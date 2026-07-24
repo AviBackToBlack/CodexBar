@@ -155,7 +155,13 @@ fn apply_provider_order_ignores_unknown_ids() {
 
 #[test]
 fn provider_summaries_reflect_settings_order() {
-    let canonical_len = codexbar::core::ProviderId::all().len();
+    // Deprecated providers (KimiK2, CrossModel) are soft-removed from the
+    // Settings catalog unless already enabled, so the default Settings
+    // surface omits them (upstream #2254).
+    let canonical_len = codexbar::core::ProviderId::all()
+        .iter()
+        .filter(|p| !p.is_deprecated())
+        .count();
     let s = Settings::default();
     let summaries: Vec<ProviderSummary> = super::build_provider_summaries(&s);
     assert_eq!(summaries.len(), canonical_len);
@@ -1256,7 +1262,16 @@ fn bootstrap_payload_exposes_every_provider_variant() {
         );
     }
 
-    for provider in ProviderId::all() {
+    // Deprecated providers (KimiK2, CrossModel) are soft-removed from the
+    // desktop catalog unless already enabled (upstream #2254); they are
+    // intentionally absent from the default bootstrap payload.
+    let active: Vec<ProviderId> = ProviderId::all()
+        .iter()
+        .copied()
+        .filter(|p| !p.is_deprecated())
+        .collect();
+
+    for provider in &active {
         let expected = provider.cli_name().to_string();
         assert!(
             catalog_ids.contains(&expected),
@@ -1266,8 +1281,8 @@ fn bootstrap_payload_exposes_every_provider_variant() {
 
     assert_eq!(
         catalog_ids.len(),
-        ProviderId::all().len(),
-        "bootstrap catalog size drifted from ProviderId::all()"
+        active.len(),
+        "bootstrap catalog size drifted from the active (non-deprecated) providers"
     );
 
     // Sanity — payload must also round-trip through JSON cleanly so
