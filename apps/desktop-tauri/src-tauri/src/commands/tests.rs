@@ -158,30 +158,29 @@ fn debug_provider_counts() {
     let s = Settings::default();
     let order = codexbar::settings::normalize_provider_order(&s.provider_order);
     let summaries = super::build_provider_summaries(&s);
-    eprintln!(
-        "DEBUG all={} order={} summaries={} deprecated={} enabled={:?}",
-        ProviderId::all().len(),
+    let all = ProviderId::all();
+    let deprecated: Vec<&ProviderId> = all.iter().filter(|p| p.is_deprecated()).collect();
+    let order_names: Vec<&str> = order.iter().map(String::as_str).collect();
+    let summary_ids: Vec<&str> = summaries.iter().map(|x| x.id.as_str()).collect();
+    let dep_in_summaries: Vec<&str> = all
+        .iter()
+        .filter(|p| p.is_deprecated())
+        .map(|p| p.cli_name())
+        .filter(|n| summary_ids.contains(n))
+        .collect();
+    panic!(
+        "DEBUGPROV all_len={} order_len={} summaries_len={} deprecated_count={} enabled={:?} \
+         deprecated_cli_names={:?} dep_in_summaries={:?} first5_order={:?} first5_summaries={:?}",
+        all.len(),
         order.len(),
         summaries.len(),
-        ProviderId::all()
-            .iter()
-            .filter(|p| p.is_deprecated())
-            .count(),
-        s.enabled_providers
+        deprecated.len(),
+        s.enabled_providers,
+        deprecated.iter().map(|p| p.cli_name()).collect::<Vec<_>>(),
+        dep_in_summaries,
+        &order_names[..order_names.len().min(5)],
+        &summary_ids[..summary_ids.len().min(5)],
     );
-    for id in ProviderId::all() {
-        if p_deprecated(*id) {
-            eprintln!(
-                "DEBUG dep {} in_order={} in_summaries={}",
-                id.cli_name(),
-                order.contains(&id.cli_name().to_string()),
-                summaries.iter().any(|x| x.id == id.cli_name())
-            );
-        }
-    }
-}
-fn p_deprecated(p: ProviderId) -> bool {
-    p.is_deprecated()
 }
 
 #[test]
