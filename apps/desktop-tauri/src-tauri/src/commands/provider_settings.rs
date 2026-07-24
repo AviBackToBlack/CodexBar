@@ -23,8 +23,7 @@ pub(crate) fn build_provider_summaries(settings: &Settings) -> Vec<ProviderSumma
 
     order
         .iter()
-        .enumerate()
-        .filter_map(|(idx, id)| {
+        .filter_map(|id| {
             by_id.get(id).and_then(|p| {
                 let enabled = settings.enabled_providers.contains(id);
                 // Soft-removed providers (upstream #2254) stay hidden unless already enabled.
@@ -35,9 +34,16 @@ pub(crate) fn build_provider_summaries(settings: &Settings) -> Vec<ProviderSumma
                     id: id.clone(),
                     display_name: p.display_name().to_string(),
                     enabled,
-                    order: idx as u32,
+                    // `order` is assigned below, over the emitted (post-filter) list,
+                    // so deprecated gaps never leave holes in the display indices.
+                    order: 0,
                 })
             })
+        })
+        .enumerate()
+        .map(|(idx, mut s)| {
+            s.order = idx as u32;
+            s
         })
         .collect()
 }

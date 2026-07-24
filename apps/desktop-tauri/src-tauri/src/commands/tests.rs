@@ -154,36 +154,6 @@ fn apply_provider_order_ignores_unknown_ids() {
 }
 
 #[test]
-fn debug_provider_counts() {
-    let s = Settings::default();
-    let order = codexbar::settings::normalize_provider_order(&s.provider_order);
-    let summaries = super::build_provider_summaries(&s);
-    let all = ProviderId::all();
-    let deprecated: Vec<&ProviderId> = all.iter().filter(|p| p.is_deprecated()).collect();
-    let order_names: Vec<&str> = order.iter().map(String::as_str).collect();
-    let summary_ids: Vec<&str> = summaries.iter().map(|x| x.id.as_str()).collect();
-    let dep_in_summaries: Vec<&str> = all
-        .iter()
-        .filter(|p| p.is_deprecated())
-        .map(|p| p.cli_name())
-        .filter(|n| summary_ids.contains(n))
-        .collect();
-    panic!(
-        "DEBUGPROV all_len={} order_len={} summaries_len={} deprecated_count={} enabled={:?} \
-         deprecated_cli_names={:?} dep_in_summaries={:?} first5_order={:?} first5_summaries={:?}",
-        all.len(),
-        order.len(),
-        summaries.len(),
-        deprecated.len(),
-        s.enabled_providers,
-        deprecated.iter().map(|p| p.cli_name()).collect::<Vec<_>>(),
-        dep_in_summaries,
-        &order_names[..order_names.len().min(5)],
-        &summary_ids[..summary_ids.len().min(5)],
-    );
-}
-
-#[test]
 fn provider_summaries_reflect_settings_order() {
     // Deprecated providers (KimiK2, CrossModel) are soft-removed from the
     // Settings catalog unless already enabled, so the default Settings
