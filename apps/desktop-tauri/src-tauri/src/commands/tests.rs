@@ -158,17 +158,31 @@ fn debug_provider_counts() {
     let s = Settings::default();
     let order = codexbar::settings::normalize_provider_order(&s.provider_order);
     let summaries = super::build_provider_summaries(&s);
-    eprintln!("DEBUG all={} order={} summaries={} deprecated={} enabled={:?}",
-        ProviderId::all().len(), order.len(), summaries.len(),
-        ProviderId::all().iter().filter(|p| p.is_deprecated()).count(),
-        s.enabled_providers);
+    eprintln!(
+        "DEBUG all={} order={} summaries={} deprecated={} enabled={:?}",
+        ProviderId::all().len(),
+        order.len(),
+        summaries.len(),
+        ProviderId::all()
+            .iter()
+            .filter(|p| p.is_deprecated())
+            .count(),
+        s.enabled_providers
+    );
     for id in ProviderId::all() {
-        if p_deprecated(*id) { eprintln!("DEBUG dep {} in_order={} in_summaries={}", id.cli_name(),
-            order.contains(&id.cli_name().to_string()),
-            summaries.iter().any(|x| x.id == id.cli_name())); }
+        if p_deprecated(*id) {
+            eprintln!(
+                "DEBUG dep {} in_order={} in_summaries={}",
+                id.cli_name(),
+                order.contains(&id.cli_name().to_string()),
+                summaries.iter().any(|x| x.id == id.cli_name())
+            );
+        }
     }
 }
-fn p_deprecated(p: ProviderId) -> bool { p.is_deprecated() }
+fn p_deprecated(p: ProviderId) -> bool {
+    p.is_deprecated()
+}
 
 #[test]
 fn provider_summaries_reflect_settings_order() {
