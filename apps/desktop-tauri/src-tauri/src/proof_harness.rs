@@ -8,8 +8,8 @@
 //!   - `popOut`             — show the pop-out dashboard
 //!   - `popOut:provider:codex` — show a provider pop-out
 //!   - `settings`           — show settings (General tab)
-//!   - `settings:apiKeys`   — show settings on the API Keys tab
-//!   - `settings:cookies`   — show settings on the Cookies tab
+//!   - `settings:menuBar`   — show settings on the Menu Bar tab
+//!   - `settings:usageSpend` — show settings on the Usage & Spend tab
 //!   - `settings:about`     — show settings on the About tab
 //!
 //! In proof mode the shell immediately transitions to the requested surface
@@ -82,7 +82,7 @@ static PROOF_SYNC_CONTROL: LazyLock<Mutex<ProofSyncControl>> =
 pub struct ProofConfig {
     /// The surface to show on startup (serialized as the camelCase id).
     pub target_surface: String,
-    /// Optional settings tab id (e.g. `"apiKeys"`, `"cookies"`).
+    /// Optional settings tab id (e.g. `"menuBar"`, `"usageSpend"`).
     pub settings_tab: Option<String>,
     /// Optional target payload for richer proof routing, such as
     /// `"provider:codex"` for pop-out provider views.
@@ -695,15 +695,15 @@ mod tests {
 
     #[test]
     fn parse_settings_with_tab() {
-        with_proof_mode_env(Some("settings:apiKeys"), || {
+        with_proof_mode_env(Some("settings:menuBar"), || {
             let cfg = ProofConfig::from_env().unwrap();
             assert_eq!(cfg.target_surface, "settings");
-            assert_eq!(cfg.settings_tab.as_deref(), Some("apiKeys"));
+            assert_eq!(cfg.settings_tab.as_deref(), Some("menuBar"));
             assert_eq!(cfg.surface_mode(), SurfaceMode::Settings);
             assert_eq!(
                 cfg.surface_target(),
                 SurfaceTarget::Settings {
-                    tab: "apiKeys".into()
+                    tab: "menuBar".into()
                 }
             );
         });
