@@ -259,7 +259,13 @@ pub fn show(
         .shadow(false)
         .resizable(false)
         .always_on_top(true)
-        .skip_taskbar(true);
+        .skip_taskbar(true)
+        // Pin Dark: the floatbar is the only window without a theme pin, and
+        // WebView2 resolves prefers-color-scheme per shared process profile,
+        // so an unpinned (light-default) webview flips the Settings window's
+        // auto theme from dark to light (issue #240). The bar's own look is
+        // CSS-driven, so pinning Dark does not change how it appears.
+        .theme(Some(tauri::Theme::Dark));
 
     // WebView2 only honors an alpha (transparent) background when the native
     // window is itself created transparent. Tauri cfg-gates this builder API
