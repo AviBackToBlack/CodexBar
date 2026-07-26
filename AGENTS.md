@@ -109,7 +109,8 @@ pnpm run tauri:build
 - Node: CI uses Node 20; no `.nvmrc` in repo — prefer Node 20 locally for parity.
 - Rust: edition **2024**, stable toolchain; CI target `x86_64-pc-windows-msvc`. No committed `rust-toolchain.toml` / `rustfmt.toml` / `clippy.toml` — defaults plus CI flags (`clippy -- -D warnings`).
 - Tray / DPAPI / browser-cookie behavior: validate on **Windows-native** hosts. WSL/Linux is insufficient for those paths.
-- CUA driver (when installed): `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe` for UI automation against a rebuilt binary, optionally with `CODEXBAR_PROOF_MODE`.
+- **CUA (computer-use) for UI proof** — see [Testing & QA](#testing--qa). Project: [trycua/cua](https://github.com/trycua/cua). On this machine the Windows driver is typically `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`.
+
 
 ## Testing & QA
 
@@ -117,9 +118,39 @@ pnpm run tauri:build
 - Frontend: Vitest 3 + jsdom + Testing Library. From `apps/desktop-tauri`: `pnpm test` (`src/**/*.{test,spec}.{ts,tsx}`).
 - **Hosted PR check** (when `vars.CI_BUDGET_MODE != 'off'`): `cargo fmt --check`, clippy both crates with `-D warnings`, cargo test both crates, `pnpm --dir apps/desktop-tauri test`, `pnpm --dir apps/desktop-tauri run build` on Blacksmith Windows. Budget details: `CONTEXT.md`, ADRs under `docs/adr/`.
 - **Local mirror**: `.\scripts\local-check.ps1` (default Rust + Tauri + Frontend). Does not run full installer / smoke unless you pass the matching flags.
-- UI / tray / float-bar behavior: rebuild the desktop binary and verify on Windows (manual or CUA). Proof example: `CODEXBAR_PROOF_MODE=settings:menu` (float bar section is on the **menu** tab).
 - Parser / fetcher changes: add deterministic samples or fixtures where practical.
 - No coverage thresholds are configured — do not invent any.
+
+### UI validation with CUA ([trycua/cua](https://github.com/trycua/cua))
+
+Unit tests and `local-check` do **not** prove tray, settings, float bar, theme, or WebView2 behavior. For UI / tray / settings / float-bar / visual changes, agents **must** retest on a real Windows desktop build using **Cua Drivers** (background computer-use: click, type, screenshot, UIA) from the open-source [trycua/cua](https://github.com/trycua/cua) project. Docs: [cua.ai/docs](https://cua.ai/docs), driver install: [install guide](https://cua.ai/docs/how-to-guides/driver/install), CLI reference: [cua-driver CLI](https://cua.ai/docs/reference/cua-driver/cli-reference).
+
+**Install (Windows PowerShell, from upstream README):**
+
+```powershell
+irm https://cua.ai/driver/install.ps1 | iex
+```
+
+Then follow post-install instructions (permissions / accessibility as prompted).
+
+**Typical layout after install:**
+
+- Driver binary: `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`
+- Long-lived daemon: `cua-driver serve` (often over a named pipe). One-shot tools: `cua-driver call <tool> '<json>'` (e.g. `list_windows`, `get_window_state`, `click`, screenshots via `--screenshot-out-file`).
+
+**Required retest loop after UI-affecting code changes:**
+
+1. **Rebuild** a local desktop binary that includes the change (`pnpm --dir apps/desktop-tauri run tauri:build:debug` or `.\scripts\dev.ps1`). Do not validate against a stale pre-change exe.
+2. **Close** any already-running CodexBar instance (single-instance plugin may hand off to the old process).
+3. **Launch** the new binary. For stable automation (no blur-dismiss), set proof mode, e.g.  
+   `$env:CODEXBAR_PROOF_MODE = 'settings:menu'`  
+   (settings tab ids: `general`, `providers`, `notifications`, `menuBar`, `menu`, `usageSpend`, `advanced`, `about` — float bar section is on **`menu`**).
+4. **Drive with CUA**: start the driver daemon if needed, then list windows / UIA tree, click the control under test, wait for UI settle, capture before/after screenshots.
+5. **Assert observables** (pixels, window list, checked toggle state, theme still dark under `auto`, float bar window present, etc.) — not only “command exited 0”.
+6. **Attach proof** to the PR (screenshots or short note + paths). If CUA cannot run, say why and attach equivalent manual proof (PR template).
+
+**Do not** treat Vitest/jsdom or `cargo test` alone as sufficient for tray icon, DWM, WebView2 theme, float bar z-order, or settings chrome. **Do not** open issues/PRs against trycua/cua unless the user explicitly asks; use it as tooling.
+
 
 ## Commit & PR Guidelines
 
@@ -131,8 +162,9 @@ pnpm run tauri:build
   - Screenshots / GIFs for UI changes (Windows)
   - Linked issue / reference when relevant
 - Hosted PR check exists (`.github/workflows/pr-check.yml`); still run and report the local slice. Do not claim there is no CI.
-- UI / tray / settings / visual PRs: attach CUA Driver visual proof when possible; otherwise equivalent manual proof and why CUA was skipped (see PR template).
+- UI / tray / settings / float-bar / visual PRs: **CUA Driver proof is the default** ([trycua/cua](https://github.com/trycua/cua)) after a **fresh local rebuild** — see [UI validation with CUA](#ui-validation-with-cua-trycuacua). If CUA cannot be used, explain why and attach equivalent manual proof (PR template checkboxes).
 - Before non-trivial merge: thermo-nuclear structure review when the project process requires it.
+
 
 ## Release & Winget Notes
 
