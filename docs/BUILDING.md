@@ -119,6 +119,23 @@ Win-CodexBar/
 └── scripts/                     # Dev/release helper scripts
 ```
 
+## Documentation map
+
+| Doc | Contents |
+|-----|----------|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Modules, entry points, data flow (Windows/Tauri) |
+| [CLI.md](./CLI.md) | `codexbar.exe` commands |
+| [CONFIGURATION.md](./CONFIGURATION.md) | Config paths, `codexbar config`, settings tabs |
+| [PROVIDERS.md](./PROVIDERS.md) | Provider factory and sources |
+| [COOKIES.md](./COOKIES.md) | Browser cookie import (DPAPI) |
+| [WSL.md](./WSL.md) | WSL limitations |
+| [WINDOWS_PROOF.md](./WINDOWS_PROOF.md) | Manual/runtime proof checklist |
+| [release/ci-cd.md](./release/ci-cd.md) | Hosted PR check + local release |
+| [../AGENTS.md](../AGENTS.md) | Agent/contributor guidelines |
+
+Upstream macOS docs (`steipete/CodexBar`) are a **read-only** concept source. Do not copy Swift/Keychain/Sparkle instructions here without a Windows rewrite.
+
+
 ## Running Tests
 
 ```bash

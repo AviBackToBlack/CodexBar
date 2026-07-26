@@ -31,7 +31,7 @@
 - `rust/src/tray/` — shared tray-icon renderer
 - `rust/src/cli/` — CLI subcommands (`codexbar` binary)
 - `scripts/` — `dev.ps1`, `local-check.ps1`, release and smoke scripts
-- `docs/` — BUILDING, WINDOWS_PROOF, COOKIES, ADRs
+- `docs/` — Windows port docs (`ARCHITECTURE`, `CLI`, `CONFIGURATION`, `PROVIDERS`, `BUILDING`, `COOKIES`, `WINDOWS_PROOF`, ADRs). Upstream macOS docs are read-only reference only.
 - `.github/workflows/` — `pr-check.yml` (hosted gate), `interaction-guard.yml`
 
 ## Development Commands
