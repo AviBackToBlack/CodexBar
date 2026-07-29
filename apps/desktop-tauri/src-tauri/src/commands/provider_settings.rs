@@ -123,14 +123,6 @@ pub fn set_provider_cookie_source(provider_id: String, source: String) -> Result
     settings.save().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn get_provider_cookie_source(provider_id: String) -> Result<Option<String>, String> {
-    Ok(provider_cookie_source_lookup(
-        &Settings::load(),
-        &provider_id,
-    ))
-}
-
 fn region_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     use codexbar::core::ProviderId;
     Some(match provider_id {
@@ -181,11 +173,6 @@ pub fn set_provider_region(provider_id: String, region: String) -> Result<(), St
     let mut settings = Settings::load();
     provider_region_set(&mut settings, &provider_id, region.to_string())?;
     settings.save().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn get_provider_region(provider_id: String) -> Result<Option<String>, String> {
-    Ok(provider_region_lookup(&Settings::load(), &provider_id))
 }
 
 fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
@@ -313,14 +300,6 @@ pub fn get_provider_workspace_id(provider_id: String) -> Result<Option<String>, 
 
 fn gateway_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     (provider_id == "wayfinder").then_some(codexbar::core::ProviderId::Wayfinder)
-}
-
-#[tauri::command]
-pub fn get_provider_gateway_url(provider_id: String) -> Result<Option<String>, String> {
-    let Some(id) = gateway_provider(&provider_id) else {
-        return Ok(None);
-    };
-    Ok(Some(Settings::load().gateway_url(id).to_string()))
 }
 
 #[tauri::command]

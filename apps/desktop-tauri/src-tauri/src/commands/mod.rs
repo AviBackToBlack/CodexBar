@@ -18,13 +18,11 @@ use std::collections::HashMap;
 use tauri::{Emitter, Manager};
 
 use crate::events;
-use crate::proof_harness::{self, ProofCommand, ProofStatePayload};
 use crate::state::AppState;
 use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 
 mod chart;
-mod diagnostics;
 mod tokens;
 mod updater;
 mod usage_spend;
@@ -61,7 +59,6 @@ pub use system::*;
 mod tests;
 
 pub use chart::*;
-pub use diagnostics::*;
 pub use tokens::*;
 pub use updater::*;
 pub use usage_spend::*;
