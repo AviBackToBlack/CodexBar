@@ -687,7 +687,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unic-langid",
- "url",
  "uuid",
  "which",
  "windows 0.58.0",
