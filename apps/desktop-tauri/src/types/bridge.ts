@@ -55,71 +55,6 @@ export interface TrayVisibilityStatusDto {
   support: TrayVisibilitySupport;
   state: TrayVisibilityState;
 }
-export type ProofProviderId =
-  | "codex"
-  | "claude"
-  | "cursor"
-  | "factory"
-  | "gemini"
-  | "antigravity"
-  | "copilot"
-  | "zai"
-  | "minimax"
-  | "kiro"
-  | "vertexai"
-  | "augment"
-  | "opencode"
-  | "kimi"
-  | "kimik2"
-  | "amp"
-  | "warp"
-  | "ollama"
-  | "azureopenai"
-  | "t3chat"
-  | "openrouter"
-  | "jetbrains"
-  | "alibaba"
-  | "alibabatokenplan"
-  | "nanogpt"
-  | "infini"
-  | "perplexity"
-  | "abacus"
-  | "opencodego"
-  | "kilo"
-  | "bedrock"
-  | "mistral"
-  | "codebuff"
-  | "deepseek"
-  | "deepinfra"
-  | "aiand"
-  | "zenmux"
-  | "clinepass"
-  | "longcat"
-  | "neuralwatt"
-  | "windsurf"
-  | "manus"
-  | "mimo"
-  | "doubao"
-  | "commandcode"
-  | "crof"
-  | "stepfun"
-  | "venice"
-  | "openaiapi"
-  | "grok"
-  | "elevenlabs"
-  | "deepgram"
-  | "groq"
-  | "llmproxy"
-  | "chutes"
-  | "litellm"
-  | "poe"
-  | "devin"
-  | "zed"
-  | "crossmodel"
-  | "qoder"
-  | "sakana"
-  | "sub2api"
-  | "wayfinder";
 
 export type TrayPanelSurfaceTarget = { kind: "summary" };
 export type PopOutSurfaceTarget =
@@ -180,32 +115,6 @@ export type SessionFocusResult =
   | { status: "focused" }
   | { status: "unsupported"; message: string }
   | { status: "failed"; message: string };
-
-export interface ProofRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface ProofStatePayload {
-  mode: SurfaceMode;
-  target: SurfaceTarget;
-  windowRect: ProofRect | null;
-  trayAnchor: ProofRect | null;
-  workArea: ProofRect | null;
-  menuPath: string | null;
-  menuItems: string[];
-}
-
-export type ProofCommand =
-  | "open-tray-panel"
-  | "open-native-menu"
-  | "open-dashboard"
-  | "open-about-path"
-  | "hide-surface"
-  | `open-provider:${ProofProviderId}`
-  | `open-settings:${SettingsTabId}`;
 
 export interface ProviderCatalogEntry {
   id: string;
@@ -480,17 +389,6 @@ export interface RefreshStartedPayload {
   providerIds: string[];
 }
 
-export interface SafeDiagnostics {
-  appVersion: string;
-  platform: string;
-  enabledProviders: string[];
-  providerCookieSources: Record<string, string>;
-  hasManualCookies: string[];
-  hasApiKeys: string[];
-  hidePersonalInfo: boolean;
-  refreshIntervalSecs: number;
-}
-
 export interface CredentialStorageStatus {
   manualCookies: string;
   apiKeys: string;
@@ -661,12 +559,6 @@ export interface WorkAreaRect {
   height: number;
 }
 
-// ── Phase 4 — event payloads ─────────────────────────────────────────
-
-/** Payload emitted for the `global-shortcut-triggered` event: the
- *  accelerator string that fired, e.g. `"Ctrl+Shift+U"`. */
-export type GlobalShortcutTriggeredPayload = string;
-
 // ── Phase 5 — i18n ────────────────────────────────────────────────────
 
 /** Snapshot returned by `get_locale_strings`. */
@@ -734,28 +626,4 @@ export interface CookieSourceOption {
 export interface RegionOption {
   value: string;
   label: string;
-}
-
-// ── Phase 6d — credential detection ──────────────────────────────────
-
-export interface GeminiCliStatus {
-  signedIn: boolean;
-  credentialsPath: string | null;
-}
-
-export interface VertexAiStatus {
-  hasCredentials: boolean;
-  credentialsPath: string | null;
-}
-
-export interface JetbrainsIde {
-  id: string;
-  displayName: string;
-  path: string;
-  detected: boolean;
-}
-
-export interface KiroStatus {
-  available: boolean;
-  hint: string | null;
 }

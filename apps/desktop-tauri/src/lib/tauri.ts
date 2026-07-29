@@ -5,8 +5,6 @@ import type {
   AppInfoBridge,
   BootstrapState,
   CurrentSurfaceState,
-  ProofCommand,
-  ProofStatePayload,
   CookieInfoBridge,
   DetectedBrowserBridge,
   Language,
@@ -27,7 +25,6 @@ import type {
   UpdateStatePayload,
   CookieSourceOption,
   RegionOption,
-  SafeDiagnostics,
   CredentialStorageStatus,
   WorkAreaRect,
   AgentSession,
@@ -105,20 +102,8 @@ export function closeSettingsWindow(): Promise<void> {
   return invoke<void>("close_settings_window");
 }
 
-export function getCurrentSurfaceMode(): Promise<SurfaceMode> {
-  return invoke<SurfaceMode>("get_current_surface_mode");
-}
-
 export function getCurrentSurfaceState(): Promise<CurrentSurfaceState> {
   return invoke<CurrentSurfaceState>("get_current_surface_state");
-}
-
-export function getProofState(): Promise<ProofStatePayload> {
-  return invoke<ProofStatePayload>("get_proof_state");
-}
-
-export function runProofCommand(command: ProofCommand): Promise<ProofStatePayload> {
-  return invoke<ProofStatePayload>("run_proof_command", { command });
 }
 
 export function refreshProviders(): Promise<void> {
@@ -131,10 +116,6 @@ export function refreshProvidersIfStale(): Promise<void> {
 
 export function getCachedProviders(): Promise<ProviderUsageSnapshot[]> {
   return invoke<ProviderUsageSnapshot[]>("get_cached_providers");
-}
-
-export function getSafeDiagnostics(): Promise<SafeDiagnostics> {
-  return invoke<SafeDiagnostics>("get_safe_diagnostics");
 }
 
 export function getWorkAreaRect(): Promise<WorkAreaRect> {
@@ -365,10 +346,6 @@ export function setProviderWorkspaceId(
   workspaceId: string,
 ): Promise<void> {
   return invoke<void>("set_provider_workspace_id", { providerId, workspaceId });
-}
-
-export function getProviderGatewayUrl(providerId: string): Promise<string | null> {
-  return invoke<string | null>("get_provider_gateway_url", { providerId });
 }
 
 export function setProviderGatewayUrl(
