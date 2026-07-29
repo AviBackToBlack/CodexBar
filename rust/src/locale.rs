@@ -440,6 +440,10 @@ locale_keys! {
     ResetsInDaysHours,
     ResetsInHoursMinutes,
     ResetsInMinutes,
+    NextExpiresInDaysHours,
+    NextExpiresInHoursMinutes,
+    NextExpiresInMinutes,
+    NextExpiresDueNow,
 
     // Provider detail - Tray Display
     TrayDisplayTitle,
