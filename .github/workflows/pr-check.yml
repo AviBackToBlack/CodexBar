@@ -32,6 +32,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The runner image preinstalls these std targets; dropping them before the
+      # stable sync avoids re-downloading rust-std for targets CI never builds.
+      - name: Remove unused preinstalled Rust targets
+        run: rustup target remove x86_64-pc-windows-gnu i686-pc-windows-msvc
+        continue-on-error: true
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -40,10 +46,6 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            rust
-            apps/desktop-tauri/src-tauri
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -63,17 +65,11 @@ jobs:
       - name: Rust format check
         run: cargo fmt --all --check
 
-      - name: Shared Rust clippy
-        run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      - name: Rust clippy (workspace)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Tauri Rust clippy
-        run: cargo clippy --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml --all-targets -- -D warnings
-
-      - name: Shared Rust tests
-        run: cargo test --manifest-path rust/Cargo.toml
-
-      - name: Tauri Rust tests
-        run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
+      - name: Rust tests (workspace)
+        run: cargo test --workspace
 
       - name: Frontend tests
         run: pnpm --dir apps/desktop-tauri test
