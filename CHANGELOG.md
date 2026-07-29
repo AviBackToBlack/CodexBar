@@ -1,5 +1,21 @@
 # Changelog
 
+## [Windows] 0.45.3 - 2026-07-29
+
+### Added
+- Settings: global HTTP proxy for provider traffic (#235, #236).
+- Codex tray: reset-credit **next expiry** on the Reset credits row (count + “Next expires …”; honors Relative reset time) (#241).
+
+### Fixed
+- Tray icon missing from the taskbar after upgrade (#237, #238).
+- Float bar window flipping Settings Auto theme to light (pin WebView2 dark on float bar) (#240).
+
+### Changed
+- Hosted PR check on Blacksmith Windows (fmt, clippy, tests, frontend build); release packaging remains local.
+- Dead-code and helper cleanup (shared SigV4/parse helpers, drop unused CLI args/bridge bindings/icons registry, simplify build scripts).
+
+---
+
 ## [Windows] 0.45.2 - 2026-07-21
 
 Windows port of upstream CodexBar **0.43.0 → 0.45.2** (providers, CLI, cost, and settings surfaces).
