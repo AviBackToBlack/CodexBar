@@ -20,6 +20,8 @@ static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceL
 pub struct CodexApi {
     client: reqwest::Client,
     home_dir: PathBuf,
+    /// When set, overrides CODEX_HOME / ~/.codex for auth.json + config.toml (tests).
+    codex_home_override: Option<PathBuf>,
 }
 
 impl CodexApi {
@@ -34,7 +36,27 @@ impl CodexApi {
         Self {
             client,
             home_dir: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+            codex_home_override: None,
         }
+    }
+
+    /// Point the client at a specific Codex home directory (contains auth.json / config.toml).
+    pub fn with_codex_home(mut self, codex_home: impl Into<PathBuf>) -> Self {
+        self.codex_home_override = Some(codex_home.into());
+        self
+    }
+
+    fn codex_dir(&self) -> PathBuf {
+        if let Some(override_dir) = &self.codex_home_override {
+            return override_dir.clone();
+        }
+        if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+            let trimmed = codex_home.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+        self.home_dir.join(".codex")
     }
 
     /// Fetch usage information from Codex API
@@ -221,29 +243,11 @@ impl CodexApi {
     }
 
     fn get_auth_path(&self) -> PathBuf {
-        // Check CODEX_HOME env var
-        if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let trimmed = codex_home.trim();
-            if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("auth.json");
-            }
-        }
-
-        self.home_dir.join(".codex").join("auth.json")
+        self.codex_dir().join("auth.json")
     }
 
     fn resolve_base_url(&self) -> String {
-        // Check CODEX_HOME for config.toml
-        let config_path = if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-            let trimmed = codex_home.trim();
-            if !trimmed.is_empty() {
-                PathBuf::from(trimmed).join("config.toml")
-            } else {
-                self.home_dir.join(".codex").join("config.toml")
-            }
-        } else {
-            self.home_dir.join(".codex").join("config.toml")
-        };
+        let config_path = self.codex_dir().join("config.toml");
 
         if let Ok(content) = std::fs::read_to_string(&config_path)
             && let Some(base_url) = parse_chatgpt_base_url(&content)
@@ -1043,64 +1047,113 @@ mod tests {
         assert!(window.resets_at.is_none());
     }
 
-    #[test]
-    fn attaches_reset_credits_extra_window_from_api_fixture() {
-        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let soonest = "2026-07-10T12:00:00Z";
-        let later = "2026-07-15T12:00:00Z";
-        let reset = decode_reset_credits(
-            format!(
-                r#"{{"available_count":2,"credits":[
-                    {{"status":"available","expires_at":"{later}"}},
-                    {{"status":"available","expires_at":"{soonest}"}}
-                ]}}"#
-            )
-            .as_bytes(),
+    fn write_codex_home(base_url: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp codex home");
+        std::fs::write(
+            dir.path().join("auth.json"),
+            r#"{"tokens":{"access_token":"test-token","account_id":"acct_test"}}"#,
         )
-        .expect("reset credits fixture");
+        .expect("auth.json");
+        std::fs::write(
+            dir.path().join("config.toml"),
+            format!("chatgpt_base_url = \"{base_url}\""),
+        )
+        .expect("config.toml");
+        dir
+    }
 
-        let mut usage = UsageSnapshot::new(RateWindow::new(0.0));
-        if reset.available_count > 0 {
-            let window = reset_credits_rate_window(&reset, now);
-            usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
-        }
+    #[tokio::test]
+    async fn fetch_usage_attaches_reset_credits_from_http() {
+        let mut server = mockito::Server::new_async().await;
+        let soonest = (Utc::now() + chrono::Duration::days(5)).to_rfc3339();
+        let later = (Utc::now() + chrono::Duration::days(12)).to_rfc3339();
 
-        assert_eq!(usage.extra_rate_windows.len(), 1);
-        let extra = &usage.extra_rate_windows[0];
-        assert_eq!(extra.id, "reset-credits");
+        let usage_mock = server
+            .mock("GET", "/wham/usage")
+            .match_header("authorization", "Bearer test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000}}}"#,
+            )
+            .create_async()
+            .await;
+
+        let reset_body = format!(
+            r#"{{"available_count":2,"credits":[
+                {{"status":"available","expires_at":"{later}"}},
+                {{"status":"available","expires_at":"{soonest}"}}
+            ]}}"#
+        );
+        let reset_mock = server
+            .mock("GET", "/wham/rate-limit-reset-credits")
+            .match_header("authorization", "Bearer test-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(reset_body)
+            .create_async()
+            .await;
+
+        let home = write_codex_home(&server.url());
+        let api = CodexApi::new().with_codex_home(home.path());
+        let (usage, _) = api.fetch_usage().await.expect("fetch_usage");
+
+        usage_mock.assert_async().await;
+        reset_mock.assert_async().await;
+
+        let extra = usage
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "reset-credits")
+            .expect("reset-credits window attached");
         assert_eq!(extra.title, "Reset credits");
         assert!(extra.window.is_informational);
         assert_eq!(
             extra.window.reset_description.as_deref(),
             Some("2 reset credits available")
         );
-        assert_eq!(
-            extra.window.resets_at,
-            Some(
-                DateTime::parse_from_rfc3339(soonest)
-                    .unwrap()
-                    .with_timezone(&Utc)
-            )
-        );
-    }
-
-    #[test]
-    fn skips_reset_credits_attach_when_available_count_zero() {
-        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+        let expected = DateTime::parse_from_rfc3339(&soonest)
             .unwrap()
             .with_timezone(&Utc);
-        let reset = decode_reset_credits(br#"{"available_count":0,"credits":[]}"#)
-            .expect("empty reset credits");
+        assert_eq!(extra.window.resets_at, Some(expected));
+    }
 
-        let mut usage = UsageSnapshot::new(RateWindow::new(0.0));
-        if reset.available_count > 0 {
-            let window = reset_credits_rate_window(&reset, now);
-            usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
-        }
+    #[tokio::test]
+    async fn fetch_usage_skips_reset_credits_when_available_count_zero() {
+        let mut server = mockito::Server::new_async().await;
 
-        assert!(usage.extra_rate_windows.is_empty());
+        let usage_mock = server
+            .mock("GET", "/wham/usage")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000}}}"#,
+            )
+            .create_async()
+            .await;
+
+        let reset_mock = server
+            .mock("GET", "/wham/rate-limit-reset-credits")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"available_count":0,"credits":[]}"#)
+            .create_async()
+            .await;
+
+        let home = write_codex_home(&server.url());
+        let api = CodexApi::new().with_codex_home(home.path());
+        let (usage, _) = api.fetch_usage().await.expect("fetch_usage");
+
+        usage_mock.assert_async().await;
+        reset_mock.assert_async().await;
+
+        assert!(
+            usage
+                .extra_rate_windows
+                .iter()
+                .all(|w| w.id != "reset-credits"),
+            "available_count=0 must not attach reset-credits"
+        );
     }
 
     #[test]
