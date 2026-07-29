@@ -229,3 +229,44 @@ pub(crate) fn validated_https_url(
     }
     Ok(url)
 }
+
+/// Extract the first semver-like substring (`\d+(?:\.\d+)+`) from `s`.
+pub(crate) fn extract_semver(s: &str) -> Option<String> {
+    let re = regex_lite::Regex::new(r"(\d+(?:\.\d+)+)").ok()?;
+    re.find(s).map(|m| m.as_str().to_string())
+}
+
+/// Extract the first capture group of `pattern` from `text` as an `f64`.
+pub(crate) fn extract_number(pattern: &str, text: &str) -> Option<f64> {
+    let re = regex_lite::Regex::new(pattern).ok()?;
+    re.captures(text)?.get(1)?.as_str().parse().ok()
+}
+
+/// Extract a `renewAt`/`renew_at` timestamp from a JS/JSON-ish payload.
+///
+/// Accepts either a numeric epoch (seconds or milliseconds) or an RFC 3339
+/// date string. Returns the parsed instant in UTC.
+pub(crate) fn extract_renewal(text: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let re = regex_lite::Regex::new(
+        r#"(?:"renewAt"|"renew_at"|renewAt|renew_at)\s*[:=]\s*"?([^",}\s]+)"?"#,
+    )
+    .ok()?;
+    let raw = re.captures(text)?.get(1)?.as_str().trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(number) = raw.parse::<f64>()
+        && number.is_finite()
+        && number > 0.0
+    {
+        let seconds = if number > 10_000_000_000.0 {
+            number / 1000.0
+        } else {
+            number
+        };
+        return chrono::DateTime::<chrono::Utc>::from_timestamp(seconds as i64, 0);
+    }
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
