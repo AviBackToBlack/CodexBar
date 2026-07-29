@@ -1044,6 +1044,66 @@ mod tests {
     }
 
     #[test]
+    fn attaches_reset_credits_extra_window_from_api_fixture() {
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let soonest = "2026-07-10T12:00:00Z";
+        let later = "2026-07-15T12:00:00Z";
+        let reset = decode_reset_credits(
+            format!(
+                r#"{{"available_count":2,"credits":[
+                    {{"status":"available","expires_at":"{later}"}},
+                    {{"status":"available","expires_at":"{soonest}"}}
+                ]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("reset credits fixture");
+
+        let mut usage = UsageSnapshot::new(RateWindow::new(0.0));
+        if reset.available_count > 0 {
+            let window = reset_credits_rate_window(&reset, now);
+            usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+        }
+
+        assert_eq!(usage.extra_rate_windows.len(), 1);
+        let extra = &usage.extra_rate_windows[0];
+        assert_eq!(extra.id, "reset-credits");
+        assert_eq!(extra.title, "Reset credits");
+        assert!(extra.window.is_informational);
+        assert_eq!(
+            extra.window.reset_description.as_deref(),
+            Some("2 reset credits available")
+        );
+        assert_eq!(
+            extra.window.resets_at,
+            Some(
+                DateTime::parse_from_rfc3339(soonest)
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+    }
+
+    #[test]
+    fn skips_reset_credits_attach_when_available_count_zero() {
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = decode_reset_credits(br#"{"available_count":0,"credits":[]}"#)
+            .expect("empty reset credits");
+
+        let mut usage = UsageSnapshot::new(RateWindow::new(0.0));
+        if reset.available_count > 0 {
+            let window = reset_credits_rate_window(&reset, now);
+            usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+        }
+
+        assert!(usage.extra_rate_windows.is_empty());
+    }
+
+    #[test]
     fn maps_codex_spark_additional_rate_limits() {
         let api = CodexApi::new();
         let (usage, _) = api
