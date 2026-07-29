@@ -1,8 +1,8 @@
 //! Core data models and traits
 
 mod adaptive_refresh;
+mod aws_signing;
 mod cost_pricing;
-mod credential_migration;
 mod hooks;
 mod http;
 mod http_proxy;
@@ -20,8 +20,8 @@ mod usage_snapshot;
 mod widget_snapshot;
 
 pub use adaptive_refresh::*;
+pub use aws_signing::*;
 pub use cost_pricing::*;
-pub use credential_migration::*;
 pub use hooks::*;
 pub use http::*;
 pub use http_proxy::*;

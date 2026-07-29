@@ -8,14 +8,13 @@ use chrono::{DateTime, TimeZone, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
 use crate::core::{
     FetchContext, NamedRateWindow, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256, sha256_hex,
 };
 
 const DOUBAO_API_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
@@ -761,7 +760,7 @@ fn sign_volcengine_request(
     body: &[u8],
     now: DateTime<Utc>,
 ) -> Result<SignedVolcengineRequest, ProviderError> {
-    let parsed = url::Url::parse(DOUBAO_CODING_PLAN_URL)
+    let parsed = reqwest::Url::parse(DOUBAO_CODING_PLAN_URL)
         .map_err(|e| ProviderError::Other(format!("Invalid Doubao Coding Plan URL: {e}")))?;
     let host = parsed
         .host_str()
@@ -814,7 +813,7 @@ fn sign_volcengine_request(
     })
 }
 
-fn canonical_uri(url: &url::Url) -> String {
+fn canonical_uri(url: &reqwest::Url) -> String {
     let path = url.path();
     if path.is_empty() {
         "/".to_string()
@@ -823,7 +822,7 @@ fn canonical_uri(url: &url::Url) -> String {
     }
 }
 
-fn canonical_query_string(url: &url::Url) -> String {
+fn canonical_query_string(url: &reqwest::Url) -> String {
     let mut pairs = url
         .query_pairs()
         .map(|(key, value)| (percent_encode(&key, true), percent_encode(&value, true)))
@@ -852,51 +851,8 @@ fn percent_encode(value: &str, encode_slash: bool) -> String {
         .collect()
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    hex(&Sha256::digest(data))
-}
-
-fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
-    const BLOCK_SIZE: usize = 64;
-    let mut key_block = [0u8; BLOCK_SIZE];
-    if key.len() > BLOCK_SIZE {
-        key_block[..32].copy_from_slice(&Sha256::digest(key));
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-
-    let mut outer = [0x5cu8; BLOCK_SIZE];
-    let mut inner = [0x36u8; BLOCK_SIZE];
-    for i in 0..BLOCK_SIZE {
-        outer[i] ^= key_block[i];
-        inner[i] ^= key_block[i];
-    }
-
-    let mut inner_hash = Sha256::new();
-    inner_hash.update(inner);
-    inner_hash.update(data);
-    let inner_digest = inner_hash.finalize();
-
-    let mut outer_hash = Sha256::new();
-    outer_hash.update(outer);
-    outer_hash.update(inner_digest);
-    outer_hash.finalize().to_vec()
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 fn sanitized_body(body: &str) -> String {
-    let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() > 200 {
-        let preview = collapsed.chars().take(200).collect::<String>();
-        format!("{preview}... [truncated]")
-    } else if collapsed.is_empty() {
-        "empty body".to_string()
-    } else {
-        collapsed
-    }
+    crate::core::sanitized_body(body, 200)
 }
 
 impl Default for DoubaoProvider {
