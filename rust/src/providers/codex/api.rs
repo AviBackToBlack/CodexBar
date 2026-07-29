@@ -87,16 +87,7 @@ impl CodexApi {
         if let Ok(reset_credits) = self.fetch_rate_limit_reset_credits(&creds, &base_url).await
             && reset_credits.available_count > 0
         {
-            let mut window = RateWindow::new(0.0);
-            window.reset_description = Some(format!(
-                "{} reset credit{} available",
-                reset_credits.available_count,
-                if reset_credits.available_count == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ));
+            let window = reset_credits_rate_window(&reset_credits, Utc::now());
             usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
         }
         Ok((usage, cost))
@@ -662,9 +653,17 @@ struct SpendControlLimitSnapshot {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct ResetCredit {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct ResetCredits {
     #[serde(default)]
-    credits: Vec<serde_json::Value>,
+    credits: Vec<ResetCredit>,
     #[serde(default)]
     available_count: u32,
 }
@@ -672,6 +671,42 @@ struct ResetCredits {
 fn decode_reset_credits(data: &[u8]) -> Result<ResetCredits, ProviderError> {
     serde_json::from_slice(data)
         .map_err(|e| ProviderError::Parse(format!("Failed to parse Codex reset credits: {e}")))
+}
+
+fn parse_credit_expiry(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn is_available_credit(credit: &ResetCredit) -> bool {
+    match credit.status.as_deref() {
+        None | Some("") => true,
+        Some(status) => status.eq_ignore_ascii_case("available"),
+    }
+}
+
+fn next_available_reset_credit_expiry(
+    credits: &[ResetCredit],
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    credits
+        .iter()
+        .filter(|credit| is_available_credit(credit))
+        .filter_map(|credit| credit.expires_at.as_deref().and_then(parse_credit_expiry))
+        .filter(|expires_at| *expires_at > now)
+        .min()
+}
+
+fn reset_credits_rate_window(reset: &ResetCredits, now: DateTime<Utc>) -> RateWindow {
+    let description = format!(
+        "{} reset credit{} available",
+        reset.available_count,
+        if reset.available_count == 1 { "" } else { "s" }
+    );
+    let mut window = RateWindow::informational(description);
+    window.resets_at = next_available_reset_credit_expiry(&reset.credits, now);
+    window
 }
 
 impl CreditDetails {
@@ -883,10 +918,129 @@ mod tests {
 
     #[test]
     fn decodes_reset_credits() {
-        let credits = decode_reset_credits(br#"{"available_count":2,"credits":[{"id":"a"}]}"#)
-            .expect("reset credits");
+        let credits = decode_reset_credits(
+            br#"{"available_count":2,"credits":[{"id":"a","status":"available","expires_at":"2026-08-01T12:00:00Z"}]}"#,
+        )
+        .expect("reset credits");
         assert_eq!(credits.available_count, 2);
         assert_eq!(credits.credits.len(), 1);
+        assert_eq!(credits.credits[0].status.as_deref(), Some("available"));
+        assert_eq!(
+            credits.credits[0].expires_at.as_deref(),
+            Some("2026-08-01T12:00:00Z")
+        );
+    }
+
+    #[test]
+    fn next_expiry_picks_soonest_available() {
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let credits = vec![
+            ResetCredit {
+                status: Some("available".into()),
+                expires_at: Some("2026-07-10T00:00:00Z".into()),
+            },
+            ResetCredit {
+                status: Some("available".into()),
+                expires_at: Some("2026-07-05T00:00:00Z".into()),
+            },
+            ResetCredit {
+                status: Some("available".into()),
+                expires_at: Some("2026-07-20T00:00:00Z".into()),
+            },
+        ];
+        let expiry = next_available_reset_credit_expiry(&credits, now).expect("expiry");
+        assert_eq!(
+            expiry,
+            DateTime::parse_from_rfc3339("2026-07-05T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn next_expiry_skips_past_and_non_available() {
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let credits = vec![
+            ResetCredit {
+                status: Some("available".into()),
+                expires_at: Some("2026-06-01T00:00:00Z".into()),
+            },
+            ResetCredit {
+                status: Some("used".into()),
+                expires_at: Some("2026-07-03T00:00:00Z".into()),
+            },
+            ResetCredit {
+                status: Some("AVAILABLE".into()),
+                expires_at: Some("2026-07-08T00:00:00Z".into()),
+            },
+            ResetCredit {
+                status: None,
+                expires_at: Some("2026-07-09T00:00:00Z".into()),
+            },
+        ];
+        let expiry = next_available_reset_credit_expiry(&credits, now).expect("expiry");
+        assert_eq!(
+            expiry,
+            DateTime::parse_from_rfc3339("2026-07-08T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn reset_credits_window_sets_informational_and_expiry() {
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = ResetCredits {
+            available_count: 2,
+            credits: vec![
+                ResetCredit {
+                    status: Some("available".into()),
+                    expires_at: Some("2026-07-15T12:00:00Z".into()),
+                },
+                ResetCredit {
+                    status: Some("available".into()),
+                    expires_at: Some("2026-07-10T12:00:00Z".into()),
+                },
+            ],
+        };
+        let window = reset_credits_rate_window(&reset, now);
+        assert!(window.is_informational);
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("2 reset credits available")
+        );
+        assert_eq!(
+            window.resets_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-07-10T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+    }
+
+    #[test]
+    fn reset_credits_window_count_only_without_expiry() {
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = ResetCredits {
+            available_count: 1,
+            credits: vec![],
+        };
+        let window = reset_credits_rate_window(&reset, now);
+        assert!(window.is_informational);
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("1 reset credit available")
+        );
+        assert!(window.resets_at.is_none());
     }
 
     #[test]
