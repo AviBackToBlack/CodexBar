@@ -118,6 +118,11 @@ describe("MenuCard", () => {
         PanelUsedSuffix: "used",
         ResetsInHoursMinutes: "Resets in {}h {}m",
         ResetsInMinutes: "Resets in {}m",
+        ResetsInDaysHours: "Resets in {}d {}h",
+        NextExpiresInHoursMinutes: "Next expires in {}h {}m",
+        NextExpiresInMinutes: "Next expires in {}m",
+        NextExpiresInDaysHours: "Next expires in {}d {}h",
+        NextExpiresDueNow: "Expires now",
         WayfinderGatewayStatus: "Gateway",
         WayfinderModels: "Models",
         WayfinderRequests: "Requests",
@@ -242,6 +247,61 @@ describe("MenuCard", () => {
     expect(title.parentElement).not.toHaveTextContent("100% left");
     expect(title.parentElement?.querySelector(".menu-metric__bar")).toBeNull();
     expect(screen.getByText("7 requests")).toBeInTheDocument();
+  });
+
+  it("shows reset credit count and next expiry without a percent bar", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.extraRateWindows = [
+      {
+        id: "reset-credits",
+        title: "Reset credits",
+        window: {
+          ...rateWindow(0, {
+            resetsAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000 + 21 * 60 * 60 * 1000).toISOString(),
+            resetDescription: "2 reset credits available",
+          }),
+          isInformational: true,
+        },
+      },
+    ];
+
+    renderCard(snapshot);
+
+    const title = await screen.findByText("Reset credits");
+    expect(screen.getByText("2 reset credits available")).toBeInTheDocument();
+    expect(screen.getByText(/Next expires in/)).toBeInTheDocument();
+    expect(title.parentElement?.querySelector(".menu-metric__bar")).toBeNull();
+  });
+
+  it("keeps reset credit count in absolute reset-time mode", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.extraRateWindows = [
+      {
+        id: "reset-credits",
+        title: "Reset credits",
+        window: {
+          ...rateWindow(0, {
+            resetsAt: new Date(Date.now() + 6 * 24 * 60 * 60 * 1000).toISOString(),
+            resetDescription: "2 reset credits available",
+          }),
+          isInformational: true,
+        },
+      },
+    ];
+
+    render(
+      <LocaleProvider>
+        <MenuCard
+          provider={snapshot}
+          hideEmail={false}
+          resetTimeRelative={false}
+        />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText("2 reset credits available")).toBeInTheDocument();
+    expect(screen.queryByText(/Next expires in/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Resets in/)).not.toBeInTheDocument();
   });
 
   it("renders Wayfinder telemetry without quota or identity rows", async () => {

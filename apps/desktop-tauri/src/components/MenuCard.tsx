@@ -9,7 +9,10 @@ import type {
 } from "../types/bridge";
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
-import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import {
+  useFormattedResetTime,
+  type ResetTimeFormatMode,
+} from "../hooks/useFormattedResetTime";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import { formatEta } from "../lib/formatEta";
 import type { LocaleKey } from "../i18n/keys";
@@ -274,6 +277,7 @@ interface MetricEntry {
   id: string;
   label: string;
   snap: RateWindowSnapshot;
+  resetFormatMode?: ResetTimeFormatMode;
 }
 
 type MetricPaceView =
@@ -311,6 +315,7 @@ function MetricRow({
   showAsUsed,
   expanded,
   onToggleExpanded,
+  resetFormatMode,
 }: {
   title: string;
   snap: RateWindowSnapshot;
@@ -320,6 +325,7 @@ function MetricRow({
   showAsUsed: boolean;
   expanded: boolean;
   onToggleExpanded: () => void;
+  resetFormatMode?: ResetTimeFormatMode;
 }) {
   const { t } = useLocale();
   const isInformational = snap.isInformational === true;
@@ -332,9 +338,11 @@ function MetricRow({
   const level = levelOf(remain, snap.isExhausted);
   const resetText = useFormattedResetTime(
     snap.resetsAt,
-    snap.resetDescription,
+    isInformational ? null : snap.resetDescription,
     resetTimeRelative,
+    resetFormatMode ?? "reset",
   );
+  const infoPrimary = snap.resetDescription?.trim() || resetText || "—";
   const resetTarget = snap.resetsAt ? Date.parse(snap.resetsAt) : Number.NaN;
   const replacesPercent =
     showResetWhenExhausted &&
@@ -357,11 +365,17 @@ function MetricRow({
       <div className="menu-metric__row">
         <span className="menu-metric__pct">
           {isInformational
-            ? resetText ?? "—"
+            ? infoPrimary
             : replacesPercent
               ? resetText
               : `${Math.round(displayPct)}% ${displayLabel}`}
         </span>
+        {isInformational &&
+          snap.resetDescription?.trim() &&
+          resetText &&
+          resetText !== infoPrimary && (
+            <span className="menu-metric__reset">{resetText}</span>
+          )}
         {!isInformational && resetText && !replacesPercent && (
           <span className="menu-metric__reset">{resetText}</span>
         )}
@@ -510,6 +524,7 @@ export default function MenuCard({
       id: `extra-${extra.id}`,
       label: extra.title,
       snap: extra.window,
+      resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });
   }
   const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
@@ -583,6 +598,7 @@ export default function MenuCard({
                   showResetWhenExhausted={showResetWhenExhausted}
                   showAsUsed={showAsUsed}
                   expanded={expandedPaceWindow === m.id}
+                  resetFormatMode={m.resetFormatMode}
                   onToggleExpanded={() => {
                     setExpandedPaceWindow((current) =>
                       current === m.id ? null : m.id,
