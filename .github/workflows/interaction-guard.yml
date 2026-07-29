@@ -17,6 +17,7 @@ jobs:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
+      - run: node --test .github/scripts/interaction-guard.test.mjs
       - run: node .github/scripts/interaction-guard.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
