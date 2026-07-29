@@ -4,7 +4,7 @@
 //! and attributes openai-codex / anthropic assistant rows into cost summaries
 //! without double-counting the same entry id across shared files.
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs::File;
@@ -294,7 +294,6 @@ fn parse_pi_assistant_entry(value: &Value, target: PiMappedProvider) -> Option<P
         }),
     };
 
-    let _ = Local::now();
     Some(PiEntry {
         model,
         input,
