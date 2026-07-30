@@ -200,6 +200,12 @@ export interface SettingsSnapshot {
   floatBarShowCost: boolean;
   /** Promote the tray icon out of the Windows hidden-icons overflow (Win11 only). */
   promoteTrayIcon?: boolean;
+  /** When true, show Claude Daily Routines quota row (default true). */
+  claudeDailyRoutinesUsageVisible: boolean;
+  /** Alibaba Token Plan region: cn | intl | cn-personal | intl-personal. */
+  alibabaTokenPlanRegion: string;
+  /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
+  weeklyProgressWorkDays?: number | null;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -261,6 +267,9 @@ export interface SettingsUpdate {
   floatBarShowResetInline?: boolean;
   floatBarShowCost?: boolean;
   promoteTrayIcon?: boolean;
+  claudeDailyRoutinesUsageVisible?: boolean;
+  alibabaTokenPlanRegion?: string;
+  weeklyProgressWorkDays?: number | null;
 }
 
 export interface UsageThresholdOverride {
@@ -281,6 +290,70 @@ export interface UsageSpendRow {
 export interface UsageSpendSummary {
   rows: UsageSpendRow[];
 }
+
+/** Codex local Workspaces snapshot (get_codex_workspaces_snapshot). */
+export type CodexWorkspacesSourceStatus =
+  | "complete"
+  | "catalogMissing"
+  | "catalogLocked"
+  | "catalogCorrupt"
+  | "catalogIncompatible";
+
+export interface CodexWorkspacesUsageTotals {
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface CodexWorkspacesCostEstimate {
+  knownUsd: number;
+  unknownTokens: number;
+}
+
+export interface CodexWorkspacesDailyPoint {
+  day: string;
+  totalTokens: number;
+  cachedInputTokens: number;
+  estimatedCostUsd: number | null;
+}
+
+export interface CodexWorkspacesSessionUsage {
+  id: string;
+  projectId: string;
+  displayTitle: string;
+  cwd: string | null;
+  startedAt: string | null;
+  latestActivity: string | null;
+  totals: CodexWorkspacesUsageTotals;
+  costEstimate: CodexWorkspacesCostEstimate;
+  topModel: string | null;
+}
+
+export interface CodexWorkspacesProjectUsage {
+  id: string;
+  displayName: string;
+  path: string | null;
+  totals: CodexWorkspacesUsageTotals;
+  costEstimate: CodexWorkspacesCostEstimate;
+  sessionCount: number;
+  latestActivity: string | null;
+  topModel: string | null;
+  topSessions: CodexWorkspacesSessionUsage[];
+}
+
+export interface CodexLocalProjectUsageSnapshot {
+  updatedAt: string;
+  historyDays: number;
+  scopeSignature: string;
+  indexedFileCount: number;
+  skippedFileCount: number;
+  total: CodexWorkspacesUsageTotals;
+  projects: CodexWorkspacesProjectUsage[];
+  daily: CodexWorkspacesDailyPoint[];
+  sourceStatus: CodexWorkspacesSourceStatus;
+}
+
 
 export interface BootstrapState {
   contractVersion: string;
@@ -313,6 +386,8 @@ export interface CostSnapshotBridge {
   resetsAt: string | null;
   formattedUsed: string;
   formattedLimit: string | null;
+  balance?: number | null;
+  formattedBalance?: string | null;
 }
 
 export interface PaceSnapshot {
@@ -322,6 +397,15 @@ export interface PaceSnapshot {
   etaSeconds: number | null;
   expectedUsedPercent: number;
   actualUsedPercent: number;
+}
+
+export interface SessionEquivalentForecastSnapshot {
+  estimatedWindowsToExhaustWeekly: number;
+  windowsUntilReset: number;
+  availableWindowsUntilReset: number;
+  sampleCount: number;
+  weeklyResetsAt: string;
+  weeklyUsedPercent: number;
 }
 
 export interface ProviderUsageSnapshot {
@@ -349,6 +433,7 @@ export interface ProviderUsageSnapshot {
   trayStatusLabel: string | null;
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
+  sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
 }
 
 export interface WayfinderRouteSummary {
