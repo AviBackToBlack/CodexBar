@@ -5,7 +5,7 @@ import { playNotificationSound } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type { Language, LanguageOption, UsageThresholdOverride } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
-import type { TabProps } from "../../Settings";
+import type { TabProps } from "../settingsTabs";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "english", display: "English" },

@@ -6,7 +6,7 @@ import {
 } from "../../../lib/tauri";
 import { ShortcutCapture } from "../../../components/ShortcutCapture";
 import { Field, Toggle } from "../../../components/FormControls";
-import type { TabProps } from "../../Settings";
+import type { TabProps } from "../settingsTabs";
 
 function formatCodexSessionsDirs(paths: string[]): string {
   return paths.join("; ");

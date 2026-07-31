@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { getUsageSpendSummary } from "../../../lib/tauri";
 import type { UsageSpendSummary } from "../../../types/bridge";
-import type { TabProps } from "../../Settings";
+import type { TabProps } from "../settingsTabs";
 
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
 
