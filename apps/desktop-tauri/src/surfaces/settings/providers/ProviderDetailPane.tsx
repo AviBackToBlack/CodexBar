@@ -87,11 +87,18 @@ export function ProviderDetailPane({
   const [busy, setBusy] = useState(false);
   const [gatewayDraft, setGatewayDraft] = useState(wayfinderGatewayUrl);
   const [gatewayError, setGatewayError] = useState<string | null>(null);
-
-  useEffect(() => {
+  const [prevGatewaySync, setPrevGatewaySync] = useState({
+    providerId,
+    wayfinderGatewayUrl,
+  });
+  if (
+    providerId !== prevGatewaySync.providerId ||
+    wayfinderGatewayUrl !== prevGatewaySync.wayfinderGatewayUrl
+  ) {
+    setPrevGatewaySync({ providerId, wayfinderGatewayUrl });
     if (providerId === "wayfinder") setGatewayDraft(wayfinderGatewayUrl);
     setGatewayError(null);
-  }, [providerId, wayfinderGatewayUrl]);
+  }
 
   const saveGateway = async () => {
     setBusy(true);
@@ -459,6 +466,7 @@ function CredentialStorageSection({
       <div className="provider-detail-section__header">
         <h4>{t("CredentialStorageTitle")}</h4>
         <button
+          type="button"
           className="credential-btn credential-btn--danger"
           disabled={busy}
           onClick={onRevoke}

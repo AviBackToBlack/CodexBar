@@ -222,6 +222,7 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
               className="text-input"
               value={settings.httpProxyUrl ?? ""}
               placeholder="http://127.0.0.1:7890"
+              aria-label={t("NetworkProxyUrlLabel")}
               disabled={saving || !settings.httpProxyEnabled}
               onChange={(event) => set({ httpProxyUrl: event.target.value })}
               onBlur={(event) =>

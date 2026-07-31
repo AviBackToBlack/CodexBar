@@ -26,6 +26,10 @@ const REFRESH_CADENCE_OPTIONS: { value: string; labelKey: LocaleKey }[] = [
   { value: "3600", labelKey: "RefreshInterval1Hour" },
 ];
 
+function blurOnEnter(event: { key: string; currentTarget: { blur: () => void } }) {
+  if (event.key === "Enter") event.currentTarget.blur();
+}
+
 function ThresholdOverrideInputs({
   label,
   value,
@@ -45,8 +49,8 @@ function ThresholdOverrideInputs({
   disabled: boolean;
   onChange: (value: UsageThresholdOverride) => void;
 }) {
-  const [high, setHigh] = useState(value.high?.toString() ?? "");
-  const [critical, setCritical] = useState(value.critical?.toString() ?? "");
+  const [high, setHigh] = useState(() => value.high?.toString() ?? "");
+  const [critical, setCritical] = useState(() => value.critical?.toString() ?? "");
   useEffect(() => setHigh(value.high?.toString() ?? ""), [value.high]);
   useEffect(() => setCritical(value.critical?.toString() ?? ""), [value.critical]);
   const commit = () =>
@@ -55,9 +59,6 @@ function ThresholdOverrideInputs({
       critical:
         critical === "" ? undefined : Math.min(100, Math.max(0, Number(critical))),
     });
-  const blurOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") event.currentTarget.blur();
-  };
   return (
     <Field label={label}>
       <div className="settings-inline-fields">

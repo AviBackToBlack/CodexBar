@@ -165,32 +165,30 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
         ? shellTarget.tab
         : "general";
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const shellTab: SettingsTab | null =
+    shellTarget?.kind === "settings" && isSettingsTab(shellTarget.tab)
+      ? shellTarget.tab
+      : null;
+  const [prevPropTab, setPrevPropTab] = useState(propTab);
+  const [prevShellTab, setPrevShellTab] = useState(shellTab);
+
+  // Adjust local tab during render when external drivers change (no effect sync).
+  if (propTab !== prevPropTab) {
+    setPrevPropTab(propTab);
+    if (propTab && isSettingsTab(propTab)) {
+      setActiveTab(propTab);
+    }
+  }
+  if (shellTab !== prevShellTab) {
+    setPrevShellTab(shellTab);
+    if (shellTab) {
+      setActiveTab(shellTab);
+    }
+  }
 
   useEffect(() => {
     void applySettingsWindowSize();
   }, []);
-
-  // Respond to prop-driven tab changes (detached window re-focus events).
-  useEffect(() => {
-    if (propTab && isSettingsTab(propTab)) {
-      setActiveTab((current) => {
-        if (current === propTab) return current;
-        return propTab;
-      });
-    }
-  }, [propTab]);
-
-  useEffect(() => {
-    if (shellTarget?.kind !== "settings" || !isSettingsTab(shellTarget.tab)) {
-      return;
-    }
-
-    const nextTab: SettingsTab = shellTarget.tab;
-    setActiveTab((current) => {
-      if (current === nextTab) return current;
-      return nextTab;
-    });
-  }, [shellTarget]);
 
   const set = (patch: SettingsUpdate) => void update(patch);
   const handleTabClick = useCallback((tab: SettingsTab) => {
@@ -210,12 +208,14 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
         <span className="settings-titlebar__title" data-tauri-drag-region>{t("SettingsWindowTitle")}</span>
         <div className="settings-titlebar__controls">
           <button
+            type="button"
             className="settings-titlebar__control settings-titlebar__control--minimize"
             onClick={() => void getCurrentWindow().minimize()}
             aria-label={t("WindowMinimize")}
             title={t("WindowMinimize")}
           />
           <button
+            type="button"
             className="settings-titlebar__control settings-titlebar__control--close"
             onClick={() => void closeSettingsWindow()}
             aria-label={t("WindowClose")}
@@ -232,6 +232,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
       <nav className="settings-tabs" role="tablist">
         {TAB_META.map((tab) => (
           <button
+            type="button"
             key={tab.id}
             role="tab"
             aria-selected={activeTab === tab.id}

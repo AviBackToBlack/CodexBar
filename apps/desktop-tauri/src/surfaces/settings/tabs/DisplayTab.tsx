@@ -3,7 +3,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import { Field, Select, Toggle } from "../../../components/FormControls";
 import type { MenuBarDisplayMode, TrayIconMode, TrayVisibilityStatusDto } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
-import { FloatBarSettingsSection } from "../../../floatbar";
+import FloatBarSettingsSection from "../../../floatbar/SettingsSection";
 import { getTrayVisibilityStatus } from "../../../lib/tauri";
 
 function clampWindowScalePercent(value: number): number {

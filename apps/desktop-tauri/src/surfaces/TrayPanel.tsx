@@ -497,8 +497,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         <div className="provider-grid__divider" />
         <div className="menu-stack">
           {useWideColumns
-            ? wideColumns.map((column, index) => (
-                <div className="menu-stack__column" key={index}>
+            ? wideColumns.map((column) => (
+                <div
+                  className="menu-stack__column"
+                  key={column.map((p) => p.providerId).join("|") || "empty"}
+                >
                   {column.map(renderProviderCard)}
                 </div>
               ))

@@ -131,6 +131,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
 
       <div className="about-actions">
         <button
+          type="button"
           className="credential-btn credential-btn--primary"
           disabled={isBusy}
           onClick={handleCheck}
@@ -150,13 +151,14 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
             </span>
             {updateState.canDownload ? (
               <button
+                type="button"
                 className="credential-btn credential-btn--primary"
                 onClick={download}
               >
                 {t("BannerDownloadButton")}
               </button>
             ) : (
-              <button className="credential-btn" onClick={openRelease}>
+              <button type="button" className="credential-btn" onClick={openRelease}>
                 {t("BannerViewRelease")}
               </button>
             )}
@@ -176,13 +178,14 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
             <span className="about-update-msg">{t("UpdateReady")}</span>
             {updateState.canApply ? (
               <button
+                type="button"
                 className="credential-btn credential-btn--primary"
                 onClick={apply}
               >
                 {t("BannerInstallRestart")}
               </button>
             ) : (
-              <button className="credential-btn" onClick={openRelease}>
+              <button type="button" className="credential-btn" onClick={openRelease}>
                 {t("BannerViewRelease")}
               </button>
             )}

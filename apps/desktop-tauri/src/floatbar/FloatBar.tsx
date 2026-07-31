@@ -257,10 +257,14 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     };
   }, []);
 
-  // The floatbar window is detached, so it doesn't share React state
-  // with the Settings tab. Listen for the Rust-side config-changed event
-  // and re-pull the snapshot when fired.
-  const [settings, setSettings] = useState<SettingsSnapshot>(state.settings);
+  // Local settings: event stream is source of truth after mount; re-seed
+  // if the bootstrap prop identity changes (rare parent remount path).
+  const [settings, setSettings] = useState(state.settings);
+  const [settingsSeed, setSettingsSeed] = useState(state.settings);
+  if (state.settings !== settingsSeed) {
+    setSettingsSeed(state.settings);
+    setSettings(state.settings);
+  }
   const [localCosts, setLocalCosts] = useState<Record<string, FloatBarCostSummary>>({});
 
   // The detached floatbar should keep usage fresh, but it must not open or
@@ -303,9 +307,6 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     return [...list].sort((a, b) => b.primary.usedPercent - a.primary.usedPercent);
   }, [providers, settings.enabledProviders, filterIds]);
 
-  const visibleCostTargetKey = visible
-    .map((p) => `${providerCostKey(p)}:${p.providerId}:${p.displayName}`)
-    .join("|");
   const visibleCostTargets = useMemo<FloatBarCostTarget[]>(
     () =>
       showCost
@@ -315,7 +316,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
             displayName: provider.displayName,
           }))
         : [],
-    [showCost, visibleCostTargetKey],
+    [showCost, visible],
   );
 
   useEffect(() => {
@@ -425,6 +426,9 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
 
   return (
     <div
+      role="button"
+      tabIndex={-1}
+      aria-label={t("AppName")}
       className={`floatbar floatbar--${orientation} floatbar--${style}${settings.floatBarDarkText ? " floatbar--light-bg" : ""}`}
       data-tauri-drag-region
       onMouseDown={startDrag}

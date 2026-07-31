@@ -115,12 +115,27 @@ function formatSessionEquivalentEstimate(
   return `Estimated: ${display} ${unit} left`;
 }
 
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
+const compactCountFormat0 = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 0,
+});
+const compactCountFormat1 = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
 function formatCurrency(amount: number, code: string): string {
   try {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: code,
-    }).format(amount);
+    let formatter = currencyFormatters.get(code);
+    if (!formatter) {
+      formatter = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: code,
+      });
+      currencyFormatters.set(code, formatter);
+    }
+    return formatter.format(amount);
   } catch {
     return `${code} ${amount.toFixed(2)}`;
   }
@@ -128,10 +143,15 @@ function formatCurrency(amount: number, code: string): string {
 
 function formatCompactCount(value: number | null): string {
   if (value == null || value <= 0) return "—";
-  return new Intl.NumberFormat("en-US", {
-    notation: "compact",
-    maximumFractionDigits: value >= 1_000_000 ? 1 : 0,
-  }).format(value);
+  return (value >= 1_000_000 ? compactCountFormat1 : compactCountFormat0).format(
+    value,
+  );
+}
+
+function formatBudget(value: number): string {
+  return value < 10
+    ? value.toFixed(1).replace(/\.0$/, "")
+    : Math.round(value).toString();
 }
 
 function LocalUsageBlock({
@@ -374,8 +394,6 @@ function MetricRow({
   const paceView = getMetricPaceView(snap);
   const reserveDescription = formatReserveDescription(snap, t);
   const forecastText = formatSessionEquivalentEstimate(sessionEquivalentForecast);
-  const formatBudget = (value: number) =>
-    value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value).toString();
   return (
     <div className="menu-metric">
       <span className="menu-metric__title">{title}</span>
