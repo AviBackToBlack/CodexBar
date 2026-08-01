@@ -18,11 +18,17 @@ struct KiroLoginRunner {
         let output: String
     }
 
+    /// Polling cadence while the login subprocess is still running, used to surface a
+    /// device-flow URL/code before the process exits (`kiro-cli login` prints them, then blocks
+    /// while polling for the browser approval).
+    private static let progressPollInterval: TimeInterval = 0.5
+
     static func run(
         timeout: TimeInterval = 120,
         outputDrainTimeout: TimeInterval = 3,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        loginPATH: [String]? = LoginShellPathCache.shared.current) async -> Result
+        loginPATH: [String]? = LoginShellPathCache.shared.current,
+        onProgress: (@Sendable (String) -> Void)? = nil) async -> Result
     {
         await Task(priority: .userInitiated) {
             var env = environment
@@ -62,7 +68,18 @@ struct KiroLoginRunner {
             stdoutCapture.start()
             stderrCapture.start()
 
+            let progressTask = onProgress.map { onProgress in
+                Task.detached(priority: .userInitiated) {
+                    await Self.pollProgress(
+                        stdout: stdoutCapture,
+                        stderr: stderrCapture,
+                        interval: self.progressPollInterval,
+                        onProgress: onProgress)
+                }
+            }
+
             let timedOut = await self.wait(timeout: timeout, termination: termination)
+            progressTask?.cancel()
             if timedOut {
                 self.terminate(process, processGroup: processGroup)
             }
@@ -186,5 +203,24 @@ struct KiroLoginRunner {
 
     private static func decode(_ data: Data) -> String {
         ProcessPipeCapture.decodeUTF8(data)
+    }
+
+    /// Polls the still-running subprocess's pipes for a device-flow URL/code and reports it once,
+    /// so the UI can show it before the timeout kills a login that's waiting on browser approval.
+    private static func pollProgress(
+        stdout: ProcessPipeCapture,
+        stderr: ProcessPipeCapture,
+        interval: TimeInterval,
+        onProgress: @escaping @Sendable (String) -> Void) async
+    {
+        while !Task.isCancelled {
+            let combined = self.decode(stdout.currentSnapshot()) + self.decode(stderr.currentSnapshot())
+            let trimmed = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.contains("http://") || trimmed.contains("https://") {
+                onProgress(trimmed)
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(max(0, interval) * 1_000_000_000))
+        }
     }
 }

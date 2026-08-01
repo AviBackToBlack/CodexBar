@@ -6,7 +6,13 @@ extension StatusItemController {
         self.loginPhase = .requesting
         defer { self.loginPhase = .idle }
 
-        let result = await KiroLoginRunner.run(timeout: 120)
+        let result = await KiroLoginRunner.run(timeout: 120) { [weak self] progressOutput in
+            Task { @MainActor in
+                self?.presentLoginAlert(
+                    title: L("Complete Kiro login in your browser"),
+                    message: progressOutput)
+            }
+        }
         guard !Task.isCancelled else { return }
         if let info = KiroLoginAlertPresentation.alertInfo(for: result) {
             self.presentLoginAlert(title: info.title, message: info.message)
