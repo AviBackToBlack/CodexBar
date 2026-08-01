@@ -2,7 +2,8 @@ import CodexBarCore
 
 @MainActor
 extension StatusItemController {
-    func runKiroLoginFlow() async {
+    @discardableResult
+    func runKiroLoginFlow() async -> Bool {
         self.loginPhase = .requesting
         defer { self.loginPhase = .idle }
 
@@ -13,14 +14,14 @@ extension StatusItemController {
                     message: progressOutput)
             }
         }
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled else { return false }
         if let info = KiroLoginAlertPresentation.alertInfo(for: result) {
             self.presentLoginAlert(title: info.title, message: info.message)
         }
         let length = result.output.count
         self.loginLogger.info("Kiro login", metadata: ["outcome": "\(result.outcome)", "length": "\(length)"])
-        if case .success = result.outcome {
-            self.postLoginNotification(for: .kiro)
-        }
+        guard case .success = result.outcome else { return false }
+        self.postLoginNotification(for: .kiro)
+        return true
     }
 }

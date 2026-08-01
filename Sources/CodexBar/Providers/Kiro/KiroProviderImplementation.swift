@@ -9,7 +9,6 @@ struct KiroProviderImplementation: ProviderImplementation {
     @MainActor
     func runLoginFlow(context: ProviderLoginContext) async -> Bool {
         await context.controller.runKiroLoginFlow()
-        return true
     }
 
     @MainActor
