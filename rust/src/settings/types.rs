@@ -12,6 +12,30 @@ pub struct UsageThresholds {
     pub critical: f64,
 }
 
+/// WAV files assigned to individual notification events.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NotificationSoundPaths {
+    pub predictive_warning: Option<String>,
+    pub high_usage: Option<String>,
+    pub critical_usage: Option<String>,
+    pub exhausted: Option<String>,
+    pub status_issue: Option<String>,
+    pub session_depleted: Option<String>,
+    pub session_restored: Option<String>,
+}
+
+/// Sound theme used when an event has no custom WAV file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NotificationSoundTheme {
+    /// Use the existing Windows system-sound mapping.
+    #[default]
+    Windows,
+    /// Use a distinct built-in CodexBar sound for each event.
+    CodexBar,
+}
+
 pub fn normalize_usage_threshold_overrides(
     values: HashMap<String, UsageThresholdOverride>,
 ) -> HashMap<String, UsageThresholdOverride> {

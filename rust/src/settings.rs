@@ -62,8 +62,13 @@ pub struct Settings {
     /// Whether to play sound effects for threshold alerts
     pub sound_enabled: bool,
 
-    /// Sound volume for alerts (0-100)
-    pub sound_volume: u8,
+    /// Per-notification WAV files. Unassigned events use the selected sound theme.
+    #[serde(default)]
+    pub notification_sound_paths: NotificationSoundPaths,
+
+    /// Sound theme used when an event has no custom WAV file.
+    #[serde(default)]
+    pub notification_sound_theme: NotificationSoundTheme,
 
     /// High usage threshold for warnings (percentage)
     pub high_usage_threshold: f64,
@@ -419,7 +424,8 @@ impl Default for Settings {
             start_at_login: false,
             show_notifications: true,
             sound_enabled: true,
-            sound_volume: 100,
+            notification_sound_paths: NotificationSoundPaths::default(),
+            notification_sound_theme: NotificationSoundTheme::default(),
             high_usage_threshold: 70.0,
             critical_usage_threshold: 90.0,
             provider_usage_thresholds: HashMap::new(),
