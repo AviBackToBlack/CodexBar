@@ -1,5 +1,28 @@
 # Changelog
 
+## [Windows] 0.47.0 - 2026-08-04
+
+Windows port of upstream CodexBar **0.46.0 → 0.47.0**.
+
+### Added
+- Providers: Notion AI and xAI usage surfaces from upstream 0.47.0.
+- CLI: hooks watch mode for live hook event streaming.
+- Low Power Mode to reduce background refresh/work on battery or demand.
+- Cost pace: real-calendar monthly pacing (not rolling 30-day only).
+- Settings: per-notification custom sounds (#251).
+- Russian localization (#248).
+
+### Fixed
+- MiniMax coding-plan web-session auth/status refresh (#250, #246).
+- OpenCode Go usage display stuck at 1% instead of true progress to 100% (#250, #247).
+- FloatBar DPI-aware sizing on scaled displays (#245).
+- Provider fixes: Cursor, CommandCode, OpenCode Go WAL handling, and ZAI/Kimi/Grok duration windows.
+
+### Changed
+- Upstream 0.47.0 provider and CLI behavior ported onto the Windows tray/desktop shell.
+
+---
+
 ## [Windows] 0.46.0 - 2026-07-30
 
 Windows port of upstream CodexBar **0.45.2 → 0.46.0**. macOS-only shell items (WidgetKit, Sparkle, AppKit menu layout, Homebrew, Safari cookie APIs) remain deferred.
