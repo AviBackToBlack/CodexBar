@@ -216,6 +216,7 @@ function providerSourceHintShort(
     case "manus":
     case "mimo":
     case "zoommate":
+    case "notion":
     case "t3chat":
     case "commandcode":
       return t("ProviderSourceWebShort");
@@ -245,6 +246,7 @@ function providerSourceHintShort(
     case "deepgram":
     case "groq":
     case "llmproxy":
+    case "xai":
       return t("ProviderSourceApiShort");
     case "kiro":
       return t("ProviderSourceKiroEnvShort");
