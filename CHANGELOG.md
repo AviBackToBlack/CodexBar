@@ -14,7 +14,7 @@ Windows port of upstream CodexBar **0.46.0 → 0.47.0**.
 
 ### Fixed
 - MiniMax coding-plan web-session auth/status refresh (#250, #246).
-- OpenCode Go usage display stuck at 1% instead of true progress to 100% (#250, #247).
+- OpenCode Go rolling 5-hour usage falsely showed 100% "Exhausted" when the real value was 1% (#250, #247).
 - FloatBar DPI-aware sizing on scaled displays (#245).
 - Provider fixes: Cursor, CommandCode, OpenCode Go WAL handling, and ZAI/Kimi/Grok duration windows.
 
