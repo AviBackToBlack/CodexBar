@@ -48,6 +48,7 @@ extension CodexBarCLI {
         }
         let groupBy = Self.decodeCostGroupBy(from: values)
         Self.warnSkippedGroupingProviders(groupBy: groupBy, providers: providers, jsonOnly: output.jsonOnly)
+        // Provider-specific by design: this warning applies only when Codex is among the requested providers.
         if providers.contains(.codex),
            !output.jsonOnly,
            let warning = Self.sessionGroupingPiOmissionWarning(
@@ -232,6 +233,7 @@ extension CodexBarCLI {
             if !historyIncomplete {
                 lines.append("—")
             }
+            // Provider-specific by design: session output uses Codex's local estimate hint.
             lines.append(Self.costEstimateHint(provider: .codex))
             return lines.joined(separator: "\n")
         }
@@ -249,6 +251,7 @@ extension CodexBarCLI {
             let modelLabel = Self.sessionModelLabel(session.modelBreakdowns.map(\.modelName))
             lines.append("\(modelLabel) · \(Self.sessionTimestampString(session.lastActivity))")
         }
+        // Provider-specific by design: session output uses Codex's local estimate hint.
         lines.append(Self.costEstimateHint(provider: .codex))
         return lines.joined(separator: "\n")
     }
@@ -301,6 +304,7 @@ extension CodexBarCLI {
         groupBy: CostGroupBy,
         format: OutputFormat) -> [UsageProvider]
     {
+        // Provider-specific by design: text grouping relies on Codex local indexes while JSON preserves all providers.
         providers.filter { !groupBy.requiresCodexLocalSessions || $0 == .codex || format == .json }
     }
 
@@ -311,6 +315,7 @@ extension CodexBarCLI {
         format: OutputFormat,
         includePiSessions: Bool) -> Bool
     {
+        // Provider-specific by design: only Codex local session text bypasses Pi/OMP merging.
         guard provider == .codex, groupBy == .session, format == .text else { return includePiSessions }
         return false
     }
@@ -321,6 +326,7 @@ extension CodexBarCLI {
         format: OutputFormat,
         includePiSessions: Bool) -> String?
     {
+        // Provider-specific by design: only Codex local session text warns about omitted mirrors.
         guard provider == .codex,
               groupBy == .session,
               format == .text,
