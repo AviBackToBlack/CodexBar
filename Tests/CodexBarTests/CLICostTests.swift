@@ -81,6 +81,30 @@ struct CLICostTests {
     }
 
     @Test
+    func `session grouping warns when default pi usage is omitted`() {
+        #expect(CodexBarCLI.sessionGroupingPiOmissionWarning(
+            provider: .codex,
+            groupBy: .session,
+            format: .text,
+            includePiSessions: true)?.contains("Pi/OMP usage is omitted") == true)
+        #expect(CodexBarCLI.sessionGroupingPiOmissionWarning(
+            provider: .codex,
+            groupBy: .session,
+            format: .text,
+            includePiSessions: false) == nil)
+        #expect(CodexBarCLI.sessionGroupingPiOmissionWarning(
+            provider: .codex,
+            groupBy: .session,
+            format: .json,
+            includePiSessions: true) == nil)
+        #expect(CodexBarCLI.sessionGroupingPiOmissionWarning(
+            provider: .claude,
+            groupBy: .session,
+            format: .text,
+            includePiSessions: true) == nil)
+    }
+
+    @Test
     func `session grouping falls back for unsupported providers`() {
         let snap = CostUsageTokenSnapshot(
             sessionTokens: 1200,

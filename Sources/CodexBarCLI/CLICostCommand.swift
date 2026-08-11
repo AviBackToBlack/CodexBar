@@ -48,6 +48,16 @@ extension CodexBarCLI {
         }
         let groupBy = Self.decodeCostGroupBy(from: values)
         Self.warnSkippedGroupingProviders(groupBy: groupBy, providers: providers, jsonOnly: output.jsonOnly)
+        if providers.contains(.codex),
+           !output.jsonOnly,
+           let warning = Self.sessionGroupingPiOmissionWarning(
+               provider: .codex,
+               groupBy: groupBy,
+               format: format,
+               includePiSessions: includePiSessions)
+        {
+            Self.writeStderr("Warning: \(warning)\n")
+        }
 
         let fetcher = CostUsageFetcher()
         var sections: [String] = []
@@ -297,6 +307,21 @@ extension CodexBarCLI {
     {
         guard provider == .codex, groupBy == .session, format == .text else { return includePiSessions }
         return false
+    }
+
+    static func sessionGroupingPiOmissionWarning(
+        provider: UsageProvider,
+        groupBy: CostGroupBy,
+        format: OutputFormat,
+        includePiSessions: Bool) -> String?
+    {
+        guard provider == .codex,
+              groupBy == .session,
+              format == .text,
+              includePiSessions
+        else { return nil }
+        return "Session grouping shows native Codex conversations only; Pi/OMP usage is omitted from this view. "
+            + "Use the default cost view for merged totals."
     }
 
     /// Provider-specific by design: only Codex JSONL sessions carry the local project/session indexes,
