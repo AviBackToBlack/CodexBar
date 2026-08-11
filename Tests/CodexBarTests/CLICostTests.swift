@@ -345,6 +345,35 @@ struct CLICostTests {
     }
 
     @Test
+    func `session grouping labels partial history during catch up`() {
+        let snap = CostUsageTokenSnapshot(
+            sessionTokens: 1200,
+            sessionCostUSD: 1.25,
+            last30DaysTokens: 9000,
+            last30DaysCostUSD: 9.99,
+            historyDays: 30,
+            historyCoverageIsEstablished: false,
+            daily: [],
+            sessions: [
+                CostUsageSessionBreakdown(
+                    sessionID: "abcd12345678abcd12345678abcd12345678",
+                    lastActivity: Date(timeIntervalSince1970: 1_750_000_000),
+                    inputTokens: nil,
+                    cachedInputTokens: nil,
+                    outputTokens: nil,
+                    totalTokens: 100,
+                    requestCount: 2,
+                    costUSD: 0.04,
+                    modelBreakdowns: []),
+            ],
+            updatedAt: Date(timeIntervalSince1970: 0))
+        let output = CodexBarCLI.renderCostText(provider: .codex, snapshot: snap, groupBy: .session, useColor: false)
+
+        #expect(output.contains("Conversation history is incomplete while the local scan catches up."))
+        #expect(output.contains("Session abcd...12345678"))
+    }
+
+    @Test
     func `session grouping does not change cost JSON payload`() throws {
         let snapshot = CostUsageTokenSnapshot(
             sessionTokens: 10,
