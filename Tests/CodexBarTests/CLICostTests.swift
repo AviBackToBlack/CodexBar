@@ -57,6 +57,30 @@ struct CLICostTests {
     }
 
     @Test
+    func `session text grouping disables pi merge only for codex`() {
+        #expect(CodexBarCLI.costIncludePiSessions(
+            provider: .codex,
+            groupBy: .session,
+            format: .text,
+            includePiSessions: true) == false)
+        #expect(CodexBarCLI.costIncludePiSessions(
+            provider: .codex,
+            groupBy: .session,
+            format: .json,
+            includePiSessions: true))
+        #expect(CodexBarCLI.costIncludePiSessions(
+            provider: .codex,
+            groupBy: .project,
+            format: .text,
+            includePiSessions: true))
+        #expect(CodexBarCLI.costIncludePiSessions(
+            provider: .claude,
+            groupBy: .session,
+            format: .text,
+            includePiSessions: true))
+    }
+
+    @Test
     func `session grouping falls back for unsupported providers`() {
         let snap = CostUsageTokenSnapshot(
             sessionTokens: 1200,

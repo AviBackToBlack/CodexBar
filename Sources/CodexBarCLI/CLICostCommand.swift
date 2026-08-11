@@ -78,7 +78,11 @@ extension CodexBarCLI {
                     historyDays: historyDays,
                     cursorCookieHeaderOverride: Self.cursorCostHeaderOverride(provider, settings: cursorCookieSettings),
                     refreshPricingInBackground: false,
-                    includePiSessions: includePiSessions)
+                    includePiSessions: Self.costIncludePiSessions(
+                        provider: provider,
+                        groupBy: groupBy,
+                        format: format,
+                        includePiSessions: includePiSessions))
                 switch format {
                 case .text:
                     sections.append(Self.renderCostText(
@@ -282,6 +286,17 @@ extension CodexBarCLI {
         format: OutputFormat) -> [UsageProvider]
     {
         providers.filter { !groupBy.requiresCodexLocalSessions || $0 == .codex || format == .json }
+    }
+
+    /// Session text reports need native Codex rows, so keep Pi/OMP aggregate merging out of that path.
+    static func costIncludePiSessions(
+        provider: UsageProvider,
+        groupBy: CostGroupBy,
+        format: OutputFormat,
+        includePiSessions: Bool) -> Bool
+    {
+        guard provider == .codex, groupBy == .session, format == .text else { return includePiSessions }
+        return false
     }
 
     /// Provider-specific by design: only Codex JSONL sessions carry the local project/session indexes,
