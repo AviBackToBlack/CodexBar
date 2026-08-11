@@ -225,7 +225,11 @@ extension CodexBarCLI {
             ?? (snapshot.historyDays == 1 ? "Today" : "Last \(snapshot.historyDays) days")
         var lines = [header, "Conversations (\(historyLabel)):"]
         guard !snapshot.sessions.isEmpty else {
-            lines.append("—")
+            if snapshot.historyCoverageIsEstablished == false {
+                lines.append("Conversation history is incomplete while the local scan catches up.")
+            } else {
+                lines.append("—")
+            }
             lines.append(Self.costEstimateHint(provider: .codex))
             return lines.joined(separator: "\n")
         }

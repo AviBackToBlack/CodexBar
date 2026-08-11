@@ -328,6 +328,23 @@ struct CLICostTests {
     }
 
     @Test
+    func `session grouping labels incomplete history during catch up`() {
+        let snap = CostUsageTokenSnapshot(
+            sessionTokens: 1200,
+            sessionCostUSD: 1.25,
+            last30DaysTokens: 9000,
+            last30DaysCostUSD: 9.99,
+            historyDays: 30,
+            historyCoverageIsEstablished: false,
+            daily: [],
+            updatedAt: Date(timeIntervalSince1970: 0))
+        let output = CodexBarCLI.renderCostText(provider: .codex, snapshot: snap, groupBy: .session, useColor: false)
+
+        #expect(output.contains("Conversation history is incomplete while the local scan catches up."))
+        #expect(!output.contains("Conversations (Last 30 days):\n—\n"))
+    }
+
+    @Test
     func `session grouping does not change cost JSON payload`() throws {
         let snapshot = CostUsageTokenSnapshot(
             sessionTokens: 10,
