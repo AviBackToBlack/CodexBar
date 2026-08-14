@@ -76,6 +76,111 @@ struct CostUsageFetcherCacheSnapshotTests {
     }
 
     @Test
+    func `cached codex token snapshot preserves a completed empty history`() async throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let now = try env.makeLocalNoon(year: 2026, month: 4, day: 8)
+        let options = CostUsageScanner.Options(
+            codexSessionsRoot: env.codexSessionsRoot,
+            cacheRoot: env.cacheRoot)
+        let scanTime = now.addingTimeInterval(-60)
+        var cache = CostUsageCache()
+        cache.lastScanUnixMs = Int64(scanTime.timeIntervalSince1970 * 1000)
+        cache.scanSinceKey = "2026-04-07"
+        cache.scanUntilKey = "2026-04-09"
+        cache.timeZoneIdentifier = options.calendar.timeZone.identifier
+        cache.roots = CostUsageScanner.codexRootsFingerprint(options: options)
+        CostUsageStoreAccess.replace(
+            cacheRoot: env.cacheRoot,
+            cache: cache,
+            calendar: options.calendar)
+        let cached = await CostUsageFetcher.loadCachedCodexTokenSnapshotResult(
+            now: now,
+            historyDays: 1,
+            includePiSessions: false,
+            scannerOptions: options)
+
+        #expect(cached?.snapshot.sessionTokens == 0)
+        #expect(cached?.snapshot.sessionCostUSD == 0)
+        #expect(cached?.snapshot.last30DaysTokens == 0)
+        #expect(cached?.snapshot.last30DaysCostUSD == 0)
+        #expect(cached?.snapshot.historyCoverageIsEstablished == true)
+        #expect(cached?.lastRefreshAt == scanTime)
+    }
+
+    @Test
+    func `cached codex token snapshot refuses an empty history while catch up is pending`() async throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let now = try env.makeLocalNoon(year: 2026, month: 4, day: 8)
+        let options = CostUsageScanner.Options(
+            codexSessionsRoot: env.codexSessionsRoot,
+            cacheRoot: env.cacheRoot)
+        var cache = CostUsageCache()
+        cache.lastScanUnixMs = Int64(now.addingTimeInterval(-60).timeIntervalSince1970 * 1000)
+        cache.scanSinceKey = "2026-04-07"
+        cache.scanUntilKey = "2026-04-09"
+        cache.timeZoneIdentifier = options.calendar.timeZone.identifier
+        cache.roots = CostUsageScanner.codexRootsFingerprint(options: options)
+        cache.codexScanCatchUpPending = true
+        CostUsageStoreAccess.replace(
+            cacheRoot: env.cacheRoot,
+            cache: cache,
+            calendar: options.calendar)
+
+        let cached = await CostUsageFetcher.loadCachedCodexTokenSnapshotResult(
+            now: now,
+            historyDays: 1,
+            includePiSessions: false,
+            scannerOptions: options)
+
+        #expect(cached == nil)
+    }
+
+    @Test
+    func `cached codex token snapshot refuses an empty history with buffered fork retries`() async throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let now = try env.makeLocalNoon(year: 2026, month: 4, day: 8)
+        let options = CostUsageScanner.Options(
+            codexSessionsRoot: env.codexSessionsRoot,
+            cacheRoot: env.cacheRoot)
+        let line = CostUsageScanner.CodexBufferedFastLine(
+            lineIndex: 1,
+            ordinal: nil,
+            line: .interAgentCommunication(triggerTurn: false))
+        let filePath = env.codexSessionsRoot.appendingPathComponent("fork.jsonl").path
+        var cache = CostUsageCache()
+        cache.lastScanUnixMs = Int64(now.addingTimeInterval(-60).timeIntervalSince1970 * 1000)
+        cache.scanSinceKey = "2026-04-07"
+        cache.scanUntilKey = "2026-04-09"
+        cache.timeZoneIdentifier = options.calendar.timeZone.identifier
+        cache.roots = CostUsageScanner.codexRootsFingerprint(options: options)
+        cache.files[filePath] = CostUsageScanner.makeFileUsage(
+            mtimeUnixMs: cache.lastScanUnixMs,
+            size: 1,
+            days: [:],
+            parsedBytes: 1,
+            codexScanComplete: true,
+            codexBufferedUnresolvedForkLines: [line])
+        CostUsageStoreAccess.replace(
+            cacheRoot: env.cacheRoot,
+            cache: cache,
+            calendar: options.calendar)
+
+        let cached = await CostUsageFetcher.loadCachedCodexTokenSnapshotResult(
+            now: now,
+            historyDays: 1,
+            includePiSessions: false,
+            scannerOptions: options)
+
+        #expect(cached == nil)
+    }
+
+    @Test
     func `cached codex token snapshot loads from existing cache without rescanning`() async throws {
         let env = try CostUsageTestEnvironment()
         defer { env.cleanup() }
