@@ -98,6 +98,12 @@ function Get-Release {
     }
 }
 
+function Get-ReleaseById {
+    param([Parameter(Mandatory)][string]$Id)
+
+    return Invoke-GhJson @('api', "repos/$Repository/releases/$Id")
+}
+
 function New-DraftRelease {
     return Invoke-GhJson @(
         'api', '--method', 'POST', "repos/$Repository/releases",
@@ -264,7 +270,7 @@ foreach ($path in $assetPaths) {
         }
         throw
     }
-    $release = Get-Release
+    $release = Get-ReleaseById ([string]$release.id)
     if (-not $release -or -not [bool]$release.draft) {
         throw "Release $Tag disappeared or is no longer draft after uploading $name."
     }
