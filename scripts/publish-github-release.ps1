@@ -57,6 +57,7 @@ function Invoke-GhJson {
 function Invoke-GhUpload {
     param([Parameter(Mandatory)][string]$Path)
 
+    $gh = Get-Command gh -ErrorAction Stop
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
