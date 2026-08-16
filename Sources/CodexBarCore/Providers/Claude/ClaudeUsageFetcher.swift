@@ -126,7 +126,7 @@ public struct ClaudeUsageFetcher: ClaudeUsageFetching, Sendable {
     }
 
     private let configuration: Configuration
-    private static let log = CodexBarLog.logger(LogCategories.claudeUsage)
+    private static let log = CodexBarLog.logger(LogCategories.provider(.claude, scope: "usage"))
     private static var isClaudeOAuthFlowDebugEnabled: Bool {
         ProcessInfo.processInfo.environment["CODEXBAR_DEBUG_CLAUDE_OAUTH_FLOW"] == "1"
     }
@@ -517,10 +517,9 @@ public struct ClaudeUsageFetcher: ClaudeUsageFetching, Sendable {
                         error: error,
                         oauthKeychainPromptCooldownEnabled: self.fetcher.oauthKeychainPromptCooldownEnabled,
                         delegatedOutcome: delegatedOutcome))
-                throw ClaudeUsageError.oauthFailed(
-                    ClaudeUsageFetcher.delegatedRefreshFailureMessage(
-                        for: delegatedResult,
-                        retryError: error))
+                throw ClaudeUsageFetcher.delegatedRefreshFailureError(
+                    for: delegatedResult,
+                    retryError: error)
             }
         }
 
@@ -1424,23 +1423,9 @@ extension ClaudeUsageFetcher {
                 web: webData.extraUsageCost,
                 includeUsageDetails: self.useWebExtras)
             if mergedProviderCost != snapshot.providerCost || mergedExtraRateWindows != snapshot.extraRateWindows {
-                return ClaudeUsageSnapshot(
-                    primary: snapshot.primary,
-                    primaryWindowKind: snapshot.primaryWindowKind,
-                    secondary: snapshot.secondary,
-                    opus: snapshot.opus,
+                return snapshot.replacingWebExtras(
                     extraRateWindows: mergedExtraRateWindows,
-                    providerCost: mergedProviderCost,
-                    updatedAt: snapshot.updatedAt,
-                    accountEmail: snapshot.accountEmail,
-                    accountOrganization: snapshot.accountOrganization,
-                    loginMethod: snapshot.loginMethod,
-                    rawText: snapshot.rawText,
-                    oauthKeychainPersistentRefHash: snapshot.oauthKeychainPersistentRefHash,
-                    oauthHistoryOwnerIdentifier: snapshot.oauthHistoryOwnerIdentifier,
-                    oauthKeychainCredentialMismatch: snapshot.oauthKeychainCredentialMismatch,
-                    oauthKeychainCredentialAbsent: snapshot.oauthKeychainCredentialAbsent,
-                    oauthKeychainCredentialUnavailable: snapshot.oauthKeychainCredentialUnavailable)
+                    providerCost: mergedProviderCost)
             }
         case let .failure(error):
             if error is CancellationError ||

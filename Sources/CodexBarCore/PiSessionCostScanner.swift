@@ -75,7 +75,7 @@ enum PiSessionCostScanner {
 
     private static let costScale = 1_000_000_000.0
     /// Bump for Pi-only cost formula changes not represented by the parser or pricing fingerprints.
-    private static let costFormulaVersion = 1
+    private static let costFormulaVersion = 2
     private static let maxLineBytes = 16 * 1024 * 1024
     private static let maxSafeRoundedInt = Double(Int.max) - 1
     private static let sessionStartFilenameRegex = try? NSRegularExpression(
@@ -107,6 +107,7 @@ enum PiSessionCostScanner {
         options: Options = Options(),
         checkCancellation: CostUsageScanner.CancellationCheck?) throws -> CostUsageDailyReport
     {
+        // Provider-specific by design: Pi records only OpenAI Codex and Anthropic sessions with distinct pricing.
         guard provider == .codex || provider == .claude else {
             return CostUsageDailyReport(data: [], summary: nil)
         }
@@ -255,7 +256,7 @@ enum PiSessionCostScanner {
                 modelsDevArtifact: modelsDevArtifact,
                 formulaVersion: Self.costFormulaVersion,
                 parserHash: CodexParserHash.value,
-                modelsDevProviderIDs: ["anthropic", "openai"]))
+                modelsDevProviderIDs: CostUsagePricing.codexModelsDevProviderIDs.union(["anthropic"])))
     }
 
     private static func requestedWindowExpandsCache(
@@ -711,6 +712,7 @@ enum PiSessionCostScanner {
     private static func normalizeModelName(_ raw: String, provider: UsageProvider) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        // Provider-specific by design: Pi model IDs require the vendor-specific Codex/Claude pricing normalizers.
         return switch provider {
         case .codex:
             CostUsagePricing.normalizeCodexModel(trimmed)

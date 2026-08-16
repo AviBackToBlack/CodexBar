@@ -485,6 +485,10 @@
 "quota_depleted_title" = "نفاد الحصة واستعادتها";
 "quota_warning_notifications_subtitle" = "يحذر عندما يتجاوز الحصة المتبقية من الجلسة أو الحصة الأسبوعية العتبات المكونة.";
 "threshold_warnings_title" = "تحذيرات العتبة";
+"provider_accent_color_title" = "لون التمييز";
+"provider_accent_color_footer" = "يحدد لون أشرطة الاستخدام والرسوم البيانية وعلامة التبديل لهذا المزود.";
+"provider_accent_color_hex_label" = "قيمة اللون السداسية";
+"provider_accent_color_reset" = "استخدام الافتراضي";
 "quota_warnings_title" = "تحذيرات الحصص";
 "quota_warning_session" = "الجلسة";
 "quota_warning_session_capitalized" = "الجلسة";
@@ -613,6 +617,11 @@
 "show_quota_warning_markers_subtitle" = "ارسم علامات عتبة على أشرطة الاستخدام عند تكوين تحذيرات الحصص.";
 "weekly_progress_work_days_title" = "أيام العمل الأسبوعية للتقدم";
 "weekly_progress_work_days_subtitle" = "حدد أيام عمل لمؤشرات شريط الاستخدام الأسبوعي وحسابات السرعة.";
+"workday_tick_appearance_title" = "مظهر علامات أيام العمل";
+"workday_tick_appearance_subtitle" = "اختر كيفية ظهور حدود أيام العمل على أشرطة الاستخدام الأسبوعية.";
+"workday_tick_appearance_hidden" = "مخفية";
+"workday_tick_appearance_subtle" = "خفيفة";
+"workday_tick_appearance_high_contrast" = "تباين عالٍ";
 "show_provider_changelog_links_title" = "اعرض روابط سجل التغييرات لمزود الخدمة";
 "show_provider_changelog_links_subtitle" = "يضيف روابط ملاحظات الإصدار لمزودي الخدمة المدعومين بدعم CLI إلى القائمة.";
 "show_credits_extra_usage_title" = "اعتمادات العرض + الاستخدام الإضافي";
@@ -672,6 +681,8 @@
 "copyright" = "© 2026 بيتر ستاينبرجر. MIT الرخصة.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "استخدام JavaScriptCore لإضافات المزوّد";
+"use_javascriptcore_plugin_engine_subtitle" = "للرجوع المتوافق فقط. أعد تشغيل CodexBar للتطبيق؛ يتجاوز CODEXBAR_PLUGIN_ENGINE هذا الإعداد.";
 "section_logging" = "قطع الأشجار";
 "enable_file_logging" = "تمكين تسجيل الملفات";
 "enable_file_logging_subtitle" = "اكتب السجلات إلى %@ للتصحيح.";
@@ -1342,6 +1353,7 @@
 "menu_bar_layout_gap" = "المسافة";
 "menu_bar_layout_gap_tight" = "ضيّق";
 "menu_bar_layout_gap_regular" = "عادي";
+"menu_bar_layout_vertical_adjustment" = "الضبط العمودي";
 "menu_bar_layout_keyboard_hint" = "يحذف Delete العنصر المحدد";
 "menu_bar_layout_sample_account" = "حساب";
 "menu_bar_layout_sample_runs_out" = "ينفد الجمعة";
@@ -1430,3 +1442,6 @@
 "Enter every endpoint setting to review the exact network origins." = "أدخل جميع إعدادات نقاط النهاية لمراجعة أصول الشبكة الدقيقة.";
 "Approve" = "موافقة";
 "Install" = "تثبيت";
+"5-hour usage" = "الاستخدام خلال 5 ساعات";
+"7-day usage" = "الاستخدام خلال 7 أيام";
+"Total usage" = "إجمالي الاستخدام";

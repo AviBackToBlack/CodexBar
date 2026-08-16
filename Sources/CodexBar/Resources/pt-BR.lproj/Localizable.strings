@@ -497,6 +497,10 @@
 "quota_depleted_title" = "Cota esgotada e restaurada";
 "quota_warning_notifications_subtitle" = "Avisa quando a cota restante da sessão ou da semana fica abaixo dos limites configurados.";
 "threshold_warnings_title" = "Alertas de limite";
+"provider_accent_color_title" = "Cor de destaque";
+"provider_accent_color_footer" = "Define a cor das barras de uso, dos gráficos e da aba do seletor deste provedor.";
+"provider_accent_color_hex_label" = "Valor de cor hexadecimal";
+"provider_accent_color_reset" = "Usar padrão";
 "quota_warnings_title" = "Alertas de cota";
 "quota_warning_session" = "sessão";
 "quota_warning_session_capitalized" = "Sessão";
@@ -604,6 +608,11 @@
 "show_quota_warning_markers_subtitle" = "Desenha marcas de limite nas barras de uso quando os alertas de cota estão configurados.";
 "weekly_progress_work_days_title" = "Dias úteis no progresso semanal";
 "weekly_progress_work_days_subtitle" = "Define os dias úteis para marcadores das barras de uso semanal e cálculos de ritmo.";
+"workday_tick_appearance_title" = "Aparência das marcas de dias úteis";
+"workday_tick_appearance_subtitle" = "Escolha como os limites dos dias úteis aparecem nas barras de uso semanal.";
+"workday_tick_appearance_hidden" = "Ocultas";
+"workday_tick_appearance_subtle" = "Sutis";
+"workday_tick_appearance_high_contrast" = "Alto contraste";
 "show_provider_changelog_links_title" = "Mostrar links de changelog dos provedores";
 "show_provider_changelog_links_subtitle" = "Adiciona links de notas de versão para provedores baseados em CLI compatíveis no menu.";
 "show_credits_extra_usage_title" = "Mostrar créditos + uso extra";
@@ -663,6 +672,8 @@
 "copyright" = "© 2026 Peter Steinberger. Licença MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Usar JavaScriptCore para plugins de provedores";
+"use_javascriptcore_plugin_engine_subtitle" = "Apenas reversão de compatibilidade. Reinicie o CodexBar para aplicar; CODEXBAR_PLUGIN_ENGINE substitui este ajuste.";
 "section_logging" = "Logs";
 "enable_file_logging" = "Ativar logs em arquivo";
 "enable_file_logging_subtitle" = "Grava logs em %@ para depuração.";
@@ -1339,6 +1350,7 @@
 "menu_bar_layout_gap" = "Espaçamento";
 "menu_bar_layout_gap_tight" = "Apertado";
 "menu_bar_layout_gap_regular" = "Normal";
+"menu_bar_layout_vertical_adjustment" = "Ajuste vertical";
 "menu_bar_layout_keyboard_hint" = "Delete remove o item selecionado";
 "menu_bar_layout_sample_account" = "conta";
 "menu_bar_layout_sample_runs_out" = "acaba sex.";
@@ -1427,3 +1439,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Preencha todos os ajustes de endpoint para conferir as origens de rede exatas.";
 "Approve" = "Aprovar";
 "Install" = "Instalar";
+"5-hour usage" = "Uso de 5 horas";
+"7-day usage" = "Uso de 7 dias";
+"Total usage" = "Uso total";

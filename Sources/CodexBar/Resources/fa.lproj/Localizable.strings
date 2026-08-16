@@ -485,6 +485,10 @@
 "quota_depleted_title" = "اتمام و بازیابی سهمیه";
 "quota_warning_notifications_subtitle" = "هشدار می دهد وقتی سهمیه نشست یا هفتگی باقی مانده از آستانه های پیکربندی شده عبور کند.";
 "threshold_warnings_title" = "هشدارهای آستانه";
+"provider_accent_color_title" = "رنگ تأکید";
+"provider_accent_color_footer" = "رنگ نوارهای مصرف، نمودارها و زبانه جابه‌جایی این ارائه‌دهنده را تعیین می‌کند.";
+"provider_accent_color_hex_label" = "مقدار رنگ هگزادسیمال";
+"provider_accent_color_reset" = "استفاده از پیش‌فرض";
 "quota_warnings_title" = "هشدارهای سهمیه";
 "quota_warning_session" = "جلسه";
 "quota_warning_session_capitalized" = "جلسه";
@@ -613,6 +617,11 @@
 "show_quota_warning_markers_subtitle" = "علامت تیک آستانه را روی نوارهای استفاده هنگام پیکربندی هشدارهای سهمیه رسم کنید.";
 "weekly_progress_work_days_title" = "روزهای کاری پیشرفت هفتگی";
 "weekly_progress_work_days_subtitle" = "روزهای کاری را برای نشانگرهای نوار مصرف هفتگی و محاسبات سرعت تعیین کنید.";
+"workday_tick_appearance_title" = "نمایش نشانه‌های روز کاری";
+"workday_tick_appearance_subtitle" = "نحوهٔ نمایش مرز روزهای کاری در نوارهای مصرف هفتگی را انتخاب کنید.";
+"workday_tick_appearance_hidden" = "پنهان";
+"workday_tick_appearance_subtle" = "ملایم";
+"workday_tick_appearance_high_contrast" = "کنتراست بالا";
 "show_provider_changelog_links_title" = "لینک های تغییرات ارائه دهنده را نمایش دهید";
 "show_provider_changelog_links_subtitle" = "لینک های یادداشت های انتشار برای ارائه دهندگان پشتیبانی شده با پشتیبانی CLI به منو اضافه می شود.";
 "show_credits_extra_usage_title" = "نمایش اعتبارها + استفاده اضافی";
@@ -672,6 +681,8 @@
 "copyright" = "© ۲۰۲۶ پیتر استاینبرگر. MIT مجوز.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "استفاده از JavaScriptCore برای افزونه‌های ارائه‌دهنده";
+"use_javascriptcore_plugin_engine_subtitle" = "فقط برای بازگشت سازگاری. برای اعمال CodexBar را بازراه‌اندازی کنید؛ CODEXBAR_PLUGIN_ENGINE این تنظیم را لغو می‌کند.";
 "section_logging" = "چوب بری";
 "enable_file_logging" = "فعال سازی ثبت فایل";
 "enable_file_logging_subtitle" = "لاگ ها را برای %@ برای اشکال زدایی بنویسید.";
@@ -1342,6 +1353,7 @@
 "menu_bar_layout_gap" = "فاصله";
 "menu_bar_layout_gap_tight" = "فشرده";
 "menu_bar_layout_gap_regular" = "معمولی";
+"menu_bar_layout_vertical_adjustment" = "تنظیم عمودی";
 "menu_bar_layout_keyboard_hint" = "Delete نشانهٔ انتخاب‌شده را حذف می‌کند";
 "menu_bar_layout_sample_account" = "حساب";
 "menu_bar_layout_sample_runs_out" = "جمعه تمام می‌شود";
@@ -1430,3 +1442,6 @@
 "Enter every endpoint setting to review the exact network origins." = "همهٔ تنظیمات نقطهٔ پایانی را وارد کنید تا مبدأهای دقیق شبکه را بررسی کنید.";
 "Approve" = "تأیید";
 "Install" = "نصب";
+"5-hour usage" = "مصرف ۵ ساعته";
+"7-day usage" = "مصرف ۷ روزه";
+"Total usage" = "مصرف کل";

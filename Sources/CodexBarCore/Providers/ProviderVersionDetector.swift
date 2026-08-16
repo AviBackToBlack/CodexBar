@@ -111,7 +111,7 @@ public enum ProviderVersionDetector {
                         timeout: 5.0,
                         extraArgs: ["--version"],
                         initialDelay: 0.0,
-                        useClaudeProbeWorkingDirectory: true))
+                        useProviderProbeWorkingDirectory: true))
             } catch {
                 commandResult = nil
             }
@@ -125,7 +125,7 @@ public enum ProviderVersionDetector {
                     timeout: 5.0,
                     extraArgs: ["--version"],
                     initialDelay: 0.0,
-                    useClaudeProbeWorkingDirectory: true))
+                    useProviderProbeWorkingDirectory: true))
         } catch {
             commandResult = nil
         }
@@ -137,6 +137,17 @@ public enum ProviderVersionDetector {
         let trimmed = TextParsing.stripANSICodes(commandResult.text)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    public static func claudeBinaryResolvable(
+        environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool
+    {
+        #if DEBUG
+        if let whichHook {
+            return whichHook("claude") != nil
+        }
+        #endif
+        return ClaudeCLIResolver.resolvedBinaryPath(environment: environment) != nil
     }
 
     public static func claudeVersion(
@@ -213,7 +224,7 @@ public enum ProviderVersionDetector {
     }
 
     public static func codexVersion() -> String? {
-        guard let path = TTYCommandRunner.which("codex") else { return nil }
+        guard let path = TTYCommandRunner.which(CodexProviderDescriptor.descriptor.cli.name) else { return nil }
         let candidates = [
             ["--version"],
             ["version"],
@@ -230,7 +241,7 @@ public enum ProviderVersionDetector {
     public static func geminiVersion() -> String? {
         let env = ProcessInfo.processInfo.environment
         guard let path = BinaryLocator.resolveGeminiBinary(env: env, loginPATH: nil)
-            ?? TTYCommandRunner.which("gemini") else { return nil }
+            ?? TTYCommandRunner.which(GeminiProviderDescriptor.descriptor.cli.name) else { return nil }
         let candidates = [
             ["--version"],
             ["-v"],

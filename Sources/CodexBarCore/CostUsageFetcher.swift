@@ -257,6 +257,7 @@ public struct CostUsageFetcher: Sendable {
     package func codexScanCatchUpStatus(
         codexHomePath: String? = nil) async -> CodexScanCatchUpStatus
     {
+        // Provider-specific by design: Codex exposes bounded background catch-up for its incremental JSONL scanner.
         let options = Self.resolvedScannerOptions(
             self.scannerOptionsOverride(),
             provider: .codex,
@@ -303,41 +304,20 @@ public struct CostUsageFetcher: Sendable {
     {
         let roots = CostUsageScanner.codexSessionsRoots(options: options)
         let rootsFingerprint = CostUsageScanner.codexRootsFingerprint(options: options)
-        let loadedCache = CostUsageCacheIO.loadCodexForMigration(
+        let cache = CostUsageStoreAccess.read(
             cacheRoot: options.cacheRoot,
             calendar: options.calendar)
-        let cache = loadedCache.cache
         guard cache.roots == rootsFingerprint else {
-            if let incompatibleCache = loadedCache.incompatibleCache,
-               incompatibleCache.roots == rootsFingerprint
-            {
-                let staleSnapshotUpdatedAt: Date? = if incompatibleCache.lastScanUnixMs > 0 {
-                    Date(timeIntervalSince1970: TimeInterval(incompatibleCache.lastScanUnixMs) / 1000)
-                } else {
-                    nil
-                }
-                return CodexScanCatchUpStatus(
-                    pending: true,
-                    progressKey: "producer-upgrade",
-                    staleSnapshotUpdatedAt: staleSnapshotUpdatedAt)
-            }
             return CodexScanCatchUpStatus(pending: false, progressKey: "scope-mismatch")
         }
 
         let scoped = CostUsageScanner.codexCache(cache, scopedTo: roots)
-        var progressHasher = Hasher()
-        for (path, usage) in scoped.files.sorted(by: { $0.key < $1.key }) {
-            progressHasher.combine(path)
-            progressHasher.combine(usage.codexScanFileId)
-            progressHasher.combine(usage.parsedBytes)
-            progressHasher.combine(usage.size)
-            progressHasher.combine(usage.codexScanComplete)
-        }
+        let progressKey = self.codexScanProgressKey(cache: cache, scopedFiles: scoped.files)
         let hasIncompleteFile = scoped.files.values.contains { $0.codexScanComplete == false }
         let pending = cache.codexScanCatchUpPending == true || hasIncompleteFile
         return CodexScanCatchUpStatus(
             pending: pending,
-            progressKey: "\(scoped.files.count):\(progressHasher.finalize())",
+            progressKey: progressKey,
             processedBytes: cache.codexScanProcessedBytes ?? 0,
             totalBytes: cache.codexScanTotalBytes ?? 0,
             completedFiles: cache.codexScanCompletedFiles ?? 0,
@@ -358,6 +338,7 @@ public struct CostUsageFetcher: Sendable {
         codexHomePath: String?) -> CostUsageScanner.Options
     {
         var options = override ?? CostUsageScanner.Options()
+        // Provider-specific by design: Codex managed profiles relocate sessions and archived_sessions roots.
         if provider == .codex,
            let codexHomePath = codexHomePath?.trimmingCharacters(in: .whitespacesAndNewlines),
            !codexHomePath.isEmpty
@@ -410,6 +391,7 @@ public struct CostUsageFetcher: Sendable {
         // Rolling window is inclusive, so a 30-day display starts 29 days before `now`.
         let since = options.calendar.date(byAdding: .day, value: -(clampedHistoryDays - 1), to: now) ?? now
         let scopedCodexHomePath = codexHomePath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Provider-specific by design: scoped Codex homes exclude ambient Pi sessions from managed-profile totals.
         let shouldMergePiUsage = provider != .codex || scopedCodexHomePath?.isEmpty != false
         await Self.refreshPricingIfAllowed(
             options: PricingRefreshOptions(
@@ -512,6 +494,8 @@ public struct CostUsageFetcher: Sendable {
         options: LocalTokenScanOptions) async throws -> LocalTokenScanResult
     {
         try Task.checkCancellation()
+        // Provider-specific by design: Codex owns project/session attribution and optional Pi merge state, while
+        // Claude/Vertex share the transcript scanner with mutually exclusive filters.
         // These synchronous scans can run for minutes on large archives. The dedicated queue keeps
         // them off the cooperative pool and bridges task cancellation into scanner-level checks.
         return try await CostUsageScanExecutor.run { checkCancellation in
@@ -548,7 +532,9 @@ public struct CostUsageFetcher: Sendable {
             if provider == .codex {
                 let roots = CostUsageScanner.codexSessionsRoots(options: options.scanOptions)
                 let cache = CostUsageScanner.codexCache(
-                    CostUsageCacheIO.load(provider: .codex, cacheRoot: options.scanOptions.cacheRoot),
+                    CostUsageStoreAccess.read(
+                        cacheRoot: options.scanOptions.cacheRoot,
+                        calendar: options.scanOptions.calendar),
                     scopedTo: roots)
                 let range = CostUsageScanner.CostUsageDayRange(
                     since: since, until: now, calendar: options.scanOptions.calendar)
@@ -630,9 +616,13 @@ public struct CostUsageFetcher: Sendable {
         }
     }
 
-    private struct UnknownPricingRefreshRequest: Sendable {
+    private struct ModelsDevPricingTarget: Hashable, Sendable {
         let providerID: String
-        let modelIDs: Set<String>
+        let modelID: String
+    }
+
+    private struct UnknownPricingRefreshRequest: Sendable {
+        let targets: Set<ModelsDevPricingTarget>
         let now: Date
         let cacheRoot: URL?
         let client: ModelsDevClient
@@ -646,22 +636,24 @@ public struct CostUsageFetcher: Sendable {
         client: ModelsDevClient) -> UnknownPricingRefreshRequest?
     {
         guard provider == .codex || provider == .claude else { return nil }
-        let unknownModelIDs = Set(daily.data.flatMap { entry in
-            entry.modelBreakdowns?.compactMap { breakdown -> String? in
-                guard breakdown.costUSD == nil else { return nil }
-                if provider == .codex,
-                   CostUsagePricing.isCodexUnattributedModel(breakdown.modelName)
-                {
-                    return nil
+        var targets = Set<ModelsDevPricingTarget>()
+        for entry in daily.data {
+            for breakdown in entry.modelBreakdowns ?? [] {
+                guard breakdown.costUSD == nil else { continue }
+                if provider == .codex {
+                    guard !CostUsagePricing.isCodexUnattributedModel(breakdown.modelName) else { continue }
+                    for target in CostUsagePricing.codexModelsDevPricingTargets(for: breakdown.modelName) {
+                        targets.insert(ModelsDevPricingTarget(providerID: target.providerID, modelID: target.modelID))
+                    }
+                } else {
+                    targets.insert(ModelsDevPricingTarget(providerID: "anthropic", modelID: breakdown.modelName))
                 }
-                return breakdown.modelName
-            } ?? []
-        })
-        guard !unknownModelIDs.isEmpty else { return nil }
+            }
+        }
+        guard !targets.isEmpty else { return nil }
 
         return UnknownPricingRefreshRequest(
-            providerID: provider == .codex ? "openai" : "anthropic",
-            modelIDs: unknownModelIDs,
+            targets: targets,
             now: now,
             cacheRoot: cacheRoot,
             client: client)
@@ -671,23 +663,30 @@ public struct CostUsageFetcher: Sendable {
         _ request: UnknownPricingRefreshRequest,
         inBackground: Bool) async -> Bool
     {
-        if inBackground {
-            Task.detached(priority: .utility) {
-                _ = await ModelsDevPricingPipeline.refreshForUnknownModelsIfNeeded(
-                    providerID: request.providerID,
-                    modelIDs: request.modelIDs,
+        func refreshTargets() async -> Bool {
+            let targetsByProvider = Dictionary(grouping: request.targets, by: \.providerID)
+            for providerID in targetsByProvider.keys.sorted() {
+                let modelIDs = Set(targetsByProvider[providerID, default: []].map(\.modelID))
+                let outcome = await ModelsDevPricingPipeline.refreshForUnknownModelsIfNeeded(
+                    providerID: providerID,
+                    modelIDs: modelIDs,
                     now: request.now,
                     cacheRoot: request.cacheRoot,
                     client: request.client)
+                if outcome == .pricingAvailable {
+                    return true
+                }
             }
             return false
         }
-        return await ModelsDevPricingPipeline.refreshForUnknownModelsIfNeeded(
-            providerID: request.providerID,
-            modelIDs: request.modelIDs,
-            now: request.now,
-            cacheRoot: request.cacheRoot,
-            client: request.client) == .pricingAvailable
+
+        if inBackground {
+            Task.detached(priority: .utility) {
+                _ = await refreshTargets()
+            }
+            return false
+        }
+        return await refreshTargets()
     }
 
     static func loadCachedCodexTokenSnapshot(
@@ -730,9 +729,9 @@ public struct CostUsageFetcher: Sendable {
             let roots = CostUsageScanner.codexSessionsRoots(options: options)
             let rootsFingerprint = CostUsageScanner.codexRootsFingerprint(options: options)
             let cache = CostUsageScanner.codexCache(
-                CostUsageCacheIO.loadCodexForMigration(
+                CostUsageStoreAccess.read(
                     cacheRoot: options.cacheRoot,
-                    calendar: options.calendar).cache,
+                    calendar: options.calendar),
                 scopedTo: roots)
             guard cache.timeZoneIdentifier == options.calendar.timeZone.identifier,
                   cache.roots == rootsFingerprint,
@@ -788,8 +787,8 @@ public struct CostUsageFetcher: Sendable {
             return nil
         }
 
-        // Decoding the persisted scan cache parses multi-megabyte JSON; keep it off the
-        // cooperative pool alongside the scans themselves.
+        // Snapshot assembly can touch many SQLite rows; keep it off the cooperative pool
+        // alongside the scans themselves.
         let cachedSnapshot: CachedCodexTokenSnapshotResult?? = try? await CostUsageScanExecutor.run { _ in
             let clampedHistoryDays = max(1, min(365, historyDays))
             let options = Self.resolvedScannerOptions(
@@ -808,11 +807,11 @@ public struct CostUsageFetcher: Sendable {
             let shouldMergePiUsage = scopedCodexHomePath?.isEmpty != false
             let roots = CostUsageScanner.codexSessionsRoots(options: options)
             let rootsFingerprint = CostUsageScanner.codexRootsFingerprint(options: options)
-            let loadedCache = CostUsageCacheIO.loadCodexForMigration(
+            let loadedCache = CostUsageStoreAccess.read(
                 cacheRoot: options.cacheRoot,
                 calendar: options.calendar)
             let cache = CostUsageScanner.codexCache(
-                loadedCache.cache,
+                loadedCache,
                 scopedTo: roots)
             var reports: [CostUsageDailyReport] = []
             var projects: [CostUsageProjectBreakdown] = []
@@ -864,25 +863,6 @@ public struct CostUsageFetcher: Sendable {
                         }
                     }
                 }
-            } else if let incompatibleCache = loadedCache.incompatibleCache,
-                      incompatibleCache.timeZoneIdentifier == range.calendar.timeZone.identifier,
-                      !incompatibleCache.days.isEmpty,
-                      incompatibleCache.roots == rootsFingerprint,
-                      !CostUsageScanner.requestedWindowExpandsCache(range: range, cache: incompatibleCache)
-            {
-                let daily = CostUsageScanner.buildCodexReportFromCache(
-                    cache: incompatibleCache,
-                    range: range,
-                    modelsDevCacheRoot: options.cacheRoot)
-                if !daily.data.isEmpty {
-                    reports.append(daily)
-                    if incompatibleCache.lastScanUnixMs > 0 {
-                        let scanAt = Date(
-                            timeIntervalSince1970: TimeInterval(incompatibleCache.lastScanUnixMs) / 1000)
-                        staleSnapshotUpdatedAt = scanAt
-                        scanTimes.append(scanAt)
-                    }
-                }
             }
 
             if includePiSessions,
@@ -932,18 +912,7 @@ public struct CostUsageFetcher: Sendable {
     /// Providers whose token-cost snapshot `loadTokenSnapshot` can produce. Cursor is
     /// macOS-only because it reuses the macOS Cursor session resolution.
     static func supportsTokenSnapshot(_ provider: UsageProvider) -> Bool {
-        switch provider {
-        case .codex, .claude, .vertexai, .bedrock:
-            return true
-        case .cursor:
-            #if os(macOS)
-            return true
-            #else
-            return false
-            #endif
-        default:
-            return false
-        }
+        ProviderDescriptorRegistry.descriptor(for: provider).tokenCost.supportsTokenSnapshot
     }
 
     static func loadCachedCodexLocalProjectUsageSnapshot(
@@ -1100,13 +1069,21 @@ public struct CostUsageFetcher: Sendable {
         } else {
             nil
         }
-        // Prefer summary totals when present; fall back to summing daily entries.
+        // Prefer summary totals when present; fall back to summing daily entries. A non-empty
+        // row set where every row carries an explicit value is a known total even when it sums
+        // to zero; keep nil only for genuinely missing values.
         let totalFromSummary = daily.summary?.totalCostUSD
         let totalFromEntries = daily.data.compactMap(\.costUSD).reduce(0, +)
-        let last30DaysCostUSD = totalFromSummary ?? (totalFromEntries > 0 ? totalFromEntries : nil)
+        let allEntriesCarryCost = !daily.data.isEmpty && daily.data.allSatisfy { $0.costUSD != nil }
+        let last30DaysCostUSD = totalFromSummary
+            ?? (allEntriesCarryCost ? totalFromEntries : nil)
         let totalTokensFromSummary = daily.summary?.totalTokens
         let totalTokensFromEntries = daily.data.compactMap(\.totalTokens).reduce(0, +)
-        let last30DaysTokens = totalTokensFromSummary ?? (totalTokensFromEntries > 0 ? totalTokensFromEntries : nil)
+        let allEntriesCarryTokens = !daily.data.isEmpty && daily.data.allSatisfy { $0.totalTokens != nil }
+        let last30DaysTokens = totalTokensFromSummary
+            ?? (allEntriesCarryTokens
+                ? totalTokensFromEntries
+                : nil)
 
         return CostUsageTokenSnapshot(
             sessionTokens: sessionTokens,
@@ -1129,6 +1106,7 @@ public struct CostUsageFetcher: Sendable {
         bypassScannerDebounce: Bool,
         configuredDuration: TimeInterval?) -> TimeInterval?
     {
+        // Provider-specific by design: only Codex refresh uses a bounded initial scan before background catch-up.
         guard provider == .codex,
               bypassScannerDebounce,
               configuredDuration == nil
@@ -1376,6 +1354,110 @@ public struct CostUsageFetcher: Sendable {
 }
 
 extension CostUsageFetcher {
+    static func codexScanProgressKey(
+        cache: CostUsageCache,
+        scopedFiles: [String: CostUsageFileUsage]) -> String
+    {
+        var progressHasher = Hasher()
+        progressHasher.combine(cache.codexScanCompletedFiles)
+
+        for (path, usage) in scopedFiles.sorted(by: { $0.key < $1.key }) {
+            progressHasher.combine(path)
+            progressHasher.combine(usage.codexScanFileId)
+            progressHasher.combine(usage.codexScanComplete)
+            if usage.codexScanComplete == false {
+                progressHasher.combine(usage.parsedBytes)
+                progressHasher.combine(usage.size)
+                progressHasher.combine(usage.codexJSONLResumeState?.offset)
+            }
+            let hasBufferedRetry = usage.hasBufferedCodexForkRetryLines
+            progressHasher.combine(hasBufferedRetry)
+            if hasBufferedRetry {
+                progressHasher.combine(usage.forkedFromId)
+                progressHasher.combine(usage.forkBaselineDependencyKey)
+                progressHasher.combine(usage.codexBufferedSubagentLines?.isEmpty == false)
+                progressHasher.combine(usage.codexBufferedUnresolvedForkLines?.isEmpty == false)
+            }
+        }
+
+        if let discovery = cache.codexSessionDiscovery {
+            progressHasher.combine(discovery.generation)
+            progressHasher.combine(discovery.directoryPaths.count)
+            progressHasher.combine(discovery.nextDirectoryIndex)
+            progressHasher.combine(discovery.filePaths.count)
+            progressHasher.combine(discovery.nextFileIndex)
+            progressHasher.combine(discovery.headScan?.path)
+            progressHasher.combine(discovery.headScan?.offset)
+            progressHasher.combine(discovery.headScan?.resumeState?.offset)
+            progressHasher.combine(discovery.filePathBySessionId.count)
+            progressHasher.combine(discovery.missingSessionIds.sorted())
+            progressHasher.combine(discovery.pendingSessionIds.sorted())
+            progressHasher.combine(discovery.validationDirectoryIndex)
+            progressHasher.combine(discovery.isComplete)
+        } else {
+            progressHasher.combine("no-discovery")
+        }
+
+        if let lookback = cache.codexActiveLookbackState {
+            progressHasher.combine(lookback.scanSinceKey)
+            progressHasher.combine(lookback.rootPaths.sorted())
+            progressHasher.combine("next-day")
+            for (root, dayKey) in lookback.nextDayKeyByRoot.sorted(by: { $0.key < $1.key }) {
+                progressHasher.combine(root)
+                progressHasher.combine(dayKey)
+            }
+            progressHasher.combine("next-directory-offset")
+            progressHasher.combine(lookback.nextDirectoryOffsetByRoot == nil)
+            for (root, offset) in (lookback.nextDirectoryOffsetByRoot ?? [:]).sorted(by: { $0.key < $1.key }) {
+                progressHasher.combine(root)
+                progressHasher.combine(offset)
+            }
+            progressHasher.combine(lookback.completedRootPaths.sorted())
+            progressHasher.combine(lookback.pendingFilePaths.sorted())
+            progressHasher.combine(lookback.legacyRecursivePendingRootPaths.sorted())
+            progressHasher.combine("current-window-next-day")
+            progressHasher.combine(lookback.currentWindowNextDayKeyByRoot == nil)
+            for (root, dayKey) in (lookback.currentWindowNextDayKeyByRoot ?? [:]).sorted(by: { $0.key < $1.key }) {
+                progressHasher.combine(root)
+                progressHasher.combine(dayKey)
+            }
+            progressHasher.combine("current-window-directory-offset")
+            progressHasher.combine(lookback.currentWindowDirectoryOffsetByRoot == nil)
+            for (root, offset) in (lookback.currentWindowDirectoryOffsetByRoot ?? [:])
+                .sorted(by: { $0.key < $1.key })
+            {
+                progressHasher.combine(root)
+                progressHasher.combine(offset)
+            }
+            progressHasher.combine("completed-current-window-roots")
+            progressHasher.combine(lookback.completedCurrentWindowRootPaths == nil)
+            progressHasher.combine((lookback.completedCurrentWindowRootPaths ?? []).sorted())
+            progressHasher.combine("current-window-flat-directory-offset")
+            progressHasher.combine(lookback.currentWindowFlatDirectoryOffsetByRoot == nil)
+            for (root, offset) in (lookback.currentWindowFlatDirectoryOffsetByRoot ?? [:])
+                .sorted(by: { $0.key < $1.key })
+            {
+                progressHasher.combine(root)
+                progressHasher.combine(offset)
+            }
+            progressHasher.combine("completed-current-window-flat-roots")
+            progressHasher.combine(lookback.completedCurrentWindowFlatRootPaths == nil)
+            progressHasher.combine((lookback.completedCurrentWindowFlatRootPaths ?? []).sorted())
+            progressHasher.combine(lookback.cacheWideMigrationQueueActive)
+        } else {
+            progressHasher.combine("no-lookback")
+        }
+
+        if let inventoryPaths = cache.codexScanInventoryPaths {
+            progressHasher.combine("inventory")
+            progressHasher.combine(inventoryPaths.sorted())
+        } else {
+            progressHasher.combine("no-inventory")
+        }
+
+        return "v2:\(scopedFiles.count):\(progressHasher.finalize())"
+    }
+
     fileprivate static func loadRemoteTokenSnapshot(
         provider: UsageProvider,
         environment: [String: String],
@@ -1383,6 +1465,7 @@ extension CostUsageFetcher {
         historyDays: Int,
         cursorCookieHeaderOverride: String?) async throws -> CostUsageTokenSnapshot?
     {
+        // Provider-specific by design: Bedrock uses AWS billing while Cursor uses its macOS dashboard session.
         let since = Calendar.current.date(byAdding: .day, value: -(historyDays - 1), to: now) ?? now
         if provider == .bedrock {
             let daily = try await Self.loadBedrockDailyReport(

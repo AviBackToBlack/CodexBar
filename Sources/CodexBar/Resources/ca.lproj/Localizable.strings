@@ -483,6 +483,10 @@
 "quota_depleted_title" = "Quota esgotada i restablerta";
 "quota_warning_notifications_subtitle" = "Avisa quan la quota restant de sessió o setmanal baixa per sota dels llindars configurats.";
 "threshold_warnings_title" = "Avisos de llindar";
+"provider_accent_color_title" = "Color d'accent";
+"provider_accent_color_footer" = "Estableix el color de les barres d'ús, els gràfics i la pestanya del selector d'aquest proveïdor.";
+"provider_accent_color_hex_label" = "Valor de color hexadecimal";
+"provider_accent_color_reset" = "Usa el valor predeterminat";
 "quota_warnings_title" = "Avisos de quota";
 "quota_warning_session" = "sessió";
 "quota_warning_session_capitalized" = "Sessió";
@@ -591,6 +595,11 @@
 "show_quota_warning_markers_subtitle" = "Dibuixa marques de llindar a les barres d'ús quan hi ha avisos de quota configurats.";
 "weekly_progress_work_days_title" = "Dies laborables del progrés setmanal";
 "weekly_progress_work_days_subtitle" = "Definiu els dies laborables per als marcadors de les barres d'ús setmanal i els càlculs de ritme.";
+"workday_tick_appearance_title" = "Aparença de les marques dels dies laborables";
+"workday_tick_appearance_subtitle" = "Trieu com es mostren els límits dels dies laborables a les barres d'ús setmanal.";
+"workday_tick_appearance_hidden" = "Ocultes";
+"workday_tick_appearance_subtle" = "Subtils";
+"workday_tick_appearance_high_contrast" = "Contrast alt";
 "show_provider_changelog_links_title" = "Mostreu els enllaços al registre de canvis del proveïdor";
 "show_provider_changelog_links_subtitle" = "Afegiu al menú enllaços a les notes de versió dels proveïdors compatibles basats en CLI.";
 "show_credits_extra_usage_title" = "Mostreu crèdits + ús addicional";
@@ -650,6 +659,8 @@
 "copyright" = "© 2026 Peter Steinberger. Llicència MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Utilitza JavaScriptCore per als connectors de proveïdor";
+"use_javascriptcore_plugin_engine_subtitle" = "Només com a reversió de compatibilitat. Reinicieu CodexBar per aplicar-ho; CODEXBAR_PLUGIN_ENGINE substitueix aquest ajust.";
 "section_logging" = "Registre";
 "enable_file_logging" = "Activeu el registre en fitxer";
 "enable_file_logging_subtitle" = "Escriu els registres a %@ per a la depuració.";
@@ -1341,6 +1352,7 @@
 "menu_bar_layout_gap" = "Espaiat";
 "menu_bar_layout_gap_tight" = "Estret";
 "menu_bar_layout_gap_regular" = "Normal";
+"menu_bar_layout_vertical_adjustment" = "Ajust vertical";
 "menu_bar_layout_keyboard_hint" = "Suprimir elimina la fitxa seleccionada";
 "menu_bar_layout_sample_account" = "compte";
 "menu_bar_layout_sample_runs_out" = "s’esgota div.";
@@ -1429,3 +1441,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Introdueix tots els paràmetres dels endpoints per revisar els orígens de xarxa exactes.";
 "Approve" = "Aprova";
 "Install" = "Instal·la";
+"5-hour usage" = "Ús de 5 hores";
+"7-day usage" = "Ús de 7 dies";
+"Total usage" = "Ús total";

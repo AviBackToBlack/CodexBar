@@ -496,6 +496,10 @@
 "quota_depleted_title" = "Hạn mức đã cạn & được khôi phục";
 "quota_warning_notifications_subtitle" = "Cảnh báo khi phiên hoặc Hạn mức còn lại hàng tuần vượt qua ngưỡng được định cấu hình.";
 "threshold_warnings_title" = "Cảnh báo ngưỡng";
+"provider_accent_color_title" = "Màu nhấn";
+"provider_accent_color_footer" = "Đặt màu cho thanh mức dùng, biểu đồ và thẻ chuyển đổi của nhà cung cấp này.";
+"provider_accent_color_hex_label" = "Giá trị màu thập lục phân";
+"provider_accent_color_reset" = "Dùng mặc định";
 "quota_warnings_title" = "Hạn mức cảnh báo";
 "quota_warning_session" = "phiên";
 "quota_warning_session_capitalized" = "Phiên";
@@ -603,6 +607,11 @@
 "show_quota_warning_markers_subtitle" = "Vẽ dấu kiểm ngưỡng trên thanh Mức sử dụng khi cảnh báo Hạn mức được định cấu hình.";
 "weekly_progress_work_days_title" = "Tiến độ ngày làm việc hàng tuần";
 "weekly_progress_work_days_subtitle" = "Đặt ngày làm việc cho các vạch trên thanh sử dụng hằng tuần và phép tính nhịp độ.";
+"workday_tick_appearance_title" = "Kiểu vạch ngày làm việc";
+"workday_tick_appearance_subtitle" = "Chọn cách hiển thị ranh giới ngày làm việc trên thanh sử dụng hằng tuần.";
+"workday_tick_appearance_hidden" = "Ẩn";
+"workday_tick_appearance_subtle" = "Nhẹ";
+"workday_tick_appearance_high_contrast" = "Tương phản cao";
 "show_provider_changelog_links_title" = "Hiển thị Nhà cung cấp liên kết nhật ký thay đổi";
 "show_provider_changelog_links_subtitle" = "Thêm liên kết ghi chú phát hành cho các nhà cung cấp được hỗ trợ CLI vào menu.";
 "show_credits_extra_usage_title" = "Hiển thị tín dụng + phần Mức sử dụng";
@@ -662,6 +671,8 @@
 "copyright" = "© 2026 Peter Steinberger. Giấy phép MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Dùng JavaScriptCore cho phần bổ trợ nhà cung cấp";
+"use_javascriptcore_plugin_engine_subtitle" = "Chỉ dùng để quay lui tương thích. Khởi động lại CodexBar để áp dụng; CODEXBAR_PLUGIN_ENGINE ghi đè cài đặt này.";
 "section_logging" = "Ghi nhật ký";
 "enable_file_logging" = "Cho phép ghi nhật ký tệp";
 "enable_file_logging_subtitle" = "Ghi nhật ký vào %@ để gỡ lỗi.";
@@ -1339,6 +1350,7 @@
 "menu_bar_layout_gap" = "Khoảng cách";
 "menu_bar_layout_gap_tight" = "Hẹp";
 "menu_bar_layout_gap_regular" = "Thường";
+"menu_bar_layout_vertical_adjustment" = "Điều chỉnh dọc";
 "menu_bar_layout_keyboard_hint" = "Delete xóa thẻ đã chọn";
 "menu_bar_layout_sample_account" = "tài khoản";
 "menu_bar_layout_sample_runs_out" = "hết vào T6";
@@ -1427,3 +1439,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Nhập đầy đủ các cài đặt điểm cuối để xem chính xác các nguồn mạng.";
 "Approve" = "Phê duyệt";
 "Install" = "Cài đặt";
+"5-hour usage" = "Mức sử dụng 5 giờ";
+"7-day usage" = "Mức sử dụng 7 ngày";
+"Total usage" = "Tổng mức sử dụng";

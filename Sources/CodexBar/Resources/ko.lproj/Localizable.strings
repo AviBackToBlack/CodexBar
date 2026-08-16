@@ -495,6 +495,10 @@
 "quota_depleted_title" = "할당량 소진 및 복원";
 "quota_warning_notifications_subtitle" = "세션 또는 주간 할당량 잔여량이 설정된 임곗값을 넘으면 경고합니다.";
 "threshold_warnings_title" = "임곗값 경고";
+"provider_accent_color_title" = "강조 색상";
+"provider_accent_color_footer" = "이 제공자의 사용량 막대, 차트, 전환 탭 색상을 설정합니다.";
+"provider_accent_color_hex_label" = "16진수 색상 값";
+"provider_accent_color_reset" = "기본값 사용";
 "quota_warnings_title" = "할당량 경고";
 "quota_warning_session" = "세션";
 "quota_warning_session_capitalized" = "세션";
@@ -596,6 +600,11 @@
 "show_quota_warning_markers_subtitle" = "할당량 경고가 구성된 경우 사용량 막대에 임계값 눈금 표시를 그립니다.";
 "weekly_progress_work_days_title" = "주간 진행률 근무일";
 "weekly_progress_work_days_subtitle" = "주간 사용량 막대 눈금과 페이스 계산에 사용할 근무일을 설정합니다.";
+"workday_tick_appearance_title" = "근무일 눈금 모양";
+"workday_tick_appearance_subtitle" = "주간 사용량 막대에 근무일 경계를 표시하는 방식을 선택합니다.";
+"workday_tick_appearance_hidden" = "숨김";
+"workday_tick_appearance_subtle" = "은은하게";
+"workday_tick_appearance_high_contrast" = "고대비";
 "show_provider_changelog_links_title" = "공급자 변경 로그 링크 표시";
 "show_provider_changelog_links_subtitle" = "지원되는 CLI 기반 공급자의 릴리스 노트 링크를 메뉴에 추가합니다.";
 "show_credits_extra_usage_title" = "크레딧 + 추가 사용량 표시";
@@ -649,6 +658,8 @@
 "check_for_updates" = "업데이트 확인…";
 "updates_unavailable" = "이 빌드에서는 업데이트를 사용할 수 없습니다.";
 "copyright" = "© 2026 Peter Steinberger. MIT License.";
+"use_javascriptcore_plugin_engine" = "제공자 플러그인에 JavaScriptCore 사용";
+"use_javascriptcore_plugin_engine_subtitle" = "호환성 롤백 전용입니다. 적용하려면 CodexBar를 재시작하세요. CODEXBAR_PLUGIN_ENGINE이 이 설정보다 우선합니다.";
 "section_logging" = "로깅";
 "enable_file_logging" = "파일 로깅 사용";
 "enable_file_logging_subtitle" = "디버깅을 위해 %@에 로그를 기록합니다.";
@@ -1306,6 +1317,7 @@
 "menu_bar_layout_gap" = "간격";
 "menu_bar_layout_gap_tight" = "좁게";
 "menu_bar_layout_gap_regular" = "보통";
+"menu_bar_layout_vertical_adjustment" = "세로 조정";
 "menu_bar_layout_keyboard_hint" = "Delete 키로 선택한 토큰 제거";
 "menu_bar_layout_sample_account" = "계정";
 "menu_bar_layout_sample_runs_out" = "금요일 소진";
@@ -1394,3 +1406,6 @@
 "Enter every endpoint setting to review the exact network origins." = "정확한 네트워크 오리진을 검토하려면 모든 엔드포인트 설정을 입력하세요.";
 "Approve" = "승인";
 "Install" = "설치";
+"5-hour usage" = "5시간 사용량";
+"7-day usage" = "7일 사용량";
+"Total usage" = "총 사용량";

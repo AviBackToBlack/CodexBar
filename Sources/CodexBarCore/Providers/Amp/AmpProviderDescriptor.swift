@@ -2,11 +2,15 @@ import Foundation
 
 public enum AmpProviderDescriptor {
     public static let descriptor: ProviderDescriptor = Self.makeDescriptor()
+    private static let credentials = ProviderCredentialAdapter.apiKey(
+        environmentKey: AmpSettingsReader.apiTokenKey,
+        resolve: AmpSettingsReader.apiToken)
 
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .amp,
-            settingsSection: .init(AmpProviderSettingsKey.self),
+            settingsSection: .init(AmpProviderSettingsKey.self, cookieSettings: AmpProviderSettings.self),
+            credentials: self.credentials,
             metadata: ProviderMetadata(
                 id: .amp,
                 displayName: "Amp",
@@ -22,6 +26,7 @@ public enum AmpProviderDescriptor {
                 widgetSelectable: false,
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
+                debugPane: ProviderDebugPaneCapabilities(probeLogOrder: 4, errorSimulationOrder: 5),
                 browserCookieOrder: ProviderBrowserCookieDefaults.defaultImportOrder,
                 dashboardURL: "https://ampcode.com/settings/usage",
                 statusPageURL: nil),
@@ -38,12 +43,25 @@ public enum AmpProviderDescriptor {
                 supportsTokenCost: false,
                 noDataMessage: { "Amp cost summary is not supported." }),
             pace: .calendarMonthResetWindow,
+            presentation: ProviderUsagePresentation(
+                rateWindowLabeler: { metadata, snapshot, _ in
+                    ProviderRateWindowLabels(
+                        primary: Self.primaryLabel(snapshot: snapshot) ?? metadata.sessionLabel,
+                        secondary: Self.secondaryLabel(snapshot: snapshot) ?? metadata.weeklyLabel,
+                        tertiary: metadata.opusLabel ?? "Sonnet",
+                        showsTertiary: metadata.supportsOpus)
+                },
+                extraRateWindowSelector: { snapshot in
+                    (snapshot.extraRateWindows ?? []).filter { $0.id == "amp-free" }
+                },
+                menuCard: ProviderMenuCardPresentation(creditsVisibility: .hiddenWhenUsageSnapshotPresent)),
             fetchPlan: ProviderFetchPlan(
                 sourceModes: [.auto, .api, .web, .cli],
                 pipeline: ProviderFetchPipeline(resolveStrategies: self.resolveStrategies)),
             cli: ProviderCLIConfig(
                 name: "amp",
-                versionDetector: nil))
+                versionDetector: nil,
+                browserSupportExemption: { _, _, _ in true }))
     }
 
     public static func primaryLabel(snapshot: UsageSnapshot) -> String? {
@@ -105,11 +123,11 @@ struct AmpAPIFetchStrategy: ProviderFetchStrategy {
     }
 
     func fetch(_ context: ProviderFetchContext) async throws -> ProviderFetchResult {
-        guard let token = ProviderTokenResolver.ampToken(environment: context.env) else {
+        guard let token = ProviderTokenResolver.token(for: .amp, environment: context.env) else {
             throw AmpUsageError.missingAPIToken
         }
         let logger: ((String) -> Void)? = context.verbose
-            ? { msg in CodexBarLog.logger(LogCategories.amp).verbose(msg) }
+            ? { msg in CodexBarLog.logger(LogCategories.provider(.amp)).verbose(msg) }
             : nil
         let snapshot = try await AmpUsageFetcher(browserDetection: context.browserDetection)
             .fetch(apiToken: token, logger: logger)
@@ -144,7 +162,7 @@ struct AmpStatusFetchStrategy: ProviderFetchStrategy {
         let fetcher = AmpUsageFetcher(browserDetection: context.browserDetection)
         let manual = Self.manualCookieHeader(from: context)
         let logger: ((String) -> Void)? = context.verbose
-            ? { msg in CodexBarLog.logger(LogCategories.amp).verbose(msg) }
+            ? { msg in CodexBarLog.logger(LogCategories.provider(.amp)).verbose(msg) }
             : nil
         let snap = try await fetcher.fetch(cookieHeaderOverride: manual, logger: logger)
         return self.makeResult(

@@ -487,6 +487,10 @@
 "quota_depleted_title" = "Kuota habis & tersedia kembali";
 "quota_warning_notifications_subtitle" = "Memperingatkan saat sisa kuota sesi atau mingguan melewati ambang batas yang dikonfigurasi.";
 "threshold_warnings_title" = "Peringatan ambang batas";
+"provider_accent_color_title" = "Warna aksen";
+"provider_accent_color_footer" = "Menetapkan warna bilah penggunaan, bagan, dan tab pengalih penyedia ini.";
+"provider_accent_color_hex_label" = "Nilai warna heksadesimal";
+"provider_accent_color_reset" = "Gunakan bawaan";
 "quota_warnings_title" = "Peringatan kuota";
 "quota_warning_session" = "sesi";
 "quota_warning_session_capitalized" = "Sesi";
@@ -615,6 +619,11 @@
 "show_quota_warning_markers_subtitle" = "Gambar tanda centang ambang batas pada bilah penggunaan saat peringatan kuota dikonfigurasi.";
 "weekly_progress_work_days_title" = "Hari kerja progres mingguan";
 "weekly_progress_work_days_subtitle" = "Atur hari kerja untuk penanda bilah penggunaan mingguan dan perhitungan pace.";
+"workday_tick_appearance_title" = "Tampilan tanda hari kerja";
+"workday_tick_appearance_subtitle" = "Pilih tampilan batas hari kerja pada bilah penggunaan mingguan.";
+"workday_tick_appearance_hidden" = "Tersembunyi";
+"workday_tick_appearance_subtle" = "Samar";
+"workday_tick_appearance_high_contrast" = "Kontras tinggi";
 "show_provider_changelog_links_title" = "Tampilkan tautan changelog penyedia";
 "show_provider_changelog_links_subtitle" = "Menambahkan tautan catatan rilis untuk penyedia berbasis CLI yang didukung ke menu.";
 "show_credits_extra_usage_title" = "Tampilkan kredit + penggunaan ekstra";
@@ -674,6 +683,8 @@
 "copyright" = "© 2026 Peter Steinberger. Lisensi MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Gunakan JavaScriptCore untuk plugin penyedia";
+"use_javascriptcore_plugin_engine_subtitle" = "Hanya untuk rollback kompatibilitas. Mulai ulang CodexBar untuk menerapkan; CODEXBAR_PLUGIN_ENGINE mengganti pengaturan ini.";
 "section_logging" = "Pencatatan";
 "enable_file_logging" = "Aktifkan pencatatan file";
 "enable_file_logging_subtitle" = "Tulis log ke %@ untuk debugging.";
@@ -1342,6 +1353,7 @@
 "menu_bar_layout_gap" = "Jarak";
 "menu_bar_layout_gap_tight" = "Rapat";
 "menu_bar_layout_gap_regular" = "Reguler";
+"menu_bar_layout_vertical_adjustment" = "Penyesuaian Vertikal";
 "menu_bar_layout_keyboard_hint" = "Delete menghapus token yang dipilih";
 "menu_bar_layout_sample_account" = "akun";
 "menu_bar_layout_sample_runs_out" = "habis Jum.";
@@ -1430,3 +1442,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Masukkan semua pengaturan endpoint untuk meninjau origin jaringan yang tepat.";
 "Approve" = "Setujui";
 "Install" = "Pasang";
+"5-hour usage" = "Penggunaan 5 jam";
+"7-day usage" = "Penggunaan 7 hari";
+"Total usage" = "Total penggunaan";

@@ -2,6 +2,9 @@ import AppKit
 import CodexBarCore
 import Observation
 import ServiceManagement
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 enum RefreshFrequency: String, CaseIterable, Identifiable {
     case manual
@@ -127,6 +130,24 @@ enum MultiAccountMenuLayout: String, CaseIterable, Identifiable {
         switch self {
         case .segmented: L("multi_account_layout_segmented")
         case .stacked: L("multi_account_layout_stacked")
+        }
+    }
+}
+
+enum WorkdayTickAppearance: String, CaseIterable, Identifiable {
+    case hidden
+    case subtle
+    case highContrast
+
+    var id: String {
+        self.rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .hidden: L("workday_tick_appearance_hidden")
+        case .subtle: L("workday_tick_appearance_subtle")
+        case .highContrast: L("workday_tick_appearance_high_contrast")
         }
     }
 }
@@ -410,6 +431,7 @@ extension SettingsStore {
         config: CodexBarConfig,
         hadExistingConfig: Bool) -> Bool
     {
+        // Provider-specific by design: the legacy OpenAI web-access flag was inferred from Codex's cookie config.
         guard let codex = config.providerConfig(for: .codex) else { return false }
         if let cookieSource = codex.cookieSource {
             return cookieSource.isEnabled
@@ -449,6 +471,8 @@ extension SettingsStore {
             userDefaults.set(true, forKey: "quotaWarningMarkersVisible")
         }
         let weeklyProgressWorkDays = userDefaults.object(forKey: "weeklyProgressWorkDays") as? Int
+        let workdayTickAppearanceRaw = userDefaults.string(forKey: "workdayTickAppearance")
+            ?? WorkdayTickAppearance.subtle.rawValue
         let usageBarsShowUsed = userDefaults.object(forKey: "usageBarsShowUsed") as? Bool ?? false
         let resetTimesShowAbsolute = userDefaults.object(forKey: "resetTimesShowAbsolute") as? Bool ?? false
         let providerChangelogLinksEnabled = userDefaults.object(
@@ -473,6 +497,8 @@ extension SettingsStore {
             ?? MenuBarLayoutSize.regular.rawValue
         let menuBarLayoutGapRaw = userDefaults.string(forKey: "menuBarLayoutGap")
             ?? MenuBarLayoutGap.regular.rawValue
+        let rawVerticalAdjustment = userDefaults.object(forKey: "menuBarLayoutVerticalAdjustment") as? Int
+        let menuBarLayoutVerticalAdjustment = max(-20, min(20, rawVerticalAdjustment ?? 0))
         let copilotBudgetExtrasEnabled = userDefaults.object(forKey: "copilotBudgetExtrasEnabled") as? Bool ?? false
         let copilotIconSecondaryWindowIDRaw = Self.loadCopilotIconSecondaryWindowIDRaw(userDefaults: userDefaults)
         let costUsageEnabled = userDefaults.object(forKey: "tokenCostUsageEnabled") as? Bool ?? false
@@ -491,6 +517,9 @@ extension SettingsStore {
         let menuBarShowsHighestUsage = userDefaults.object(forKey: "menuBarShowsHighestUsage") as? Bool ?? false
         let claudeOAuthKeychainReadStrategyRaw = Self.loadClaudeOAuthKeychainReadStrategyRaw(userDefaults: userDefaults)
         let claudeOAuthKeychainPromptModeRaw = userDefaults.string(forKey: "claudeOAuthKeychainPromptMode")
+        // Explicit consent for reading Claude Code's Keychain item (#2634). Default OFF; never enabled silently.
+        let claudeOAuthDirectKeychainReadAllowed = userDefaults.object(
+            forKey: ClaudeOAuthDirectKeychainReadConsent.userDefaultsKey) as? Bool ?? false
         let claudeWebExtrasEnabledRaw = userDefaults.object(forKey: "claudeWebExtrasEnabled") as? Bool ?? false
         let creditsExtrasDefault = userDefaults.object(forKey: "showOptionalCreditsAndExtraUsage") as? Bool
         let showOptionalCreditsAndExtraUsage = creditsExtrasDefault ?? true
@@ -503,10 +532,18 @@ extension SettingsStore {
         if Self.isRunningTests, claudeDailyRoutinesUsageVisibleDefault == nil {
             userDefaults.set(true, forKey: "claudeDailyRoutinesUsageVisible")
         }
+        // Model-scoped weekly rows are opt-in: a fresh install keeps widgets on the standard quota lanes.
+        let claudeModelScopedWeeklyUsageVisible = userDefaults.object(
+            forKey: "claudeModelScopedWeeklyUsageVisible") as? Bool ?? false
         let codexSparkUsageVisibleDefault = userDefaults.object(forKey: "codexSparkUsageVisible") as? Bool
         let codexSparkUsageVisible = codexSparkUsageVisibleDefault ?? true
         if Self.isRunningTests, codexSparkUsageVisibleDefault == nil {
             userDefaults.set(true, forKey: "codexSparkUsageVisible")
+        }
+        let codexExternalOAuthSourcesAllowed = userDefaults.object(
+            forKey: "codexExternalOAuthSourcesAllowed") as? Bool ?? false
+        if Self.isRunningTests, userDefaults.object(forKey: "codexExternalOAuthSourcesAllowed") == nil {
+            userDefaults.set(false, forKey: "codexExternalOAuthSourcesAllowed")
         }
         let openAIWebAccessDefault = userDefaults.object(forKey: "openAIWebAccessEnabled") as? Bool
         let openAIWebAccessEnabled = openAIWebAccessDefault ?? false
@@ -574,6 +611,7 @@ extension SettingsStore {
             quotaWarningOnScreenAlertEnabled: quotaWarnings.onScreenAlertEnabled,
             quotaWarningMarkersVisible: quotaWarningMarkersVisible,
             weeklyProgressWorkDays: weeklyProgressWorkDays,
+            workdayTickAppearanceRaw: workdayTickAppearanceRaw,
             usageBarsShowUsed: usageBarsShowUsed,
             resetTimesShowAbsolute: resetTimesShowAbsolute,
             providerChangelogLinksEnabled: providerChangelogLinksEnabled,
@@ -590,6 +628,7 @@ extension SettingsStore {
             menuBarLayoutOverridesRaw: menuBarLayoutOverridesRaw,
             menuBarLayoutSizeRaw: menuBarLayoutSizeRaw,
             menuBarLayoutGapRaw: menuBarLayoutGapRaw,
+            menuBarLayoutVerticalAdjustment: menuBarLayoutVerticalAdjustment,
             copilotBudgetExtrasEnabled: copilotBudgetExtrasEnabled,
             copilotIconSecondaryWindowIDRaw: copilotIconSecondaryWindowIDRaw,
             costUsageEnabled: costUsageEnabled,
@@ -604,10 +643,13 @@ extension SettingsStore {
             menuBarShowsHighestUsage: menuBarShowsHighestUsage,
             claudeOAuthKeychainPromptModeRaw: claudeOAuthKeychainPromptModeRaw,
             claudeOAuthKeychainReadStrategyRaw: claudeOAuthKeychainReadStrategyRaw,
+            claudeOAuthDirectKeychainReadAllowed: claudeOAuthDirectKeychainReadAllowed,
             claudeWebExtrasEnabledRaw: claudeWebExtrasEnabledRaw,
             showOptionalCreditsAndExtraUsage: showOptionalCreditsAndExtraUsage,
             claudeDailyRoutinesUsageVisible: claudeDailyRoutinesUsageVisible,
+            claudeModelScopedWeeklyUsageVisible: claudeModelScopedWeeklyUsageVisible,
             codexSparkUsageVisible: codexSparkUsageVisible,
+            codexExternalOAuthSourcesAllowed: codexExternalOAuthSourcesAllowed,
             openAIWebAccessEnabled: openAIWebAccessEnabled,
             openAIWebBatterySaverEnabled: openAIWebBatterySaverEnabled,
             backgroundWorkLowPowerModeEnabled: backgroundWorkLowPowerModeEnabled,
@@ -732,6 +774,7 @@ extension SettingsStore {
 
         // Tagged builds through v0.35 used primary=Claude, secondary=Gemini Pro,
         // and tertiary=Gemini Flash. Remap those meanings once to the two-pool schema.
+        // Provider-specific by design: this one-time migration rewrites Antigravity's historical persisted lanes.
         var migrated = preferences
         switch MenuBarMetricPreference(rawValue: migrated[UsageProvider.antigravity.rawValue] ?? "") {
         case .primary:
@@ -900,12 +943,24 @@ extension SettingsStore {
             enablement[instanceID] = isEnabled
         }
         self.providerEnablement = enablement
+        // Every config path crosses this method, so the accent palette refreshes from a settings edit,
+        // an external edit to the config file, and an inbound iCloud sync alike.
+        if ProviderAccentPalette.apply(config: config) {
+            #if canImport(WidgetKit)
+            WidgetCenter.shared.reloadAllTimelines()
+            #endif
+        }
     }
 
     private static func providerConfigFingerprint(_ config: ProviderConfig) -> Data {
+        // This fingerprint gates provider refresh publication, so it must cover only fields a fetch
+        // depends on. A purely cosmetic field would otherwise discard an in-flight probe result, and
+        // a cosmetic edit schedules no replacement fetch.
+        var fetchRelevant = config
+        fetchRelevant.accentColor = nil
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        return (try? encoder.encode(config)) ?? Data()
+        return (try? encoder.encode(fetchRelevant)) ?? Data()
     }
 
     func providerEnablementRevision(for provider: UsageProvider) -> UInt64 {

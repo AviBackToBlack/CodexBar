@@ -500,6 +500,10 @@
 "quota_depleted_title" = "Kvoten tar slut och återställs";
 "quota_warning_notifications_subtitle" = "Varnar när återstående sessions- eller veckokvot passerar inställda trösklar.";
 "threshold_warnings_title" = "Tröskelvarningar";
+"provider_accent_color_title" = "Accentfärg";
+"provider_accent_color_footer" = "Anger färgen på användningsstaplarna, diagrammen och växlarfliken för den här leverantören.";
+"provider_accent_color_hex_label" = "Hexadecimalt färgvärde";
+"provider_accent_color_reset" = "Använd standard";
 "quota_warnings_title" = "Kvotvarningar";
 "quota_warning_session" = "session";
 "quota_warning_session_capitalized" = "Session";
@@ -606,6 +610,11 @@
 "show_quota_warning_markers_subtitle" = "Rita tröskelmarkeringar på användningsstaplar när kvotvarningar är konfigurerade.";
 "weekly_progress_work_days_title" = "Arbetsdagar i veckoförlopp";
 "weekly_progress_work_days_subtitle" = "Ställ in arbetsdagar för markeringar i veckostaplar och tempoberäkningar.";
+"workday_tick_appearance_title" = "Utseende för arbetsdagsmarkeringar";
+"workday_tick_appearance_subtitle" = "Välj hur arbetsdagsgränser visas i veckans användningsstaplar.";
+"workday_tick_appearance_hidden" = "Dolda";
+"workday_tick_appearance_subtle" = "Diskreta";
+"workday_tick_appearance_high_contrast" = "Hög kontrast";
 "show_provider_changelog_links_title" = "Visa länkar till leverantörers ändringsloggar";
 "show_provider_changelog_links_subtitle" = "Lägger till länkar till utgåvekommentarer för stödda CLI-baserade leverantörer i menyn.";
 "show_credits_extra_usage_title" = "Visa krediter och extra användning";
@@ -665,6 +674,8 @@
 "copyright" = "© 2026 Peter Steinberger. MIT-licens.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Använd JavaScriptCore för leverantörsinsticksfiler";
+"use_javascriptcore_plugin_engine_subtitle" = "Endast kompatibilitetsåterställning. Starta om CodexBar för att tillämpa; CODEXBAR_PLUGIN_ENGINE åsidosätter inställningen.";
 "section_logging" = "Loggning";
 "enable_file_logging" = "Aktivera filloggning";
 "enable_file_logging_subtitle" = "Skriv loggar till %@ för felsökning.";
@@ -1337,6 +1348,7 @@
 "menu_bar_layout_gap" = "Mellanrum";
 "menu_bar_layout_gap_tight" = "Tätt";
 "menu_bar_layout_gap_regular" = "Normal";
+"menu_bar_layout_vertical_adjustment" = "Vertikal justering";
 "menu_bar_layout_keyboard_hint" = "Delete tar bort den markerade brickan";
 "menu_bar_layout_sample_account" = "konto";
 "menu_bar_layout_sample_runs_out" = "tar slut fre.";
@@ -1425,3 +1437,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Ange alla slutpunktsinställningar för att granska de exakta ursprungsadresserna.";
 "Approve" = "Godkänn";
 "Install" = "Installera";
+"5-hour usage" = "5-timmarsanvändning";
+"7-day usage" = "7-dagarsanvändning";
+"Total usage" = "Total användning";

@@ -6,7 +6,7 @@ public enum T3ChatProviderDescriptor {
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .t3chat,
-            settingsSection: .init(T3ChatProviderSettingsKey.self),
+            settingsSection: .init(T3ChatProviderSettingsKey.self, cookieSettings: T3ChatProviderSettings.self),
             metadata: ProviderMetadata(
                 id: .t3chat,
                 displayName: "T3 Chat",
@@ -22,6 +22,9 @@ public enum T3ChatProviderDescriptor {
                 widgetSelectable: false,
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
+                sharePlanLabels: ["free": "Free", "pro": "Pro", "team": "Team"],
+                debugLogUnavailableMessage: "T3 Chat debug log not yet implemented",
+                debugPane: ProviderDebugPaneCapabilities(errorSimulationOrder: 6),
                 browserCookieOrder: ProviderBrowserCookieDefaults.defaultImportOrder,
                 dashboardURL: "https://t3.chat/settings/customization",
                 subscriptionDashboardURL: "https://t3.chat/settings/subscription",
@@ -50,7 +53,6 @@ public enum T3ChatProviderDescriptor {
             sourceModes: [.auto, .web],
             pipeline: ProviderFetchPipeline(resolveStrategies: { context in
                 let swift = T3ChatWebFetchStrategy()
-                #if canImport(JavaScriptCore)
                 guard ProviderPluginPrototype.isEnabled(environment: context.env) else { return [swift] }
                 return [
                     ScriptFetchStrategy(
@@ -64,9 +66,6 @@ public enum T3ChatProviderDescriptor {
                         }),
                     swift,
                 ]
-                #else
-                return [swift]
-                #endif
             }))
     }
 }
@@ -92,7 +91,7 @@ struct T3ChatWebFetchStrategy: ProviderFetchStrategy {
         let fetcher = T3ChatUsageFetcher(browserDetection: context.browserDetection)
         let manual = Self.manualCookieHeader(from: context)
         let logger: ((String) -> Void)? = context.verbose
-            ? { msg in CodexBarLog.logger(LogCategories.t3chat).verbose(msg) }
+            ? { msg in CodexBarLog.logger(LogCategories.provider(.t3chat)).verbose(msg) }
             : nil
         let snapshot = try await fetcher.fetch(
             cookieHeaderOverride: manual,

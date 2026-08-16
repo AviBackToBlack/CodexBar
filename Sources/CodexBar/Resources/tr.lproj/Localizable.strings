@@ -485,6 +485,10 @@
 "quota_depleted_title" = "Kota tükenmesi ve yenilenmesi";
 "quota_warning_notifications_subtitle" = "Oturum veya haftalık kalan kota yapılandırılan eşikleri geçtiğinde uyarır.";
 "threshold_warnings_title" = "Eşik uyarıları";
+"provider_accent_color_title" = "Vurgu rengi";
+"provider_accent_color_footer" = "Bu sağlayıcının kullanım çubuklarının, grafiklerinin ve geçiş sekmesinin rengini belirler.";
+"provider_accent_color_hex_label" = "Onaltılık renk değeri";
+"provider_accent_color_reset" = "Varsayılanı kullan";
 "quota_warnings_title" = "Kota uyarıları";
 "quota_warning_session" = "oturum";
 "quota_warning_session_capitalized" = "Oturum";
@@ -613,6 +617,11 @@
 "show_quota_warning_markers_subtitle" = "Kota uyarıları yapılandırıldığında kullanım çubuklarına eşik çizgileri çizer.";
 "weekly_progress_work_days_title" = "Haftalık ilerleme iş günleri";
 "weekly_progress_work_days_subtitle" = "Haftalık kullanım çubuğu işaretleri ve tempo hesaplamaları için iş günlerini ayarlar.";
+"workday_tick_appearance_title" = "İş günü işaretlerinin görünümü";
+"workday_tick_appearance_subtitle" = "İş günü sınırlarının haftalık kullanım çubuklarında nasıl görüneceğini seçin.";
+"workday_tick_appearance_hidden" = "Gizli";
+"workday_tick_appearance_subtle" = "Hafif";
+"workday_tick_appearance_high_contrast" = "Yüksek kontrast";
 "show_provider_changelog_links_title" = "Sağlayıcı değişiklik günlüğü bağlantılarını göster";
 "show_provider_changelog_links_subtitle" = "Desteklenen CLI destekli sağlayıcılar için menüye sürüm notları bağlantıları ekler.";
 "show_credits_extra_usage_title" = "Krediler + ekstra kullanımı göster";
@@ -672,6 +681,8 @@
 "copyright" = "© 2026 Peter Steinberger. MIT Lisansı.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Sağlayıcı eklentileri için JavaScriptCore kullan";
+"use_javascriptcore_plugin_engine_subtitle" = "Yalnızca uyumluluk geri dönüşü. Uygulamak için CodexBar’ı yeniden başlatın; CODEXBAR_PLUGIN_ENGINE bu ayarı geçersiz kılar.";
 "section_logging" = "Günlükleme";
 "enable_file_logging" = "Dosya günlüğünü etkinleştir";
 "enable_file_logging_subtitle" = "Hata ayıklama için günlükleri %@ konumuna yaz.";
@@ -1340,6 +1351,7 @@
 "menu_bar_layout_gap" = "Boşluk";
 "menu_bar_layout_gap_tight" = "Dar";
 "menu_bar_layout_gap_regular" = "Normal";
+"menu_bar_layout_vertical_adjustment" = "Dikey Ayar";
 "menu_bar_layout_keyboard_hint" = "Delete seçili belirteci kaldırır";
 "menu_bar_layout_sample_account" = "hesap";
 "menu_bar_layout_sample_runs_out" = "Cum. biter";
@@ -1428,3 +1440,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Kullanılacak ağ kaynaklarını tam olarak incelemek için tüm uç nokta ayarlarını girin.";
 "Approve" = "Onayla";
 "Install" = "Yükle";
+"5-hour usage" = "5 saatlik kullanım";
+"7-day usage" = "7 günlük kullanım";
+"Total usage" = "Toplam kullanım";

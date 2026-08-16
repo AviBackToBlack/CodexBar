@@ -64,6 +64,7 @@ extension UsageStore {
         }
     }
 
+    /// Builds outbound snapshots only from this Mac's UsageStore; remote fleet snapshots live in CloudSyncState.
     func cloudSyncAccountSnapshots() -> [AccountSnapshotSyncPayload] {
         let deviceID = self.settings.iCloudSyncDeviceID
         var payloads: [String: AccountSnapshotSyncPayload] = [:]
@@ -119,12 +120,14 @@ extension UsageStore {
     }
 
     func cloudSyncLocalAccountKeys(for provider: UsageProvider) -> Set<String> {
-        var identities: Set<String> = []
+        let snapshotKeys = self.cloudSyncAccountSnapshots().filter { $0.provider == provider.instanceID }
+            .map(\.accountKey)
+        var identities = Set(snapshotKeys)
+        var hasDefaultCodexSnapshot = false
         func insert(_ identity: String?) {
             guard let identity else { return }
             identities.insert(AccountSnapshotSyncPayload.accountKey(for: identity))
         }
-
         if let usage = self.snapshots[provider.instanceID] {
             insert(usage.identity?.accountID ?? usage.identity?.accountEmail)
         }
@@ -138,6 +141,7 @@ extension UsageStore {
             insert(account.externalIdentifier)
             insert(account.id.uuidString)
         }
+        // Provider-specific by design: Claude swap subprocesses own extra IDs; Codex alone has scoped account info.
         if provider == .claude {
             for accountSnapshot in self.claudeSwapAccountSnapshots {
                 insert(accountSnapshot.snapshot?.identity?.accountID)
@@ -145,17 +149,18 @@ extension UsageStore {
                 insert("\(accountSnapshot.id.source):\(accountSnapshot.id.opaqueID)")
             }
         }
-        if provider == .codex,
-           let projection = self.settings.codexVisibleAccountProjectionForMenuDisplay
-        {
-            for account in projection.visibleAccounts {
-                insert(account.workspaceAccountID)
-                insert(account.email)
-                insert(account.id)
-                insert(account.storedAccountID?.uuidString)
+        if provider == .codex {
+            if let projection = self.settings.codexVisibleAccountProjectionForMenuDisplay {
+                for account in projection.visibleAccounts {
+                    insert(account.workspaceAccountID)
+                    insert(account.email)
+                    insert(account.id)
+                    insert(account.storedAccountID?.uuidString)
+                }
             }
+            hasDefaultCodexSnapshot = snapshotKeys.contains(AccountSnapshotSyncPayload.accountKey(for: nil))
         }
-        if identities.isEmpty {
+        if identities.isEmpty || hasDefaultCodexSnapshot {
             let fallback = self.accountInfo(for: provider)
             insert(fallback.email)
         }
@@ -201,7 +206,8 @@ extension UsageStore {
         {
             Self.preservedClaudeWidgetUsage(
                 from: previousEntry,
-                expectedQuotaOwnerKey: claudeQuotaOwnerKey)
+                expectedQuotaOwnerKey: claudeQuotaOwnerKey,
+                includesModelScopedWeeklyRows: self.settings.claudeModelScopedWeeklyUsageVisible)
         } else {
             nil
         }
@@ -289,7 +295,8 @@ extension UsageStore {
 
     private nonisolated static func preservedClaudeWidgetUsage(
         from entry: WidgetSnapshot.ProviderEntry?,
-        expectedQuotaOwnerKey: String?) -> PreservedClaudeWidgetUsage?
+        expectedQuotaOwnerKey: String?,
+        includesModelScopedWeeklyRows: Bool) -> PreservedClaudeWidgetUsage?
     {
         guard let entry, entry.provider == .claude else { return nil }
         guard let expectedQuotaOwnerKey,
@@ -304,6 +311,13 @@ extension UsageStore {
         let tertiary = entry.tertiary?.isSyntheticPlaceholder == true ? nil : entry.tertiary
         let usageRows = entry.usageRows?.filter { row in
             guard row.window?.isSyntheticPlaceholder != true else { return false }
+            // Rows persisted while the setting was on must not outlive it: without a live snapshot
+            // this preserved list is what widgets render, so re-apply the visibility filter here.
+            guard includesModelScopedWeeklyRows ||
+                !row.id.hasPrefix(Self.claudeModelScopedWeeklyWindowIDPrefix)
+            else {
+                return false
+            }
             return switch row.id {
             case "primary": primary != nil
             case "secondary": secondary != nil
@@ -413,7 +427,7 @@ extension UsageStore {
                 return "Requests"
             }
             if provider == .grok,
-               let dyn = GrokProviderDescriptor.primaryLabel(window: snapshot.primary)
+               let dyn = GrokProviderDescriptor.displayLabel(window: snapshot.primary)
             {
                 return dyn
             }
@@ -462,6 +476,20 @@ extension UsageStore {
                 title: metadata?.opusLabel ?? "Opus",
                 percentLeft: snapshot.tertiary?.remainingPercent))
         }
+        if provider == .claude, self.settings.claudeModelScopedWeeklyUsageVisible {
+            // Claude fetchers place model-scoped weekly quotas (for example, Fable) in extraRateWindows.
+            // Keep the widget projection generic so newly surfaced Claude model quotas appear without UI changes.
+            rows.append(contentsOf: (snapshot.extraRateWindows ?? []).compactMap { namedWindow in
+                guard namedWindow.id.hasPrefix(Self.claudeModelScopedWeeklyWindowIDPrefix),
+                      namedWindow.usageKnown
+                else { return nil }
+                return WidgetSnapshot.WidgetUsageRowSnapshot(
+                    id: namedWindow.id,
+                    title: namedWindow.title,
+                    percentLeft: namedWindow.window.remainingPercent,
+                    window: namedWindow.window)
+            })
+        }
         if provider == .kimi {
             // Keep persisted widget order stable and include only Kimi's intentional subscription lanes.
             let kimiWindowIDs = ["kimi-monthly", "kimi-code-7d"]
@@ -477,6 +505,9 @@ extension UsageStore {
         return rows.filter { $0.percentLeft != nil }
     }
 
+    /// Identifier prefix Claude fetchers use for model-scoped weekly carve-outs (for example, Fable).
+    private nonisolated static let claudeModelScopedWeeklyWindowIDPrefix = "claude-weekly-scoped-"
+
     private nonisolated static let antigravityQuotaSummaryWindowIDPrefix = "antigravity-quota-summary-"
     private nonisolated static let antigravityCompactFallbackWindowIDPrefix = "antigravity-compact-fallback-"
 
@@ -488,7 +519,9 @@ extension UsageStore {
         }), !windows.isEmpty else {
             return nil
         }
-        return windows.map { namedWindow in
+        // Match the menu card and drop model families the account never touches.
+        let idleIDs = AntigravityQuotaFamilyVisibility.idleWindowIDs(in: snapshot)
+        return windows.filter { !idleIDs.contains($0.id) }.map { namedWindow in
             WidgetSnapshot.WidgetUsageRowSnapshot(
                 id: namedWindow.id,
                 title: namedWindow.title,

@@ -79,10 +79,17 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
             let refreshStartedAt = Date()
             await self.store.refreshProvider(provider)
             guard !Task.isCancelled, !self.hasPreparedForAppShutdown else { return }
+            // Provider-specific by design: Codex publishes a compatible core quota model before its optional
+            // credits and OpenAI Web enrichment stages below. Incompatible cards remain frozen until the final
+            // menu reconciliation, so they never lose their loading state while still showing the old layout.
+            if provider == .codex {
+                self.menuCardRefreshMonitor.publishResolvedModelIfCompatible(for: provider)
+            }
             await self.store.refreshProviderStatus(provider)
             guard !Task.isCancelled, !self.hasPreparedForAppShutdown else { return }
             await self.store.refreshTokenUsageNow(for: provider, force: true)
             guard !Task.isCancelled, !self.hasPreparedForAppShutdown else { return }
+            // Provider-specific by design: Codex refresh also owns OpenAI dashboard and reset-credit enrichment.
             if provider == .codex {
                 await self.store.refreshCreditsNow(minimumSnapshotUpdatedAt: refreshStartedAt)
                 guard !Task.isCancelled, !self.hasPreparedForAppShutdown else { return }
@@ -324,6 +331,7 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
     }
 
     @objc func openDashboard() {
+        // Provider-specific by design: Codex remains the historical action fallback when no provider is selected.
         let preferred = self.lastMenuProvider?.firstPartyProvider
             ?? (self.store.isEnabled(.codex) ? .codex : self.store.enabledFirstPartyProviders().first)
 
@@ -336,6 +344,7 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
         for provider: UsageProvider,
         environment: [String: String] = ProcessInfo.processInfo.environment) -> URL?
     {
+        // Provider-specific by design: these dashboards depend on region, source label, scope, or subscription plan.
         if provider == .alibaba {
             return self.settings.alibabaCodingPlanAPIRegion.dashboardURL
         }
@@ -359,7 +368,7 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
         }
 
         if provider == .zai {
-            return ZaiUsageFetcher.resolveDashboardURL(
+            return ZaiEndpointRouter.resolveDashboardURL(
                 region: self.settings.zaiAPIRegion,
                 environment: environment,
                 usageScope: self.settings.zaiEffectiveUsageScope())
@@ -383,6 +392,7 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
     }
 
     @objc func openCreditsPurchase() {
+        // Provider-specific by design: codexResetCredits payload supplies the validated ChatGPT purchase URL.
         let preferred = self.lastMenuProvider
             ?? (self.store.isEnabled(.codex) ? .codex : self.store.enabledProviders().first)
         let provider = preferred ?? .codex
@@ -464,6 +474,7 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
     }
 
     @objc func openTerminalCommand(_ sender: NSMenuItem) {
+        // Provider-specific by design: legacy terminal menu items without a command payload open Claude.
         let command = sender.representedObject as? String ?? "claude"
         self.openTerminal(command: command)
     }
@@ -642,9 +653,9 @@ extension StatusItemController: StatusItemMenuPersistentActionDelegate {
     func openTerminal(command: String) {
         let terminal = self.settings.terminalApp
 
-        if terminal == .iTerm, !terminal.isInstalled {
+        if terminal != .terminal, !terminal.isInstalled {
             CodexBarLog.logger(LogCategories.terminal).warning(
-                "iTerm is not installed, falling back to Terminal.app",
+                "\(terminal.label) is not installed, falling back to Terminal.app",
                 metadata: ["terminal": terminal.rawValue])
             Self.openTerminalInDefaultTerminal(command: command)
             return

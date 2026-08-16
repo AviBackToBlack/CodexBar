@@ -269,6 +269,14 @@ extension SettingsStore {
         }
     }
 
+    var workdayTickAppearance: WorkdayTickAppearance {
+        get { WorkdayTickAppearance(rawValue: self.defaultsState.workdayTickAppearanceRaw) ?? .subtle }
+        set {
+            self.defaultsState.workdayTickAppearanceRaw = newValue.rawValue
+            self.userDefaults.set(newValue.rawValue, forKey: "workdayTickAppearance")
+        }
+    }
+
     var usageBarsShowUsed: Bool {
         get { self.defaultsState.usageBarsShowUsed }
         set {
@@ -471,6 +479,17 @@ extension SettingsStore {
         }
     }
 
+    /// User-tunable vertical nudge for the menu bar title, clamped to -20...20.
+    /// Positive moves content up, negative moves it down; 0 keeps the optical default.
+    var menuBarLayoutVerticalAdjustment: Int {
+        get { self.defaultsState.menuBarLayoutVerticalAdjustment }
+        set {
+            let clamped = max(-20, min(20, newValue))
+            self.defaultsState.menuBarLayoutVerticalAdjustment = clamped
+            self.userDefaults.set(clamped, forKey: "menuBarLayoutVerticalAdjustment")
+        }
+    }
+
     private func persistMenuBarLayout(_ layout: MenuBarLayout, key: String) {
         guard let data = try? JSONEncoder().encode(layout) else { return }
         self.userDefaults.set(data, forKey: key)
@@ -613,6 +632,30 @@ extension SettingsStore {
         }
     }
 
+    /// Explicit opt-in for reading Claude Code's own Keychain item (#2634). Feeds
+    /// `ClaudeOAuthDirectKeychainReadConsent`, the single consent source behind
+    /// `ClaudeOAuthCredentialsStore.keychainAccessAllowed`.
+    var claudeOAuthDirectKeychainReadAllowed: Bool {
+        get { self.defaultsState.claudeOAuthDirectKeychainReadAllowed }
+        set {
+            let wasAllowed = self.defaultsState.claudeOAuthDirectKeychainReadAllowed
+            self.defaultsState.claudeOAuthDirectKeychainReadAllowed = newValue
+            self.userDefaults.set(newValue, forKey: ClaudeOAuthDirectKeychainReadConsent.userDefaultsKey)
+            CodexBarLog.logger(LogCategories.settings).info(
+                "Claude direct Keychain read consent updated",
+                metadata: ["allowed": newValue ? "1" : "0"])
+            if wasAllowed, !newValue {
+                // Revoking consent must also revoke what consent obtained: credentials copied from Claude
+                // Code's Keychain while consent was on live in CodexBar's memory and Keychain caches, and
+                // those caches are consulted before the direct-read gate. Advance the global revocation epoch
+                // before dropping the active cache so previously used profile caches also fail closed on lookup
+                // (CodexBar-owned state only — Claude Code's item is untouched).
+                ClaudeOAuthCredentialsStore.revokeDirectKeychainReadConsent()
+            }
+            self.noteBackgroundWorkSettingsChanged()
+        }
+    }
+
     var claudeOAuthPromptFreeCredentialsEnabled: Bool {
         get { self.claudeOAuthKeychainPromptMode == .never }
         set {
@@ -672,11 +715,28 @@ extension SettingsStore {
         }
     }
 
+    var claudeModelScopedWeeklyUsageVisible: Bool {
+        get { self.defaultsState.claudeModelScopedWeeklyUsageVisible }
+        set {
+            self.defaultsState.claudeModelScopedWeeklyUsageVisible = newValue
+            self.userDefaults.set(newValue, forKey: "claudeModelScopedWeeklyUsageVisible")
+        }
+    }
+
     var codexSparkUsageVisible: Bool {
         get { self.defaultsState.codexSparkUsageVisible }
         set {
             self.defaultsState.codexSparkUsageVisible = newValue
             self.userDefaults.set(newValue, forKey: "codexSparkUsageVisible")
+        }
+    }
+
+    var codexExternalOAuthSourcesAllowed: Bool {
+        get { self.defaultsState.codexExternalOAuthSourcesAllowed }
+        set {
+            self.defaultsState.codexExternalOAuthSourcesAllowed = newValue
+            self.userDefaults.set(newValue, forKey: "codexExternalOAuthSourcesAllowed")
+            self.noteBackgroundWorkSettingsChanged()
         }
     }
 

@@ -479,6 +479,10 @@
 "quota_depleted_title" = "Cota esgotada e restaurada";
 "quota_warning_notifications_subtitle" = "Avisa cando a cota restante de sesión ou semanal supera os limiares configurados.";
 "threshold_warnings_title" = "Avisos de limiar";
+"provider_accent_color_title" = "Cor de acento";
+"provider_accent_color_footer" = "Establece a cor das barras de uso, das gráficas e da lapela do selector deste provedor.";
+"provider_accent_color_hex_label" = "Valor de cor hexadecimal";
+"provider_accent_color_reset" = "Usar o predeterminado";
 "quota_warnings_title" = "Avisos de cota";
 "quota_warning_session" = "sesión";
 "quota_warning_session_capitalized" = "Sesión";
@@ -586,6 +590,11 @@
 "show_quota_warning_markers_subtitle" = "Debuxa marcas de limiar nas barras de uso cando hai avisos de cota configurados.";
 "weekly_progress_work_days_title" = "Días laborables do progreso semanal";
 "weekly_progress_work_days_subtitle" = "Define os días laborables para os marcadores das barras de uso semanal e os cálculos de ritmo.";
+"workday_tick_appearance_title" = "Aspecto das marcas dos días laborables";
+"workday_tick_appearance_subtitle" = "Escolle como aparecen os límites dos días laborables nas barras de uso semanal.";
+"workday_tick_appearance_hidden" = "Ocultas";
+"workday_tick_appearance_subtle" = "Sutís";
+"workday_tick_appearance_high_contrast" = "Contraste alto";
 "show_provider_changelog_links_title" = "Amosar as ligazóns ao rexistro de cambios do provedor";
 "show_provider_changelog_links_subtitle" = "Engade ao menú enlaces ás notas de versión dos provedores compatibles baseados en CLI.";
 "show_credits_extra_usage_title" = "Amosar créditos + uso adicional";
@@ -645,6 +654,8 @@
 "copyright" = "© 2026 Peter Steinberger. Licenza MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Usar JavaScriptCore para os complementos de provedores";
+"use_javascriptcore_plugin_engine_subtitle" = "Só como reversión de compatibilidade. Reinicia CodexBar para aplicalo; CODEXBAR_PLUGIN_ENGINE substitúe este axuste.";
 "section_logging" = "Rexistro";
 "enable_file_logging" = "Activar o rexistro en ficheiro";
 "enable_file_logging_subtitle" = "Escribe os rexistros en %@ para depuración.";
@@ -1338,6 +1349,7 @@
 "menu_bar_layout_gap" = "Separación";
 "menu_bar_layout_gap_tight" = "Estreita";
 "menu_bar_layout_gap_regular" = "Normal";
+"menu_bar_layout_vertical_adjustment" = "Axuste vertical";
 "menu_bar_layout_keyboard_hint" = "Suprimir retira a ficha seleccionada";
 "menu_bar_layout_sample_account" = "conta";
 "menu_bar_layout_sample_runs_out" = "esgótase ven.";
@@ -1426,3 +1438,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Introduce todos os axustes dos puntos de conexión para revisar as orixes de rede exactas.";
 "Approve" = "Aprobar";
 "Install" = "Instalar";
+"5-hour usage" = "Uso de 5 horas";
+"7-day usage" = "Uso de 7 días";
+"Total usage" = "Uso total";

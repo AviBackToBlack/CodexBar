@@ -462,6 +462,10 @@
 "quota_depleted_title" = "Quota depleted & restored";
 "quota_warning_notifications_subtitle" = "Warns when session or weekly quota remaining crosses configured thresholds.";
 "threshold_warnings_title" = "Threshold warnings";
+"provider_accent_color_title" = "Accent color";
+"provider_accent_color_footer" = "Sets the color of this provider's usage bars, charts, and switcher tab.";
+"provider_accent_color_hex_label" = "Hex color value";
+"provider_accent_color_reset" = "Use default";
 "quota_warnings_title" = "Quota warnings";
 "quota_warning_session" = "session";
 "quota_warning_session_capitalized" = "Session";
@@ -590,6 +594,11 @@
 "show_quota_warning_markers_subtitle" = "Draw threshold tick marks on usage bars when quota warnings are configured.";
 "weekly_progress_work_days_title" = "Work days";
 "weekly_progress_work_days_subtitle" = "Set work days for weekly usage-bar markers and pace calculations.";
+"workday_tick_appearance_title" = "Workday tick appearance";
+"workday_tick_appearance_subtitle" = "Choose how workday boundaries appear on weekly usage bars.";
+"workday_tick_appearance_hidden" = "Hidden";
+"workday_tick_appearance_subtle" = "Subtle";
+"workday_tick_appearance_high_contrast" = "High contrast";
 "show_provider_changelog_links_title" = "Show provider changelog links";
 "show_provider_changelog_links_subtitle" = "Adds release-notes links for supported CLI-backed providers to the menu.";
 "show_credits_extra_usage_title" = "Show credits & extra usage";
@@ -660,6 +669,8 @@
 "copyright" = "© 2026 Peter Steinberger. MIT License.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Use JavaScriptCore for provider plugins";
+"use_javascriptcore_plugin_engine_subtitle" = "Compatibility rollback only. Restart CodexBar to apply; CODEXBAR_PLUGIN_ENGINE overrides this setting.";
 "section_logging" = "Logging";
 "enable_file_logging" = "Enable file logging";
 "enable_file_logging_subtitle" = "Write logs to %@ for debugging.";
@@ -1331,6 +1342,7 @@
 "menu_bar_layout_gap" = "Gap";
 "menu_bar_layout_gap_tight" = "Tight";
 "menu_bar_layout_gap_regular" = "Regular";
+"menu_bar_layout_vertical_adjustment" = "Vertical";
 "menu_bar_layout_keyboard_hint" = "Delete removes the selected token";
 "menu_bar_layout_sample_account" = "account";
 "menu_bar_layout_sample_runs_out" = "runs out Fri";
@@ -1442,3 +1454,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Enter every endpoint setting to review the exact network origins.";
 "Approve" = "Approve";
 "Install" = "Install";
+"5-hour usage" = "5-hour usage";
+"7-day usage" = "7-day usage";
+"Total usage" = "Total usage";

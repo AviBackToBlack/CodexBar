@@ -500,6 +500,10 @@
 "quota_depleted_title" = "Вичерпання та відновлення квоти";
 "quota_warning_notifications_subtitle" = "Попереджає, коли залишок сеансу або тижневої квоти перевищує налаштовані порогові значення.";
 "threshold_warnings_title" = "Попередження про порогові значення";
+"provider_accent_color_title" = "Акцентний колір";
+"provider_accent_color_footer" = "Задає колір смуг використання, графіків і вкладки перемикача цього провайдера.";
+"provider_accent_color_hex_label" = "Шістнадцяткове значення кольору";
+"provider_accent_color_reset" = "Використовувати типовий";
 "quota_warnings_title" = "Попередження про квоту";
 "quota_warning_session" = "сесії";
 "quota_warning_session_capitalized" = "Сесія";
@@ -607,6 +611,11 @@
 "show_quota_warning_markers_subtitle" = "Малюйте порогові позначки на панелях використання, коли налаштовано попередження про квоту.";
 "weekly_progress_work_days_title" = "Щотижневі робочі дні";
 "weekly_progress_work_days_subtitle" = "Задайте робочі дні для позначок на смугах тижневого використання та розрахунків темпу.";
+"workday_tick_appearance_title" = "Вигляд позначок робочих днів";
+"workday_tick_appearance_subtitle" = "Виберіть, як відображати межі робочих днів на смугах тижневого використання.";
+"workday_tick_appearance_hidden" = "Приховані";
+"workday_tick_appearance_subtle" = "Ненав’язливі";
+"workday_tick_appearance_high_contrast" = "Високий контраст";
 "show_provider_changelog_links_title" = "Показати посилання журналу змін провайдера";
 "show_provider_changelog_links_subtitle" = "Додає в меню посилання на примітки до випуску для підтримуваних постачальників, що підтримують CLI.";
 "show_credits_extra_usage_title" = "Показати кредити + додаткове використання";
@@ -666,6 +675,8 @@
 "copyright" = "© 2026 Пітер Штайнбергер. Ліцензія MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Використовувати JavaScriptCore для плагінів постачальників";
+"use_javascriptcore_plugin_engine_subtitle" = "Лише для відкату сумісності. Перезапустіть CodexBar; CODEXBAR_PLUGIN_ENGINE перевизначає це налаштування.";
 "section_logging" = "Лісозаготівля";
 "enable_file_logging" = "Увімкнути журналювання файлів";
 "enable_file_logging_subtitle" = "Записати журнали до %@ для налагодження.";
@@ -1338,6 +1349,7 @@
 "menu_bar_layout_gap" = "Інтервал";
 "menu_bar_layout_gap_tight" = "Вузький";
 "menu_bar_layout_gap_regular" = "Звичайний";
+"menu_bar_layout_vertical_adjustment" = "Вертикальне налаштування";
 "menu_bar_layout_keyboard_hint" = "Delete видаляє вибраний елемент";
 "menu_bar_layout_sample_account" = "обліковий запис";
 "menu_bar_layout_sample_runs_out" = "закінчиться пт.";
@@ -1426,3 +1438,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Введіть усі параметри кінцевих точок, щоб переглянути точні джерела мережевих запитів.";
 "Approve" = "Схвалити";
 "Install" = "Встановити";
+"5-hour usage" = "Використання за 5 годин";
+"7-day usage" = "Використання за 7 днів";
+"Total usage" = "Загальне використання";

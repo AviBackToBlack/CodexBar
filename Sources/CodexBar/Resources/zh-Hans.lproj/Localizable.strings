@@ -507,6 +507,10 @@
 "quota_depleted_title" = "配额耗尽与恢复";
 "quota_warning_notifications_subtitle" = "当会话或每周剩余配额低于设置的阈值时提醒。";
 "threshold_warnings_title" = "阈值预警";
+"provider_accent_color_title" = "强调色";
+"provider_accent_color_footer" = "设置该提供商的用量条、图表和切换标签的颜色。";
+"provider_accent_color_hex_label" = "十六进制颜色值";
+"provider_accent_color_reset" = "使用默认值";
 "quota_warnings_title" = "配额预警";
 "quota_warning_session" = "会话";
 "quota_warning_session_capitalized" = "会话";
@@ -639,6 +643,8 @@
 "check_for_updates" = "检查更新…";
 "updates_unavailable" = "此构建中更新不可用。";
 "copyright" = "© 2026 Peter Steinberger。MIT 许可证。";
+"use_javascriptcore_plugin_engine" = "为提供商插件使用 JavaScriptCore";
+"use_javascriptcore_plugin_engine_subtitle" = "仅用于兼容性回退。重启 CodexBar 后生效；CODEXBAR_PLUGIN_ENGINE 会覆盖此设置。";
 "section_logging" = "日志";
 "enable_file_logging" = "启用文件日志";
 "enable_file_logging_subtitle" = "将日志写入 %@ 以进行调试。";
@@ -966,6 +972,11 @@
 "%d unreadable item(s) skipped" = "已跳过 %d 个不可读项目";
 "weekly_progress_work_days_title" = "工作日刻度线";
 "weekly_progress_work_days_subtitle" = "设置用于每周用量条刻度和进度计算的工作日。";
+"workday_tick_appearance_title" = "工作日刻度外观";
+"workday_tick_appearance_subtitle" = "选择工作日边界在每周用量条上的显示方式。";
+"workday_tick_appearance_hidden" = "隐藏";
+"workday_tick_appearance_subtle" = "柔和";
+"workday_tick_appearance_high_contrast" = "高对比度";
 "copilot_device_code" = "设备代码已复制到剪贴板：%1$@\n\n请在以下地址验证：%2$@";
 "copilot_waiting_text" = "请在浏览器中完成登录。\n登录完成后，此窗口会自动关闭。";
 "vertex_ai_login_instructions" = "要跟踪 Vertex AI 用量，请通过 Google Cloud 进行认证。\n\n1. 打开终端\n2. 运行：gcloud auth application-default login\n3. 按照浏览器提示登录\n4. 设置你的项目：gcloud config set project PROJECT_ID\n\n是否现在打开终端？";
@@ -1317,6 +1328,7 @@
 "menu_bar_layout_gap" = "间距";
 "menu_bar_layout_gap_tight" = "紧凑";
 "menu_bar_layout_gap_regular" = "常规";
+"menu_bar_layout_vertical_adjustment" = "垂直调整";
 "menu_bar_layout_keyboard_hint" = "Delete 键会移除所选项目";
 "menu_bar_layout_sample_account" = "帐户";
 "menu_bar_layout_sample_runs_out" = "周五用尽";
@@ -1405,3 +1417,6 @@
 "Enter every endpoint setting to review the exact network origins." = "请填写所有端点设置，以查看确切的网络来源。";
 "Approve" = "批准";
 "Install" = "安装";
+"5-hour usage" = "5 小时用量";
+"7-day usage" = "7 天用量";
+"Total usage" = "总用量";

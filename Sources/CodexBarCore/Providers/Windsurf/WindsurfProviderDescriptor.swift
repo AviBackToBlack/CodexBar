@@ -6,7 +6,11 @@ public enum WindsurfProviderDescriptor {
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .windsurf,
-            settingsSection: .init(WindsurfProviderSettingsKey.self),
+            settingsSection: .init(WindsurfProviderSettingsKey.self, cookieSettings: { settings in
+                CookieProviderSettings(
+                    cookieSource: settings.cookieSource,
+                    manualCookieHeader: settings.manualCookieHeader)
+            }),
             metadata: ProviderMetadata(
                 id: .windsurf,
                 displayName: "Windsurf",
@@ -22,6 +26,10 @@ public enum WindsurfProviderDescriptor {
                 widgetSelectable: false,
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
+                sharePlanLabels: [
+                    "free": "Free", "pro": "Pro", "team": "Teams", "teams": "Teams",
+                    "enterprise": "Enterprise", "ultimate": "Ultimate",
+                ],
                 dashboardURL: "https://windsurf.com/subscription/usage",
                 statusPageURL: nil),
             branding: ProviderBranding(

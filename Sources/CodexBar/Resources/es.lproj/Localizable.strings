@@ -501,6 +501,10 @@
 "quota_depleted_title" = "Cuota agotada y restaurada";
 "quota_warning_notifications_subtitle" = "Avisa cuando la cuota restante de sesión o semanal cruza los umbrales configurados.";
 "threshold_warnings_title" = "Avisos de umbral";
+"provider_accent_color_title" = "Color de acento";
+"provider_accent_color_footer" = "Establece el color de las barras de uso, los gráficos y la pestaña del selector de este proveedor.";
+"provider_accent_color_hex_label" = "Valor de color hexadecimal";
+"provider_accent_color_reset" = "Usar predeterminado";
 "quota_warnings_title" = "Avisos de cuota";
 "quota_warning_session" = "sesión";
 "quota_warning_session_capitalized" = "Sesión";
@@ -599,6 +603,11 @@
 "show_quota_warning_markers_subtitle" = "Dibuja marcas de umbral en las barras de uso cuando hay avisos de cuota configurados.";
 "weekly_progress_work_days_title" = "Días laborables del progreso semanal";
 "weekly_progress_work_days_subtitle" = "Define los días laborables para los marcadores de las barras de uso semanal y los cálculos de ritmo.";
+"workday_tick_appearance_title" = "Aspecto de las marcas de días laborables";
+"workday_tick_appearance_subtitle" = "Elige cómo aparecen los límites de los días laborables en las barras de uso semanal.";
+"workday_tick_appearance_hidden" = "Ocultas";
+"workday_tick_appearance_subtle" = "Sutiles";
+"workday_tick_appearance_high_contrast" = "Contraste alto";
 "show_provider_changelog_links_title" = "Mostrar enlaces al registro de cambios del proveedor";
 "show_provider_changelog_links_subtitle" = "Añade al menú enlaces a las notas de versión de los proveedores compatibles basados en CLI.";
 "show_credits_extra_usage_title" = "Mostrar créditos + uso adicional";
@@ -659,6 +668,8 @@
 "copyright" = "© 2026 Peter Steinberger. Licencia MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Usar JavaScriptCore para los complementos de proveedores";
+"use_javascriptcore_plugin_engine_subtitle" = "Solo para reversión de compatibilidad. Reinicia CodexBar para aplicarlo; CODEXBAR_PLUGIN_ENGINE anula este ajuste.";
 "section_logging" = "Registro";
 "enable_file_logging" = "Activar registro en archivo";
 "enable_file_logging_subtitle" = "Escribir registros en %@ para depuración.";
@@ -1337,6 +1348,7 @@
 "menu_bar_layout_gap" = "Separación";
 "menu_bar_layout_gap_tight" = "Estrecha";
 "menu_bar_layout_gap_regular" = "Normal";
+"menu_bar_layout_vertical_adjustment" = "Ajuste vertical";
 "menu_bar_layout_keyboard_hint" = "Suprimir quita la ficha seleccionada";
 "menu_bar_layout_sample_account" = "cuenta";
 "menu_bar_layout_sample_runs_out" = "se agota vie.";
@@ -1425,3 +1437,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Introduce todos los ajustes de endpoint para revisar los orígenes de red exactos.";
 "Approve" = "Aprobar";
 "Install" = "Instalar";
+"5-hour usage" = "Uso de 5 horas";
+"7-day usage" = "Uso de 7 días";
+"Total usage" = "Uso total";

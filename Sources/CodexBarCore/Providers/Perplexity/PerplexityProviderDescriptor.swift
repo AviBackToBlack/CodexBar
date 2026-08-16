@@ -2,11 +2,27 @@ import Foundation
 
 public enum PerplexityProviderDescriptor {
     public static let descriptor: ProviderDescriptor = Self.makeDescriptor()
+    private static let credentials = ProviderCredentialAdapter(
+        tokenResolver: { kind, environment, _ in
+            guard kind == .primary, let token = Self.resolveSessionToken(environment: environment) else {
+                return nil
+            }
+            return ProviderTokenResolution(token: token, source: .environment)
+        },
+        authDetector: { environment, _ in
+            PerplexitySettingsReader.sessionToken(environment: environment) == nil ? [] : ["web"]
+        },
+        missingCredentialMessage: { _ in PerplexityAPIError.missingToken.errorDescription })
 
     static func makeDescriptor() -> ProviderDescriptor {
         ProviderDescriptor(
             id: .perplexity,
-            settingsSection: .init(PerplexityProviderSettingsKey.self),
+            menuBarMetrics: ProviderMenuBarMetricCapabilities(
+                supported: [.automatic, .primary, .secondary, .tertiary]),
+            settingsSection: .init(
+                PerplexityProviderSettingsKey.self,
+                cookieSettings: PerplexityProviderSettings.self),
+            credentials: self.credentials,
             metadata: ProviderMetadata(
                 id: .perplexity,
                 displayName: "Perplexity",
@@ -23,6 +39,7 @@ public enum PerplexityProviderDescriptor {
                 widgetSelectable: false,
                 isPrimaryProvider: false,
                 usesAccountFallback: false,
+                sharePlanLabels: ["pro": "Pro", "max": "Max"],
                 browserCookieOrder: nil,
                 dashboardURL: "https://www.perplexity.ai/account/usage",
                 statusPageURL: nil,
@@ -39,6 +56,24 @@ public enum PerplexityProviderDescriptor {
             tokenCost: ProviderTokenCostConfig(
                 supportsTokenCost: false,
                 noDataMessage: { "Perplexity cost tracking is not supported." }),
+            presentation: ProviderUsagePresentation(
+                iconWindowResolver: { context in
+                    let windows = context.snapshot.orderedPerplexityDisplayWindows()
+                    return ProviderUsageWindowPair(primary: windows.first, secondary: windows.dropFirst().first)
+                },
+                requestedMenuBarLaneOrders: [
+                    .primary: [.primary, .secondary, .tertiary],
+                    .secondary: [.secondary, .tertiary, .primary],
+                    .tertiary: [.tertiary, .secondary, .primary],
+                ],
+                automaticSelectionPrioritizesExhaustedWindow: false,
+                menuBarWindowResolver: { context in
+                    guard context.metric == .automatic else { return .unhandled }
+                    return .resolved(context.snapshot.automaticPerplexityWindow())
+                },
+                menu: ProviderMenuDescriptorPresentation(
+                    secondaryDescriptionMode: .resetOverride,
+                    tertiaryDescriptionOverridesReset: true)),
             fetchPlan: self.fetchPlan(),
             cli: ProviderCLIConfig(
                 name: "perplexity",
@@ -46,12 +81,22 @@ public enum PerplexityProviderDescriptor {
                 versionDetector: nil))
     }
 
+    private static func resolveSessionToken(environment: [String: String]) -> String? {
+        if let token = PerplexitySettingsReader.sessionToken(environment: environment) {
+            return token
+        }
+        #if os(macOS)
+        return try? PerplexityCookieImporter.importSession().sessionToken
+        #else
+        return nil
+        #endif
+    }
+
     private static func fetchPlan() -> ProviderFetchPlan {
         ProviderFetchPlan(
             sourceModes: [.auto, .web],
             pipeline: ProviderFetchPipeline(resolveStrategies: { context in
                 let swift = PerplexityWebFetchStrategy()
-                #if canImport(JavaScriptCore)
                 guard ProviderPluginPrototype.isEnabled(environment: context.env) else { return [swift] }
                 return [
                     ScriptFetchStrategy(
@@ -65,9 +110,6 @@ public enum PerplexityProviderDescriptor {
                         }),
                     swift,
                 ]
-                #else
-                return [swift]
-                #endif
             }))
     }
 }

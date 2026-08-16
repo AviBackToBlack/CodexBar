@@ -505,6 +505,10 @@
 "quota_depleted_title" = "配額用完與恢復";
 "quota_warning_notifications_subtitle" = "當工作階段或每週剩餘配額達到設定門檻時提醒。";
 "threshold_warnings_title" = "門檻提醒";
+"provider_accent_color_title" = "強調色";
+"provider_accent_color_footer" = "設定此供應商的用量列、圖表與切換標籤的顏色。";
+"provider_accent_color_hex_label" = "十六進位顏色值";
+"provider_accent_color_reset" = "使用預設值";
 "quota_warnings_title" = "配額提醒";
 "quota_warning_session" = "工作階段";
 "quota_warning_session_capitalized" = "工作階段";
@@ -606,6 +610,11 @@
 "show_quota_warning_markers_subtitle" = "設定配額提醒後，在使用量條上繪製門檻刻度標記。";
 "weekly_progress_work_days_title" = "每週進度工作日標記";
 "weekly_progress_work_days_subtitle" = "設定用於每週用量條刻度與進度計算的工作日。";
+"workday_tick_appearance_title" = "工作日刻度外觀";
+"workday_tick_appearance_subtitle" = "選擇工作日邊界在每週用量條上的顯示方式。";
+"workday_tick_appearance_hidden" = "隱藏";
+"workday_tick_appearance_subtle" = "柔和";
+"workday_tick_appearance_high_contrast" = "高對比度";
 "show_provider_changelog_links_title" = "顯示提供者版本資訊連結";
 "show_provider_changelog_links_subtitle" = "在選單中為支援的 CLI 提供者新增發行說明連結。";
 "show_credits_extra_usage_title" = "顯示額度 + 額外使用量";
@@ -660,6 +669,8 @@
 "check_for_updates" = "檢查更新…";
 "updates_unavailable" = "此建置無法使用更新功能。";
 "copyright" = "© 2026 Peter Steinberger。MIT 許可證。";
+"use_javascriptcore_plugin_engine" = "為供應商外掛使用 JavaScriptCore";
+"use_javascriptcore_plugin_engine_subtitle" = "僅用於相容性回復。重新啟動 CodexBar 後生效；CODEXBAR_PLUGIN_ENGINE 會覆寫此設定。";
 "section_logging" = "記錄";
 "enable_file_logging" = "啟用檔案記錄";
 "enable_file_logging_subtitle" = "將記錄寫入 %@ 以進行除錯。";
@@ -1369,6 +1380,7 @@
 "menu_bar_layout_gap" = "間距";
 "menu_bar_layout_gap_tight" = "緊湊";
 "menu_bar_layout_gap_regular" = "一般";
+"menu_bar_layout_vertical_adjustment" = "垂直調整";
 "menu_bar_layout_keyboard_hint" = "Delete 鍵會移除所選項目";
 "menu_bar_layout_sample_account" = "帳號";
 "menu_bar_layout_sample_runs_out" = "週五用盡";
@@ -1457,3 +1469,6 @@
 "Enter every endpoint setting to review the exact network origins." = "請填寫所有端點設定，以檢視確切的網路來源。";
 "Approve" = "核准";
 "Install" = "安裝";
+"5-hour usage" = "5 小時用量";
+"7-day usage" = "7 天用量";
+"Total usage" = "總用量";

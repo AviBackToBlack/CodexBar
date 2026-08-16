@@ -500,6 +500,10 @@
 "quota_depleted_title" = "Quotum uitgeput en hersteld";
 "quota_warning_notifications_subtitle" = "Waarschuwt wanneer het resterende sessie- of wekelijkse quotum de geconfigureerde drempels overschrijdt.";
 "threshold_warnings_title" = "Drempelwaarschuwingen";
+"provider_accent_color_title" = "Accentkleur";
+"provider_accent_color_footer" = "Stelt de kleur in van de gebruiksbalken, grafieken en schakeltab van deze aanbieder.";
+"provider_accent_color_hex_label" = "Hexadecimale kleurwaarde";
+"provider_accent_color_reset" = "Standaard gebruiken";
 "quota_warnings_title" = "Quotumwaarschuwingen";
 "quota_warning_session" = "sessie";
 "quota_warning_session_capitalized" = "Sessie";
@@ -607,6 +611,11 @@
 "show_quota_warning_markers_subtitle" = "Teken drempelmarkeringen op gebruiksbalken wanneer quotawaarschuwingen zijn geconfigureerd.";
 "weekly_progress_work_days_title" = "Wekelijkse voortgang werkdagen";
 "weekly_progress_work_days_subtitle" = "Stel werkdagen in voor markeringen op wekelijkse gebruiksbalken en tempoberekeningen.";
+"workday_tick_appearance_title" = "Weergave van werkdagmarkeringen";
+"workday_tick_appearance_subtitle" = "Kies hoe werkdaggrenzen op wekelijkse gebruiksbalken worden weergegeven.";
+"workday_tick_appearance_hidden" = "Verborgen";
+"workday_tick_appearance_subtle" = "Subtiel";
+"workday_tick_appearance_high_contrast" = "Hoog contrast";
 "show_provider_changelog_links_title" = "Toon provider changelog-links";
 "show_provider_changelog_links_subtitle" = "Voegt koppelingen naar release-opmerkingen voor ondersteunde CLI-ondersteunde providers toe aan het menu.";
 "show_credits_extra_usage_title" = "Toon credits + extra gebruik";
@@ -666,6 +675,8 @@
 "copyright" = "© 2026 Peter Steinberger. MIT-licentie.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "JavaScriptCore gebruiken voor providerplug-ins";
+"use_javascriptcore_plugin_engine_subtitle" = "Alleen als compatibiliteitsterugval. Start CodexBar opnieuw; CODEXBAR_PLUGIN_ENGINE overschrijft deze instelling.";
 "section_logging" = "Loggen";
 "enable_file_logging" = "Bestandsregistratie inschakelen";
 "enable_file_logging_subtitle" = "Schrijf logboeken naar %@ voor foutopsporing.";
@@ -1338,6 +1349,7 @@
 "menu_bar_layout_gap" = "Tussenruimte";
 "menu_bar_layout_gap_tight" = "Krap";
 "menu_bar_layout_gap_regular" = "Normaal";
+"menu_bar_layout_vertical_adjustment" = "Verticale aanpassing";
 "menu_bar_layout_keyboard_hint" = "Delete verwijdert het geselecteerde token";
 "menu_bar_layout_sample_account" = "account";
 "menu_bar_layout_sample_runs_out" = "op vr.";
@@ -1426,3 +1438,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Vul alle eindpuntinstellingen in om de exacte netwerkherkomsten te controleren.";
 "Approve" = "Goedkeuren";
 "Install" = "Installeren";
+"5-hour usage" = "5-uursgebruik";
+"7-day usage" = "7-dagengebruik";
+"Total usage" = "Totaal gebruik";

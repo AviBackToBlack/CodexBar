@@ -26,7 +26,9 @@ struct MenuBarLayoutRendererTests {
             (.pace(window: .automatic), "0%"),
             (.usageBar, "▮▮▯"),
             (.resetCountdown, "in 2h"),
-            (.runsOut, "Runs out tomorrow"),
+            (.runsOut, "Runs out in 1d 16h"),
+            (.runsOutCompact, "1d 16h"),
+            (.balance, "$12.34"),
             (.costToday, "$1.25"),
             (.cost30d, "$20.00"),
             (.separatorDot, "·"),
@@ -47,7 +49,8 @@ struct MenuBarLayoutRendererTests {
             data: data,
             icon: icon,
             options: self.options())
-        #expect(iconOutput.attributedTitle.attribute(.attachment, at: 0, effectiveRange: nil) is NSTextAttachment)
+        #expect(iconOutput.attributedTitle.string.isEmpty)
+        #expect(iconOutput.leadingIcon != nil)
 
         let absoluteOutput = renderer.render(
             layout: MenuBarLayout(lines: [[.resetAbsolute]]),
@@ -55,6 +58,32 @@ struct MenuBarLayoutRendererTests {
             icon: icon,
             options: self.options())
         #expect(absoluteOutput.attributedTitle.string != "–")
+    }
+
+    @Test
+    func `Notion secondary percentage renders and announces monthly cadence`() {
+        let renderer = MenuBarLayoutRenderer()
+        let output = renderer.render(
+            layout: MenuBarLayout(lines: [[.percent(window: .weekly)]]),
+            data: self.data(provider: .notion),
+            icon: nil,
+            options: self.options())
+
+        #expect(output.attributedTitle.string == "M 60%")
+        #expect(output.accessibilityLabel == L("%@ %@", L("Monthly"), "60%"))
+    }
+
+    @Test
+    func `Notion secondary pace announces monthly cadence`() {
+        let renderer = MenuBarLayoutRenderer()
+        let output = renderer.render(
+            layout: MenuBarLayout(lines: [[.pace(window: .weekly)]]),
+            data: self.data(provider: .notion),
+            icon: nil,
+            options: self.options())
+
+        #expect(output.attributedTitle.string == "+11%")
+        #expect(output.accessibilityLabel == L("%@ %@ %@", L("Monthly"), L("display_mode_pace").lowercased(), "+11%"))
     }
 
     @Test
@@ -72,20 +101,74 @@ struct MenuBarLayoutRendererTests {
             data: self.data(),
             icon: icon,
             options: self.options())
-        let attachment = try #require(
-            output.attributedTitle.attribute(.attachment, at: 0, effectiveRange: nil) as? NSTextAttachment)
-        let attachmentImage = try #require(attachment.image)
 
-        #expect(attachment.bounds.size == NSSize(width: 16, height: 16))
-        #expect(attachmentImage.isTemplate)
-        #expect(try self.averageBrightness(of: output.attributedTitle, appearance: .aqua) < 0.25)
-        #expect(try self.averageBrightness(of: output.attributedTitle, appearance: .darkAqua) > 0.75)
+        #expect(output.attributedTitle.string.isEmpty)
+        let leadingIcon = try #require(output.leadingIcon)
+        #expect(leadingIcon.isTemplate)
+        #expect(leadingIcon.size == icon.size)
+    }
+
+    @Test
+    func `vertical adjustment offsets the surfaced leading icon`() throws {
+        let renderer = MenuBarLayoutRenderer()
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        icon.isTemplate = true
+        let layout = MenuBarLayout(lines: [[.icon, .percent(window: .automatic)]])
+        let raised = renderer.render(
+            layout: layout,
+            data: self.data(),
+            icon: icon,
+            options: self.options(verticalAdjustment: 2))
+        let lowered = renderer.render(
+            layout: layout,
+            data: self.data(),
+            icon: icon,
+            options: self.options(verticalAdjustment: -2))
+
+        let raisedIcon = try #require(raised.leadingIcon)
+        #expect(raisedIcon.size == NSSize(width: 16, height: 20))
+        #expect(raisedIcon.isTemplate)
+        let loweredIcon = try #require(lowered.leadingIcon)
+        #expect(loweredIcon.size == NSSize(width: 16, height: 20))
+        #expect(loweredIcon.isTemplate)
+    }
+
+    @Test
+    func `vertical adjustment on the surfaced icon is capped to the menu bar height`() throws {
+        let renderer = MenuBarLayoutRenderer()
+        let icon = NSImage(size: NSSize(width: 18, height: 18))
+        icon.isTemplate = true
+        let output = renderer.render(
+            layout: MenuBarLayout(lines: [[.icon, .percent(window: .automatic)]]),
+            data: self.data(),
+            icon: icon,
+            options: self.options(verticalAdjustment: 10))
+
+        let leadingIcon = try #require(output.leadingIcon)
+        #expect(leadingIcon.size == NSSize(width: 18, height: 22))
+        #expect(leadingIcon.isTemplate)
+    }
+
+    @Test
+    func `zero vertical adjustment returns the original leading icon instance`() throws {
+        let renderer = MenuBarLayoutRenderer()
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        icon.isTemplate = true
+        let output = renderer.render(
+            layout: MenuBarLayout(lines: [[.icon, .percent(window: .automatic)]]),
+            data: self.data(),
+            icon: icon,
+            options: self.options(verticalAdjustment: 0))
+
+        let leadingIcon = try #require(output.leadingIcon)
+        #expect(leadingIcon === icon)
     }
 
     @Test
     func `missing token data keeps every sibling visible as a placeholder`() {
         let renderer = MenuBarLayoutRenderer()
         let missingData = MenuBarLayoutRenderData(
+            provider: .codex,
             iconKey: "missing",
             providerName: nil,
             accountLabel: nil,
@@ -94,10 +177,12 @@ struct MenuBarLayoutRendererTests {
             scopedWeekly: nil,
             scopedWeeklyTitle: nil,
             automatic: nil,
+            automaticText: nil,
             sessionPace: nil,
             weeklyPace: nil,
             automaticPace: nil,
             runsOut: nil,
+            balance: nil,
             costToday: nil,
             cost30d: nil)
         let layout = MenuBarLayout(lines: [[
@@ -115,14 +200,29 @@ struct MenuBarLayoutRendererTests {
             .resetCountdown,
             .resetAbsolute,
             .runsOut,
+            .runsOutCompact,
+            .balance,
             .costToday,
             .cost30d,
         ]])
 
         let output = renderer.render(layout: layout, data: missingData, icon: nil, options: self.options())
 
-        #expect(output.attributedTitle.string.count(where: { $0 == "–" }) == 16)
+        #expect(output.attributedTitle.string.count(where: { $0 == "–" }) == 18)
         #expect(output.accessibilityLabel.contains("unavailable"))
+    }
+
+    @Test
+    func `compact run out token keeps the labeled forecast for accessibility`() {
+        let renderer = MenuBarLayoutRenderer()
+        let output = renderer.render(
+            layout: MenuBarLayout(lines: [[.runsOutCompact]]),
+            data: self.data(),
+            icon: nil,
+            options: self.options())
+
+        #expect(output.attributedTitle.string == "1d 16h")
+        #expect(output.accessibilityLabel == "Runs out in 1d 16h")
     }
 
     @Test
@@ -147,6 +247,7 @@ struct MenuBarLayoutRendererTests {
     func `pace token stays a placeholder while siblings keep rendering`() {
         let renderer = MenuBarLayoutRenderer()
         let data = MenuBarLayoutRenderData(
+            provider: .codex,
             iconKey: "codex",
             providerName: "Codex",
             accountLabel: nil,
@@ -159,11 +260,13 @@ struct MenuBarLayoutRendererTests {
             scopedWeekly: nil,
             scopedWeeklyTitle: nil,
             automatic: nil,
+            automaticText: nil,
             // Pace is suppressed below 3% of window elapsed; the percent token must survive that.
             sessionPace: nil,
             weeklyPace: nil,
             automaticPace: nil,
             runsOut: nil,
+            balance: nil,
             costToday: nil,
             cost30d: nil)
 
@@ -231,7 +334,31 @@ struct MenuBarLayoutRendererTests {
 
         #expect(try #require(self.baselineOffset(in: stacked.attributedTitle, at: 0)) == -3)
         #expect(try #require(self.baselineOffset(in: stacked.attributedTitle, at: resetIndex)) == -3)
-        #expect(self.baselineOffset(in: singleLine.attributedTitle, at: 0) == nil)
+        #expect(try #require(self.baselineOffset(in: singleLine.attributedTitle, at: 0)) == -1)
+    }
+
+    @Test
+    func `vertical adjustment shifts single line baseline offset`() throws {
+        let renderer = MenuBarLayoutRenderer()
+        let base = renderer.render(
+            layout: MenuBarLayout(lines: [[.percent(window: .automatic)]]),
+            data: self.data(),
+            icon: nil,
+            options: self.options())
+        let adjusted = renderer.render(
+            layout: MenuBarLayout(lines: [[.percent(window: .automatic)]]),
+            data: self.data(),
+            icon: nil,
+            options: self.options(verticalAdjustment: 2))
+        let lifted = renderer.render(
+            layout: MenuBarLayout(lines: [[.percent(window: .automatic)]]),
+            data: self.data(),
+            icon: nil,
+            options: self.options(verticalAdjustment: -2))
+
+        #expect(try #require(self.baselineOffset(in: base.attributedTitle, at: 0)) == -1)
+        #expect(try #require(self.baselineOffset(in: adjusted.attributedTitle, at: 0)) == 1)
+        #expect(try #require(self.baselineOffset(in: lifted.attributedTitle, at: 0)) == -3)
     }
 
     @Test
@@ -277,6 +404,41 @@ struct MenuBarLayoutRendererTests {
     }
 
     @Test
+    func `countdown uses the exact clock while caching an unchanged displayed minute`() {
+        let renderer = MenuBarLayoutRenderer()
+        let minuteStart = self.now
+        let now = minuteStart.addingTimeInterval(51)
+        let resetAt = minuteStart.addingTimeInterval(6 * 60 + 50)
+        let data = self.data(automaticResetAt: resetAt)
+        let layout = MenuBarLayout(lines: [[.resetCountdown]])
+
+        // Rounding the clock back to the wall-minute boundary reproduces the reported one-minute mismatch.
+        #expect(UsageFormatter.resetCountdownDescription(from: resetAt, now: minuteStart) == "in 7m")
+        let first = renderer.render(
+            layout: layout,
+            data: data,
+            icon: nil,
+            options: self.options(now: now))
+        #expect(first.attributedTitle.string == "in 6m")
+
+        // A different exact instant with the same visible value still hits the attributed-title cache.
+        let sameMinute = renderer.render(
+            layout: layout,
+            data: data,
+            icon: nil,
+            options: self.options(now: now.addingTimeInterval(20)))
+        #expect(first.attributedTitle === sameMinute.attributedTitle)
+
+        let nextMinute = renderer.render(
+            layout: layout,
+            data: data,
+            icon: nil,
+            options: self.options(now: now.addingTimeInterval(60)))
+        #expect(nextMinute.attributedTitle.string == "in 5m")
+        #expect(first.attributedTitle !== nextMinute.attributedTitle)
+    }
+
+    @Test
     func `usage bar follows remaining display direction`() {
         let renderer = MenuBarLayoutRenderer()
         let output = renderer.render(
@@ -303,6 +465,7 @@ struct MenuBarLayoutRendererTests {
             resetsAt: nil,
             resetDescription: "Friday at 10:00"))
         let data = MenuBarLayoutRenderData(
+            provider: .codex,
             iconKey: "codex",
             providerName: "Codex",
             accountLabel: nil,
@@ -311,10 +474,12 @@ struct MenuBarLayoutRendererTests {
             scopedWeekly: nil,
             scopedWeeklyTitle: nil,
             automatic: textOnlyWindow,
+            automaticText: nil,
             sessionPace: nil,
             weeklyPace: nil,
             automaticPace: nil,
             runsOut: nil,
+            balance: nil,
             costToday: nil,
             cost30d: nil)
 
@@ -345,14 +510,60 @@ struct MenuBarLayoutRendererTests {
             icon: icon,
             options: options)
 
+        // High contrast keeps the icon inside the attributed title (not surfaced as button.image)
+        // so AppKit dims the whole title together on inactive displays.
+        #expect(output.leadingIcon == nil)
         #expect(output.attributedTitle.attribute(.attachment, at: 0, effectiveRange: nil) is NSTextAttachment)
         let textIndex = (output.attributedTitle.string as NSString).range(of: "50%").location
         #expect(output.attributedTitle
             .attribute(.foregroundColor, at: textIndex, effectiveRange: nil) as? NSColor == .labelColor)
     }
 
-    private func data(automaticUsedPercent: Double = 50) -> MenuBarLayoutRenderData {
+    @Test
+    func `extracted leading icon keeps its accessibility description`() {
+        let renderer = MenuBarLayoutRenderer()
+        let icon = NSImage(size: NSSize(width: 16, height: 16))
+        icon.isTemplate = true
+        let output = renderer.render(
+            layout: MenuBarLayout(lines: [[.icon, .percent(window: .automatic)]]),
+            data: self.data(),
+            icon: icon,
+            options: self.options())
+
+        #expect(output.leadingIcon != nil)
+        #expect(output.attributedTitle.attribute(.attachment, at: 0, effectiveRange: nil) == nil)
+        #expect(output.accessibilityLabel.contains(L("%@ icon", "Codex")))
+    }
+
+    @Test
+    func `stale title dims foreground while keeping the snapshot visible`() {
+        let renderer = MenuBarLayoutRenderer()
+        let fresh = renderer.render(
+            layout: MenuBarLayout(lines: [[.percent(window: .automatic)]]),
+            data: self.data(),
+            icon: nil,
+            options: self.options())
+        let stale = renderer.render(
+            layout: MenuBarLayout(lines: [[.percent(window: .automatic)]]),
+            data: self.data(),
+            icon: nil,
+            options: self.options(isStale: true))
+
+        #expect(stale.attributedTitle.string == fresh.attributedTitle.string)
+        #expect(stale.attributedTitle
+            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .secondaryLabelColor)
+        #expect(fresh.attributedTitle
+            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .controlTextColor)
+    }
+
+    private func data(
+        automaticUsedPercent: Double = 50,
+        provider: UsageProvider = .codex,
+        automaticResetAt: Date? = nil)
+        -> MenuBarLayoutRenderData
+    {
         MenuBarLayoutRenderData(
+            provider: provider,
             iconKey: "codex",
             providerName: "Codex",
             accountLabel: "user@example.com",
@@ -375,24 +586,32 @@ struct MenuBarLayoutRendererTests {
             automatic: MenuBarLayoutRenderWindow(RateWindow(
                 usedPercent: automaticUsedPercent,
                 windowMinutes: 300,
-                resetsAt: self.now.addingTimeInterval(2 * 60 * 60),
+                resetsAt: automaticResetAt ?? self.now.addingTimeInterval(2 * 60 * 60),
                 resetDescription: nil)),
+            automaticText: nil,
             sessionPace: "-8%",
             weeklyPace: "+11%",
             automaticPace: "0%",
-            runsOut: "Runs out tomorrow",
+            runsOut: "Runs out in 1d 16h",
+            balance: "$12.34",
             costToday: "$1.25",
             cost30d: "$20.00")
     }
 
-    private func options() -> MenuBarLayoutRenderOptions {
+    private func options(
+        now: Date? = nil,
+        verticalAdjustment: Int = 0,
+        isStale: Bool = false) -> MenuBarLayoutRenderOptions
+    {
         MenuBarLayoutRenderOptions(
             size: .regular,
             highContrast: false,
             showUsed: true,
             appearanceName: "aqua",
             isDebugApp: false,
-            now: self.now)
+            isStale: isStale,
+            now: now ?? self.now,
+            verticalAdjustment: verticalAdjustment)
     }
 
     private func averageBrightness(
@@ -400,12 +619,22 @@ struct MenuBarLayoutRendererTests {
         appearance: NSAppearance.Name) throws
         -> CGFloat
     {
+        try self.renderAverageBrightness(appearance: appearance) { _ in
+            title.draw(at: NSPoint(x: 4, y: 4))
+        }
+    }
+
+    private func renderAverageBrightness(
+        appearance: NSAppearance.Name,
+        draw: (NSImage) -> Void) throws
+        -> CGFloat
+    {
         let canvas = NSImage(size: NSSize(width: 24, height: 24))
         try #require(NSAppearance(named: appearance)).performAsCurrentDrawingAppearance {
             canvas.lockFocus()
             NSColor.clear.setFill()
             NSRect(origin: .zero, size: canvas.size).fill()
-            title.draw(at: NSPoint(x: 4, y: 4))
+            draw(canvas)
             canvas.unlockFocus()
         }
 

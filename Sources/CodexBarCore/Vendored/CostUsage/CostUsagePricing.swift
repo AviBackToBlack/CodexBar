@@ -421,7 +421,61 @@ enum CostUsagePricing {
     ]
 
     private static let codexModelsDevProviderID = "openai"
+    /// Provider IDs emitted by Codex-compatible clients that have matching entries in models.dev.
+    ///
+    /// The route prefix is part of the model identity for local usage estimates. Keep both the
+    /// client-facing aliases and their models.dev provider IDs here so pricing-cache fingerprints
+    /// invalidate when any supported route's rates change.
+    static let codexModelsDevProviderIDs: Set<String> = [
+        "deepseek",
+        "kimi-coding",
+        "kimi-for-coding",
+        "openai",
+        "opencode",
+        "opencode-free",
+        "opencode-go",
+    ]
     private static let claudeModelsDevProviderID = "anthropic"
+
+    /// Returns the provider/model identities that may price a Codex model. Keep this mapping
+    /// shared by direct lookup and unknown-price refresh so a newly downloaded catalog is checked
+    /// under the same identity that was used to resolve the model.
+    static func codexModelsDevPricingTargets(for rawModel: String) -> [(providerID: String, modelID: String)] {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        if let slash = trimmed.firstIndex(of: "/") {
+            let routeID = String(trimmed[..<slash]).lowercased()
+            let modelID = String(trimmed[trimmed.index(after: slash)...])
+            guard !routeID.isEmpty, !modelID.isEmpty,
+                  self.codexModelsDevProviderIDs.contains(routeID)
+            else { return [] }
+
+            var providerIDs = [routeID]
+            switch routeID {
+            case "kimi-coding":
+                providerIDs.append("kimi-for-coding")
+            case "opencode-free":
+                providerIDs.append("opencode")
+            default:
+                break
+            }
+            var targets = providerIDs.map { ($0, modelID) }
+            if routeID == self.codexModelsDevProviderID {
+                let normalized = self.normalizeCodexModel(modelID)
+                if normalized != modelID {
+                    targets.append((self.codexModelsDevProviderID, normalized))
+                }
+            }
+            return targets
+        }
+
+        let normalized = self.normalizeCodexModel(trimmed)
+        var targets = [(self.codexModelsDevProviderID, trimmed)]
+        if normalized != trimmed {
+            targets.append((self.codexModelsDevProviderID, normalized))
+        }
+        return targets
+    }
 
     static func normalizeCodexModel(_ raw: String) -> String {
         var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -494,20 +548,59 @@ enum CostUsagePricing {
         modelsDevCatalog: ModelsDevCatalog? = nil,
         modelsDevCacheRoot: URL? = nil) -> Double?
     {
+        guard let pricing = self.resolvedCodexPricing(
+            model: model,
+            modelsDevCatalog: modelsDevCatalog,
+            modelsDevCacheRoot: modelsDevCacheRoot)
+        else { return nil }
+        return self.codexCostUSD(
+            pricing: pricing,
+            inputTokens: inputTokens,
+            cachedInputTokens: cachedInputTokens,
+            cacheWriteInputTokens: cacheWriteInputTokens,
+            outputTokens: outputTokens)
+    }
+
+    static func codexAggregateCostUSD(
+        model: String,
+        inputTokens: Int,
+        cachedInputTokens: Int,
+        outputTokens: Int,
+        cacheWriteInputTokens: Int = 0,
+        modelsDevCatalog: ModelsDevCatalog? = nil,
+        modelsDevCacheRoot: URL? = nil) -> Double?
+    {
+        guard let pricing = self.resolvedCodexPricing(
+            model: model,
+            modelsDevCatalog: modelsDevCatalog,
+            modelsDevCacheRoot: modelsDevCacheRoot)
+        else { return nil }
+        if let thresholdTokens = pricing.thresholdTokens,
+           max(0, inputTokens) > thresholdTokens
+        {
+            return nil
+        }
+        return self.codexCostUSD(
+            pricing: pricing,
+            inputTokens: inputTokens,
+            cachedInputTokens: cachedInputTokens,
+            cacheWriteInputTokens: cacheWriteInputTokens,
+            outputTokens: outputTokens)
+    }
+
+    private static func resolvedCodexPricing(
+        model: String,
+        modelsDevCatalog: ModelsDevCatalog?,
+        modelsDevCacheRoot: URL?) -> CodexPricing?
+    {
         let key = self.normalizeCodexModel(model)
         guard key != self.codexUnattributedModel else { return nil }
-        let modelsDevLookup = self.modelsDevLookup(
-            providerID: self.codexModelsDevProviderID,
+        let modelsDevLookup = self.codexModelsDevLookup(
             model: model,
             catalog: modelsDevCatalog,
             cacheRoot: modelsDevCacheRoot)
-            ?? (model == key ? nil : self.modelsDevLookup(
-                providerID: self.codexModelsDevProviderID,
-                model: key,
-                catalog: modelsDevCatalog,
-                cacheRoot: modelsDevCacheRoot))
         if let lookup = modelsDevLookup {
-            let bundled = self.codex[key]
+            let bundled = lookup.pricing.providerID == self.codexModelsDevProviderID ? self.codex[key] : nil
             // A missing catalog context block means models.dev has no long-context opinion, so use
             // the bundled tuple. Once the block exists, preserve its omissions and normal fallback
             // semantics instead of filling individual fields from a different pricing source.
@@ -524,32 +617,46 @@ enum CostUsagePricing {
                     ?? lookup.pricing.inputCostPerTokenAboveThreshold
                     ?? lookup.pricing.inputCostPerToken
                     : bundledLongContext?.cacheWriteInputCostPerTokenAboveThreshold)
-            return self.codexCostUSD(
-                pricing: lookup.pricing,
+            return CodexPricing(
+                inputCostPerToken: lookup.pricing.inputCostPerToken,
+                outputCostPerToken: lookup.pricing.outputCostPerToken,
+                cacheReadInputCostPerToken: lookup.pricing.cacheReadInputCostPerToken
+                    ?? bundled?.cacheReadInputCostPerToken,
+                displayLabel: nil,
+                cacheWriteInputCostPerToken: lookup.pricing.cacheCreationInputCostPerToken
+                    ?? bundled?.cacheWriteInputCostPerToken,
                 thresholdTokens: bundled?.thresholdTokens ?? lookup.pricing.thresholdTokens,
                 inputCostPerTokenAboveThreshold: lookup.pricing.inputCostPerTokenAboveThreshold
                     ?? bundledLongContext?.inputCostPerTokenAboveThreshold,
                 outputCostPerTokenAboveThreshold: lookup.pricing.outputCostPerTokenAboveThreshold
                     ?? bundledLongContext?.outputCostPerTokenAboveThreshold,
-                cacheReadInputCostPerToken: lookup.pricing.cacheReadInputCostPerToken
-                    ?? bundled?.cacheReadInputCostPerToken,
                 cacheReadInputCostPerTokenAboveThreshold: cacheReadAboveThreshold,
-                cacheWriteInputCostPerToken: lookup.pricing.cacheCreationInputCostPerToken
-                    ?? bundled?.cacheWriteInputCostPerToken,
-                cacheWriteInputCostPerTokenAboveThreshold: cacheWriteAboveThreshold,
-                inputTokens: inputTokens,
-                cachedInputTokens: cachedInputTokens,
-                cacheWriteInputTokens: cacheWriteInputTokens,
-                outputTokens: outputTokens)
+                cacheWriteInputCostPerTokenAboveThreshold: cacheWriteAboveThreshold)
         }
 
         guard let pricing = self.codex[key] else { return nil }
-        return self.codexCostUSD(
-            pricing: pricing,
-            inputTokens: inputTokens,
-            cachedInputTokens: cachedInputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            outputTokens: outputTokens)
+        return pricing
+    }
+
+    /// Resolves the provider-qualified model IDs written by Codex-compatible clients without
+    /// falling back to OpenAI pricing for an unrelated route. Unqualified model IDs retain the
+    /// historical OpenAI behavior, including the gpt-5.6 alias lookup.
+    private static func codexModelsDevLookup(
+        model rawModel: String,
+        catalog: ModelsDevCatalog?,
+        cacheRoot: URL?) -> ModelsDevPricingLookup?
+    {
+        for target in self.codexModelsDevPricingTargets(for: rawModel) {
+            if let lookup = self.modelsDevLookup(
+                providerID: target.providerID,
+                model: target.modelID,
+                catalog: catalog,
+                cacheRoot: cacheRoot)
+            {
+                return lookup
+            }
+        }
+        return nil
     }
 
     static func codexPriorityCostUSD(
@@ -626,44 +733,6 @@ enum CostUsagePricing {
             + (Double(cached) * cachedInputRate)
             + (Double(cacheWrite) * cacheWriteRate)
             + (Double(max(0, outputTokens)) * outputRate)
-    }
-
-    private static func codexCostUSD(
-        pricing: ModelsDevPricingInfo,
-        thresholdTokens: Int? = nil,
-        inputCostPerTokenAboveThreshold: Double? = nil,
-        outputCostPerTokenAboveThreshold: Double? = nil,
-        cacheReadInputCostPerToken: Double? = nil,
-        cacheReadInputCostPerTokenAboveThreshold: Double? = nil,
-        cacheWriteInputCostPerToken: Double? = nil,
-        cacheWriteInputCostPerTokenAboveThreshold: Double? = nil,
-        inputTokens: Int,
-        cachedInputTokens: Int,
-        cacheWriteInputTokens: Int = 0,
-        outputTokens: Int) -> Double
-    {
-        self.codexCostUSD(
-            pricing: CodexPricing(
-                inputCostPerToken: pricing.inputCostPerToken,
-                outputCostPerToken: pricing.outputCostPerToken,
-                cacheReadInputCostPerToken: cacheReadInputCostPerToken
-                    ?? pricing.cacheReadInputCostPerToken,
-                displayLabel: nil,
-                cacheWriteInputCostPerToken: cacheWriteInputCostPerToken
-                    ?? pricing.cacheCreationInputCostPerToken,
-                thresholdTokens: thresholdTokens ?? pricing.thresholdTokens,
-                inputCostPerTokenAboveThreshold: inputCostPerTokenAboveThreshold
-                    ?? pricing.inputCostPerTokenAboveThreshold,
-                outputCostPerTokenAboveThreshold: outputCostPerTokenAboveThreshold
-                    ?? pricing.outputCostPerTokenAboveThreshold,
-                cacheReadInputCostPerTokenAboveThreshold: cacheReadInputCostPerTokenAboveThreshold
-                    ?? pricing.cacheReadInputCostPerTokenAboveThreshold,
-                cacheWriteInputCostPerTokenAboveThreshold: cacheWriteInputCostPerTokenAboveThreshold
-                    ?? pricing.cacheCreationInputCostPerTokenAboveThreshold),
-            inputTokens: inputTokens,
-            cachedInputTokens: cachedInputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            outputTokens: outputTokens)
     }
 
     static func claudeCostUSD(

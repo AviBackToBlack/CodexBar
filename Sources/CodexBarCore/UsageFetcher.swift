@@ -402,6 +402,7 @@ public struct UsageSnapshot: Codable, Sendable {
         guard Self.identitiesMatch(self.identity, cached.identity) else { return self }
         // Amp's percentage-based daily quota supersedes the legacy rolling-replenishment cadence. Do not attach
         // that older exact reset to the new daily window; other providers retain the shared backfill behavior.
+        // Provider-specific by design: Amp daily quotas must not inherit its obsolete rolling-reset cadence.
         let cachedPrimary: RateWindow? = if self.identity?.providerID == .amp,
                                             self.primary?.resetDescription == "resets daily"
         {
@@ -562,6 +563,8 @@ public enum UsageLimitsAvailability: Equatable, Sendable {
         account: AccountInfo? = nil,
         lastErrorDescription: String? = nil) -> Self
     {
+        // Provider-specific by design: Claude error text, Codex identity, and Doubao/Antigravity identities signal
+        // whether a successful payload actually contains subscription limits.
         if provider == .claude {
             guard snapshot == nil else { return .available }
             return ClaudeStatusProbe.isSubscriptionQuotaUnavailableDescription(lastErrorDescription)
@@ -830,7 +833,8 @@ enum RPCWireError: Error, LocalizedError {
 
 /// RPC helper used on background tasks; safe because we confine it to the owning task.
 private final class CodexRPCClient: @unchecked Sendable {
-    private static let log = CodexBarLog.logger(LogCategories.codexRPC)
+    // Provider-specific by design: Codex RPC owns its dedicated subprocess log category.
+    private static let log = CodexBarLog.logger(LogCategories.provider(.codex, scope: "rpc"))
     private let process = Process()
     private let stdinPipe = Pipe()
     private let stdoutPipe = Pipe()
@@ -841,14 +845,8 @@ private final class CodexRPCClient: @unchecked Sendable {
     private let initializeTimeoutSeconds: TimeInterval
     private let requestTimeoutSeconds: TimeInterval
 
-    private static func debugWriteStderr(_ message: String) {
-        #if !os(Linux)
-        fputs(message, stderr)
-        #endif
-    }
-
     init(
-        executable: String = "codex",
+        executable: String = "codex", // Provider-specific by design: this RPC client launches Codex app-server.
         arguments: [String] = ["-s", "read-only", "-a", "untrusted", "app-server"],
         environment: [String: String] = ProcessInfo.processInfo.environment,
         initializeTimeoutSeconds: TimeInterval = 8.0,
@@ -903,6 +901,7 @@ private final class CodexRPCClient: @unchecked Sendable {
         let stdoutLineContinuation = self.stdoutLineContinuation
         let stdoutBuffer = BoundedLineBuffer()
         let process = self.process
+        let stdinPipe = self.stdinPipe
         stdoutHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
@@ -915,7 +914,9 @@ private final class CodexRPCClient: @unchecked Sendable {
             if result.didExceedLimit {
                 Self.log.warning("Codex RPC line exceeded memory limit; terminating process")
                 handle.readabilityHandler = nil
-                process.terminate()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    RPCChildProcessTeardown.terminate(process: process, stdinPipe: stdinPipe)
+                }
                 stdoutLineContinuation.finish()
                 return
             }
@@ -936,7 +937,7 @@ private final class CodexRPCClient: @unchecked Sendable {
             }
             guard let text = String(data: data, encoding: .utf8), !text.isEmpty else { return }
             for line in text.split(whereSeparator: \.isNewline) {
-                Self.debugWriteStderr("[codex stderr] \(line)\n")
+                Self.log.debug("[codex stderr] \(line)")
             }
         }
     }
@@ -960,10 +961,8 @@ private final class CodexRPCClient: @unchecked Sendable {
     }
 
     func shutdown() {
-        if self.process.isRunning {
-            Self.log.debug("Codex RPC stopping")
-            self.process.terminate()
-        }
+        Self.log.debug("Codex RPC stopping")
+        RPCChildProcessTeardown.terminate(process: self.process, stdinPipe: self.stdinPipe)
     }
 
     // MARK: - JSON-RPC helpers
@@ -987,7 +986,7 @@ private final class CodexRPCClient: @unchecked Sendable {
                 let message = try await self.readNextMessage()
 
                 if message["id"] == nil, let methodName = message["method"] as? String {
-                    Self.debugWriteStderr("[codex notify] \(methodName)\n")
+                    Self.log.debug("[codex notify] \(methodName)")
                     continue
                 }
 
@@ -1033,7 +1032,13 @@ private final class CodexRPCClient: @unchecked Sendable {
     private func terminateProcessForTimeout(method: String) {
         if self.process.isRunning {
             Self.log.warning("Codex RPC timed out on `\(method)`; terminating process")
-            self.process.terminate()
+        }
+        // Dispatch off the timeout task so the bounded TERM-to-KILL wait cannot delay the timeout
+        // error or let the stdout-EOF failure win the race; `shutdown()` remains the synchronous backstop.
+        let process = self.process
+        let stdinPipe = self.stdinPipe
+        DispatchQueue.global(qos: .userInitiated).async {
+            RPCChildProcessTeardown.terminate(process: process, stdinPipe: stdinPipe)
         }
     }
 
@@ -1143,6 +1148,7 @@ public struct UsageFetcher: Sendable {
             let limits = limitsResponse.rateLimits
             let account = try? await rpc.fetchAccount()
             let rateLimitsPlan = Self.normalizedCodexAccountField(limits.planType)
+            // Provider-specific by design: Codex app-server responses construct Codex reconciled identity.
             let identity = ProviderIdentitySnapshot(
                 providerID: .codex,
                 accountEmail: account?.account.flatMap { details in
@@ -1184,7 +1190,7 @@ public struct UsageFetcher: Sendable {
                     credits: credits,
                     identity: usage?.identity)
             }
-            throw error
+            throw CodexCLIBackendRateLimitError.classify(error, environment: self.environment) ?? error
         }
     }
 
@@ -1363,6 +1369,7 @@ public struct UsageFetcher: Sendable {
     }
 
     private static func recoverUsageFromRPCError(_ error: Error) -> UsageSnapshot? {
+        // Provider-specific by design: Codex RPC error bodies can still carry authoritative rate-limit payloads.
         guard let body = self.decodeRateLimitsErrorBody(from: error) else { return nil }
         let identity = ProviderIdentitySnapshot(
             providerID: .codex,

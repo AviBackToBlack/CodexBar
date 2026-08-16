@@ -525,7 +525,7 @@ struct SettingsStoreCoverageTests {
         settings.ensureTokenAccountsLoaded()
 
         #expect(settings.zaiAPIToken.isEmpty)
-        #expect(settings.syntheticAPIToken.isEmpty)
+        #expect(settings[providerConfig: .synthetic, field: .apiKey].isEmpty)
     }
 
     @Test
@@ -845,6 +845,27 @@ struct SettingsStoreCoverageTests {
         #expect(defaults.object(forKey: "weeklyProgressWorkDays") == nil)
         let reloaded4 = Self.makeSettingsStore(userDefaults: defaults, configStore: configStore)
         #expect(reloaded4.weeklyProgressWorkDays == nil)
+    }
+
+    @Test
+    func `workday tick appearance defaults to subtle and persists valid choices`() throws {
+        let suite = "SettingsStoreCoverageTests-workday-tick-appearance"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        let configStore = testConfigStore(suiteName: suite)
+
+        let fresh = Self.makeSettingsStore(userDefaults: defaults, configStore: configStore)
+        #expect(fresh.workdayTickAppearance == .subtle)
+
+        fresh.workdayTickAppearance = .highContrast
+        #expect(defaults.string(forKey: "workdayTickAppearance") == WorkdayTickAppearance.highContrast.rawValue)
+
+        let reloaded = Self.makeSettingsStore(userDefaults: defaults, configStore: configStore)
+        #expect(reloaded.workdayTickAppearance == .highContrast)
+
+        defaults.set("unknown", forKey: "workdayTickAppearance")
+        let invalid = Self.makeSettingsStore(userDefaults: defaults, configStore: configStore)
+        #expect(invalid.workdayTickAppearance == .subtle)
     }
 
     @Test

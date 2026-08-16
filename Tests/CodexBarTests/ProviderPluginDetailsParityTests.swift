@@ -1,17 +1,15 @@
-#if canImport(JavaScriptCore)
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import CodexBarCore
 
 struct ProviderPluginDetailsParityTests {
     @Test
-    func `details providers prepend JS only when the prototype flag is enabled`() async {
+    func `OpenAI prepends JS only when the prototype flag is enabled`() async {
         let fixtures: [(UsageProvider, [String], [String])] = [
             (.openai, ["openai.api.balance"], ["openai.js", "openai.api.balance"]),
-            (.zai, ["zai.api"], ["zai.js", "zai.api"]),
-            (.openrouter, ["openrouter.api"], ["openrouter.js", "openrouter.api"]),
-            (.poe, ["poe.api"], ["poe.js", "poe.api"]),
-            (.clawrouter, ["clawrouter.api"], ["clawrouter.js", "clawrouter.api"]),
         ]
 
         for (provider, defaultIDs, enabledIDs) in fixtures {
@@ -45,13 +43,14 @@ struct ProviderPluginDetailsParityTests {
         let chinaStrategies = await descriptor.fetchPlan.pipeline.resolveStrategies(chinaContext)
         let globalStrategies = await descriptor.fetchPlan.pipeline.resolveStrategies(globalContext)
 
-        #expect(chinaStrategies.map(\.id) == ["zai.js", "zai.api"])
+        #expect(chinaStrategies.map(\.id) == ["zai.js"])
         #expect(await chinaStrategies[0].isAvailable(chinaContext))
+        #expect(globalStrategies.map(\.id) == ["zai.js"])
         #expect(await globalStrategies[0].isAvailable(globalContext) == false)
     }
 
     @Test
-    func `OpenRouter fixture has Swift core parity and stable details`() async throws {
+    func `OpenRouter fixture matches stable cut-over details`() async throws {
         let transport = Self.transport { request in
             switch request.url?.path {
             case "/api/v1/credits": Self.openRouterCredits
@@ -60,15 +59,11 @@ struct ProviderPluginDetailsParityTests {
             }
         }
         let now = Date(timeIntervalSince1970: 1_785_686_400)
-        let swift = try await OpenRouterUsageFetcher.fetchUsage(
-            apiKey: "fixture-key",
-            environment: [:],
-            transport: transport).toUsageSnapshot()
-        let script = try await ProviderPluginRuntime(bundledPlugin: "openrouter", transport: transport)
+        let script = try await Self.openRouterRuntime(transport: transport)
             .fetchUsage(secrets: ["OPENROUTER_API_KEY": "fixture-key"], now: now)
 
-        Self.expectCoreParity(swift, script)
-        #expect(swift.details == script.details)
+        #expect(script.primary?.usedPercent == 25)
+        #expect(script.identity?.loginMethod == "Balance: $60.00")
         #expect(try script.details == [
             Self.section("Credits", rows: [
                 Self.row("Remaining", "$60.00"),
@@ -94,22 +89,45 @@ struct ProviderPluginDetailsParityTests {
     }
 
     @Test
-    func `ClawRouter fixture has Swift core parity and stable details`() async throws {
+    func `OpenRouter optional key timeout is an observable degradation`() async throws {
+        let transport = ProviderHTTPTransportHandler { request in
+            let isKeyRequest = request.url?.path == "/api/v1/key"
+            if isKeyRequest {
+                try await Task.sleep(for: .milliseconds(1500))
+            }
+            let response = try #require(HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]))
+            let body = isKeyRequest ? Self.openRouterKey : Self.openRouterCredits
+            return (Data(body.utf8), response)
+        }
+
+        let script = try await ProviderPluginRuntime(bundledPlugin: "openrouter", transport: transport)
+            .fetchUsage(secrets: ["OPENROUTER_API_KEY": "fixture-key"])
+
+        #expect(script.primary == nil)
+        #expect(script.details.count == 2)
+        #expect(script.details[0].rows.map(\.label) == ["Remaining", "Used", "Total added"])
+        let degradation = try #require(script.detailRow(label: "API key budget"))
+        #expect(degradation.value == "Unavailable right now")
+        #expect(degradation.secondaryValue == "Request timed out")
+    }
+
+    @Test
+    func `ClawRouter fixture matches stable cut-over details`() async throws {
         let transport = Self.transport { request in
             guard request.url?.path == "/v1/usage" else { throw FixtureError.unexpectedURL(request.url) }
             return Self.clawRouter
         }
         let now = Date(timeIntervalSince1970: 1_785_686_400)
-        let swift = try await ClawRouterUsageFetcher.fetchUsage(
-            apiKey: "fixture-key",
-            baseURL: #require(URL(string: "https://clawrouter.openclaw.ai")),
-            transport: transport,
-            updatedAt: now).toUsageSnapshot()
         let script = try await ProviderPluginRuntime(bundledPlugin: "clawrouter", transport: transport)
             .fetchUsage(secrets: ["CLAWROUTER_API_KEY": "fixture-key"], now: now)
 
-        Self.expectCoreParity(swift, script)
-        #expect(swift.details == script.details)
+        #expect(script.primary?.usedPercent == 0.024)
+        #expect(script.providerCost?.used == 0.006)
+        #expect(script.providerCost?.limit == 25)
         #expect(try script.details == [
             Self.section("Usage", rows: [
                 Self.row("Requests", "6", "5 succeeded · 1 failed"),
@@ -130,8 +148,88 @@ struct ProviderPluginDetailsParityTests {
         ])
     }
 
+    @Test(arguments: [false, true])
+    func `OpenRouter cut-over honors default and overridden requests`(overridden: Bool) async throws {
+        let environment: [String: String] = overridden ? [
+            OpenRouterSettingsReader.apiURLEnvironmentKey: "https://router.example.test/gateway/v1",
+            OpenRouterSettingsReader.httpRefererEnvironmentKey: " https://codexbar.example ",
+            OpenRouterSettingsReader.clientTitleEnvironmentKey: "CodexBar QA",
+        ] : [:]
+        let settings: [String: String] = [
+            OpenRouterSettingsReader.apiURLEnvironmentKey:
+                OpenRouterSettingsReader.apiURL(environment: environment).absoluteString,
+            OpenRouterSettingsReader.clientTitleEnvironmentKey:
+                OpenRouterSettingsReader.clientTitle(environment: environment),
+            OpenRouterSettingsReader.httpRefererEnvironmentKey:
+                OpenRouterSettingsReader.httpReferer(environment: environment) ?? "",
+        ]
+        let requests = PluginRequestRecorder()
+        let transport = Self.recordingTransport(requests) { request in
+            request.url?.path.hasSuffix("/key") == true ? Self.openRouterKey : Self.openRouterCredits
+        }
+
+        _ = try await Self.openRouterRuntime(transport: transport).fetchUsage(
+            settings: settings,
+            secrets: [OpenRouterSettingsReader.envKey: "fixture-key"])
+
+        let recorded = await requests.requests
+        #expect(recorded.count == 2)
+        #expect(recorded[0].url?.absoluteString == (overridden
+                ? "https://router.example.test/gateway/v1/credits"
+                : "https://openrouter.ai/api/v1/credits"))
+        #expect(recorded[1].url?.absoluteString == (overridden
+                ? "https://router.example.test/gateway/v1/key"
+                : "https://openrouter.ai/api/v1/key"))
+        #expect(recorded[1].timeoutInterval == 15)
+        #expect(recorded[0].value(forHTTPHeaderField: "X-Title") == (overridden ? "CodexBar QA" : "CodexBar"))
+        #expect(recorded[0].value(forHTTPHeaderField: "HTTP-Referer") ==
+            (overridden ? "https://codexbar.example" : nil))
+        #expect(recorded[1].value(forHTTPHeaderField: "X-Title") == nil)
+    }
+
     @Test
-    func `Poe fixture has Swift core parity and stable details`() async throws {
+    func `OpenRouter credential adapter projects and validates configured origin`() throws {
+        let endpointKey = OpenRouterSettingsReader.apiURLEnvironmentKey
+        let configured = ProviderConfigEnvironment.applyProviderConfigOverrides(
+            base: [endpointKey: "https://environment.example"],
+            provider: .openrouter,
+            config: ProviderConfig(
+                id: .openrouter,
+                apiKey: "config-key",
+                enterpriseHost: "https://config.example/v1"))
+
+        #expect(configured[OpenRouterSettingsReader.envKey] == "config-key")
+        #expect(configured[endpointKey] == "https://config.example/v1")
+        let credentials = try #require(ProviderDescriptorRegistry.descriptor(for: .openrouter).credentials)
+        #expect(credentials.validateConfig(ProviderConfig(
+            id: .openrouter,
+            enterpriseHost: "http://api.example")).contains { $0.code == "invalid_enterprise_host" })
+        #expect(credentials.validateConfig(ProviderConfig(
+            id: .openrouter,
+            enterpriseHost: "api.example/v1")).isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func `ClawRouter cut-over honors default and overridden requests`(overridden: Bool) async throws {
+        let baseURL = try #require(URL(string: overridden
+                ? "https://router.example.test/gateway/v1"
+                : "https://clawrouter.openclaw.ai"))
+        let requests = PluginRequestRecorder()
+        let transport = Self.recordingTransport(requests) { _ in Self.clawRouter }
+
+        _ = try await ProviderPluginRuntime(bundledPlugin: "clawrouter", transport: transport).fetchUsage(
+            settings: [ClawRouterSettingsReader.baseURLEnvironmentKey: baseURL.absoluteString],
+            secrets: [ClawRouterSettingsReader.apiKeyEnvironmentKey: "fixture-key"])
+
+        let recorded = await requests.requests
+        #expect(recorded.count == 1)
+        #expect(recorded[0].url?.absoluteString == (overridden
+                ? "https://router.example.test/gateway/v1/usage"
+                : "https://clawrouter.openclaw.ai/v1/usage"))
+    }
+
+    @Test
+    func `Poe fixture matches the cut-over golden`() async throws {
         let transport = Self.transport { request in
             switch request.url?.path {
             case "/usage/current_balance": Self.poeBalance
@@ -140,12 +238,15 @@ struct ProviderPluginDetailsParityTests {
             }
         }
         let now = Date(timeIntervalSince1970: 1_785_816_000)
-        let swift = try await PoeUsageFetcher._fetchUsage(apiKey: "fixture-key", transport: transport).toUsageSnapshot()
         let script = try await ProviderPluginRuntime(bundledPlugin: "poe", transport: transport)
             .fetchUsage(secrets: ["POE_API_KEY": "fixture-key"], now: now)
 
-        Self.expectCoreParity(swift, script)
-        #expect(swift.details == script.details)
+        #expect(script.primary == nil)
+        #expect(script.secondary == nil)
+        #expect(script.tertiary == nil)
+        #expect(script.providerCost == nil)
+        #expect(script.identity?.providerID == .poe)
+        #expect(script.identity?.loginMethod == "Balance: 2,500 points")
         #expect(try script.details == [Self.section(
             "Points",
             rows: [
@@ -164,7 +265,7 @@ struct ProviderPluginDetailsParityTests {
     }
 
     @Test
-    func `zai fixture has Swift core parity and stable details`() async throws {
+    func `zai fixture matches the cut-over golden`() async throws {
         let transport = Self.transport { request in
             if request.url?.path.hasSuffix("/quota/limit") == true {
                 return Self.zaiQuota
@@ -175,10 +276,6 @@ struct ProviderPluginDetailsParityTests {
             throw FixtureError.unexpectedURL(request.url)
         }
         let now = Date(timeIntervalSince1970: 1_785_816_000)
-        let swift = try await ZaiUsageFetcher.fetchUsageWithModelUsage(
-            apiKey: "fixture-key",
-            environment: [:],
-            transport: transport).toUsageSnapshot()
         let script = try await ProviderPluginRuntime(bundledPlugin: "zai", transport: transport)
             .fetchUsage(
                 settings: [
@@ -188,8 +285,17 @@ struct ProviderPluginDetailsParityTests {
                 secrets: ["Z_AI_API_KEY": "fixture-key"],
                 now: now)
 
-        Self.expectCoreParity(swift, script)
-        #expect(swift.details == script.details)
+        #expect(script.primary?.usedPercent == 25)
+        #expect(script.primary?.windowMinutes == 300)
+        #expect(script.primary?.resetsAt == Date(timeIntervalSince1970: 1_785_816_000))
+        #expect(script.primary?.resetDescription == "5-hour")
+        #expect(script.secondary?.usedPercent == 9)
+        #expect(script.secondary?.windowMinutes == 10080)
+        #expect(script.secondary?.resetsAt == Date(timeIntervalSince1970: 1_786_291_200))
+        #expect(script.extraRateWindows?.first?.id == "zai-mcp")
+        #expect(script.extraRateWindows?.first?.window.usedPercent == 22.400000000000002)
+        #expect(script.identity?.providerID == .zai)
+        #expect(script.identity?.loginMethod == "Pro")
         #expect(try script.details == [
             Self.section("Quota details", rows: [
                 Self.row("Token quota", "9% used"),
@@ -217,6 +323,72 @@ struct ProviderPluginDetailsParityTests {
                     ("2026-08-02 08:00", 150), ("2026-08-02 09:00", 25),
                 ])),
         ])
+    }
+
+    @Test
+    func `zai CREDIT_LIMIT fixture matches the cut-over golden`() async throws {
+        let transport = Self.transport { request in
+            // Quota only: model-usage is intentionally unserved so the plugin's non-fatal
+            // model-usage fetch fails and both paths produce only Quota details.
+            if request.url?.path.hasSuffix("/quota/limit") == true {
+                return Self.zaiCreditQuota
+            }
+            throw FixtureError.unexpectedURL(request.url)
+        }
+        let now = Date(timeIntervalSince1970: 1_786_073_946)
+        let script = try await ProviderPluginRuntime(bundledPlugin: "zai", transport: transport)
+            .fetchUsage(
+                settings: [
+                    "Z_AI_REGION": "global",
+                    "Z_AI_USAGE_SCOPE": "personal",
+                ],
+                secrets: ["Z_AI_API_KEY": "fixture-key"],
+                now: now)
+
+        #expect(script.primary?.usedPercent == 5)
+        #expect(script.primary?.windowMinutes == 300)
+        #expect(script.primary?.resetDescription == "5-hour")
+        #expect(script.secondary?.usedPercent == 10)
+        #expect(script.secondary?.windowMinutes == 10080)
+        #expect(script.identity?.providerID == .zai)
+        #expect(script.identity?.loginMethod == "lite")
+        #expect(try script.details == [
+            Self.section("Quota details", rows: [
+                Self.row("Credit quota", "10% used", "10000 limit · 9000 remaining"),
+                Self.row("Session credit quota", "5% used", "2000 limit · 1900 remaining"),
+                Self.row("Quota rate", "Off-peak", "peak in 2h 21m"),
+            ]),
+        ])
+    }
+
+    @Test
+    func `zai quota rate row tracks the credit-plan peak schedule`() async throws {
+        let cases: [(epoch: TimeInterval, value: String, secondary: String)] = [
+            (1_786_001_400, "Peak", "off-peak in 2h 30m"), // Thursday 07:30 UTC
+            (1_786_073_946, "Off-peak", "peak in 2h 21m"), // Friday 03:39 UTC
+            (1_786_143_600, "Off-peak", "peak in 2d 7h"), // Friday 23:00 UTC skips the weekend
+            (1_786_172_400, "Off-peak", "peak in 1d 23h"), // Saturday 07:00 UTC is off-peak all day
+        ]
+        for testCase in cases {
+            let transport = Self.transport { request in
+                guard request.url?.path.hasSuffix("/quota/limit") == true else {
+                    throw FixtureError.unexpectedURL(request.url)
+                }
+                return Self.zaiCreditQuota
+            }
+            let script = try await ProviderPluginRuntime(bundledPlugin: "zai", transport: transport)
+                .fetchUsage(
+                    settings: [
+                        "Z_AI_REGION": "global",
+                        "Z_AI_USAGE_SCOPE": "personal",
+                    ],
+                    secrets: ["Z_AI_API_KEY": "fixture-key"],
+                    now: Date(timeIntervalSince1970: testCase.epoch))
+
+            let row = try #require(script.details.first?.rows.first { $0.label == "Quota rate" })
+            #expect(row.value == testCase.value)
+            #expect(row.secondaryValue == testCase.secondary)
+        }
     }
 
     @Test
@@ -273,6 +445,33 @@ struct ProviderPluginDetailsParityTests {
         ProviderHTTPTransportHandler { request in
             #expect(request.httpMethod == "GET")
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-key")
+            if request.url?.path == "/api/v1/key" {
+                try await Task.sleep(for: .milliseconds(950))
+            }
+            let response = try #require(HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]))
+            return try (Data(body(request).utf8), response)
+        }
+    }
+
+    private static func openRouterRuntime(
+        transport: any ProviderHTTPTransport) throws -> ProviderPluginRuntime
+    {
+        try ProviderPluginRuntime(
+            bundledPlugin: "openrouter",
+            transport: transport,
+            contextOptions: ProviderPluginContextOptions(optionalRequestTimeoutSeconds: 15))
+    }
+
+    private static func recordingTransport(
+        _ recorder: PluginRequestRecorder,
+        body: @escaping @Sendable (URLRequest) throws -> String) -> ProviderHTTPTransportHandler
+    {
+        ProviderHTTPTransportHandler { request in
+            await recorder.append(request)
             let response = try #require(HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -331,7 +530,6 @@ struct ProviderPluginDetailsParityTests {
     private static func environment(for provider: UsageProvider) -> [String: String] {
         switch provider {
         case .openai: [OpenAIAPISettingsReader.apiKeyEnvironmentKey: "fixture-key"]
-        case .zai: [ZaiSettingsReader.apiTokenKey: "fixture-key"]
         case .openrouter: [OpenRouterSettingsReader.envKey: "fixture-key"]
         case .poe: [PoeSettingsReader.apiKeyEnvironmentKey: "fixture-key"]
         case .clawrouter: [ClawRouterSettingsReader.apiKeyEnvironmentKey: "fixture-key"]
@@ -385,6 +583,14 @@ struct ProviderPluginDetailsParityTests {
        {"modelCode":"web-reader","usage":14}]}
     ]}}
     """#
+    private static let zaiCreditQuota = #"""
+    {"code":200,"msg":"success","success":true,"data":{"level":"lite","limits":[
+      {"type":"CREDIT_LIMIT","unit":3,"number":5,"usage":2000,"currentValue":100,"remaining":1900,
+       "percentage":5,"nextResetTime":1786073946574},
+      {"type":"CREDIT_LIMIT","unit":6,"number":1,"usage":10000,"currentValue":1000,"remaining":9000,
+       "percentage":10,"nextResetTime":1786660486998}
+    ]}}
+    """#
     private static let zaiModelUsage = #"""
     {"code":200,"msg":"success","success":true,"data":{
       "x_time":["2026-08-02 08:00","2026-08-02 09:00"],
@@ -429,4 +635,11 @@ private struct FixtureClaudeFetcher: ClaudeUsageFetching {
         nil
     }
 }
-#endif
+
+private actor PluginRequestRecorder {
+    private(set) var requests: [URLRequest] = []
+
+    func append(_ request: URLRequest) {
+        self.requests.append(request)
+    }
+}

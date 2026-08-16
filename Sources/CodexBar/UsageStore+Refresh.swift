@@ -81,6 +81,7 @@ extension UsageStore {
         if let tokenAccount {
             return self.warningTokenAccountDiscriminator(tokenAccount)
         }
+        // Provider-specific by design: Codex owner keys and Claude OAuth observations scope warning deduplication.
         if provider == .codex {
             return context.codexSessionQuotaOwnerKey?.rawValue
         }
@@ -122,6 +123,7 @@ extension UsageStore {
     }
 
     func prepareRefreshState(for provider: UsageProvider? = nil) {
+        // Provider-specific by design: Codex active-source correction reconciles managed profile filesystem state.
         guard provider == nil || provider == .codex else { return }
         _ = self.settings.persistResolvedCodexActiveSourceCorrectionIfNeeded()
     }
@@ -295,6 +297,7 @@ extension UsageStore {
             guard matches.count == 1 else { return nil }
             return matches[0]
         }()
+        // Provider-specific by design: Codex account refresh hydrates only a uniquely matching reconciled owner.
         if self.snapshots[.codex] == nil,
            let hydratedPrior,
            let hydratedSnapshot = hydratedPrior.snapshot
@@ -401,7 +404,7 @@ extension UsageStore {
             : nil
         let priorTokenAccountSnapshot = self.tokenAccountSnapshot(provider: provider, account: tokenAccount)
         let descriptor = spec.descriptor
-        let codexResetCreditsFetcher = self.codexResetCreditsFetcher()
+        let codexResetCreditsFetcher = self.codexResetCreditsFetcher(workspaceAccountID: fetchContext.codexWorkspaceID)
         let previousCodexSnapshot = codexPreparation?.previousSnapshot
         let codexMissingWindowBackfillSnapshot = codexPreparation?.missingWindowBackfillSnapshot
         let fetchOutcome: @Sendable () async -> ProviderFetchOutcome = {
@@ -561,13 +564,17 @@ extension UsageStore {
                 .compactMap(\.self),
             shouldTrack: shouldTrackActiveAccount,
             environment: input.environment)
-        let credentialsChanged = shouldTrackActiveAccount && (
+        let successfulOAuth = Self.isSuccessfulClaudeOAuthOutcome(input.outcome)
+        let successfulOAuthCredentialOwner = Self.successfulClaudeOAuthCredentialOwner(input.outcome)
+        let successfulOAuthHasIndependentAuthority = successfulOAuth && (
+            successfulOAuthCredentialOwner == .environment || successfulOAuthCredentialOwner == .codexbar)
+        let activeAccountChangedDuringFetchForOutcome =
+            activeAccountChangedDuringFetch && !successfulOAuthHasIndependentAuthority
+        let credentialsChanged = shouldTrackActiveAccount && !successfulOAuthHasIndependentAuthority && (
             Self.claudeCredentialsChanged(
                 beforeFetch: input.beforeFetch,
                 changedDuringFetch: authChangedDuringFetch) || activeAccountReconciliation.changed)
-        let successfulOAuth = Self.isSuccessfulClaudeOAuthOutcome(input.outcome)
-        let successfulOAuthCredentialOwner = Self.successfulClaudeOAuthCredentialOwner(input.outcome)
-        let activeAccountMismatch = successfulOAuth && (
+        let activeAccountMismatch = successfulOAuth && successfulOAuthCredentialOwner == .claudeCLI && (
             activeAccountChangedDuringFetch || activeAccountReconciliation.changedFromPersistedIdentity)
         let quarantinedCredentialsFile = if successfulOAuthCredentialOwner == .claudeCLI {
             await Self.isClaudeCredentialsFileQuarantinedForOAuth(environment: input.environment)
@@ -588,7 +595,7 @@ extension UsageStore {
             }
         }
         let ownerCLIRecoverySucceeded = !input.ownerCLIRecoveryPass || Self.isSuccessfulClaudeCLIOutcome(input.outcome)
-        if !oauthAccountMismatch, !activeAccountChangedDuringFetch, ownerCLIRecoverySucceeded {
+        if !oauthAccountMismatch, !activeAccountChangedDuringFetchForOutcome, ownerCLIRecoverySucceeded {
             self.persistClaudeActiveAccountIdentity(
                 activeAccountReconciliation.newestIdentity,
                 environment: input.environment)
@@ -608,12 +615,12 @@ extension UsageStore {
 
         // Only the ambient CLI authority observes Claude's account/config files. Source-authority changes apply to
         // every Claude route, but retire only the live projection; configured token-account caches remain isolated.
-        if credentialsChanged || activeAccountChangedDuringFetch || sourceAuthorityChanged {
+        if credentialsChanged || activeAccountChangedDuringFetchForOutcome || sourceAuthorityChanged {
             self.clearClaudeCredentialDerivedStateForCredentialSwap()
         }
         let disposition: ClaudeRefreshDisposition = if oauthAccountMismatch {
             .retryOwnerCLI
-        } else if activeAccountChangedDuringFetch {
+        } else if activeAccountChangedDuringFetchForOutcome {
             .retry
         } else {
             .apply
@@ -652,6 +659,7 @@ extension UsageStore {
         context: ProviderRefreshOutcomeContext) async
     {
         let rawScoped = result.usage.scoped(to: provider)
+        // Provider-specific by design: Codex results are discarded when managed-account ownership changes mid-fetch.
         if provider == .codex,
            let codexExpectedGuard = context.codexExpectedGuard,
            !self.shouldApplyCodexUsageResult(expectedGuard: codexExpectedGuard, usage: rawScoped)
@@ -764,8 +772,8 @@ extension UsageStore {
             return backfilled
         }
         guard let backfilled else { return }
-        let isClaudeOAuthSample = provider == .claude
-            && result.strategyKind == .oauth
+        self.refreshClaudeVersionAfterUserInitiatedCLIFetch(provider: provider, strategyKind: result.strategyKind)
+        let isClaudeOAuthSample = provider == .claude && result.strategyKind == .oauth
         let claudeOAuthPersistentRefHash: String? = if isClaudeOAuthSample,
                                                        result.claudeOAuthKeychainPersistentRefHash == context
                                                            .claudeOAuthHistoryPersistentRefHash
@@ -1007,6 +1015,7 @@ extension UsageStore {
                 return true
             }
             let normalizedPriorSource = priorSourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            // Provider-specific by design: Claude's legacy CLI source label is part of refresh continuity.
             return normalizedPriorSource == "claude" || normalizedPriorSource == "cli"
         }
     }
@@ -1053,6 +1062,7 @@ extension UsageStore {
         case oauth
 
         init?(sourceLabel: String?) {
+            // Provider-specific by design: Claude CLI results historically used both provider and transport labels.
             switch sourceLabel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
             case "claude", "cli":
                 self = .cli
@@ -1119,6 +1129,7 @@ extension UsageStore {
         beforeFetch: ClaudeRefreshAuthState?,
         afterFetchFingerprintToken: String?) -> Bool
     {
+        // Provider-specific by design: Claude credential fingerprints invalidate results produced by an old OAuth key.
         provider == .claude && afterFetchFingerprintToken != beforeFetch?.fingerprintToken
     }
 
@@ -1285,6 +1296,7 @@ extension UsageStore {
     }
 
     private func clearClaudeCredentialDerivedStateForCredentialSwap() {
+        // Provider-specific by design: Claude credential swaps invalidate OAuth, swap, widget, quota, and token state.
         self.widgetUsagePreservationBlockedProviders.insert(.claude)
         self.snapshots.removeValue(forKey: .claude)
         self.lastKnownResetSnapshots.removeValue(forKey: .claude)

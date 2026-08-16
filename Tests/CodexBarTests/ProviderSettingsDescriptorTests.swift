@@ -65,7 +65,7 @@ struct ProviderSettingsDescriptorTests {
 
         #expect(project.title == "Project ID")
         #expect(project.subtitle.contains(OpenAIAPISettingsReader.projectIDEnvironmentKey))
-        #expect(fixture.settings.openAIAPIProjectID == "proj_abc")
+        #expect(fixture.settings[providerConfig: .openai, field: .secretWorkspace(logField: "projectID")] == "proj_abc")
         #expect(fixture.settings.providerConfig(for: .openai)?.sanitizedWorkspaceID == "proj_abc")
     }
 
@@ -342,6 +342,26 @@ struct ProviderSettingsDescriptorTests {
 
         fixture.settings.showOptionalCreditsAndExtraUsage = false
         #expect(routinesToggle.isEnabled?() == false)
+    }
+
+    @Test
+    func `claude model scoped widget usage toggle is default off and independent`() throws {
+        let fixture = try self.makeSettingsFixture(suite: "ProviderSettingsDescriptorTests-claude-model-scoped-widget")
+        let context = fixture.settingsContext(provider: .claude)
+        let toggles = ClaudeProviderImplementation().settingsToggles(context: context)
+        let widgetToggle = try #require(toggles.first {
+            $0.id == "claude-model-scoped-weekly-usage-visible"
+        })
+
+        #expect(widgetToggle.binding.wrappedValue == false)
+        #expect(widgetToggle.isEnabled == nil)
+        #expect(widgetToggle.subtitle.contains("Fable"))
+
+        widgetToggle.binding.wrappedValue = true
+        #expect(fixture.settings.claudeModelScopedWeeklyUsageVisible)
+
+        fixture.settings.showOptionalCreditsAndExtraUsage = false
+        #expect(widgetToggle.isEnabled == nil)
     }
 
     @Test

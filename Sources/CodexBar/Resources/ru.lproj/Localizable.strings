@@ -501,6 +501,10 @@
 "quota_depleted_title" = "Исчерпание и восстановление квоты";
 "quota_warning_notifications_subtitle" = "Предупреждает, когда остаток сессионной или недельной квоты пересекает заданные пороги.";
 "threshold_warnings_title" = "Предупреждения о порогах";
+"provider_accent_color_title" = "Акцентный цвет";
+"provider_accent_color_footer" = "Задаёт цвет полос использования, графиков и вкладки переключателя этого провайдера.";
+"provider_accent_color_hex_label" = "Шестнадцатеричное значение цвета";
+"provider_accent_color_reset" = "Использовать по умолчанию";
 "quota_warnings_title" = "Предупреждения о квотах";
 "quota_warning_session" = "сеанс";
 "quota_warning_session_capitalized" = "Сеанс";
@@ -608,6 +612,11 @@
 "show_quota_warning_markers_subtitle" = "Рисует отметки порогов на индикаторах использования, если настроены предупреждения о квотах.";
 "weekly_progress_work_days_title" = "Рабочие дни для недельного прогресса";
 "weekly_progress_work_days_subtitle" = "Задаёт рабочие дни для недельных отметок использования и расчёта темпа.";
+"workday_tick_appearance_title" = "Вид отметок рабочих дней";
+"workday_tick_appearance_subtitle" = "Выберите, как отображать границы рабочих дней на недельных полосах использования.";
+"workday_tick_appearance_hidden" = "Скрыты";
+"workday_tick_appearance_subtle" = "Ненавязчивые";
+"workday_tick_appearance_high_contrast" = "Высокий контраст";
 "show_provider_changelog_links_title" = "Показывать ссылки на журналы изменений провайдеров";
 "show_provider_changelog_links_subtitle" = "Добавляет в меню ссылки на заметки к релизам для поддерживаемых CLI-провайдеров.";
 "show_credits_extra_usage_title" = "Показывать кредиты и доп. использование";
@@ -667,6 +676,8 @@
 "copyright" = "© 2026 Peter Steinberger. Лицензия MIT.";
 
 /* Debug Pane */
+"use_javascriptcore_plugin_engine" = "Использовать JavaScriptCore для плагинов провайдеров";
+"use_javascriptcore_plugin_engine_subtitle" = "Только для отката совместимости. Перезапустите CodexBar; CODEXBAR_PLUGIN_ENGINE переопределяет эту настройку.";
 "section_logging" = "Журналирование";
 "enable_file_logging" = "Включить запись логов";
 "enable_file_logging_subtitle" = "Записывать логи в %@ для отладки.";
@@ -1340,6 +1351,7 @@
 "menu_bar_layout_gap" = "Интервал";
 "menu_bar_layout_gap_tight" = "Узкий";
 "menu_bar_layout_gap_regular" = "Обычный";
+"menu_bar_layout_vertical_adjustment" = "Вертикальная настройка";
 "menu_bar_layout_keyboard_hint" = "Delete удаляет выбранный элемент";
 "menu_bar_layout_sample_account" = "аккаунт";
 "menu_bar_layout_sample_runs_out" = "закончится пт.";
@@ -1428,3 +1440,6 @@
 "Enter every endpoint setting to review the exact network origins." = "Укажите все параметры эндпоинта, чтобы просмотреть точные сетевые источники.";
 "Approve" = "Одобрить";
 "Install" = "Установить";
+"5-hour usage" = "Использование за 5 часов";
+"7-day usage" = "Использование за 7 дней";
+"Total usage" = "Общее использование";
