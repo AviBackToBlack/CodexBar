@@ -669,6 +669,15 @@
 "keychain_access_caption" = "Disattiva tutte le letture e scritture del Portachiavi. Usalo se macOS continua a chiedere accesso a 'Chrome/Brave/Edge Safe Storage' anche dopo aver scelto Consenti sempre. Quando è attivo, l'importazione dei cookie dal browser non è disponibile; incolla manualmente gli header Cookie in Provider. L'OAuth di Claude/Codex tramite CLI continua a funzionare.";
 "disable_keychain_access_title" = "Disattiva accesso Portachiavi";
 "disable_keychain_access_subtitle" = "Impedisce qualsiasi accesso al Portachiavi quando attivo.";
+"Re-authenticate" = "Re-authenticate";
+"kiro_reauthenticate_title" = "Kiro CLI login";
+"kiro_reauthenticate_subtitle" = "Runs 'kiro-cli login' to refresh your session when it has expired.";
+"Kiro CLI not found" = "Kiro CLI not found";
+"Install kiro-cli and try again." = "Install kiro-cli and try again.";
+"Could not start kiro-cli login" = "Could not start kiro-cli login";
+"Kiro login timed out" = "Kiro login timed out";
+"kiro-cli login exited with status %d." = "kiro-cli login exited with status %d.";
+"Kiro login failed" = "Kiro login failed";
 
 /* About Pane */
 "about_tagline" = "Che i tuoi token non finiscano mai: tieni sempre sotto controllo i limiti degli agenti.";

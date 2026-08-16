@@ -654,6 +654,15 @@
 "keychain_access_caption" = "Desactiva todas las lecturas y escrituras del Llavero. La importación de cookies del navegador no estará disponible; pega las cabeceras Cookie manualmente en Proveedores.";
 "disable_keychain_access_title" = "Desactivar el acceso al Llavero";
 "disable_keychain_access_subtitle" = "Impide cualquier acceso al Llavero mientras esté activado.";
+"Re-authenticate" = "Re-authenticate";
+"kiro_reauthenticate_title" = "Kiro CLI login";
+"kiro_reauthenticate_subtitle" = "Runs 'kiro-cli login' to refresh your session when it has expired.";
+"Kiro CLI not found" = "Kiro CLI not found";
+"Install kiro-cli and try again." = "Install kiro-cli and try again.";
+"Could not start kiro-cli login" = "Could not start kiro-cli login";
+"Kiro login timed out" = "Kiro login timed out";
+"kiro-cli login exited with status %d." = "kiro-cli login exited with status %d.";
+"Kiro login failed" = "Kiro login failed";
 
 /* About Pane */
 "about_tagline" = "Que tus tokens nunca se agoten: mantén los límites de tus agentes a la vista.";

@@ -648,6 +648,15 @@
 "keychain_access_caption" = "모든 키체인 읽기 및 쓰기를 사용 안 함으로 설정합니다. 항상 허용을 클릭한 후에도 macOS가 'Chrome/Brave/Edge Safe Storage'를 계속 요청하는 경우 사용하세요. 사용 시 브라우저 쿠키 가져오기를 사용할 수 없으며, 공급자에서 Cookie 헤더를 직접 붙여넣으세요. CLI를 통한 Claude/Codex OAuth는 계속 작동합니다.";
 "disable_keychain_access_title" = "키체인 접근 사용 안 함";
 "disable_keychain_access_subtitle" = "사용 시 모든 키체인 접근을 차단합니다.";
+"Re-authenticate" = "Re-authenticate";
+"kiro_reauthenticate_title" = "Kiro CLI login";
+"kiro_reauthenticate_subtitle" = "Runs 'kiro-cli login' to refresh your session when it has expired.";
+"Kiro CLI not found" = "Kiro CLI not found";
+"Install kiro-cli and try again." = "Install kiro-cli and try again.";
+"Could not start kiro-cli login" = "Could not start kiro-cli login";
+"Kiro login timed out" = "Kiro login timed out";
+"kiro-cli login exited with status %d." = "kiro-cli login exited with status %d.";
+"Kiro login failed" = "Kiro login failed";
 "about_tagline" = "토큰이 결코 바닥나지 않기를—에이전트 한도를 늘 확인하세요.";
 "link_github" = "GitHub";
 "link_website" = "웹사이트";

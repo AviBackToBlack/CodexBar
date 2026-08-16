@@ -645,6 +645,15 @@
 "keychain_access_caption" = "Desactiveu totes les lectures i escriptures del Clauer. Feu-ho si macOS continua mostrant sol·licituds de «Chrome/Brave/Edge Safe Storage» fins i tot després de triar «Permet sempre». La importació de galetes del navegador no estarà disponible mentre aquesta opció estigui activada; enganxeu manualment les capçaleres Cookie a Proveïdors. L'OAuth de Claude/Codex mitjançant la CLI continuarà funcionant.";
 "disable_keychain_access_title" = "Desactiveu l'accés al Clauer";
 "disable_keychain_access_subtitle" = "Impedeix qualsevol accés al Clauer mentre estigui activat.";
+"Re-authenticate" = "Re-authenticate";
+"kiro_reauthenticate_title" = "Kiro CLI login";
+"kiro_reauthenticate_subtitle" = "Runs 'kiro-cli login' to refresh your session when it has expired.";
+"Kiro CLI not found" = "Kiro CLI not found";
+"Install kiro-cli and try again." = "Install kiro-cli and try again.";
+"Could not start kiro-cli login" = "Could not start kiro-cli login";
+"Kiro login timed out" = "Kiro login timed out";
+"kiro-cli login exited with status %d." = "kiro-cli login exited with status %d.";
+"Kiro login failed" = "Kiro login failed";
 
 /* About Pane */
 "about_tagline" = "Que els vostres tokens no s'esgotin mai: mantingueu els límits dels vostres agents a la vista.";
