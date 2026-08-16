@@ -19,6 +19,7 @@
 - Antigravity: render one lane per quota bucket on the serve dashboard and in `codexbar dashboard`, instead of repeating two buckets as extra "Gemini Models" and "Claude and GPT" rows (#2963). Thanks @urda!
 - Serve: follow the app's "Hide personal information" setting on the web dashboard when no `--identity` flag is given, resolving the mode per request so the toggle applies without a serve restart (#2960). Thanks @urda!
 - Codex cost: price provider-qualified routed models (OpenCodex, DeepSeek, Kimi routes) against their matching models.dev provider, keeping unknown route prefixes unpriced instead of falling back to OpenAI rates (#2946). Thanks @Yuxin-Qiao!
+- CLI releases: record only the asset basename in release checksum sidecars so `sha256sum -c` verifies downloads anywhere, instead of embedding runner-local absolute paths (#2971, #2973). Thanks @shockbladenull!
 
 ## 0.50.0 — 2026-08-15
 
