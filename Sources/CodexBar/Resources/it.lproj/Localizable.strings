@@ -1445,3 +1445,5 @@
 "5-hour usage" = "Utilizzo di 5 ore";
 "7-day usage" = "Utilizzo di 7 giorni";
 "Total usage" = "Utilizzo totale";
+"claude_oauth_keychain_access_revoked" = "Claude Keychain access was revoked by Claude Code's token rotation. Click Refresh to re-grant access, or switch Claude Usage source to CLI/Web.";
+"claude_showing_last_known_usage" = "Showing last-known usage captured %@.";

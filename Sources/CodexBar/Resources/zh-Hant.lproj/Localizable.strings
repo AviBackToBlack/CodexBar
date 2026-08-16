@@ -1472,3 +1472,5 @@
 "5-hour usage" = "5 小時用量";
 "7-day usage" = "7 天用量";
 "Total usage" = "總用量";
+"claude_oauth_keychain_access_revoked" = "Claude Keychain access was revoked by Claude Code's token rotation. Click Refresh to re-grant access, or switch Claude Usage source to CLI/Web.";
+"claude_showing_last_known_usage" = "Showing last-known usage captured %@.";

@@ -1409,3 +1409,5 @@
 "5-hour usage" = "5시간 사용량";
 "7-day usage" = "7일 사용량";
 "Total usage" = "총 사용량";
+"claude_oauth_keychain_access_revoked" = "Claude Keychain access was revoked by Claude Code's token rotation. Click Refresh to re-grant access, or switch Claude Usage source to CLI/Web.";
+"claude_showing_last_known_usage" = "Showing last-known usage captured %@.";

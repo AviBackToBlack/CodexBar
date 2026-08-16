@@ -23,6 +23,7 @@ extension UsageStore {
 
     private struct ProviderRefreshOutcomeContext {
         let generation: UInt64
+        let claudeUsesConsumerAutoPipeline: Bool
         let codexExpectedGuard: CodexAccountScopedRefreshGuard?
         let tokenAccount: ProviderTokenAccount?
         let priorTokenAccountSnapshot: TokenAccountUsageSnapshot?
@@ -480,6 +481,11 @@ extension UsageStore {
             generation: generation))
         let outcomeContext = ProviderRefreshOutcomeContext(
             generation: generation,
+            claudeUsesConsumerAutoPipeline: Self.isClaudeConsumerAutoPipeline(
+                provider: provider,
+                context: fetchContext,
+                hasAdminAPIKey: claudeHasAdminAPIKey,
+                hasTokenAccount: tokenAccount != nil),
             codexExpectedGuard: codexExpectedGuard,
             tokenAccount: tokenAccount,
             priorTokenAccountSnapshot: priorTokenAccountSnapshot,
@@ -745,7 +751,7 @@ extension UsageStore {
                 self.tokenErrors[provider.instanceID] = nil
             }
             self.lastSourceLabels[provider.instanceID] = result.sourceLabel
-            self.errors[provider.instanceID] = nil
+            self.recordProviderFetchSuccessErrorState(provider: provider)
             self.diagnostics[provider.instanceID] = result.diagnostic
             if let tokenAccount = currentTokenAccount {
                 self.cacheTokenAccountSnapshot(
@@ -1303,6 +1309,7 @@ extension UsageStore {
         self.errors[.claude] = nil
         self.knownLimitsAvailabilityByProvider.removeValue(forKey: .claude)
         self.lastSourceLabels.removeValue(forKey: .claude)
+        self.claudeHistoryFallbackEligible = false
         self.clearTokenSnapshot(for: .claude)
         self.tokenErrors[.claude] = nil
         self.failureGates[.claude]?.reset()
@@ -1322,6 +1329,10 @@ extension UsageStore {
         await MainActor.run {
             guard self.isCurrentProviderRefreshGeneration(provider, generation: context.generation) else { return }
             self.diagnostics[provider.instanceID] = nil
+            let restoredClaudeHistory = self.prepareClaudeHistoryFallback(
+                provider: provider,
+                usesConsumerAutoPipeline: context.claudeUsesConsumerAutoPipeline,
+                accountStateWasStable: context.claudeOAuthActiveAccountObservation != .changed)
             if provider == .gemini, Self.isGeminiConsumerTierDeprecationError(error) {
                 // This is a durable provider migration signal, not a transient fetch failure.
                 // Surface it immediately so a cached snapshot cannot hide the required handoff.
@@ -1402,11 +1413,12 @@ extension UsageStore {
                 hadPriorData: hadPriorData) ||
                 (provider == .claude &&
                     hadPriorData &&
-                    (Self.isClaudeCLIRateLimitFailure(error) ||
+                    (context.claudeUsesConsumerAutoPipeline ||
+                        Self.isClaudeCLIRateLimitFailure(error) ||
                         isTerminalClaudeCLIParseFailure))
-            let shouldSurface =
+            let shouldSurface = restoredClaudeHistory ||
                 self.failureGates[provider.instanceID]?
-                    .shouldSurfaceError(onFailureWithPriorData: hadPriorData) ?? true
+                .shouldSurfaceError(onFailureWithPriorData: hadPriorData) ?? true
             let preservesClaudeWebSessionFailure =
                 provider == .claude &&
                 hadPriorData &&
@@ -1482,30 +1494,7 @@ extension UsageStore {
         }
     }
 
-    private static func shouldPreservePriorSnapshot(after error: Error, hadPriorData: Bool) -> Bool {
-        guard hadPriorData else { return false }
-        if error is CancellationError {
-            return true
-        }
-        if self.isPreservableNetworkTransportError(error) {
-            return true
-        }
-
-        let message = error.localizedDescription.lowercased()
-        return message.contains("timed out") ||
-            message.contains("timeout") ||
-            message.contains("cancelled") ||
-            message.contains("network connection was lost") ||
-            message.contains("not connected to the internet")
-    }
-
-    private static func lastAvailableFailedFetchKind(from attempts: [ProviderFetchAttempt]) -> ProviderFetchKind? {
-        attempts.last { attempt in
-            attempt.wasAvailable && attempt.errorDescription != nil
-        }?.kind
-    }
-
-    static func isPreservableNetworkTransportError(_ error: Error) -> Bool {
+    nonisolated static func isPreservableNetworkTransportError(_ error: Error) -> Bool {
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else { return false }
         switch nsError.code {
@@ -1563,20 +1552,6 @@ extension UsageStore {
             return true
         }
         return error.localizedDescription == ClaudeStatusProbeError.timedOut.localizedDescription
-    }
-
-    private static func isClaudeCLIRateLimitFailure(_ error: Error) -> Bool {
-        ClaudeUsageFetcher.isCLIRateLimitError(error)
-    }
-
-    private static func isClaudeCLIUsageParseFailure(_ error: Error) -> Bool {
-        if case let ClaudeStatusProbeError.parseFailed(message) = error {
-            return !ClaudeStatusProbe.isSubscriptionQuotaUnavailableDescription(message)
-        }
-        if case let ClaudeUsageError.parseFailed(message) = error {
-            return !ClaudeStatusProbe.isSubscriptionQuotaUnavailableDescription(message)
-        }
-        return false
     }
 
     private static func isClaudeWebSessionRefreshFailure(_ error: Error) -> Bool {
