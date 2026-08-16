@@ -111,6 +111,8 @@
 "Could not switch system account" = "Could not switch system account";
 "Credits" = "Credits";
 "Individual credits" = "Individual credits";
+"Show all (%d)" = "Show all (%d)";
+"Show less" = "Show less";
 "Workspace" = "Workspace";
 "Credits history" = "Credits history";
 "Cursor login failed" = "Cursor login failed";
