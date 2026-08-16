@@ -37,6 +37,15 @@ jobs:
             $root = (Get-Location).Path
             & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\install-release-prerequisites.ps1') -RepoRoot $root
             if ($LASTEXITCODE -ne 0) { throw "install-release-prerequisites.ps1 failed with exit code $LASTEXITCODE" }
+      - restore_cache:
+          name: Restore Cargo registry cache
+          keys:
+            - cargo-registry-{{ checksum "Cargo.lock" }}
+      - restore_cache:
+          name: Restore Cargo target and pnpm store cache
+          keys:
+            - release-cache-{{ checksum "Cargo.lock" }}-{{ checksum "rust/Cargo.toml" }}-{{ checksum "apps/desktop-tauri/src-tauri/Cargo.toml" }}
+            - release-cache-{{ checksum "Cargo.lock" }}-
       - run:
           name: Build, smoke-install, and emit verified assets
           no_output_timeout: 90m
@@ -47,6 +56,16 @@ jobs:
             $output = Join-Path $root 'release-output'
             & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\circleci-release-build.ps1') -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot $root -OutputDir $output
             if ($LASTEXITCODE -ne 0) { throw "circleci-release-build.ps1 failed with exit code $LASTEXITCODE" }
+      - save_cache:
+          name: Save Cargo registry cache
+          key: cargo-registry-{{ checksum "Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+      - save_cache:
+          name: Save Cargo target and pnpm store cache
+          key: release-cache-{{ checksum "Cargo.lock" }}-{{ checksum "rust/Cargo.toml" }}-{{ checksum "apps/desktop-tauri/src-tauri/Cargo.toml" }}
+          paths:
+            - ~/cb/release/cache
       - persist_to_workspace:
           root: .
           paths:
