@@ -46,9 +46,12 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      Heavy omits `creditUsagePercent` and reports a zero on-demand cap, so that
      shape keeps identity and does not invent 0% usage. The reset timestamp comes
      from `config.currentPeriod.end`, then `config.billingPeriodEnd`.
-   - Reads `subscriptionTier` from `config` first, then the credits envelope, and
-     maps it to the account `loginMethod` (`SuperGrok Heavy` vs `SuperGrok`). OIDC
-     `auth_mode` alone cannot distinguish those plans.
+   - Plan name does not come from the credits payload. After a successful credits
+     fetch, CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the
+     same bearer headers and reads `subscription_tier_display` (`SuperGrok Heavy`
+     vs `SuperGrok`). OIDC `auth_mode` alone cannot distinguish those plans. A
+     settings failure keeps billing data and falls back to the OIDC SuperGrok
+     label.
    - This is the Grok CLI's supported token-authenticated billing backend. If it
      fails, CodexBar continues through the existing browser-cookie and legacy
      bearer fallbacks.
@@ -148,9 +151,9 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 - **Identity**:
   - `accountEmail` from credential `email`.
   - `accountOrganization` from credential `team_id`.
-  - `loginMethod` = billing `subscriptionTier` when present (`SuperGrok Heavy`
-    or `SuperGrok`), otherwise "SuperGrok" for OIDC and the raw `auth_mode` for
-    other login modes.
+  - `loginMethod` = CLI settings `subscription_tier_display` when present
+    (`SuperGrok Heavy` or `SuperGrok`), otherwise "SuperGrok" for OIDC and the
+    raw `auth_mode` for other login modes.
 
 ## Local fallback (`~/.grok/sessions/`)
 
@@ -184,6 +187,7 @@ points to `https://status.x.ai`.
 - `Sources/CodexBarCore/Providers/Grok/GrokPlan.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokRPCClient.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokCreditsProxyFetcher.swift`
+- `Sources/CodexBarCore/Providers/Grok/GrokCLISettingsFetcher.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokWebBillingFetcher.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokStatusProbe.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokLocalSessionScanner.swift`

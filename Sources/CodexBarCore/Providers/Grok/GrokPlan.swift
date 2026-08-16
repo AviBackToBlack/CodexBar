@@ -1,7 +1,8 @@
 import Foundation
 
 /// Grok consumer plan labels. OIDC only tells CodexBar that the user signed in as SuperGrok;
-/// the billed tier (SuperGrok vs SuperGrok Heavy) comes from the credits envelope.
+/// the billed tier (SuperGrok vs SuperGrok Heavy) comes from CLI settings
+/// `subscription_tier_display`.
 public enum GrokPlan: Sendable {
     /// Prefer the billing `subscriptionTier`, then the OIDC login-method fallback.
     public static func loginMethod(subscriptionTier: String?, credentials: GrokCredentials?) -> String? {

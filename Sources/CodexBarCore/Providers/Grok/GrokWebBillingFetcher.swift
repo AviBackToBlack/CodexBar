@@ -7,11 +7,39 @@ public struct GrokWebBillingSnapshot: Sendable, Equatable {
     public let usedPercent: Double?
     public let resetsAt: Date?
     public let subscriptionTier: String?
+    let inferredZeroUsage: Bool
 
     public init(usedPercent: Double?, resetsAt: Date?, subscriptionTier: String? = nil) {
+        self.init(
+            usedPercent: usedPercent,
+            resetsAt: resetsAt,
+            subscriptionTier: subscriptionTier,
+            inferredZeroUsage: false)
+    }
+
+    init(usedPercent: Double?, resetsAt: Date?, subscriptionTier: String?, inferredZeroUsage: Bool) {
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
         self.subscriptionTier = subscriptionTier
+        self.inferredZeroUsage = inferredZeroUsage
+    }
+
+    /// Overlay the CLI settings plan name. SuperGrok Heavy omits a credit percent, so an inferred
+    /// 0% from a period-only credits payload is dropped rather than shown as unused quota.
+    func applying(subscriptionTier raw: String?) -> GrokWebBillingSnapshot {
+        let resolved = GrokPlan.displayName(from: raw) ?? self.subscriptionTier
+        if GrokPlan.omitsIncludedUsagePercent(resolved), self.inferredZeroUsage {
+            return GrokWebBillingSnapshot(
+                usedPercent: nil,
+                resetsAt: self.resetsAt,
+                subscriptionTier: resolved,
+                inferredZeroUsage: true)
+        }
+        return GrokWebBillingSnapshot(
+            usedPercent: self.usedPercent,
+            resetsAt: self.resetsAt,
+            subscriptionTier: resolved,
+            inferredZeroUsage: self.inferredZeroUsage)
     }
 }
 

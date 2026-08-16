@@ -38,7 +38,12 @@ public enum GrokCreditsProxyFetcher {
             let body = String(data: response.data.prefix(400), encoding: .utf8) ?? ""
             throw GrokWebBillingError.requestFailed(response.statusCode, body)
         }
-        return try Self.parseSnapshot(response.data)
+        let snapshot = try Self.parseSnapshot(response.data)
+        let settingsTier = try await GrokCLISettingsFetcher.subscriptionTierDisplay(
+            credentials: credentials,
+            session: transport,
+            endpoint: GrokCLISettingsFetcher.endpoint(fromBilling: endpoint))
+        return snapshot.applying(subscriptionTier: settingsTier)
     }
 
     static func parseSnapshot(_ data: Data) throws -> GrokWebBillingSnapshot {
@@ -75,11 +80,12 @@ public enum GrokCreditsProxyFetcher {
         }
 
         if resetsAt != nil {
-            let usedPercent: Double? = GrokPlan.omitsIncludedUsagePercent(subscriptionTier) ? nil : 0
+            let isHeavy = GrokPlan.omitsIncludedUsagePercent(subscriptionTier)
             return GrokWebBillingSnapshot(
-                usedPercent: usedPercent,
+                usedPercent: isHeavy ? nil : 0,
                 resetsAt: resetsAt,
-                subscriptionTier: subscriptionTier)
+                subscriptionTier: subscriptionTier,
+                inferredZeroUsage: !isHeavy)
         }
 
         guard subscriptionTier != nil else {
