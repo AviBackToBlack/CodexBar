@@ -10,6 +10,7 @@
 - Widgets: opt-in display of Claude model-scoped weekly quotas (for example Fable) projected from the shared usage snapshot, off by default (#2645). Thanks @alfredjbclaw!
 
 ### Fixed
+- Claude: let Auto reuse a working CLI fallback when OAuth Keychain access is revoked by Claude Code token rotation, distinguish revoked access from missing credentials, and keep last-known quota history visible with its capture age when every live source fails (#2516). Thanks @axisrow and everyone who supplied forensics!
 - Menu: apply the cost summary display style to every provider's menu card, so Submenu only hides inline cost rows for z.ai and other providers (#2976). Thanks @ar0nbg!
 - Cost history: align x-axis date labels with their bars in status-menu charts (#2974). Thanks @Yuxin-Qiao!
 - Codex: preserve completed empty local history as known-zero usage and spend without fabricating zeroes for incomplete scans (#2932). Thanks @Yuxin-Qiao!

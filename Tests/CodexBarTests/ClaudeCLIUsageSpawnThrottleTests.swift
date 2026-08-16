@@ -57,6 +57,37 @@ struct ClaudeCLIUsageSpawnThrottleTests {
     }
 
     @Test
+    func `Auto returns cached CLI usage after OAuth Keychain access is revoked`() async throws {
+        let strategy = self.makeStrategy()
+        let profile = try self.makeProfile(accountID: "account-a")
+        defer { try? FileManager.default.removeItem(at: profile.root) }
+        let context = self.makeContext(environment: profile.environment, sourceMode: .auto)
+        let attempts = AttemptRecorder()
+        let pipeline = ProviderFetchPipeline { _ in [RevokedOAuthStrategy(), strategy] }
+
+        try await self.withGateStack {
+            try await KeychainAccessGate.withTaskOverrideForTesting(false) {
+                try await ClaudeOAuthKeychainPromptPreference.withTaskOverrideForTesting(.onlyOnUserAction) {
+                    try await ClaudeStatusProbe.$fetchOverride.withValue(
+                        self.successfulFetchOverride(attempts: attempts))
+                    {
+                        _ = try await self.fetch(strategy, context: context, interaction: .userInitiated)
+                        let outcome = await ProviderInteractionContext.$current.withValue(.background) {
+                            await pipeline.fetch(context: context, provider: .claude)
+                        }
+
+                        let result = try outcome.result.get()
+                        #expect(result.strategyID == "claude.cli")
+                        #expect(result.usage.primary?.usedPercent == 11)
+                        #expect(await attempts.snapshot() == 1)
+                        #expect(outcome.attempts.map(\.strategyID) == ["claude.oauth-revoked", "claude.cli"])
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     func `background refresh respawns the CLI after the spawn floor elapses`() async throws {
         let strategy = self.makeStrategy()
         let profile = try self.makeProfile(accountID: "account-a")
@@ -217,6 +248,23 @@ struct ClaudeCLIUsageSpawnThrottleTests {
         case failed
     }
 
+    private struct RevokedOAuthStrategy: ProviderFetchStrategy {
+        let id = "claude.oauth-revoked"
+        let kind = ProviderFetchKind.oauth
+
+        func isAvailable(_: ProviderFetchContext) async -> Bool {
+            true
+        }
+
+        func fetch(_: ProviderFetchContext) async throws -> ProviderFetchResult {
+            throw ClaudeOAuthCredentialsError.keychainAccessRevoked
+        }
+
+        func shouldFallback(on _: Error, context: ProviderFetchContext) -> Bool {
+            context.sourceMode == .auto
+        }
+    }
+
     private func makeStrategy() -> ClaudeCLIFetchStrategy {
         ClaudeCLIFetchStrategy(
             useWebExtras: false,
@@ -228,12 +276,13 @@ struct ClaudeCLIUsageSpawnThrottleTests {
 
     private func makeContext(
         environment: [String: String],
+        sourceMode: ProviderSourceMode = .cli,
         claudeOwnerCLIRecoveryOnly: Bool = false) -> ProviderFetchContext
     {
         let browserDetection = BrowserDetection(cacheTTL: 0)
         return ProviderFetchContext(
             runtime: .app,
-            sourceMode: .cli,
+            sourceMode: sourceMode,
             includeCredits: false,
             webTimeout: 1,
             webDebugDumpHTML: false,
