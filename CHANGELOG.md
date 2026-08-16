@@ -9,6 +9,7 @@
 - Widgets: opt-in display of Claude model-scoped weekly quotas (for example Fable) projected from the shared usage snapshot, off by default (#2645). Thanks @alfredjbclaw!
 
 ### Fixed
+- Menu: apply the cost summary display style to every provider's menu card, so Submenu only hides inline cost rows for z.ai and other providers (#2976). Thanks @ar0nbg!
 - Codex: preserve completed empty local history as known-zero usage and spend without fabricating zeroes for incomplete scans (#2932). Thanks @Yuxin-Qiao!
 - Codex: keep CLI-owned `auth.json` read-only during usage refresh, delegate stale native credentials to CLI recovery, and fail closed for stale external OAuth files (#2944). Thanks @Yuxin-Qiao!
 - Usage & Spend: keep safely priced Codex totals visible after completed history scans when request-tier uncertainty leaves some days unpriced (#2948). Thanks @Atopoz for the report!
