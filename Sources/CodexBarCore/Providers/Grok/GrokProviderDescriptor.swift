@@ -225,7 +225,8 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
                 webBilling: webBilling),
             localSummary: GrokLocalSessionScanner.summarize(env: context.env),
             cliVersion: GrokStatusProbe.detectVersion(env: context.env),
-            updatedAt: Date())
+            updatedAt: Date(),
+            subscriptionTier: webBilling.subscriptionTier)
         return self.makeResult(
             usage: snapshot.toUsageSnapshot(),
             sourceLabel: sourceLabel)

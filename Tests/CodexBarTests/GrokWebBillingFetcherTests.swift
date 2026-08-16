@@ -941,6 +941,63 @@ extension GrokWebBillingFetcherTests {
     }
 
     @Test
+    func `CLI RPC usage snapshot uses settings tier when web billing is absent`() throws {
+        let billing = try JSONDecoder().decode(
+            GrokBillingResponse.self,
+            from: Data("""
+            {
+              "billingCycle": {
+                "billingPeriodStart": "2026-08-16T18:42:45Z",
+                "billingPeriodEnd": "2026-08-23T18:42:45Z"
+              },
+              "monthlyLimit": { "val": 100 },
+              "usage": { "totalUsed": { "val": 0 } }
+            }
+            """.utf8))
+        let snapshot = GrokUsageSnapshot(
+            billing: billing,
+            webBilling: nil,
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: "1.0.4",
+            updatedAt: Date(timeIntervalSince1970: 1_799_000_000),
+            subscriptionTier: "SuperGrok Heavy")
+
+        let usage = snapshot.toUsageSnapshot()
+
+        #expect(usage.primary?.usedPercent == 0)
+        #expect(usage.loginMethod(for: .grok) == "SuperGrok Heavy")
+    }
+
+    @Test
+    func `CLI RPC usage snapshot falls back to OIDC SuperGrok when settings are missing`() throws {
+        let billing = try JSONDecoder().decode(
+            GrokBillingResponse.self,
+            from: Data(#"{"monthlyLimit":{"val":100},"usage":{"totalUsed":{"val":10}}}"#.utf8))
+        let snapshot = GrokUsageSnapshot(
+            billing: billing,
+            webBilling: nil,
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: "1.0.4",
+            updatedAt: Date(timeIntervalSince1970: 1_799_000_000))
+
+        #expect(snapshot.toUsageSnapshot().loginMethod(for: .grok) == "SuperGrok")
+    }
+
+    @Test
+    func `identity-only CLI fallback keeps a settings SuperGrok Heavy label`() {
+        let snapshot = GrokStatusProbe.identityOnlySnapshot(
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: "1.0.4",
+            subscriptionTier: "SuperGrok Heavy")
+
+        #expect(snapshot.toUsageSnapshot().loginMethod(for: .grok) == "SuperGrok Heavy")
+        #expect(snapshot.diagnostic == GrokStatusProbe.teamUsageUnavailableMessage)
+    }
+
+    @Test
     func `usage snapshot does not classify a monthly reset near its end as weekly`() {
         // A monthly quota with six days left must not be reported as a weekly window.
         let snapshot = GrokUsageSnapshot(
