@@ -8,10 +8,12 @@ extension UsageStore {
         hasAdminAPIKey: Bool,
         hasTokenAccount: Bool) -> Bool
     {
+        // Provider-specific by design: this gate protects Claude's consumer Auto source from Admin/token accounts.
         provider == .claude && context.sourceMode == .auto && !hasAdminAPIKey && !hasTokenAccount
     }
 
     func clearClaudeHistoryFallbackEligibility(provider: UsageProvider) {
+        // Provider-specific by design: only Claude owns the persisted quota-history fallback state.
         guard provider == .claude else { return }
         self.claudeHistoryFallbackEligible = false
     }
@@ -27,6 +29,7 @@ extension UsageStore {
         usesConsumerAutoPipeline: Bool,
         accountStateWasStable: Bool) -> Bool
     {
+        // Provider-specific by design: only a stable Claude refresh may arm the Claude history fallback.
         guard provider == .claude else { return false }
         let eligible = usesConsumerAutoPipeline && accountStateWasStable
         self.claudeHistoryFallbackEligible = eligible
@@ -74,6 +77,7 @@ extension UsageStore {
     /// unset: history proves the percentages and capture time, but it must never impersonate a live account fetch.
     @discardableResult
     func restoreClaudeHistorySnapshotIfNeeded() -> Bool {
+        // Provider-specific by design: this reconstructs only Claude quota bars in Claude's isolated state lanes.
         guard self.claudeHistoryFallbackEligible,
               self.planUtilizationHistoryLoaded,
               self.settings.claudeUsageDataSource == .auto,
@@ -106,6 +110,7 @@ extension UsageStore {
             tertiary: opus.map(Self.rateWindow(from:)),
             updatedAt: capturedAt,
             dataConfidence: .percentOnly)
+        // Provider-specific by design: reconstructed history is published only to Claude's snapshot/reset lanes.
         self.snapshots[.claude] = snapshot
         self.lastKnownResetSnapshots[.claude] = snapshot
         return true
