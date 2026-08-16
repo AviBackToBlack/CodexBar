@@ -921,6 +921,26 @@ extension GrokWebBillingFetcherTests {
     }
 
     @Test
+    func `usage snapshot prefers billing SuperGrok Heavy over OIDC SuperGrok`() {
+        let snapshot = GrokUsageSnapshot(
+            billing: nil,
+            webBilling: GrokWebBillingSnapshot(
+                usedPercent: nil,
+                resetsAt: Date(timeIntervalSince1970: 1_800_000_003),
+                subscriptionTier: "SuperGrok Heavy"),
+            credentials: Self.credentials,
+            localSummary: nil,
+            cliVersion: nil,
+            updatedAt: Date(timeIntervalSince1970: 1_799_000_000))
+
+        let usage = snapshot.toUsageSnapshot()
+
+        #expect(usage.primary == nil)
+        #expect(usage.loginMethod(for: .grok) == "SuperGrok Heavy")
+        #expect(usage.accountEmail(for: .grok) == "grok@example.com")
+    }
+
+    @Test
     func `usage snapshot does not classify a monthly reset near its end as weekly`() {
         // A monthly quota with six days left must not be reported as a weekly window.
         let snapshot = GrokUsageSnapshot(

@@ -6,10 +6,12 @@ import FoundationNetworking
 public struct GrokWebBillingSnapshot: Sendable, Equatable {
     public let usedPercent: Double?
     public let resetsAt: Date?
+    public let subscriptionTier: String?
 
-    public init(usedPercent: Double?, resetsAt: Date?) {
+    public init(usedPercent: Double?, resetsAt: Date?, subscriptionTier: String? = nil) {
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
+        self.subscriptionTier = subscriptionTier
     }
 }
 

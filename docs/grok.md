@@ -42,8 +42,13 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `Accept: application/json`.
    - Reads `config.creditUsagePercent`, falling back to
      `onDemandUsed.val / onDemandCap.val * 100`. A parseable current period
-     without either value represents zero usage. The reset timestamp comes from
-     `config.currentPeriod.end`, then `config.billingPeriodEnd`.
+     without either value represents zero usage for ordinary SuperGrok. SuperGrok
+     Heavy omits `creditUsagePercent` and reports a zero on-demand cap, so that
+     shape keeps identity and does not invent 0% usage. The reset timestamp comes
+     from `config.currentPeriod.end`, then `config.billingPeriodEnd`.
+   - Reads `subscriptionTier` from `config` first, then the credits envelope, and
+     maps it to the account `loginMethod` (`SuperGrok Heavy` vs `SuperGrok`). OIDC
+     `auth_mode` alone cannot distinguish those plans.
    - This is the Grok CLI's supported token-authenticated billing backend. If it
      fails, CodexBar continues through the existing browser-cookie and legacy
      bearer fallbacks.
@@ -143,7 +148,9 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 - **Identity**:
   - `accountEmail` from credential `email`.
   - `accountOrganization` from credential `team_id`.
-  - `loginMethod` = "SuperGrok" for OIDC, otherwise the raw `auth_mode`.
+  - `loginMethod` = billing `subscriptionTier` when present (`SuperGrok Heavy`
+    or `SuperGrok`), otherwise "SuperGrok" for OIDC and the raw `auth_mode` for
+    other login modes.
 
 ## Local fallback (`~/.grok/sessions/`)
 
@@ -174,6 +181,7 @@ points to `https://status.x.ai`.
 
 - `Sources/CodexBarCore/Providers/Grok/GrokProviderDescriptor.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokAuth.swift`
+- `Sources/CodexBarCore/Providers/Grok/GrokPlan.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokRPCClient.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokCreditsProxyFetcher.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokWebBillingFetcher.swift`

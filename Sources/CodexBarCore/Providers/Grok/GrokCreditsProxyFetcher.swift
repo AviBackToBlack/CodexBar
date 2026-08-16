@@ -52,13 +52,15 @@ public enum GrokCreditsProxyFetcher {
             throw GrokWebBillingError.parseFailed
         }
 
+        let subscriptionTier = GrokPlan.displayName(from: config.subscriptionTier ?? response.subscriptionTier)
         let resetsAt = config.currentPeriod?.end.flatMap(Self.parseISO8601)
             ?? config.billingPeriodEnd.flatMap(Self.parseISO8601)
 
         if let percent = config.creditUsagePercent, percent.isFinite {
             return GrokWebBillingSnapshot(
                 usedPercent: min(100, max(0, percent)),
-                resetsAt: resetsAt)
+                resetsAt: resetsAt,
+                subscriptionTier: subscriptionTier)
         }
 
         if let cap = config.onDemandCap?.val,
@@ -66,13 +68,27 @@ public enum GrokCreditsProxyFetcher {
            let used = config.onDemandUsed?.val
         {
             let percent = min(100, max(0, used / cap * 100))
-            return GrokWebBillingSnapshot(usedPercent: percent, resetsAt: resetsAt)
+            return GrokWebBillingSnapshot(
+                usedPercent: percent,
+                resetsAt: resetsAt,
+                subscriptionTier: subscriptionTier)
         }
 
-        guard resetsAt != nil else {
+        if resetsAt != nil {
+            let usedPercent: Double? = GrokPlan.omitsIncludedUsagePercent(subscriptionTier) ? nil : 0
+            return GrokWebBillingSnapshot(
+                usedPercent: usedPercent,
+                resetsAt: resetsAt,
+                subscriptionTier: subscriptionTier)
+        }
+
+        guard subscriptionTier != nil else {
             throw GrokWebBillingError.parseFailed
         }
-        return GrokWebBillingSnapshot(usedPercent: 0, resetsAt: resetsAt)
+        return GrokWebBillingSnapshot(
+            usedPercent: nil,
+            resetsAt: nil,
+            subscriptionTier: subscriptionTier)
     }
 
     private static func parseISO8601(_ raw: String) -> Date? {
@@ -87,6 +103,7 @@ public enum GrokCreditsProxyFetcher {
 
     private struct CreditsResponse: Decodable {
         let config: CreditsConfig?
+        let subscriptionTier: String?
     }
 
     private struct CreditsConfig: Decodable {
@@ -95,6 +112,7 @@ public enum GrokCreditsProxyFetcher {
         let billingPeriodEnd: String?
         let onDemandCap: CreditsAmount?
         let onDemandUsed: CreditsAmount?
+        let subscriptionTier: String?
     }
 
     private struct CurrentPeriod: Decodable {

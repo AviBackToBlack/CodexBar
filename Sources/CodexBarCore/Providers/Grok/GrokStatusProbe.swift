@@ -55,7 +55,9 @@ public struct GrokUsageSnapshot: Sendable {
             providerID: .grok,
             accountEmail: self.credentials?.email,
             accountOrganization: self.credentials?.teamId,
-            loginMethod: self.credentials?.loginMethod)
+            loginMethod: GrokPlan.loginMethod(
+                subscriptionTier: self.webBilling?.subscriptionTier,
+                credentials: self.credentials))
 
         return UsageSnapshot(
             primary: primary,

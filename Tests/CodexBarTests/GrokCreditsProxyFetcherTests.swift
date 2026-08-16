@@ -49,6 +49,7 @@ struct GrokCreditsProxyFetcherTests {
         #expect(GrokCreditsProxyStubURLProtocol.requests.count == 1)
         #expect(snapshot.usedPercent == 12.5)
         #expect(snapshot.resetsAt == expectedReset)
+        #expect(snapshot.subscriptionTier == nil)
     }
 
     @Test
@@ -101,6 +102,62 @@ struct GrokCreditsProxyFetcherTests {
 
         #expect(snapshot.usedPercent == 0)
         #expect(snapshot.resetsAt == expectedReset)
+        #expect(snapshot.subscriptionTier == nil)
+    }
+
+    @Test
+    func `reads SuperGrok Heavy from the top-level subscription tier`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "currentPeriod": {
+              "type": "USAGE_PERIOD_TYPE_WEEKLY",
+              "start": "2026-08-16T18:42:45.537749+00:00",
+              "end": "2026-08-23T18:42:45.537749+00:00"
+            },
+            "onDemandCap": { "val": 0 },
+            "onDemandUsed": { "val": 0 },
+            "billingPeriodEnd": "2026-08-23T18:42:45.537749+00:00"
+          },
+          "subscriptionTier": "SuperGrok Heavy"
+        }
+        """.utf8))
+        let expectedReset = try Self.date("2026-08-23T18:42:45.537749+00:00")
+
+        #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
+        #expect(snapshot.usedPercent == nil)
+        #expect(snapshot.resetsAt == expectedReset)
+    }
+
+    @Test
+    func `prefers config subscription tier over the envelope`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": {
+            "creditUsagePercent": 8,
+            "billingPeriodEnd": "2026-08-13T00:00:00Z",
+            "subscriptionTier": "SuperGrok Heavy"
+          },
+          "subscriptionTier": "SuperGrok"
+        }
+        """.utf8))
+
+        #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
+        #expect(snapshot.usedPercent == 8)
+    }
+
+    @Test
+    func `keeps SuperGrok Heavy identity when only the tier is present`() throws {
+        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+        {
+          "config": { "onDemandCap": { "val": 0 } },
+          "subscriptionTier": "supergrok_heavy"
+        }
+        """.utf8))
+
+        #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
+        #expect(snapshot.usedPercent == nil)
+        #expect(snapshot.resetsAt == nil)
     }
 
     @Test
