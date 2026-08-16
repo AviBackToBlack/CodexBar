@@ -6,6 +6,7 @@
 - Providers: add a per-provider accent color override with a hex field, a color well, and a reset to the shipped color; it applies to usage bars, charts, switcher tabs, widgets, and the `codexbar serve` dashboard, and syncs across Macs (#2972). Thanks @urda!
 - Usage bars: make workday tick marks configurable with hidden, subtle, and high-contrast appearances (#2904, #2950). Thanks @dstier-git!
 - Settings: allow minimizing the Settings window while keeping its Dock tile available for restoring it (#2945). Thanks @Yuxin-Qiao!
+- Widgets: opt-in display of Claude model-scoped weekly quotas (for example Fable) projected from the shared usage snapshot, off by default (#2645). Thanks @alfredjbclaw!
 
 ### Fixed
 - Codex: keep CLI-owned `auth.json` read-only during usage refresh, delegate stale native credentials to CLI recovery, and fail closed for stale external OAuth files (#2944). Thanks @Yuxin-Qiao!
