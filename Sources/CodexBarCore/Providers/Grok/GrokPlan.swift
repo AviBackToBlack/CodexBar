@@ -22,12 +22,6 @@ public enum GrokPlan: Sendable {
         }
     }
 
-    /// SuperGrok Heavy's credits payload reports a weekly period without `creditUsagePercent`.
-    /// That omission is not zero usage.
-    public static func omitsIncludedUsagePercent(_ raw: String?) -> Bool {
-        self.compactToken(raw ?? "").contains("heavy")
-    }
-
     private static func compactToken(_ raw: String) -> String {
         raw.lowercased().filter(\.isLetter)
     }

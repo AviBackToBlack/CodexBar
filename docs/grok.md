@@ -42,10 +42,8 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `Accept: application/json`.
    - Reads `config.creditUsagePercent`, falling back to
      `onDemandUsed.val / onDemandCap.val * 100`. A parseable current period
-     without either value represents zero usage for ordinary SuperGrok. SuperGrok
-     Heavy omits `creditUsagePercent` and reports a zero on-demand cap, so that
-     shape keeps identity and does not invent 0% usage. The reset timestamp comes
-     from `config.currentPeriod.end`, then `config.billingPeriodEnd`.
+     without either value represents zero usage. The reset timestamp comes from
+     `config.currentPeriod.end`, then `config.billingPeriodEnd`.
    - Plan name does not come from the credits payload. After a successful credits
      fetch, CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the
      same bearer headers and reads `subscription_tier_display` (`SuperGrok Heavy`

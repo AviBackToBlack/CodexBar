@@ -15,14 +15,6 @@ struct GrokPlanTests {
     }
 
     @Test
-    func `treats Heavy omitted credit percent as unknown usage`() {
-        #expect(GrokPlan.omitsIncludedUsagePercent("SuperGrok Heavy"))
-        #expect(GrokPlan.omitsIncludedUsagePercent("supergrok_heavy"))
-        #expect(!GrokPlan.omitsIncludedUsagePercent("SuperGrok"))
-        #expect(!GrokPlan.omitsIncludedUsagePercent(nil))
-    }
-
-    @Test
     func `login method prefers billing tier over OIDC SuperGrok`() {
         let credentials = GrokCredentials(
             accessToken: "token",
@@ -57,22 +49,14 @@ struct GrokPlanTests {
     }
 
     @Test
-    func `applying Heavy drops an inferred zero percent`() {
-        let inferred = GrokWebBillingSnapshot(
+    func `applying a plan name keeps the existing usage percent`() {
+        let snapshot = GrokWebBillingSnapshot(
             usedPercent: 0,
-            resetsAt: Date(timeIntervalSince1970: 1_800_000_000),
-            subscriptionTier: nil,
-            inferredZeroUsage: true)
-        let applied = inferred.applying(subscriptionTier: "SuperGrok Heavy")
+            resetsAt: Date(timeIntervalSince1970: 1_800_000_000))
+        let applied = snapshot.applying(subscriptionTier: "SuperGrok Heavy")
         #expect(applied.subscriptionTier == "SuperGrok Heavy")
-        #expect(applied.usedPercent == nil)
+        #expect(applied.usedPercent == 0)
         #expect(applied.resetsAt == Date(timeIntervalSince1970: 1_800_000_000))
-
-        let explicit = GrokWebBillingSnapshot(
-            usedPercent: 0,
-            resetsAt: Date(timeIntervalSince1970: 1_800_000_000),
-            subscriptionTier: nil)
-        #expect(explicit.applying(subscriptionTier: "SuperGrok Heavy").usedPercent == 0)
     }
 
     @Test

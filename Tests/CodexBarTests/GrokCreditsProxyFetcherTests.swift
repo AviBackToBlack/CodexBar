@@ -56,7 +56,7 @@ struct GrokCreditsProxyFetcherTests {
     }
 
     @Test
-    func `reads SuperGrok Heavy from CLI settings and does not invent zero usage`() async throws {
+    func `reads SuperGrok Heavy from CLI settings and keeps period-only usage at zero`() async throws {
         let session = Self.makeSession()
         let endpoint = try #require(URL(string: "https://grok.test/v1/billing?format=credits"))
         defer { GrokCreditsProxyStubURLProtocol.reset() }
@@ -95,7 +95,7 @@ struct GrokCreditsProxyFetcherTests {
         let expectedReset = try Self.date("2026-08-23T18:42:45.537749+00:00")
 
         #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
-        #expect(snapshot.usedPercent == nil)
+        #expect(snapshot.usedPercent == 0)
         #expect(snapshot.resetsAt == expectedReset)
         #expect(GrokCreditsProxyStubURLProtocol.requests.map(\.url?.path) == [
             "/v1/billing",
@@ -207,7 +207,7 @@ struct GrokCreditsProxyFetcherTests {
         let expectedReset = try Self.date("2026-08-23T18:42:45.537749+00:00")
 
         #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
-        #expect(snapshot.usedPercent == nil)
+        #expect(snapshot.usedPercent == 0)
         #expect(snapshot.resetsAt == expectedReset)
     }
 

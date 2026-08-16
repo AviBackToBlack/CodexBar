@@ -80,12 +80,10 @@ public enum GrokCreditsProxyFetcher {
         }
 
         if resetsAt != nil {
-            let isHeavy = GrokPlan.omitsIncludedUsagePercent(subscriptionTier)
             return GrokWebBillingSnapshot(
-                usedPercent: isHeavy ? nil : 0,
+                usedPercent: 0,
                 resetsAt: resetsAt,
-                subscriptionTier: subscriptionTier,
-                inferredZeroUsage: !isHeavy)
+                subscriptionTier: subscriptionTier)
         }
 
         guard subscriptionTier != nil else {

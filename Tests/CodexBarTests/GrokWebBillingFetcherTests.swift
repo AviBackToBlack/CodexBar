@@ -925,7 +925,7 @@ extension GrokWebBillingFetcherTests {
         let snapshot = GrokUsageSnapshot(
             billing: nil,
             webBilling: GrokWebBillingSnapshot(
-                usedPercent: nil,
+                usedPercent: 0,
                 resetsAt: Date(timeIntervalSince1970: 1_800_000_003),
                 subscriptionTier: "SuperGrok Heavy"),
             credentials: Self.credentials,
@@ -935,7 +935,7 @@ extension GrokWebBillingFetcherTests {
 
         let usage = snapshot.toUsageSnapshot()
 
-        #expect(usage.primary == nil)
+        #expect(usage.primary?.usedPercent == 0)
         #expect(usage.loginMethod(for: .grok) == "SuperGrok Heavy")
         #expect(usage.accountEmail(for: .grok) == "grok@example.com")
     }
