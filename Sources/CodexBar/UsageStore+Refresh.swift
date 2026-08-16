@@ -370,18 +370,18 @@ extension UsageStore {
             self.scheduleClaudeSwapAccountRefresh(generation: generation)
         }
 
-        let tokenAccounts = self.tokenAccounts(for: provider)
-        if self.shouldFetchAllTokenAccounts(provider: provider, accounts: tokenAccounts) {
+        let tokenAccountPreparation = self.tokenAccountRefreshPreparation(for: provider)
+        if self.shouldFetchAllTokenAccounts(provider: provider, accounts: tokenAccountPreparation.accounts) {
             await self.refreshTokenAccounts(
                 provider: provider,
-                accounts: tokenAccounts,
+                accounts: tokenAccountPreparation.accounts,
                 generation: generation)
             return nil
         } else {
             _ = await MainActor.run {
                 self.reconcileSelectedTokenAccountSnapshotBeforeRefresh(
                     provider: provider,
-                    accounts: tokenAccounts)
+                    accounts: tokenAccountPreparation.accounts)
             }
         }
 
@@ -485,7 +485,8 @@ extension UsageStore {
                 provider: provider,
                 context: fetchContext,
                 hasAdminAPIKey: claudeHasAdminAPIKey,
-                hasTokenAccount: tokenAccount != nil),
+                hasTokenAccount: tokenAccount != nil,
+                removedTokenAccountAuthority: tokenAccountPreparation.removesAccountAuthority),
             codexExpectedGuard: codexExpectedGuard,
             tokenAccount: tokenAccount,
             priorTokenAccountSnapshot: priorTokenAccountSnapshot,

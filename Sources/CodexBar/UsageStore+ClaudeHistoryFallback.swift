@@ -6,10 +6,12 @@ extension UsageStore {
         provider: UsageProvider,
         context: ProviderFetchContext,
         hasAdminAPIKey: Bool,
-        hasTokenAccount: Bool) -> Bool
+        hasTokenAccount: Bool,
+        removedTokenAccountAuthority: Bool) -> Bool
     {
         // Provider-specific by design: this gate protects Claude's consumer Auto source from Admin/token accounts.
-        provider == .claude && context.sourceMode == .auto && !hasAdminAPIKey && !hasTokenAccount
+        provider == .claude && context.sourceMode == .auto && !hasAdminAPIKey && !hasTokenAccount &&
+            !removedTokenAccountAuthority
     }
 
     func clearClaudeHistoryFallbackEligibility(provider: UsageProvider) {

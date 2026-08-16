@@ -1192,11 +1192,13 @@ extension ClaudeResilienceTests {
     }
 
     @Test
-    func `Auto restores stale Claude quota bars from disk history when every source fails`() async throws {
+    func `Auto restores stale Claude quota bars for a configured account when every source fails`() async throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("codexbar-claude-history-fallback-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
+        try Data(#"{"oauthAccount":{"accountUuid":"account-a"}}"#.utf8)
+            .write(to: tempDir.appendingPathComponent(".config.json"), options: .atomic)
         let missingCredentialsURL = tempDir.appendingPathComponent("missing-credentials.json")
         let sessionCapturedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let weeklyCapturedAt = sessionCapturedAt.addingTimeInterval(60)
