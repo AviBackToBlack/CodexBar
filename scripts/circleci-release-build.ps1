@@ -82,6 +82,9 @@ if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) { throw "Missin
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Clear-DirectoryContents $OutputDir
 $version = Get-ReleaseVersionFromTag $Tag
+# Use a fixed WorkRoot so the Cargo target and pnpm store caches persist
+# across runs (restored via CircleCI save_cache/restore_cache).  The
+# source checkout inside WorkRoot is cleaned before each build.
 $tempRoot = if ($env:USERPROFILE) {
     Join-Path $env:USERPROFILE 'cb'
 } elseif ($env:TEMP) {
@@ -89,8 +92,7 @@ $tempRoot = if ($env:USERPROFILE) {
 } else {
     Join-Path ([IO.Path]::GetTempPath()) 'cb'
 }
-New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
-$workRoot = Join-Path $tempRoot ('r-' + [guid]::NewGuid().ToString('N'))
+$workRoot = Join-Path $tempRoot 'release'
 $assetsDir = Join-Path $workRoot 'assets'
 $doctorLog = Join-Path $OutputDir 'release-doctor.log'
 $buildLog = Join-Path $OutputDir 'windows-release-build.log'
@@ -110,14 +112,19 @@ try {
     ) (Join-Path $OutputDir 'emit-release-manifest.log')
     Write-Host "Credential-free release build passed for $Tag ($Sha)."
 } finally {
-    if (Test-Path -LiteralPath $workRoot -PathType Container) {
-        foreach ($entry in @(Get-ChildItem -LiteralPath $workRoot -Force -Recurse -ErrorAction SilentlyContinue)) {
-            if ($entry -is [IO.FileInfo]) {
-                try { $entry.IsReadOnly = $false } catch { }
+    # Preserve the cache/ subdirectory (Cargo target + pnpm store) for
+    # the next run; clean only source/ and assets/ which are rebuilt fresh.
+    foreach ($sub in @('source', 'assets')) {
+        $subPath = Join-Path $workRoot $sub
+        if (Test-Path -LiteralPath $subPath -PathType Container) {
+            foreach ($entry in @(Get-ChildItem -LiteralPath $subPath -Force -Recurse -ErrorAction SilentlyContinue)) {
+                if ($entry -is [IO.FileInfo]) {
+                    try { $entry.IsReadOnly = $false } catch { }
+                }
             }
-        }
-        try {
-            [IO.Directory]::Delete($workRoot, $true)
-        } catch { }
+            try {
+                [IO.Directory]::Delete($subPath, $true)
+            } catch { }
         }
     }
+}
