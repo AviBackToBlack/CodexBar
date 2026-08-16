@@ -80,6 +80,7 @@ pub enum ProviderId {
     QwenCloud,
     Notion,
     Xai,
+    Fireworks,
 }
 
 impl ProviderId {
@@ -155,6 +156,7 @@ impl ProviderId {
             ProviderId::QwenCloud,
             ProviderId::Notion,
             ProviderId::Xai,
+            ProviderId::Fireworks,
         ]
     }
 
@@ -196,6 +198,7 @@ impl ProviderId {
             ProviderId::Codebuff => "codebuff",
             ProviderId::DeepSeek => "deepseek",
             ProviderId::DeepInfra => "deepinfra",
+            ProviderId::Fireworks => "fireworks",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -272,6 +275,7 @@ impl ProviderId {
             ProviderId::Codebuff => "Codebuff",
             ProviderId::DeepSeek => "DeepSeek",
             ProviderId::DeepInfra => "DeepInfra",
+            ProviderId::Fireworks => "Fireworks",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -361,6 +365,7 @@ impl ProviderId {
             ProviderId::Codebuff => None,
             ProviderId::DeepSeek => None,
             ProviderId::DeepInfra => None,
+            ProviderId::Fireworks => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -433,6 +438,7 @@ impl ProviderId {
             "codebuff" | "manicode" => Some(ProviderId::Codebuff),
             "deepseek" | "deep-seek" | "ds" => Some(ProviderId::DeepSeek),
             "deepinfra" | "deep-infra" | "di" => Some(ProviderId::DeepInfra),
+            "fireworks" | "fireworks-ai" | "fw" => Some(ProviderId::Fireworks),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
             "windsurf" | "codeium" => Some(ProviderId::Windsurf),
             "manus" => Some(ProviderId::Manus),
@@ -681,6 +687,8 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("ds", ProviderId::DeepSeek);
     map.insert("deep-infra", ProviderId::DeepInfra);
     map.insert("di", ProviderId::DeepInfra);
+    map.insert("fireworks-ai", ProviderId::Fireworks);
+    map.insert("fw", ProviderId::Fireworks);
     map.insert("ai&", ProviderId::AiAnd);
     map.insert("ai-and", ProviderId::AiAnd);
     map.insert("codeium", ProviderId::Windsurf);
@@ -740,9 +748,10 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 69);
+        assert_eq!(all.len(), 70);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
+        assert!(all.contains(&ProviderId::Fireworks));
         assert!(all.contains(&ProviderId::Kimi));
         assert!(all.contains(&ProviderId::KimiK2));
         assert!(all.contains(&ProviderId::Amp));

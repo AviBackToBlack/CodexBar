@@ -248,6 +248,7 @@ function providerSourceHintShort(
     case "groq":
     case "llmproxy":
     case "xai":
+    case "fireworks":
       return t("ProviderSourceApiShort");
     case "kiro":
       return t("ProviderSourceKiroEnvShort");
