@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.50.2 — Unreleased
+
+### Added
+- Usage & Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data. Thanks @Yuxin-Qiao!
+
 ## 0.50.1 — 2026-08-16
 
 ### Added
