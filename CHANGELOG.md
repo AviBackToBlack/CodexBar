@@ -2,6 +2,9 @@
 
 ## 0.50.2 — Unreleased
 
+### Added
+- CLI: add `codexbar cost --group-by session` for per-conversation Codex session cost breakdowns in text output (#2854). Thanks @Yuxin-Qiao!
+
 ## 0.50.1 — 2026-08-16
 
 ### Added
