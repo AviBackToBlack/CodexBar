@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.50.1 — Unreleased
+## 0.50.1 — 2026-08-16
 
 ### Added
 - Kiro: add an explicit Re-authenticate action that runs `kiro-cli login`, surfaces device-flow instructions, and refreshes usage only after a successful login (#2340). Thanks @Vit129!
