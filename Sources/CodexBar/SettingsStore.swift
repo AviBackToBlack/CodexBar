@@ -532,6 +532,9 @@ extension SettingsStore {
         if Self.isRunningTests, claudeDailyRoutinesUsageVisibleDefault == nil {
             userDefaults.set(true, forKey: "claudeDailyRoutinesUsageVisible")
         }
+        // Model-scoped weekly rows are opt-in: a fresh install keeps widgets on the standard quota lanes.
+        let claudeModelScopedWeeklyUsageVisible = userDefaults.object(
+            forKey: "claudeModelScopedWeeklyUsageVisible") as? Bool ?? false
         let codexSparkUsageVisibleDefault = userDefaults.object(forKey: "codexSparkUsageVisible") as? Bool
         let codexSparkUsageVisible = codexSparkUsageVisibleDefault ?? true
         if Self.isRunningTests, codexSparkUsageVisibleDefault == nil {
@@ -644,6 +647,7 @@ extension SettingsStore {
             claudeWebExtrasEnabledRaw: claudeWebExtrasEnabledRaw,
             showOptionalCreditsAndExtraUsage: showOptionalCreditsAndExtraUsage,
             claudeDailyRoutinesUsageVisible: claudeDailyRoutinesUsageVisible,
+            claudeModelScopedWeeklyUsageVisible: claudeModelScopedWeeklyUsageVisible,
             codexSparkUsageVisible: codexSparkUsageVisible,
             codexExternalOAuthSourcesAllowed: codexExternalOAuthSourcesAllowed,
             openAIWebAccessEnabled: openAIWebAccessEnabled,
