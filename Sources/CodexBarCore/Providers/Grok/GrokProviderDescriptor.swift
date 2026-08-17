@@ -119,7 +119,7 @@ public enum GrokProviderDescriptor {
     {
         switch context.sourceMode {
         case .auto:
-            [GrokCLIFetchStrategy(), GrokOAuthFetchStrategy(), GrokWebFetchStrategy()]
+            [GrokCLIFetchStrategy(), GrokWebFetchStrategy(), GrokOAuthFetchStrategy()]
         case .cli:
             [GrokCLIFetchStrategy()]
         case .oauth:

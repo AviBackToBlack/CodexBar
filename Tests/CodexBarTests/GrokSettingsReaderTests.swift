@@ -155,4 +155,24 @@ struct GrokSettingsReaderTests {
         #expect(none.cookieSource == .auto)
         #expect(none.manualCookieHeader == "sso=configured")
     }
+
+    @Test
+    func `auto keeps cookies before SuperGrok OAuth`() async {
+        let browserDetection = BrowserDetection(cacheTTL: 0)
+        let context = ProviderFetchContext(
+            runtime: .app,
+            sourceMode: .auto,
+            includeCredits: false,
+            webTimeout: 1,
+            webDebugDumpHTML: false,
+            verbose: false,
+            env: [:],
+            settings: nil,
+            fetcher: UsageFetcher(),
+            claudeFetcher: ClaudeUsageFetcher(browserDetection: browserDetection),
+            browserDetection: browserDetection)
+        let strategies = await GrokProviderDescriptor.descriptor.fetchPlan.pipeline
+            .resolveStrategies(context)
+        #expect(strategies.map(\.id) == ["grok.cli", "grok.web", "grok.oauth"])
+    }
 }
