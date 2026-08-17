@@ -1319,6 +1319,105 @@ extension CostUsagePricingTests {
         #expect(cost == expected)
     }
 
+    @Test
+    func `claude cost prices bare first-party model IDs from vendor catalogs`() throws {
+        let root = try Self.seedModelsDevCache("""
+        {
+          "anthropic": {
+            "id": "anthropic",
+            "models": {
+              "claude-sonnet-4-6": {
+                "id": "claude-sonnet-4-6",
+                "cost": { "input": 3, "output": 15 }
+              }
+            }
+          },
+          "deepseek": {
+            "id": "deepseek",
+            "models": {
+              "deepseek-v4-flash": {
+                "id": "deepseek-v4-flash",
+                "cost": { "input": 0.14, "output": 0.28 }
+              }
+            }
+          },
+          "opencode-go": {
+            "id": "opencode-go",
+            "models": {
+              "deepseek-v4-flash": {
+                "id": "deepseek-v4-flash",
+                "cost": { "input": 0.07, "output": 0.14 }
+              }
+            }
+          }
+        }
+        """)
+
+        let bare = CostUsagePricing.claudeCostUSD(
+            model: "deepseek-v4-flash",
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 5,
+            modelsDevCacheRoot: root)
+        let prefixed = CostUsagePricing.claudeCostUSD(
+            model: "opencode-go/deepseek-v4-flash",
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 5,
+            modelsDevCacheRoot: root)
+        let anthropic = CostUsagePricing.claudeCostUSD(
+            model: "claude-sonnet-4-6",
+            inputTokens: 10,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 5,
+            modelsDevCacheRoot: root)
+
+        #expect(bare == (100.0 * 0.14e-6) + (5.0 * 0.28e-6))
+        #expect(prefixed == (100.0 * 0.07e-6) + (5.0 * 0.14e-6))
+        #expect(anthropic == (10.0 * 3e-6) + (5.0 * 15e-6))
+        #expect(CostUsagePricing.claudeModelsDevPricingTargets(for: "deepseek-v4-flash").contains {
+            $0.providerID == "deepseek" && $0.modelID == "deepseek-v4-flash"
+        })
+        #expect(Set(CostUsagePricing.claudeFirstPartyModelsDevProviderIDs).isSuperset(of: [
+            "anthropic",
+            "openai",
+            "google",
+            "moonshot",
+            "minimax",
+            "deepseek",
+        ]))
+    }
+
+    @Test
+    func `claude cost does not cross charge a prefixed route onto first-party rates`() throws {
+        let root = try Self.seedModelsDevCache("""
+        {
+          "deepseek": {
+            "id": "deepseek",
+            "models": {
+              "deepseek-v4-flash": {
+                "id": "deepseek-v4-flash",
+                "cost": { "input": 0.14, "output": 0.28 }
+              }
+            }
+          }
+        }
+        """)
+
+        let cost = CostUsagePricing.claudeCostUSD(
+            model: "opencode-go/deepseek-v4-flash",
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 5,
+            modelsDevCacheRoot: root)
+
+        #expect(cost == nil)
+    }
+
     private static func seedModelsDevCache(_ json: String) throws -> URL {
         let root = try Self.cacheRoot()
         let catalog = try JSONDecoder().decode(ModelsDevCatalog.self, from: Data(json.utf8))

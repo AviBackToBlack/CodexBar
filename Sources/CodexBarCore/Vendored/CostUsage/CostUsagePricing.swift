@@ -763,8 +763,7 @@ enum CostUsagePricing {
                     : currentPricing,
                 tokens: tokens)
         }
-        if let lookup = self.modelsDevLookup(
-            providerID: self.claudeModelsDevProviderID,
+        if let lookup = self.claudeModelsDevLookup(
             model: model,
             catalog: modelsDevCatalog,
             cacheRoot: modelsDevCacheRoot)
@@ -848,5 +847,54 @@ enum CostUsagePricing {
             providerID: providerID,
             modelID: model,
             cacheRoot: cacheRoot)
+    }
+}
+
+extension CostUsagePricing {
+    /// Bare Claude-routed IDs may match first-party models.dev vendors. Prefixed routes stay on
+    /// that route and never fall through to another vendor's official price.
+    /// Provider-specific by design: first-party vendor fallback for bare Claude model IDs.
+    static let claudeFirstPartyModelsDevProviderIDs: [String] = [
+        Self.claudeModelsDevProviderID,
+        "openai",
+        "google",
+        "moonshot",
+        "minimax",
+        "deepseek",
+    ]
+
+    static func claudeModelsDevPricingTargets(for rawModel: String) -> [(providerID: String, modelID: String)] {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        if trimmed.contains("/") {
+            return self.codexModelsDevPricingTargets(for: trimmed)
+        }
+
+        let normalized = self.normalizeClaudeModel(trimmed)
+        var modelIDs = [trimmed]
+        if normalized != trimmed {
+            modelIDs.append(normalized)
+        }
+        return modelIDs.flatMap { modelID in
+            self.claudeFirstPartyModelsDevProviderIDs.map { ($0, modelID) }
+        }
+    }
+
+    fileprivate static func claudeModelsDevLookup(
+        model rawModel: String,
+        catalog: ModelsDevCatalog?,
+        cacheRoot: URL?) -> ModelsDevPricingLookup?
+    {
+        for target in self.claudeModelsDevPricingTargets(for: rawModel) {
+            if let lookup = self.modelsDevLookup(
+                providerID: target.providerID,
+                model: target.modelID,
+                catalog: catalog,
+                cacheRoot: cacheRoot)
+            {
+                return lookup
+            }
+        }
+        return nil
     }
 }

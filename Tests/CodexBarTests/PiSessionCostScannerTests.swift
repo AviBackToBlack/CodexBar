@@ -1159,11 +1159,11 @@ extension PiSessionCostScannerTests {
               }
             }
           },
-          "google": {
-            "id": "google",
+          "groq": {
+            "id": "groq",
             "models": {
-              "gemini-test": {
-                "id": "gemini-test",
+              "groq-test": {
+                "id": "groq-test",
                 "cost": { "input": 1, "output": 2 }
               }
             }
@@ -1209,11 +1209,11 @@ extension PiSessionCostScannerTests {
               }
             }
           },
-          "google": {
-            "id": "google",
+          "groq": {
+            "id": "groq",
             "models": {
-              "gemini-test": {
-                "id": "gemini-test",
+              "groq-test": {
+                "id": "groq-test",
                 "cost": { "input": 99, "output": 199 }
               }
             }
