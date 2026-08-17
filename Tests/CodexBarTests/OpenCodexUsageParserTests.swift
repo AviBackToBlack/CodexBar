@@ -1,0 +1,86 @@
+import Foundation
+import Testing
+@testable import CodexBarCore
+
+struct OpenCodexUsageParserTests {
+    @Test
+    func `parses persisted usage rows without reading the developer home`() throws {
+        let line = """
+        {"requestId":"req-1","timestamp":1784179200000,"provider":"openai","model":"gpt-5.4",\
+        "usageStatus":"reported","accountLogLabel":"p2","surface":"claude",\
+        "usage":{"inputTokens":100,"outputTokens":20,"cacheReadInputTokens":10,\
+        "reasoningOutputTokens":5,"totalTokens":135},"totalTokens":135}
+        """
+        let entry = try #require(OpenCodexUsageParser.parseLine(line))
+        #expect(entry.requestID == "req-1")
+        #expect(entry.provider == "openai")
+        #expect(entry.model == "gpt-5.4")
+        #expect(entry.usageStatus == .reported)
+        #expect(entry.accountLogLabel == "p2")
+        #expect(entry.surface == "claude")
+        #expect(entry.usage?.inputTokens == 100)
+        #expect(entry.usage?.reasoningOutputTokens == 5)
+        #expect(entry.resolvedTotalTokens == 135)
+        #expect(entry.timestamp == Date(timeIntervalSince1970: 1_784_179_200))
+    }
+
+    @Test
+    func `skips malformed lines and keeps nil usage classes unset`() {
+        let text = """
+        not-json
+        {"requestId":"req-2","timestamp":1784179200,"provider":"anthropic",\
+        "model":"claude-sonnet-4","usageStatus":"unreported"}
+        """
+        let entries = OpenCodexUsageParser.parseLines(text)
+        #expect(entries.count == 1)
+        #expect(entries[0].usage == nil)
+        #expect(entries[0].usageStatus == .unreported)
+        #expect(entries[0].accountLogLabel == nil)
+    }
+
+    @Test
+    func `does not resolve a default home while tests are running`() {
+        #expect(OpenCodexUsageLog.usageLogURL(environment: ["TESTING_LIBRARY_VERSION": "1"]) == nil)
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenCodexUsageParserTests-\(UUID().uuidString)", isDirectory: true)
+        let url = OpenCodexUsageLog.usageLogURL(environment: ["OPENCODEX_HOME": home.path])
+        #expect(url == home.appendingPathComponent("usage.jsonl"))
+    }
+
+    @Test
+    func `aggregates a fixture log into an independent snapshot`() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("OpenCodexUsageAggregatorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let log = root.appendingPathComponent("usage.jsonl")
+        let now = Date(timeIntervalSince1970: 1_784_179_200)
+        let millis = Int(now.timeIntervalSince1970 * 1000)
+        try """
+        {"requestId":"a","timestamp":\(millis),"provider":"openai","model":"gpt-5.4","usageStatus":"reported",\
+        "accountLogLabel":"main","conversationId":"chat-1",\
+        "usage":{"inputTokens":10,"outputTokens":2,"totalTokens":12},"totalTokens":12}
+        {"requestId":"b","timestamp":\(millis),"provider":"openai","model":"gpt-5.4","usageStatus":"estimated",\
+        "accountLogLabel":"p1","conversationId":"chat-1",\
+        "usage":{"inputTokens":5,"outputTokens":1,"reasoningOutputTokens":3,"totalTokens":9},"totalTokens":9}
+        """.write(to: log, atomically: true, encoding: .utf8)
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let snapshot = try OpenCodexUsageStore(cacheRoot: root).loadSnapshot(
+            logURL: log,
+            now: now,
+            historyDays: 7,
+            calendar: calendar)
+        #expect(snapshot.historyLabel == "OpenCodex usage.jsonl")
+        #expect(snapshot.daily.count == 1)
+        #expect(snapshot.daily[0].inputTokens == 15)
+        #expect(snapshot.daily[0].reasoningTokens == 3)
+        #expect(snapshot.daily[0].estimatedRequestCount == 1)
+        #expect(snapshot.sessions.count == 1)
+        #expect(snapshot.sessions[0].sessionID == "chat-1")
+        #expect(snapshot.sessions[0].reasoningTokens == 3)
+        #expect(OpenCodexUsageStore.databaseFilename == "opencodex-usage.sqlite")
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("opencodex-usage.sqlite").path))
+    }
+}
