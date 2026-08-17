@@ -203,6 +203,19 @@ extension SpendDashboardModel {
         }
     }
 
+    /// Provider-specific by design: Cursor usage events can omit totalCents without voiding priced rows.
+    static func hasExplicitlyUnpriceableLedgerCost(
+        _ provider: UsageProvider,
+        _ entry: CostUsageDailyReport.Entry) -> Bool
+    {
+        switch provider {
+        case .codex, .cursor:
+            self.hasExplicitlyUnpriceableCodexCost(entry)
+        default:
+            false
+        }
+    }
+
     private static func hasCompleteModelCostCoverage(_ entry: CostUsageDailyReport.Entry) -> Bool {
         var totalCost = 0.0
         var sawNamedBreakdown = false

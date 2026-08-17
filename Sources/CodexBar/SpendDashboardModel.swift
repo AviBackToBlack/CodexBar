@@ -539,10 +539,9 @@ struct SpendDashboardModel: Equatable, Sendable {
             }
             guard coverage.contains(day) else { continue }
             guard let cost = validCost(entry.costUSD) else {
-                // Provider-specific by design: only the Codex ledger carries explicit unpriceable model/day evidence.
+                // Provider-specific by design: Codex and Cursor can omit prices on some model/day rows.
                 guard input.snapshot.historyCoverageIsEstablished,
-                      input.provider == .codex,
-                      Self.hasExplicitlyUnpriceableCodexCost(entry)
+                      Self.hasExplicitlyUnpriceableLedgerCost(input.provider, entry)
                 else { return false }
                 continue
             }

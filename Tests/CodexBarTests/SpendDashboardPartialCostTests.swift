@@ -54,6 +54,63 @@ struct SpendDashboardPartialCostTests {
     }
 
     @Test
+    func `established Cursor history keeps priced days when another day omits cost`() throws {
+        let snapshot = Self.snapshot(
+            entries: [
+                Self.entry(day: "2026-07-15", cost: 1, tokens: 5, model: "claude-4.5-sonnet"),
+                Self.entry(day: "2026-07-16", cost: nil, tokens: 7, model: "gpt-5"),
+            ],
+            last30DaysTokens: 12,
+            last30DaysCostUSD: 1)
+        let group = try Self.group(inputs: [
+            .init(provider: .cursor, displayName: "Cursor", snapshot: snapshot),
+        ])
+
+        #expect(snapshot.historyCoverageIsEstablished)
+        #expect(group.totalCost == 1)
+        #expect(group.totalTokens == 12)
+        #expect(group.dailyPoints.map(\.cost) == [1])
+    }
+
+    @Test
+    func `unestablished Cursor history with an unresolved day keeps spend unavailable`() throws {
+        let snapshot = Self.snapshot(
+            entries: [
+                Self.entry(day: "2026-07-15", cost: 1, tokens: 5, model: "claude-4.5-sonnet"),
+                Self.entry(day: "2026-07-16", cost: nil, tokens: 7, model: "gpt-5"),
+            ],
+            historyCoverageIsEstablished: false,
+            last30DaysTokens: 12,
+            last30DaysCostUSD: 1)
+        let group = try Self.group(inputs: [
+            .init(provider: .cursor, displayName: "Cursor", snapshot: snapshot),
+        ])
+
+        #expect(!snapshot.historyCoverageIsEstablished)
+        #expect(group.totalCost == nil)
+        #expect(group.dailyPoints.isEmpty)
+    }
+
+    @Test
+    func `established Cursor history retains priced days when some events omit total cents`() throws {
+        let snapshot = Self.snapshot(
+            entries: [
+                Self.entry(day: "2026-07-15", cost: 3, tokens: 30, model: "claude-4.5-sonnet"),
+                Self.entry(day: "2026-07-16", cost: nil, tokens: 40, model: "gpt-5"),
+            ],
+            last30DaysTokens: 70,
+            last30DaysCostUSD: 3)
+        let group = try Self.group(inputs: [
+            .init(provider: .cursor, displayName: "Cursor", snapshot: snapshot),
+        ])
+
+        #expect(group.totalCost == 3)
+        #expect(group.totalTokens == 70)
+        #expect(group.dailyPoints.map(\.cost) == [3])
+        #expect(group.modelHistoryCompleteness == .incomplete)
+    }
+
+    @Test
     func `incomplete Codex history with an unresolved day keeps spend unavailable`() throws {
         let snapshot = Self.snapshot(
             entries: [
