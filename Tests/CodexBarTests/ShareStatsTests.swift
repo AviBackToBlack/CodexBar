@@ -32,6 +32,7 @@ struct ShareStatsTests {
 
         #expect(payload.days == 30)
         #expect(payload.totalTokens == 500)
+        #expect(payload.hasPartialTokens)
         #expect(payload.currencies == [
             ShareStatsCurrencyPayload(currencyCode: "GBP", estimatedCost: 12, coveredDayCount: 10),
             ShareStatsCurrencyPayload(
@@ -49,6 +50,7 @@ struct ShareStatsTests {
         #expect(text.contains("GBP: £12.00 estimated · coverage 10/30 days"))
         #expect(text.contains("Claude · Max: 300 tokens · ~£12.00 est · 10/30 days"))
         #expect(text.contains("USD: $4.00 estimated (partial) · coverage 0/30 days"))
+        #expect(text.contains("~500 tracked tokens (partial)"))
         #expect(text.contains("Cursor · Cursor Pro: Spend unavailable"))
         #expect(!text.contains("£12.00 +"))
     }

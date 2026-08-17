@@ -310,7 +310,9 @@ struct SpendDashboardPane: View {
             }
         } else {
             ForEach(self.controller.model.groups) { group in
-                SpendCurrencySection(group: group, requestedDays: self.controller.model.requestedDays)
+                SpendDashboardCurrencySection(
+                    group: group,
+                    requestedDays: self.controller.model.requestedDays)
             }
         }
 
@@ -412,7 +414,7 @@ struct SpendDashboardEmptyState: Equatable {
     }
 }
 
-private struct SpendCurrencySection: View {
+struct SpendDashboardCurrencySection: View {
     let group: SpendDashboardModel.CurrencyGroup
     let requestedDays: Int
 

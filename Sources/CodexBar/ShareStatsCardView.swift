@@ -72,7 +72,7 @@ struct ShareStatsCardView: View {
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .tracking(1.8)
                     .foregroundStyle(self.secondary)
-                Text(self.payload.totalTokens.map(ShareStatsFormatting.compactCount) ?? "—")
+                Text(self.trackedTokensText)
                     .font(.system(size: 104, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .lineLimit(1)
@@ -180,6 +180,12 @@ struct ShareStatsCardView: View {
 
     private var spendLabel: String {
         self.isAllTime ? "ALL-TIME SPEND" : "\(self.payload.days)-DAY SPEND"
+    }
+
+    private var trackedTokensText: String {
+        guard let tokens = self.payload.totalTokens else { return "—" }
+        let formatted = ShareStatsFormatting.compactCount(tokens)
+        return self.payload.hasPartialTokens ? "~\(formatted)" : formatted
     }
 
     private var coverageDenominator: String {
