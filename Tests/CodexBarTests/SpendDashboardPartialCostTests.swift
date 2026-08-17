@@ -105,9 +105,65 @@ struct SpendDashboardPartialCostTests {
         #expect(group.dailyPoints.map(\.cost) == [3, 4])
     }
 
+    @Test
+    func `priced subscription keeps group spend when peers lack prices`() throws {
+        let priced = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: 4, tokens: 40, model: "gpt-5.4-mini")],
+            last30DaysTokens: 40,
+            last30DaysCostUSD: 4)
+        let unpriced = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: nil, tokens: 100, model: "deepseek-v4-flash")],
+            last30DaysTokens: 100,
+            last30DaysCostUSD: nil)
+        let group = try Self.group(inputs: [
+            .init(provider: .codex, displayName: "Codex", snapshot: priced),
+            .init(provider: .claude, displayName: "Claude", snapshot: unpriced),
+            .init(provider: .cursor, displayName: "Cursor", snapshot: unpriced),
+        ])
+
+        #expect(group.totalCost == 4)
+        #expect(group.totalTokens == 240)
+        #expect(group.hasPartialCost)
+        #expect(!group.hasPartialTokens)
+        #expect(group.pricedProviderCount == 1)
+        #expect(group.providers.count == 3)
+        #expect(group.providers.map(\SpendDashboardModel.ProviderRow.totalCost) == [4, nil, nil])
+        CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            #expect(spendDashboardGroupCostText(group).hasPrefix("~"))
+            #expect(spendDashboardPartialSubscriptionsText(group) == "1 of 3 subscriptions have spend")
+            #expect(spendDashboardHistoryCaption(group, requestedDays: 30).contains("Partial estimate"))
+        }
+    }
+
+    @Test
+    func `all unpriced subscriptions keep group spend unavailable`() throws {
+        let unpriced = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: nil, tokens: 100, model: "deepseek-v4-flash")],
+            last30DaysTokens: 100,
+            last30DaysCostUSD: nil)
+        let group = try Self.group(inputs: [
+            .init(provider: .claude, displayName: "Claude", snapshot: unpriced),
+            .init(provider: .cursor, displayName: "Cursor", snapshot: unpriced),
+        ])
+
+        #expect(group.totalCost == nil)
+        #expect(group.totalTokens == 200)
+        #expect(!group.hasPartialCost)
+        #expect(!group.hasPartialTokens)
+        CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            #expect(spendDashboardGroupCostText(group) == "Spend unavailable")
+        }
+    }
+
     private static func group(_ snapshot: CostUsageTokenSnapshot) throws -> SpendDashboardModel.CurrencyGroup {
+        try self.group(inputs: [.init(provider: .codex, displayName: "Codex", snapshot: snapshot)])
+    }
+
+    private static func group(
+        inputs: [SpendDashboardModel.ProviderInput]) throws -> SpendDashboardModel.CurrencyGroup
+    {
         try #require(SpendDashboardModel.build(
-            inputs: [.init(provider: .codex, displayName: "Codex", snapshot: snapshot)],
+            inputs: inputs,
             requestedDays: 30,
             now: self.now,
             calendar: self.calendar).groups.first)

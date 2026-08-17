@@ -1315,6 +1315,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Ursprungliga valutor hålls åtskilda; rader för Codex-konton utesluter Pi-sessionshistorik.";
 "Spend unavailable" = "Utgifter ej tillgängliga";
 "Model breakdown unavailable" = "Modellfördelning ej tillgänglig";
+"Partial estimate" = "Delvis uppskattning";
+"Partial model breakdown" = "Delvis modellfördelning";
+"%d of %d subscriptions have spend" = "%d av %d prenumerationer har utgifter";
 "Local estimated history" = "Lokal uppskattad historik";
 "Coverage" = "Täckning";
 "Estimated spend" = "Uppskattade utgifter";

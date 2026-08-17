@@ -278,8 +278,8 @@ struct SpendDashboardModel: Equatable, Sendable {
             models: modelSummary.rows,
             projects: Self.projectRows(summaries: summaries, bounds: bounds, calendar: calendar),
             dailyPoints: dailyPoints,
-            totalTokens: Self.completeIntSum(providers.map(\.totalTokens)),
-            totalCost: Self.completeCostSum(providers.map(\.totalCost)),
+            totalTokens: Self.knownIntSum(providers.map(\.totalTokens)),
+            totalCost: Self.knownCostSum(providers.map(\.totalCost)),
             coveredDayCount: Self.commonCoverageDayCount(summaries: summaries, calendar: calendar),
             chartDomain: Self.chartDomain(bounds: bounds, calendar: calendar),
             modelHistoryCompleteness: modelHistoryCompleteness)
@@ -841,6 +841,10 @@ struct SpendDashboardModel: Equatable, Sendable {
         return self.safeCostSum(values.compactMap(\.self))
     }
 
+    private static func knownCostSum(_ values: [Double?]) -> Double? {
+        self.safeCostSum(values.compactMap(\.self))
+    }
+
     private static func safeIntSum(_ values: [Int]) -> Int? {
         guard !values.isEmpty else { return nil }
         var result = 0
@@ -855,6 +859,10 @@ struct SpendDashboardModel: Equatable, Sendable {
     private static func completeIntSum(_ values: [Int?]) -> Int? {
         guard values.allSatisfy({ $0 != nil }) else { return nil }
         return self.safeIntSum(values.compactMap(\.self))
+    }
+
+    private static func knownIntSum(_ values: [Int?]) -> Int? {
+        self.safeIntSum(values.compactMap(\.self))
     }
 
     static func add(_ value: Int, to current: Int?, overflowed: inout Bool) -> Int? {
@@ -875,5 +883,21 @@ struct SpendDashboardModel: Equatable, Sendable {
             return nil
         }
         return result
+    }
+}
+
+extension SpendDashboardModel.CurrencyGroup {
+    var pricedProviderCount: Int {
+        self.providers.count { $0.totalCost != nil }
+    }
+
+    var hasPartialCost: Bool {
+        let values = self.providers.map(\.totalCost)
+        return values.contains { $0 != nil } && values.contains { $0 == nil }
+    }
+
+    var hasPartialTokens: Bool {
+        let values = self.providers.map(\.totalTokens)
+        return values.contains { $0 != nil } && values.contains { $0 == nil }
     }
 }
