@@ -587,8 +587,23 @@ enum CostUsagePricing {
         outputTokens: Int,
         cacheWriteInputTokens: Int = 0,
         modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil) -> Double?
+        modelsDevCacheRoot: URL? = nil,
+        customPricing: CostUsageCustomPricing? = nil) -> Double?
     {
+        let overlay = customPricing ?? self.customPricingOverlay()
+        if let rates = overlay.rates(providerID: self.codexModelsDevProviderID, model: model)
+            ?? overlay.rates(model: model)
+        {
+            let cached = max(0, cachedInputTokens)
+            let written = max(0, cacheWriteInputTokens)
+            let uncachedInput = max(0, inputTokens - cached - written)
+            return CostUsageCustomPricing.costUSD(
+                rates: rates,
+                inputTokens: uncachedInput,
+                outputTokens: outputTokens,
+                cacheReadTokens: cached,
+                cacheWriteTokens: written)
+        }
         guard let pricing = self.resolvedCodexPricing(
             model: model,
             modelsDevCatalog: modelsDevCatalog,
@@ -685,7 +700,8 @@ enum CostUsagePricing {
         cacheWriteInputTokens: Int = 0,
         outputTokens: Int,
         modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil) -> Double?
+        modelsDevCacheRoot: URL? = nil,
+        customPricing: CostUsageCustomPricing? = nil) -> Double?
     {
         guard let multiplier = self.codexAPIFastMultiplier(model: model) else { return nil }
         // OpenAI does not support API Fast processing for long-context requests. Do not combine
@@ -701,7 +717,8 @@ enum CostUsagePricing {
             outputTokens: outputTokens,
             cacheWriteInputTokens: cacheWriteInputTokens,
             modelsDevCatalog: modelsDevCatalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
+            modelsDevCacheRoot: modelsDevCacheRoot,
+            customPricing: customPricing)
             .map { $0 * multiplier }
     }
 

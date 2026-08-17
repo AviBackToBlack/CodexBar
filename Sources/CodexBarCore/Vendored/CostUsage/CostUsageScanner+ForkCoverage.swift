@@ -53,6 +53,7 @@ extension CostUsageScanner {
         var priorityTurns: [String: CodexPriorityTurnMetadata]
         var modelsDevCatalog: ModelsDevCatalog
         var modelsDevCacheRoot: URL?
+        var customPricing: CostUsageCustomPricing
     }
 
     static func unmeteredForkReportEntry(day: String, unmetered: Int) -> CostUsageDailyReport.Entry? {
@@ -103,7 +104,8 @@ extension CostUsageScanner {
                 rows: rows,
                 priorityTurns: pricing.priorityTurns,
                 modelsDevCatalog: pricing.modelsDevCatalog,
-                modelsDevCacheRoot: pricing.modelsDevCacheRoot)
+                modelsDevCacheRoot: pricing.modelsDevCacheRoot,
+                customPricing: pricing.customPricing)
             let group = CodexDayModelKey(day: day, model: model)
             let rowCostIsTrusted = !pricing.unresolvedRowGroups.contains(group)
                 && !pricing.modeOwnershipMismatchGroups.contains(group)
@@ -120,7 +122,8 @@ extension CostUsageScanner {
                     cachedInputTokens: cached,
                     outputTokens: output,
                     modelsDevCatalog: pricing.modelsDevCatalog,
-                    modelsDevCacheRoot: pricing.modelsDevCacheRoot)
+                    modelsDevCacheRoot: pricing.modelsDevCacheRoot,
+                    customPricing: pricing.customPricing)
             let cost = rowCostIsTrusted
                 ? rowCost?.totalCostUSD ?? aggregateCost
                 : aggregateCost

@@ -153,7 +153,8 @@ extension CostUsageScanner {
         rows: [CodexUsageRow],
         priorityTurns: [String: CodexPriorityTurnMetadata],
         modelsDevCatalog: ModelsDevCatalog?,
-        modelsDevCacheRoot: URL?) -> CodexRowCostBreakdown
+        modelsDevCacheRoot: URL?,
+        customPricing: CostUsageCustomPricing? = nil) -> CodexRowCostBreakdown
     {
         var breakdown = CodexRowCostBreakdown()
         for row in rows {
@@ -183,7 +184,8 @@ extension CostUsageScanner {
                 for: row,
                 priorityTurns: priorityTurns,
                 modelsDevCatalog: modelsDevCatalog,
-                modelsDevCacheRoot: modelsDevCacheRoot)
+                modelsDevCacheRoot: modelsDevCacheRoot,
+                customPricing: customPricing)
             else {
                 breakdown.hasIncompletePricing = breakdown.hasIncompletePricing || hasTokens
                 continue
@@ -1420,7 +1422,8 @@ extension CostUsageScanner {
             authoritativeCostEvidenceGroups: [],
             priorityTurns: priorityTurns,
             modelsDevCatalog: catalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
+            modelsDevCacheRoot: modelsDevCacheRoot,
+            customPricing: CostUsagePricing.customPricingOverlay())
         for usage in reportCache.files.values {
             let reconciled = self.codexCanonicalPricingRows(usage)
             pricing.unresolvedRowGroups.formUnion(reconciled.unresolvedGroups)
@@ -1436,7 +1439,8 @@ extension CostUsageScanner {
                 range: range,
                 priorityTurns: priorityTurns,
                 modelsDevCatalog: catalog,
-                modelsDevCacheRoot: modelsDevCacheRoot))
+                modelsDevCacheRoot: modelsDevCacheRoot,
+                customPricing: pricing.customPricing))
             for row in usage.codexRows ?? [] where (row.knownCostNanos ?? 0) != 0 {
                 pricing.authoritativeCostEvidenceGroups.insert(CodexDayModelKey(day: row.day, model: row.model))
             }
