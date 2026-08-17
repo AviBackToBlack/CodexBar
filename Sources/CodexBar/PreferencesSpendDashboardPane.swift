@@ -4,6 +4,9 @@ import CodexBarCore
 import SwiftUI
 
 func spendDashboardDayRangeText(_ days: Int) -> String {
+    if days >= SpendDashboardSource.scanDays {
+        return L("All")
+    }
     let template: String
     switch days {
     case 7: template = L("7d")
@@ -140,10 +143,11 @@ struct SpendDashboardPane: View {
             Picker(L("Time range"), selection: self.daysBinding) {
                 Text(spendDashboardDayRangeText(7)).tag(7)
                 Text(spendDashboardDayRangeText(30)).tag(30)
+                Text(spendDashboardDayRangeText(SpendDashboardSource.scanDays)).tag(SpendDashboardSource.scanDays)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 116)
+            .frame(width: 188)
 
             Button {
                 self.controller.refresh()
@@ -306,7 +310,9 @@ struct SpendDashboardPane: View {
             }
         } else {
             ForEach(self.controller.model.groups) { group in
-                SpendCurrencySection(group: group, requestedDays: self.controller.model.requestedDays)
+                SpendDashboardCurrencySection(
+                    group: group,
+                    requestedDays: self.controller.model.requestedDays)
             }
         }
 
@@ -408,7 +414,7 @@ struct SpendDashboardEmptyState: Equatable {
     }
 }
 
-private struct SpendCurrencySection: View {
+struct SpendDashboardCurrencySection: View {
     let group: SpendDashboardModel.CurrencyGroup
     let requestedDays: Int
 
@@ -434,7 +440,7 @@ private struct SpendCurrencySection: View {
                         value: self.group.totalCost == nil ? "—" : spendDashboardGroupCostText(self.group))
                     SpendSummaryValue(
                         title: L("Tracked tokens"),
-                        value: self.group.totalTokens.map(UsageFormatter.tokenCountString) ?? "—")
+                        value: spendDashboardGroupTokenText(self.group))
                     SpendSummaryValue(
                         title: L("Subscriptions"),
                         value: codexBarLocalizedInteger(self.group.providers.count))
@@ -771,6 +777,12 @@ func spendDashboardGroupCostText(_ group: SpendDashboardModel.CurrencyGroup) -> 
     return group.hasPartialCost ? "~\(formatted)" : formatted
 }
 
+func spendDashboardGroupTokenText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
+    guard let tokens = group.totalTokens else { return "—" }
+    let formatted = UsageFormatter.tokenCountString(tokens)
+    return group.hasPartialTokens ? "~\(formatted)" : formatted
+}
+
 func spendDashboardPartialSubscriptionsText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
     L("%d of %d subscriptions have spend", group.pricedProviderCount, group.providers.count)
 }
@@ -780,9 +792,11 @@ func spendDashboardHistoryCaption(
     requestedDays: Int) -> String
 {
     var parts: [String] = []
-    if group.hasPartialCost {
+    if group.hasPartialCost || group.hasPartialTokens {
         parts.append(L("Partial estimate"))
-        parts.append(spendDashboardPartialSubscriptionsText(group))
+        if group.hasPartialCost {
+            parts.append(spendDashboardPartialSubscriptionsText(group))
+        }
     } else {
         parts.append(L("Local estimated history"))
     }

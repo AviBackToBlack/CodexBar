@@ -2,9 +2,16 @@
 
 ## 0.52.1 — Unreleased
 
+### Added
+- Usage & Spend: add an All time range alongside 7d/30d, backed by 365 days of local history with dedicated Claude and Cursor spend snapshot slots (#3009). Thanks @Yuxin-Qiao!
+- General settings: turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
+
 ### Fixed
 - Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
-- Cursor: keep a successfully validated refresh result when its session cache is temporarily unavailable, instead of reporting that the session changed.
+- Cursor: keep an API-validated usage result when the Keychain cache is temporarily unavailable, instead of treating it as a missing or replaced session (#3000). Thanks @hxy91819!
+- Usage & Spend: sum priced subscriptions into a ~$ partial estimate with coverage shown when some subscriptions lack prices, instead of hiding the total (#3001). Thanks @Yuxin-Qiao!
+- Usage & Spend: keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
+- Settings: style the Quit CodexBar button as a prominent accent-color button and remove its stray section background (#2992). Thanks @elijahfriedman!
 
 ## 0.52.0 — 2026-08-17
 
