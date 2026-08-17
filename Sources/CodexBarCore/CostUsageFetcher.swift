@@ -86,37 +86,40 @@ public struct CostUsageFetcher: Sendable {
     public func loadCachedCodexTokenSnapshot(
         now: Date = Date(),
         codexHomePath: String? = nil,
-        historyDays: Int = 30) async -> CostUsageTokenSnapshot?
+        historyDays: Int = 30,
+        calendar: Calendar? = nil) async -> CostUsageTokenSnapshot?
     {
         await Self.loadCachedCodexTokenSnapshot(
             now: now,
             codexHomePath: codexHomePath,
             historyDays: historyDays,
-            scannerOptions: self.scannerOptionsOverride())
+            scannerOptions: self.scannerOptions(calendar: calendar))
     }
 
     package func loadCachedCodexTokenActivity(
         now: Date = Date(),
         codexHomePath: String? = nil,
-        maximumDays: Int = 365) async -> CostUsageTokenActivityCache?
+        maximumDays: Int = 365,
+        calendar: Calendar? = nil) async -> CostUsageTokenActivityCache?
     {
         await Self.loadCachedCodexTokenActivity(
             now: now,
             codexHomePath: codexHomePath,
             maximumDays: maximumDays,
-            scannerOptions: self.scannerOptionsOverride())
+            scannerOptions: self.scannerOptions(calendar: calendar))
     }
 
     package func loadCachedCodexTokenSnapshotResult(
         now: Date = Date(),
         codexHomePath: String? = nil,
-        historyDays: Int = 30) async -> CachedCodexTokenSnapshotResult?
+        historyDays: Int = 30,
+        calendar: Calendar? = nil) async -> CachedCodexTokenSnapshotResult?
     {
         await Self.loadCachedCodexTokenSnapshotResult(
             now: now,
             codexHomePath: codexHomePath,
             historyDays: historyDays,
-            scannerOptions: self.scannerOptionsOverride())
+            scannerOptions: self.scannerOptions(calendar: calendar))
     }
 
     package func loadCachedCodexTokenSnapshotForScopedHome(
@@ -124,7 +127,8 @@ public struct CostUsageFetcher: Sendable {
         codexHomePath: String,
         historyDays: Int = 30,
         includePiSessions: Bool = false,
-        includeProjectAndSessionBreakdowns: Bool = false) async -> CostUsageTokenSnapshot?
+        includeProjectAndSessionBreakdowns: Bool = false,
+        calendar: Calendar? = nil) async -> CostUsageTokenSnapshot?
     {
         await Self.loadCachedCodexTokenSnapshot(
             now: now,
@@ -133,7 +137,7 @@ public struct CostUsageFetcher: Sendable {
             allowScopedCodexHome: true,
             includePiSessions: includePiSessions,
             includeProjectAndSessionBreakdowns: includeProjectAndSessionBreakdowns,
-            scannerOptions: self.scannerOptionsOverride())
+            scannerOptions: self.scannerOptions(calendar: calendar))
     }
 
     public func loadCachedCodexLocalProjectUsageSnapshot(
@@ -268,12 +272,22 @@ public struct CostUsageFetcher: Sendable {
         self.scannerOptions
     }
 
+    private func scannerOptions(calendar: Calendar?) -> CostUsageScanner.Options? {
+        guard calendar != nil || self.scannerOptions != nil else { return self.scannerOptions }
+        var options = self.scannerOptions ?? CostUsageScanner.Options()
+        if let calendar {
+            options.calendar = calendar
+        }
+        return options
+    }
+
     package func codexScanCatchUpStatus(
-        codexHomePath: String? = nil) async -> CodexScanCatchUpStatus
+        codexHomePath: String? = nil,
+        calendar: Calendar? = nil) async -> CodexScanCatchUpStatus
     {
         // Provider-specific by design: Codex exposes bounded background catch-up for its incremental JSONL scanner.
         let options = Self.resolvedScannerOptions(
-            self.scannerOptionsOverride(),
+            self.scannerOptions(calendar: calendar),
             provider: .codex,
             codexHomePath: codexHomePath)
         return await (try? CostUsageScanExecutor.run { checkCancellation in
@@ -285,10 +299,11 @@ public struct CostUsageFetcher: Sendable {
     package func advanceCodexScanCatchUp(
         now: Date = Date(),
         codexHomePath: String? = nil,
-        historyDays: Int = 30) async throws -> CodexScanCatchUpStatus
+        historyDays: Int = 30,
+        calendar: Calendar? = nil) async throws -> CodexScanCatchUpStatus
     {
         var options = Self.resolvedScannerOptions(
-            self.scannerOptionsOverride(),
+            self.scannerOptions(calendar: calendar),
             provider: .codex,
             codexHomePath: codexHomePath)
         options.forceRescan = false
@@ -501,6 +516,7 @@ public struct CostUsageFetcher: Sendable {
             historyDays: clampedHistoryDays,
             calendar: scanOptions.calendar,
             historyCoverageIsEstablished: scanResult.historyCoverageIsEstablished,
+            costProvenance: .listPriceEstimate,
             projects: scanResult.projects,
             sessions: scanResult.sessions,
             updatedAt: scanResult.staleSnapshotUpdatedAt)
@@ -957,6 +973,7 @@ public struct CostUsageFetcher: Sendable {
                     historyDays: clampedHistoryDays,
                     calendar: options.calendar,
                     historyCoverageIsEstablished: Self.codexHistoryCoverageIsEstablished(options: options),
+                    costProvenance: .listPriceEstimate,
                     projects: Self.mergedProjectBreakdowns(projects),
                     sessions: sessions,
                     updatedAt: scanTimes.min()),
@@ -1090,6 +1107,9 @@ public struct CostUsageFetcher: Sendable {
             historyDays: historyDays,
             useCurrentLocalDayForSession: true,
             meteredCostUSD: report.meteredCostUSD,
+            costProvenance: Self.cursorCostProvenance(
+                meteredCostUSD: report.meteredCostUSD,
+                daily: report.daily.data),
             credentialScopeFingerprint: report.credentialScopeFingerprint)
     }
     #endif
@@ -1102,6 +1122,7 @@ public struct CostUsageFetcher: Sendable {
         calendar: Calendar = .current,
         historyCoverageIsEstablished: Bool = true,
         meteredCostUSD: Double? = nil,
+        costProvenance: CostProvenance = .unknown,
         credentialScopeFingerprint: String? = nil,
         historyLabel: String? = nil,
         projects: [CostUsageProjectBreakdown] = [],
@@ -1158,6 +1179,7 @@ public struct CostUsageFetcher: Sendable {
             historyCoverageIsEstablished: historyCoverageIsEstablished,
             historyLabel: historyLabel,
             meteredCostUSD: meteredCostUSD,
+            costProvenance: costProvenance,
             credentialScopeFingerprint: credentialScopeFingerprint,
             daily: daily.data,
             projects: projects,
@@ -1180,6 +1202,17 @@ public struct CostUsageFetcher: Sendable {
         // so it can publish a partial snapshot and hand remaining work to the persistent
         // catch-up loop instead of consuming the whole 512 MiB byte budget continuously.
         return self.codexAutomaticScanDurationPerRefresh
+    }
+
+    private static func cursorCostProvenance(
+        meteredCostUSD: Double?,
+        daily: [CostUsageDailyReport.Entry]) -> CostProvenance
+    {
+        let hasDailyCosts = daily.contains { $0.costUSD != nil }
+        if meteredCostUSD != nil, hasDailyCosts { return .mixed }
+        if meteredCostUSD != nil { return .vendorMetered }
+        if hasDailyCosts { return .listPriceEstimate }
+        return .unknown
     }
 
     private static func configureScannerRefresh(
@@ -1540,7 +1573,8 @@ extension CostUsageFetcher {
                 from: daily,
                 now: now,
                 historyDays: historyDays,
-                useCurrentLocalDayForSession: false)
+                useCurrentLocalDayForSession: false,
+                costProvenance: .vendorMetered)
         }
 
         #if os(macOS)

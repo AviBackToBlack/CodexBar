@@ -268,6 +268,7 @@ public struct OpenAIAPIUsageSnapshot: Codable, Equatable, Sendable {
             last30DaysCostUSD: total.costUSD,
             last30DaysRequests: total.requests,
             historyDays: self.historyDays,
+            costProvenance: .vendorMetered,
             daily: daily,
             updatedAt: self.updatedAt)
     }

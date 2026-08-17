@@ -229,7 +229,8 @@ extension UsageStore {
                 await self.costUsageFetcher.loadCachedCodexTokenSnapshotResult(
                     now: now,
                     codexHomePath: scope.codexHomePath,
-                    historyDays: historyDays)
+                    historyDays: historyDays,
+                    calendar: self.settings.costUsageBucketCalendar)
                     .map {
                         (
                             snapshot: $0.snapshot,

@@ -66,6 +66,89 @@ struct CostProvenanceTests {
             unmeteredRequestCount: 2)
         #expect(unmetered.coverageCounts == CostUsageCoverageCounts(unmetered: 2))
     }
+
+    @Test
+    func `vendor reported snapshots stay vendor metered without meteredCostUSD`() throws {
+        let snapshot = CostUsageTokenSnapshot(
+            sessionTokens: 10,
+            sessionCostUSD: 1.25,
+            last30DaysTokens: 10,
+            last30DaysCostUSD: 1.25,
+            historyDays: 30,
+            costProvenance: .vendorMetered,
+            daily: [
+                CostUsageDailyReport.Entry(
+                    date: "2026-07-01",
+                    inputTokens: 8,
+                    outputTokens: 2,
+                    totalTokens: 10,
+                    costUSD: 1.25,
+                    modelsUsed: nil,
+                    modelBreakdowns: nil),
+            ],
+            updatedAt: Date(timeIntervalSince1970: 1_782_864_000))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let summary = snapshot.summary(forLastDays: 7, calendar: calendar)
+        #expect(summary.provenance == .vendorMetered)
+        #expect(summary.totalCostUSD == 1.25)
+        #expect(summary.meteredCostUSD == nil)
+    }
+
+    @Test
+    func `shorter summaries omit snapshot-wide metered spend`() throws {
+        let snapshot = CostUsageTokenSnapshot(
+            sessionTokens: 10,
+            sessionCostUSD: 1,
+            last30DaysTokens: 100,
+            last30DaysCostUSD: 10,
+            historyDays: 30,
+            meteredCostUSD: 4.5,
+            costProvenance: .mixed,
+            daily: [
+                CostUsageDailyReport.Entry(
+                    date: "2026-07-01",
+                    inputTokens: 8,
+                    outputTokens: 2,
+                    totalTokens: 10,
+                    costUSD: 1,
+                    modelsUsed: nil,
+                    modelBreakdowns: nil),
+            ],
+            updatedAt: Date(timeIntervalSince1970: 1_782_864_000))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let week = snapshot.summary(forLastDays: 7, calendar: calendar)
+        let month = snapshot.summary(forLastDays: 30, calendar: calendar)
+        #expect(week.meteredCostUSD == nil)
+        #expect(week.provenance == .listPriceEstimate)
+        #expect(month.meteredCostUSD == 4.5)
+        #expect(month.provenance == .mixed)
+    }
+
+    @Test
+    func `cached previous reports round-trip coverage counters`() throws {
+        let entry = CostUsageDailyReport.Entry(
+            date: "2026-07-16",
+            inputTokens: 10,
+            outputTokens: 2,
+            totalTokens: 12,
+            costUSD: nil,
+            modelsUsed: nil,
+            modelBreakdowns: nil,
+            unpricedRequestCount: 1,
+            unmeteredRequestCount: 2,
+            estimatedRequestCount: 3)
+        let cached = CostUsageCodexPreviousReport.Entry(entry)
+        let restored = cached.dailyReportValue
+        #expect(restored.unpricedRequestCount == 1)
+        #expect(restored.unmeteredRequestCount == 2)
+        #expect(restored.estimatedRequestCount == 3)
+        let data = try JSONEncoder().encode(cached)
+        let decoded = try JSONDecoder().decode(CostUsageCodexPreviousReport.Entry.self, from: data)
+        #expect(decoded.dailyReportValue.unmeteredRequestCount == 2)
+        #expect(decoded.dailyReportValue.estimatedRequestCount == 3)
+    }
 }
 
 struct CostUsageBucketTimeZoneTests {

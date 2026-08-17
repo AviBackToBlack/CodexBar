@@ -136,6 +136,9 @@ struct CostUsageCodexPreviousReport: Codable, Equatable {
         var costUSD: Double?
         var modelsUsed: [String]?
         var modelBreakdowns: [ModelBreakdown]?
+        var unpricedRequestCount: Int?
+        var unmeteredRequestCount: Int?
+        var estimatedRequestCount: Int?
 
         init(_ entry: CostUsageDailyReport.Entry) {
             self.date = entry.date
@@ -149,6 +152,9 @@ struct CostUsageCodexPreviousReport: Codable, Equatable {
             self.costUSD = entry.costUSD
             self.modelsUsed = entry.modelsUsed
             self.modelBreakdowns = entry.modelBreakdowns?.map(ModelBreakdown.init)
+            self.unpricedRequestCount = entry.unpricedRequestCount
+            self.unmeteredRequestCount = entry.unmeteredRequestCount
+            self.estimatedRequestCount = entry.estimatedRequestCount
         }
 
         var dailyReportValue: CostUsageDailyReport.Entry {
@@ -163,7 +169,10 @@ struct CostUsageCodexPreviousReport: Codable, Equatable {
                 requestCount: self.requestCount,
                 costUSD: self.costUSD,
                 modelsUsed: self.modelsUsed,
-                modelBreakdowns: self.modelBreakdowns?.map(\.dailyReportValue))
+                modelBreakdowns: self.modelBreakdowns?.map(\.dailyReportValue),
+                unpricedRequestCount: self.unpricedRequestCount,
+                unmeteredRequestCount: self.unmeteredRequestCount,
+                estimatedRequestCount: self.estimatedRequestCount)
         }
     }
 

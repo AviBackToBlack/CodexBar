@@ -108,6 +108,9 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
     /// actually deducts, as opposed to the API-rate estimate. Only some providers (e.g. Cursor)
     /// report this; `nil` when unknown.
     public let meteredCostUSD: Double?
+    /// How this snapshot's costs were produced. Never infer this solely from whether a
+    /// cost figure exists — Bedrock and OpenAI Admin costs are vendor-reported.
+    public let costProvenance: CostProvenance
     /// Internal credential scope used to prevent cross-account cache publication. This is a
     /// non-reversible fingerprint, not account identity, and is not emitted by CLI payloads.
     public let credentialScopeFingerprint: String?
@@ -128,6 +131,7 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         historyCoverageIsEstablished: Bool = true,
         historyLabel: String? = nil,
         meteredCostUSD: Double? = nil,
+        costProvenance: CostProvenance = .unknown,
         credentialScopeFingerprint: String? = nil,
         daily: [CostUsageDailyReport.Entry],
         projects: [CostUsageProjectBreakdown] = [],
@@ -146,6 +150,7 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
         self.historyCoverageIsEstablished = historyCoverageIsEstablished
         self.historyLabel = historyLabel
         self.meteredCostUSD = meteredCostUSD
+        self.costProvenance = costProvenance
         self.credentialScopeFingerprint = credentialScopeFingerprint
         self.daily = daily
         self.projects = projects
@@ -176,15 +181,8 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
             mix.merge(.from(entry: entry))
             coverage.merge(entry.coverageCounts)
         }
-        let provenance: CostProvenance = if self.meteredCostUSD != nil, costs.isEmpty {
-            .vendorMetered
-        } else if self.meteredCostUSD != nil {
-            .mixed
-        } else if !costs.isEmpty {
-            .listPriceEstimate
-        } else {
-            .unknown
-        }
+        let coversFullHistory = days >= self.historyDays
+        let windowMetered = coversFullHistory ? self.meteredCostUSD : nil
         return CostUsageWindowSummary(
             days: days,
             totalTokens: tokens.isEmpty ? nil : tokens.reduce(0, +),
@@ -193,8 +191,11 @@ public struct CostUsageTokenSnapshot: Sendable, Equatable {
             entryCount: entries.count,
             tokenMix: mix,
             coverage: coverage,
-            provenance: provenance,
-            meteredCostUSD: self.meteredCostUSD)
+            provenance: CostProvenance.forWindow(
+                snapshot: self.costProvenance,
+                hasWindowCosts: !costs.isEmpty,
+                includesMetered: windowMetered != nil),
+            meteredCostUSD: windowMetered)
     }
 
     public func comparisonSummaries(

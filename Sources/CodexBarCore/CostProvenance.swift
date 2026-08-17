@@ -13,6 +13,34 @@ public enum CostProvenance: String, Sendable, Equatable, Codable {
     public var isBillingReceipt: Bool {
         false
     }
+
+    /// Narrow a snapshot-level provenance to the costs actually present in a window.
+    /// Daily vendor-reported rows stay vendor-metered even when `meteredCostUSD` is absent.
+    public static func forWindow(
+        snapshot: CostProvenance,
+        hasWindowCosts: Bool,
+        includesMetered: Bool) -> CostProvenance
+    {
+        switch snapshot {
+        case .vendorMetered:
+            includesMetered || hasWindowCosts ? .vendorMetered : .unknown
+        case .mixed:
+            switch (includesMetered, hasWindowCosts) {
+            case (true, true):
+                .mixed
+            case (true, false):
+                .vendorMetered
+            case (false, true):
+                .listPriceEstimate
+            case (false, false):
+                .unknown
+            }
+        case .listPriceEstimate:
+            hasWindowCosts ? .listPriceEstimate : .unknown
+        case .unknown:
+            .unknown
+        }
+    }
 }
 
 /// Request/row coverage for a cost window. Counts stay independent so a missing

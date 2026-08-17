@@ -14,11 +14,11 @@ extension CostUsageScanner {
             else { continue }
             let unixMs = usage.codexSession?.startedAtUnixMs
                 ?? usage.codexSession?.latestActivityUnixMs
-            let dayKey = unixMs.map {
-                CostUsageDayRange.dayKey(
-                    from: Date(timeIntervalSince1970: TimeInterval($0) / 1000),
-                    calendar: range.calendar)
-            } ?? range.untilKey
+                ?? usage.mtimeUnixMs
+            guard unixMs > 0 else { continue }
+            let dayKey = CostUsageDayRange.dayKey(
+                from: Date(timeIntervalSince1970: TimeInterval(unixMs) / 1000),
+                calendar: range.calendar)
             guard CostUsageDayRange.isInRange(dayKey: dayKey, since: range.sinceKey, until: range.untilKey)
             else { continue }
             counts[dayKey, default: 0] += 1
