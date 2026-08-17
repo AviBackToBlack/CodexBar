@@ -105,11 +105,11 @@ final class KeepaliveWindowConfiguratorView: NSView {
         guard let window = self.windowProvider(self) else { return }
 
         window.identifier = NSUserInterfaceItemIdentifier("CodexBarLifecycleKeepalive")
-        // Make the keepalive window truly invisible and non-interactive.
+        // Keep the live SwiftUI scene inert without projecting it across Spaces.
         window.styleMask = [.borderless]
-        window.collectionBehavior = [.auxiliary, .ignoresCycle, .transient, .canJoinAllSpaces]
+        window.collectionBehavior = [.auxiliary, .ignoresCycle, .transient]
         window.isExcludedFromWindowsMenu = true
-        window.level = .floating
+        window.level = .normal
         window.isOpaque = false
         window.alphaValue = 0
         window.backgroundColor = .clear

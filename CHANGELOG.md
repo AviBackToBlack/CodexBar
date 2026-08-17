@@ -3,6 +3,7 @@
 ## 0.51.1 — Unreleased
 
 ### Fixed
+- Mission Control: stop the lifecycle keepalive window from participating as a floating all-Spaces window on macOS 27 (#2955). Thanks @phuchong89 for the diagnostics!
 - Cost history chart: localize the Projects, Conversations, session, and standard/fast mode labels that previously stayed English for all 23 app languages (#2983). Thanks @Yuxin-Qiao!
 
 ## 0.51.0 — 2026-08-16
