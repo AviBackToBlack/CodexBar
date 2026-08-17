@@ -420,7 +420,7 @@ enum CostUsagePricing {
             cacheReadInputCostPerTokenAboveThreshold: 6e-7),
     ]
 
-    private static let codexModelsDevProviderID = "openai"
+    static let codexModelsDevProviderID = "openai"
     /// Provider IDs emitted by Codex-compatible clients that have matching entries in models.dev.
     ///
     /// The route prefix is part of the model identity for local usage estimates. Keep both the
@@ -543,86 +543,7 @@ enum CostUsagePricing {
         CostUsageCustomPricing.load(fileURL: fileURL)
     }
 
-    static func codexCostUSD(
-        model: String,
-        inputTokens: Int,
-        cachedInputTokens: Int,
-        outputTokens: Int,
-        cacheWriteInputTokens: Int = 0,
-        modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil,
-        customPricing: CostUsageCustomPricing? = nil) -> Double?
-    {
-        let overlay = customPricing ?? self.customPricingOverlay()
-        if let rates = overlay.rates(providerID: self.codexModelsDevProviderID, model: model)
-            ?? overlay.rates(model: model)
-        {
-            let cached = max(0, cachedInputTokens)
-            let written = max(0, cacheWriteInputTokens)
-            let uncachedInput = max(0, inputTokens - cached - written)
-            return CostUsageCustomPricing.costUSD(
-                rates: rates,
-                inputTokens: uncachedInput,
-                outputTokens: outputTokens,
-                cacheReadTokens: cached,
-                cacheWriteTokens: written)
-        }
-        guard let pricing = self.resolvedCodexPricing(
-            model: model,
-            modelsDevCatalog: modelsDevCatalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
-        else { return nil }
-        return self.codexCostUSD(
-            pricing: pricing,
-            inputTokens: inputTokens,
-            cachedInputTokens: cachedInputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            outputTokens: outputTokens)
-    }
-
-    static func codexAggregateCostUSD(
-        model: String,
-        inputTokens: Int,
-        cachedInputTokens: Int,
-        outputTokens: Int,
-        cacheWriteInputTokens: Int = 0,
-        modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil,
-        customPricing: CostUsageCustomPricing? = nil) -> Double?
-    {
-        let overlay = customPricing ?? self.customPricingOverlay()
-        if let rates = overlay.rates(providerID: self.codexModelsDevProviderID, model: model)
-            ?? overlay.rates(model: model)
-        {
-            let cached = max(0, cachedInputTokens)
-            let written = max(0, cacheWriteInputTokens)
-            let uncachedInput = max(0, inputTokens - cached - written)
-            return CostUsageCustomPricing.costUSD(
-                rates: rates,
-                inputTokens: uncachedInput,
-                outputTokens: outputTokens,
-                cacheReadTokens: cached,
-                cacheWriteTokens: written)
-        }
-        guard let pricing = self.resolvedCodexPricing(
-            model: model,
-            modelsDevCatalog: modelsDevCatalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
-        else { return nil }
-        if let thresholdTokens = pricing.thresholdTokens,
-           max(0, inputTokens) > thresholdTokens
-        {
-            return nil
-        }
-        return self.codexCostUSD(
-            pricing: pricing,
-            inputTokens: inputTokens,
-            cachedInputTokens: cachedInputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            outputTokens: outputTokens)
-    }
-
-    private static func resolvedCodexPricing(
+    static func resolvedCodexPricing(
         model: String,
         modelsDevCatalog: ModelsDevCatalog?,
         modelsDevCacheRoot: URL?) -> CodexPricing?
@@ -732,7 +653,7 @@ enum CostUsagePricing {
         }
     }
 
-    private static func codexCostUSD(
+    static func codexCostUSD(
         pricing: CodexPricing,
         inputTokens: Int,
         cachedInputTokens: Int,

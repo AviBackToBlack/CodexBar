@@ -123,6 +123,26 @@ public struct CostUsageCustomPricing: Sendable, Equatable {
             cacheWriteTokens: cacheWriteTokens)
     }
 
+    func estimatedCodexCostUSD(
+        model: String,
+        inputTokens: Int,
+        cachedInputTokens: Int,
+        outputTokens: Int,
+        cacheWriteInputTokens: Int,
+        providerID: String) -> Double?
+    {
+        let cached = max(0, cachedInputTokens)
+        let written = max(0, cacheWriteInputTokens)
+        let uncachedInput = max(0, inputTokens - cached - written)
+        return self.costUSD(
+            providerID: providerID,
+            model: model,
+            inputTokens: uncachedInput,
+            outputTokens: outputTokens,
+            cacheReadTokens: cached,
+            cacheWriteTokens: written)
+    }
+
     static func costUSD(
         rates: Rates,
         inputTokens: Int,
