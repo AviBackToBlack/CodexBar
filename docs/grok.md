@@ -48,15 +48,17 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `onDemandUsed.val / onDemandCap.val * 100`. A parseable current period
      without either value represents zero usage. The reset timestamp comes from
      `config.currentPeriod.end`, then `config.billingPeriodEnd`.
-   - Plan name does not come from the credits payload. After any successful web
-     billing result — CLI-proxy, cookie/gRPC fallback, or the team identity-only
-     path — CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the
-     same bearer headers and reads `subscription_tier_display` (`SuperGrok Heavy`
-     vs `SuperGrok`). The request uses a 2-second timeout and `BoundedTaskJoin`,
-     so a stuck settings call cannot delay already-fetched usage by 15 seconds.
-     A recent successful tier is cached per user as a fallback. OIDC `auth_mode`
-     alone cannot distinguish those plans. A settings failure keeps billing data
-     and falls back to the OIDC SuperGrok label.
+   - Plan name does not come from the credits payload. After a successful
+     auth-file web billing result (CLI-proxy) or the team identity-only path,
+     CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the same
+     bearer headers and reads `subscription_tier_display` (`SuperGrok Heavy` vs
+     `SuperGrok`). Cookie/gRPC fallbacks are a different browser session and do
+     not reuse the auth-file settings tier. The request uses a 2-second timeout
+     and `BoundedTaskJoin`, so a stuck settings call cannot delay already-fetched
+     usage by 15 seconds. A recent successful tier is cached per principal
+     (`userId`/`email`, `principalType`, and `teamId` for Team) as a fallback.
+     OIDC `auth_mode` alone cannot distinguish those plans. A settings failure
+     keeps billing data and falls back to the OIDC SuperGrok label.
    - This is the Grok CLI's supported token-authenticated billing backend. If it
      fails, CodexBar continues through the existing browser-cookie and legacy
      bearer fallbacks.

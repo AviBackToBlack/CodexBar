@@ -397,7 +397,8 @@ struct GrokWebBillingFetcherTests {
     }
 
     @Test
-    func `web strategy applies settings tier after legacy cookie billing`() async throws {
+    func `web strategy does not attach auth-file settings tier to cookie billing`() async throws {
+        let asked = LockIsolated(false)
         let result = try await GrokWebFetchStrategy().fetch(
             Self.webContext(grokHome: nil),
             webBilling: {
@@ -408,9 +409,32 @@ struct GrokWebBillingFetcherTests {
                     "Chrome",
                     false)
             },
-            settingsTier: { _ in "SuperGrok Heavy" })
+            settingsTier: { _ in
+                asked.setValue(true)
+                return "SuperGrok Heavy"
+            })
 
         #expect(result.sourceLabel == "Chrome")
+        #expect(asked.value == false)
+        #expect(result.usage.loginMethod(for: .grok) == nil)
+        #expect(result.usage.primary?.usedPercent == 0)
+    }
+
+    @Test
+    func `web strategy applies settings tier when billing used the auth file`() async throws {
+        let result = try await GrokWebFetchStrategy().fetch(
+            Self.webContext(grokHome: nil),
+            webBilling: {
+                (
+                    GrokWebBillingSnapshot(
+                        usedPercent: 0,
+                        resetsAt: Date(timeIntervalSince1970: 1_800_000_003)),
+                    "grok-cli-proxy",
+                    true)
+            },
+            settingsTier: { _ in "SuperGrok Heavy" })
+
+        #expect(result.sourceLabel == "grok-cli-proxy")
         #expect(result.usage.loginMethod(for: .grok) == "SuperGrok Heavy")
         #expect(result.usage.primary?.usedPercent == 0)
     }

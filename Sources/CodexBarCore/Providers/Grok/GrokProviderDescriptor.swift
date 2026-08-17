@@ -224,7 +224,13 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
         let credentials = Self.credentialsForWebBillingSnapshot(
             credentials: authCredentials,
             authenticatedByAuthFile: authenticatedByAuthFile)
-        let subscriptionTier = try await resolveSettingsTier(authCredentials)
+        // Cookie/gRPC fallback is a different browser session. Never attach the
+        // auth.json account's settings tier onto that usage.
+        let subscriptionTier: String? = if authenticatedByAuthFile {
+            try await resolveSettingsTier(authCredentials)
+        } else {
+            nil
+        }
         let enrichedBilling = webBilling.applying(subscriptionTier: subscriptionTier)
         let snapshot = GrokUsageSnapshot(
             billing: nil,

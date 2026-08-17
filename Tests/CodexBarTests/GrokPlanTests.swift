@@ -96,6 +96,43 @@ struct GrokPlanTests {
         GrokCLISettingsFetcher.remember("SuperGrok Heavy", for: first)
         #expect(GrokCLISettingsFetcher.cachedTier(for: first) == "SuperGrok Heavy")
         #expect(GrokCLISettingsFetcher.cachedTier(for: second) == nil)
+
+        let personal = GrokCredentials(
+            accessToken: "token-a",
+            refreshToken: nil,
+            scope: "https://auth.x.ai::client",
+            authMode: "oidc",
+            userId: "user-a",
+            email: "a@example.com",
+            firstName: nil,
+            lastName: nil,
+            teamId: "team-a",
+            principalType: "User",
+            oidcIssuer: nil,
+            oidcClientId: nil,
+            expiresAt: nil,
+            createTime: nil)
+        let team = GrokCredentials(
+            accessToken: "token-a",
+            refreshToken: nil,
+            scope: "https://auth.x.ai::client",
+            authMode: "oidc",
+            userId: "user-a",
+            email: "a@example.com",
+            firstName: nil,
+            lastName: nil,
+            teamId: "team-a",
+            principalType: "Team",
+            oidcIssuer: nil,
+            oidcClientId: nil,
+            expiresAt: nil,
+            createTime: nil)
+        #expect(GrokCLISettingsFetcher.cacheKey(for: personal) == "user:user-a")
+        #expect(GrokCLISettingsFetcher.cacheKey(for: team) == "team:team-a:user-a")
+        GrokCLISettingsFetcher.remember("SuperGrok", for: personal)
+        GrokCLISettingsFetcher.remember("SuperGrok Heavy", for: team)
+        #expect(GrokCLISettingsFetcher.cachedTier(for: personal) == "SuperGrok")
+        #expect(GrokCLISettingsFetcher.cachedTier(for: team) == "SuperGrok Heavy")
     }
 
     @Test

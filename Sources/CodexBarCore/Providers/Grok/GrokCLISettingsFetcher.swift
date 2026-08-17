@@ -9,32 +9,26 @@ enum GrokCLISettingsFetcher {
     static let defaultEndpoint = URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!
     static let requestTimeoutSeconds: TimeInterval = 2
 
-    private struct CacheEntry: Sendable {
-        let key: String
-        let tier: String
-    }
-
     private final class Cache: @unchecked Sendable {
         private let lock = NSLock()
-        private var entry: CacheEntry?
+        private var entries: [String: String] = [:]
 
         func remember(_ tier: String?, key: String) {
             guard let tier else { return }
             self.lock.lock()
-            self.entry = CacheEntry(key: key, tier: tier)
+            self.entries[key] = tier
             self.lock.unlock()
         }
 
         func tier(for key: String) -> String? {
             self.lock.lock()
             defer { self.lock.unlock() }
-            guard let entry, entry.key == key else { return nil }
-            return entry.tier
+            return self.entries[key]
         }
 
         func reset() {
             self.lock.lock()
-            self.entry = nil
+            self.entries = [:]
             self.lock.unlock()
         }
     }
@@ -91,8 +85,17 @@ enum GrokCLISettingsFetcher {
         self.cache.reset()
     }
 
-    private static func cacheKey(for credentials: GrokCredentials) -> String? {
-        credentials.userId ?? credentials.email
+    static func cacheKey(for credentials: GrokCredentials) -> String? {
+        let identity = credentials.userId ?? credentials.email
+        guard let identity else { return nil }
+        if credentials.isTeamPrincipal {
+            let teamID = credentials.teamId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "team:\(teamID?.isEmpty == false ? teamID! : "_"):\(identity)"
+        }
+        let principal = credentials.principalType?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return "\(principal?.isEmpty == false ? principal! : "user"):\(identity)"
     }
 
     static func parse(_ data: Data) -> String? {
