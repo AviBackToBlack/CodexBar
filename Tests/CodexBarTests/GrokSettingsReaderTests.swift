@@ -163,20 +163,32 @@ struct GrokSettingsReaderTests {
     @Test
     func `auto tries SuperGrok OAuth before cookies and after the CLI`() async {
         let browserDetection = BrowserDetection(cacheTTL: 0)
-        let context = ProviderFetchContext(
-            runtime: .app,
-            sourceMode: .auto,
-            includeCredits: false,
-            webTimeout: 1,
-            webDebugDumpHTML: false,
-            verbose: false,
-            env: [:],
-            settings: nil,
-            fetcher: UsageFetcher(),
-            claudeFetcher: ClaudeUsageFetcher(browserDetection: browserDetection),
-            browserDetection: browserDetection)
+        func makeContext(sourceMode: ProviderSourceMode) -> ProviderFetchContext {
+            ProviderFetchContext(
+                runtime: .app,
+                sourceMode: sourceMode,
+                includeCredits: false,
+                webTimeout: 1,
+                webDebugDumpHTML: false,
+                verbose: false,
+                env: [:],
+                settings: nil,
+                fetcher: UsageFetcher(),
+                claudeFetcher: ClaudeUsageFetcher(browserDetection: browserDetection),
+                browserDetection: browserDetection)
+        }
+        let auto = makeContext(sourceMode: .auto)
+        let web = makeContext(sourceMode: .web)
         let strategies = await GrokProviderDescriptor.descriptor.fetchPlan.pipeline
-            .resolveStrategies(context)
+            .resolveStrategies(auto)
         #expect(strategies.map(\.id) == ["grok.cli", "grok.oauth", "grok.web", "grok.oauth-grpc"])
+        #expect(
+            GrokWebFetchStrategy().shouldFallback(
+                on: GrokWebBillingError.missingCredentials,
+                context: auto))
+        #expect(
+            !GrokWebFetchStrategy().shouldFallback(
+                on: GrokWebBillingError.missingCredentials,
+                context: web))
     }
 }

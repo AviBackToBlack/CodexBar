@@ -591,7 +591,7 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
     }
     #endif
 
-    func shouldFallback(on _: Error, context _: ProviderFetchContext) -> Bool {
-        false
+    func shouldFallback(on _: Error, context: ProviderFetchContext) -> Bool {
+        context.sourceMode == .auto
     }
 }
