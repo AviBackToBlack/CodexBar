@@ -61,6 +61,15 @@ final class SpendDashboardScreenshotRenderTests: XCTestCase {
         let renders: [(String, AnyView)] = [
             ("usage-spend-30d", AnyView(Self.chrome(selectedDays: 30, group: thirtyGroup))),
             ("usage-spend-all", AnyView(Self.chrome(selectedDays: SpendDashboardSource.scanDays, group: allGroup))),
+            (
+                "overview-spend-summary",
+                AnyView(
+                    OverviewSpendSummaryCardView(
+                        summary: OverviewSpendSummary(model: thirty, providerCount: 2),
+                        days: 30,
+                        width: 320)
+                        .padding(.vertical, 8)
+                        .background(Color(nsColor: .windowBackgroundColor)))),
         ]
         for (name, view) in renders {
             let data = try XCTUnwrap(Self.pngData(for: view), "render failed for \(name)")
