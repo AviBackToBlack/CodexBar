@@ -303,7 +303,7 @@
 "Quit CodexBar" = "退出 CodexBar";
 "Random (default)" = "随机（默认）";
 "Reads local usage logs. Shows today + last 30 days cost in the menu." = "读取本地用量日志。在菜单中显示今天及所选历史窗口的费用。";
-"Runs automatic provider, local usage, and storage refreshes no more often than every 30 minutes. Manual refresh remains available." = "自动供应商刷新、本地用量扫描和存储扫描最多每 30 分钟运行一次；仍可随时手动刷新。";
+"When on, runs automatic provider, local usage, and storage refreshes no more often than every 30 minutes. Manual refresh remains available. Automatic follows the system Low Power Mode setting." = "开启后，自动供应商刷新、本地用量扫描和存储扫描最多每 30 分钟运行一次；仍可随时手动刷新。选择“自动”时将跟随系统的低电量模式设置。";
 "Refresh" = "刷新";
 "Refreshing" = "正在刷新";
 "Refresh cadence" = "刷新频率";
