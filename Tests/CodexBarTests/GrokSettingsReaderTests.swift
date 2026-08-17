@@ -28,15 +28,16 @@ struct GrokSettingsReaderTests {
             .appendingPathComponent("CodexBar-GrokExpiredAuth-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }
-        try Data("""
-        {
-          "https://auth.x.ai::client": {
-            "key": "stale-file-token",
-            "auth_mode": "oidc",
-            "expires_at": "2020-01-01T00:00:00Z"
-          }
-        }
-        """.utf8).write(to: home.appendingPathComponent("auth.json"))
+        try Data(
+            """
+            {
+              "https://auth.x.ai::client": {
+                "key": "stale-file-token",
+                "auth_mode": "oidc",
+                "expires_at": "2020-01-01T00:00:00Z"
+              }
+            }
+            """.utf8).write(to: home.appendingPathComponent("auth.json"))
 
         var env = [GrokSettingsReader.oauthTokenEnvironmentKey: "pasted-token"]
         env["GROK_HOME"] = home.path
@@ -104,8 +105,10 @@ struct GrokSettingsReaderTests {
             adapter?.selectedAccountSourceMode(base: .auto, account: cookieAccount, config: nil)
                 == .web)
         #expect(adapter?.selectedAccountSourceMode(base: .auto, account: nil, config: nil) == .auto)
-        #expect(adapter?.selectedAccountSourceMode(base: .cli, account: oauthAccount, config: nil) == .cli)
-        #expect(adapter?.selectedAccountSourceMode(base: .web, account: oauthAccount, config: nil) == .web)
+        #expect(
+            adapter?.selectedAccountSourceMode(base: .cli, account: oauthAccount, config: nil) == .cli)
+        #expect(
+            adapter?.selectedAccountSourceMode(base: .web, account: oauthAccount, config: nil) == .web)
         #expect(
             GrokProviderDescriptor.descriptor.fetchPlan.sourceModes == [.auto, .cli, .oauth, .web])
     }
@@ -116,14 +119,15 @@ struct GrokSettingsReaderTests {
             .appendingPathComponent("CodexBar-GrokSelectedBearer-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }
-        try Data("""
-        {
-          "https://auth.x.ai::client": {
-            "key": "file-token",
-            "auth_mode": "oidc"
-          }
-        }
-        """.utf8).write(to: home.appendingPathComponent("auth.json"))
+        try Data(
+            """
+            {
+              "https://auth.x.ai::client": {
+                "key": "file-token",
+                "auth_mode": "oidc"
+              }
+            }
+            """.utf8).write(to: home.appendingPathComponent("auth.json"))
 
         var env = [GrokSettingsReader.oauthTokenEnvironmentKey: "pasted-token"]
         env["GROK_HOME"] = home.path
@@ -157,7 +161,7 @@ struct GrokSettingsReaderTests {
     }
 
     @Test
-    func `auto keeps cookies before SuperGrok OAuth`() async {
+    func `auto tries SuperGrok OAuth before cookies and after the CLI`() async {
         let browserDetection = BrowserDetection(cacheTTL: 0)
         let context = ProviderFetchContext(
             runtime: .app,
@@ -173,6 +177,6 @@ struct GrokSettingsReaderTests {
             browserDetection: browserDetection)
         let strategies = await GrokProviderDescriptor.descriptor.fetchPlan.pipeline
             .resolveStrategies(context)
-        #expect(strategies.map(\.id) == ["grok.cli", "grok.web", "grok.oauth"])
+        #expect(strategies.map(\.id) == ["grok.cli", "grok.oauth", "grok.web"])
     }
 }

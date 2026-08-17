@@ -73,7 +73,7 @@ struct GrokProviderImplementation: ProviderImplementation {
             ProviderSettingsPickerDescriptor(
                 id: "grok-usage-source",
                 title: "Usage source",
-                subtitle: "Auto tries the Grok CLI, browser cookies, then SuperGrok OAuth.",
+                subtitle: "Auto tries the Grok CLI, SuperGrok OAuth, then browser cookies.",
                 binding: sourceBinding,
                 options: sourceOptions,
                 isVisible: nil,
@@ -113,14 +113,14 @@ struct GrokProviderImplementation: ProviderImplementation {
                             if let url = URL(string: "https://grok.com/?_s=usage") {
                                 NSWorkspace.shared.open(url)
                             }
-                        })
+                        }),
                 ],
                 isVisible: {
                     (context.settings.grokUsageDataSource == .auto
                         || context.settings.grokUsageDataSource == .web)
                         && context.settings.grokCookieSource == .manual
                 },
-                onActivate: { context.settings.ensureGrokCookieLoaded() })
+                onActivate: { context.settings.ensureGrokCookieLoaded() }),
         ]
     }
 }

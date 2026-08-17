@@ -119,7 +119,7 @@ public enum GrokProviderDescriptor {
     {
         switch context.sourceMode {
         case .auto:
-            [GrokCLIFetchStrategy(), GrokWebFetchStrategy(), GrokOAuthFetchStrategy()]
+            [GrokCLIFetchStrategy(), GrokOAuthFetchStrategy(), GrokWebFetchStrategy()]
         case .cli:
             [GrokCLIFetchStrategy()]
         case .oauth:
@@ -216,6 +216,8 @@ struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
             } catch let error as URLError where error.code == .cancelled {
                 throw error
             } catch {
+                // Auto must reach browser cookies before bearer gRPC, matching main.
+                guard context.sourceMode != .auto else { throw error }
                 let snapshot = try await GrokWebBillingFetcher.fetch(credentials: credentials)
                 return (snapshot, "grok-web", true)
             }

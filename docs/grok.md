@@ -15,7 +15,7 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 
 ## Settings source picker
 
-- **Auto**: Grok CLI, then browser cookies, then SuperGrok OAuth.
+- **Auto**: Grok CLI, then SuperGrok OAuth (`auth.json` / CLI-proxy), then browser cookies.
 - **Grok CLI**: `grok agent stdio` only.
 - **SuperGrok OAuth**: `~/.grok/auth.json` or a pasted bearer / `GROK_OAUTH_TOKEN`. CLI-proxy credits, then bearer gRPC. No cookies.
 - **Browser cookies**: grok.com Cookie header / Chrome import only. No OAuth bearer.
