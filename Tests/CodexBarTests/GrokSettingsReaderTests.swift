@@ -177,6 +177,6 @@ struct GrokSettingsReaderTests {
             browserDetection: browserDetection)
         let strategies = await GrokProviderDescriptor.descriptor.fetchPlan.pipeline
             .resolveStrategies(context)
-        #expect(strategies.map(\.id) == ["grok.cli", "grok.oauth", "grok.web"])
+        #expect(strategies.map(\.id) == ["grok.cli", "grok.oauth", "grok.web", "grok.oauth-grpc"])
     }
 }

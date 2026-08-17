@@ -119,7 +119,12 @@ public enum GrokProviderDescriptor {
     {
         switch context.sourceMode {
         case .auto:
-            [GrokCLIFetchStrategy(), GrokOAuthFetchStrategy(), GrokWebFetchStrategy()]
+            [
+                GrokCLIFetchStrategy(),
+                GrokOAuthFetchStrategy(mode: .proxy),
+                GrokWebFetchStrategy(),
+                GrokOAuthFetchStrategy(mode: .grpc),
+            ]
         case .cli:
             [GrokCLIFetchStrategy()]
         case .oauth:
@@ -193,8 +198,25 @@ struct GrokCLIFetchStrategy: ProviderFetchStrategy {
 }
 
 struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
-    let id: String = "grok.oauth"
+    enum Mode: Sendable {
+        case proxyThenGrpc
+        case proxy
+        case grpc
+    }
+
+    let mode: Mode
     let kind: ProviderFetchKind = .oauth
+
+    init(mode: Mode = .proxyThenGrpc) {
+        self.mode = mode
+    }
+
+    var id: String {
+        switch self.mode {
+        case .proxyThenGrpc, .proxy: "grok.oauth"
+        case .grpc: "grok.oauth-grpc"
+        }
+    }
 
     func isAvailable(_ context: ProviderFetchContext) async -> Bool {
         GrokSettingsReader.resolvedCredentials(environment: context.env) != nil
@@ -208,18 +230,25 @@ struct GrokOAuthFetchStrategy: ProviderFetchStrategy {
             guard !credentials.isExpired else {
                 throw GrokWebBillingError.missingCredentials
             }
-            do {
-                let snapshot = try await GrokCreditsProxyFetcher.fetch(credentials: credentials)
-                return (snapshot, "grok-cli-proxy", true)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch let error as URLError where error.code == .cancelled {
-                throw error
-            } catch {
-                // Auto must reach browser cookies before bearer gRPC, matching main.
-                guard context.sourceMode != .auto else { throw error }
+            switch self.mode {
+            case .grpc:
                 let snapshot = try await GrokWebBillingFetcher.fetch(credentials: credentials)
                 return (snapshot, "grok-web", true)
+            case .proxy:
+                let snapshot = try await GrokCreditsProxyFetcher.fetch(credentials: credentials)
+                return (snapshot, "grok-cli-proxy", true)
+            case .proxyThenGrpc:
+                do {
+                    let snapshot = try await GrokCreditsProxyFetcher.fetch(credentials: credentials)
+                    return (snapshot, "grok-cli-proxy", true)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch let error as URLError where error.code == .cancelled {
+                    throw error
+                } catch {
+                    let snapshot = try await GrokWebBillingFetcher.fetch(credentials: credentials)
+                    return (snapshot, "grok-web", true)
+                }
             }
         }
     }

@@ -73,7 +73,8 @@ struct GrokProviderImplementation: ProviderImplementation {
             ProviderSettingsPickerDescriptor(
                 id: "grok-usage-source",
                 title: "Usage source",
-                subtitle: "Auto tries the Grok CLI, SuperGrok OAuth, then browser cookies.",
+                subtitle:
+                "Auto tries the Grok CLI, SuperGrok OAuth, browser cookies, then bearer gRPC.",
                 binding: sourceBinding,
                 options: sourceOptions,
                 isVisible: nil,
