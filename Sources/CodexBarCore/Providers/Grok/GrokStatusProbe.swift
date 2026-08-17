@@ -77,13 +77,16 @@ public struct GrokStatusProbe: Sendable {
 
     public init() {}
 
-    public static func detectVersion(env: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+    public static func detectVersion(env: [String: String] = ProcessInfo.processInfo.environment)
+        -> String?
+    {
         guard let binary = BinaryLocator.resolveGrokBinary(env: env) else { return nil }
-        guard let output = ProviderVersionDetector.run(
-            path: binary,
-            args: ["--version"],
-            environment: env,
-            mergeStandardError: true)
+        guard
+            let output = ProviderVersionDetector.run(
+                path: binary,
+                args: ["--version"],
+                environment: env,
+                mergeStandardError: true)
         else { return nil }
         // Output is like "grok 0.1.210 (8b63e9068c)" — strip the leading "grok " so
         // callers can prefix the CLI name themselves without duplicating it.
@@ -95,7 +98,9 @@ public struct GrokStatusProbe: Sendable {
         return withoutPrefix.isEmpty ? nil : withoutPrefix
     }
 
-    public func fetch(env: [String: String] = ProcessInfo.processInfo.environment) async throws -> GrokUsageSnapshot {
+    public func fetch(env: [String: String] = ProcessInfo.processInfo.environment) async throws
+        -> GrokUsageSnapshot
+    {
         // Credentials are optional: we still show identity-less state if the user
         // hasn't logged in, with a clear hint via the RPC error.
         let credentials = try? GrokCredentialsStore.load(env: env)

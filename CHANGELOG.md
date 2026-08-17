@@ -2,6 +2,11 @@
 
 ## 0.52.1 — Unreleased
 
+### Added
+- Grok: add an Auto / Grok CLI / SuperGrok OAuth / Browser cookies source picker, and paste a SuperGrok bearer or grok.com cookie into token accounts. OAuth and cookies stay separate paths.
+
+### Fixed
+- Grok: Open token file opens `~/.grok/auth.json` instead of CodexBar's `config.json`.
 ## 0.52.0 — 2026-08-17
 
 ### Added

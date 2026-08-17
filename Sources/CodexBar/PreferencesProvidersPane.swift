@@ -465,6 +465,9 @@ struct ProvidersPane: View {
                 }
             } },
             openConfigFile: {
+                if implementation?.openTokenFile(context: context) == true {
+                    return
+                }
                 self.settings.openTokenAccountsFile()
             },
             reloadFromDisk: {
