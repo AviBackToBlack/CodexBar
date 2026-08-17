@@ -2,6 +2,9 @@
 
 ## 0.52.1 — Unreleased
 
+### Fixed
+- Cursor: keep a successfully validated refresh result when its session cache is temporarily unavailable, instead of reporting that the session changed.
+
 ## 0.52.0 — 2026-08-17
 
 ### Added
