@@ -156,7 +156,7 @@ struct SettingsStoreCoverageTests {
         let initial = Self.makeSettingsStore(userDefaults: defaults, configStore: configStore)
         #expect(initial.backgroundWorkLowPowerModePreference == .off)
         #expect(initial.backgroundWorkLowPowerModeEnabled == false)
-        #expect(defaults.object(forKey: "backgroundWorkLowPowerModePreference") == nil)
+        #expect(defaults.string(forKey: "backgroundWorkLowPowerModePreference") == "off")
         #expect(initial.effectiveOpenAIWebBatterySaverEnabled == false)
 
         let revision = initial.backgroundWorkSettingsRevision

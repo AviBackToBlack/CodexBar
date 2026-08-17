@@ -265,6 +265,7 @@ final class SettingsStore {
     #endif
     @ObservationIgnored var mergedMenuLastSelectedWasOverviewStorage = false
     @ObservationIgnored var selectedMenuProviderRawStorage: String?
+    @ObservationIgnored private nonisolated(unsafe) var lowPowerModeObserver: NSObjectProtocol?
     var defaultsState: SettingsDefaultsState
     var configRevision: Int = 0
     var providerDetailSettingsRevision: Int = 0
@@ -418,10 +419,31 @@ final class SettingsStore {
         }
         KeychainAccessGate.isDisabled = self.debugDisableKeychainAccess
         self.startConfigFileWatcher()
+        self.observeSystemPowerStateChanges()
     }
 
     deinit {
         self.configFileWatcher?.stop()
+        if let lowPowerModeObserver {
+            NotificationCenter.default.removeObserver(lowPowerModeObserver)
+        }
+    }
+
+    /// Automatic Low Power Mode reads `ProcessInfo.isLowPowerModeEnabled` live, but background
+    /// timers only restart when `backgroundWorkSettingsRevision` changes. Without this, toggling
+    /// the system's Low Power Mode mid-session would leave a running fixed-frequency timer stuck
+    /// at its previously computed interval until an unrelated settings change restarted it.
+    private func observeSystemPowerStateChanges() {
+        self.lowPowerModeObserver = NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: .main)
+        { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.backgroundWorkLowPowerModePreference == .automatic else { return }
+                self.noteBackgroundWorkSettingsChanged()
+            }
+        }
     }
 }
 
