@@ -764,15 +764,25 @@ extension SettingsStore {
         }
     }
 
-    var backgroundWorkLowPowerModeEnabled: Bool {
-        get { self.defaultsState.backgroundWorkLowPowerModeEnabled }
+    var backgroundWorkLowPowerModePreference: LowPowerModePreference {
+        get { self.defaultsState.backgroundWorkLowPowerModePreference }
         set {
-            self.defaultsState.backgroundWorkLowPowerModeEnabled = newValue
-            self.userDefaults.set(newValue, forKey: "backgroundWorkLowPowerModeEnabled")
+            self.defaultsState.backgroundWorkLowPowerModePreference = newValue
+            self.userDefaults.set(newValue.rawValue, forKey: "backgroundWorkLowPowerModePreference")
             CodexBarLog.logger(LogCategories.settings).info(
-                "Background work low power mode updated",
-                metadata: ["enabled": newValue ? "1" : "0"])
+                "Background work low power mode preference updated",
+                metadata: ["preference": newValue.rawValue])
             self.noteBackgroundWorkSettingsChanged()
+        }
+    }
+
+    /// Resolves `backgroundWorkLowPowerModePreference` against the live system Low Power Mode state
+    /// when the preference is `.automatic`.
+    var backgroundWorkLowPowerModeEnabled: Bool {
+        switch self.backgroundWorkLowPowerModePreference {
+        case .off: false
+        case .on: true
+        case .automatic: ProcessInfo.processInfo.isLowPowerModeEnabled
         }
     }
 

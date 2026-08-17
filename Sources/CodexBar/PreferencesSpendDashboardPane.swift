@@ -4,6 +4,9 @@ import CodexBarCore
 import SwiftUI
 
 func spendDashboardDayRangeText(_ days: Int) -> String {
+    if days >= SpendDashboardSource.scanDays {
+        return L("All")
+    }
     let template: String
     switch days {
     case 7: template = L("7d")
@@ -140,10 +143,11 @@ struct SpendDashboardPane: View {
             Picker(L("Time range"), selection: self.daysBinding) {
                 Text(spendDashboardDayRangeText(7)).tag(7)
                 Text(spendDashboardDayRangeText(30)).tag(30)
+                Text(spendDashboardDayRangeText(SpendDashboardSource.scanDays)).tag(SpendDashboardSource.scanDays)
             }
             .labelsHidden()
             .pickerStyle(.segmented)
-            .frame(width: 116)
+            .frame(width: 188)
 
             Button {
                 self.controller.refresh()
@@ -306,7 +310,9 @@ struct SpendDashboardPane: View {
             }
         } else {
             ForEach(self.controller.model.groups) { group in
-                SpendCurrencySection(group: group, requestedDays: self.controller.model.requestedDays)
+                SpendDashboardCurrencySection(
+                    group: group,
+                    requestedDays: self.controller.model.requestedDays)
             }
         }
 
@@ -408,7 +414,7 @@ struct SpendDashboardEmptyState: Equatable {
     }
 }
 
-private struct SpendCurrencySection: View {
+struct SpendDashboardCurrencySection: View {
     let group: SpendDashboardModel.CurrencyGroup
     let requestedDays: Int
 
@@ -418,18 +424,12 @@ private struct SpendCurrencySection: View {
                 Text(self.group.currencyCode)
                     .font(.headline)
                 Spacer()
-                Text(self.group.totalCost.map {
-                    UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                } ?? L("Spend unavailable"))
+                Text(spendDashboardGroupCostText(self.group))
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
 
-            Text(
-                "\(L("Local estimated history")) · " +
-                    spendDashboardCoverageText(
-                        covered: self.group.coveredDayCount,
-                        requested: self.requestedDays))
+            Text(spendDashboardHistoryCaption(self.group, requestedDays: self.requestedDays))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -437,12 +437,10 @@ private struct SpendCurrencySection: View {
                 HStack(spacing: 24) {
                     SpendSummaryValue(
                         title: L("Estimated spend"),
-                        value: self.group.totalCost.map {
-                            UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                        } ?? "—")
+                        value: self.group.totalCost == nil ? "—" : spendDashboardGroupCostText(self.group))
                     SpendSummaryValue(
                         title: L("Tracked tokens"),
-                        value: self.group.totalTokens.map(UsageFormatter.tokenCountString) ?? "—")
+                        value: spendDashboardGroupTokenText(self.group))
                     SpendSummaryValue(
                         title: L("Subscriptions"),
                         value: codexBarLocalizedInteger(self.group.providers.count))
@@ -530,7 +528,7 @@ private struct SpendModelPanel: View {
                         .padding(.vertical, 10)
                 case .partial, .complete:
                     if presentation == .partial {
-                        Label(L("Model breakdown unavailable"), systemImage: "exclamationmark.triangle")
+                        Label(L("Partial model breakdown"), systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.bottom, 6)
@@ -771,4 +769,37 @@ private struct SpendDashboardPanel<Content: View>: View {
                     .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35))
             }
     }
+}
+
+func spendDashboardGroupCostText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
+    guard let cost = group.totalCost else { return L("Spend unavailable") }
+    let formatted = UsageFormatter.currencyString(cost, currencyCode: group.currencyCode)
+    return group.hasPartialCost ? "~\(formatted)" : formatted
+}
+
+func spendDashboardGroupTokenText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
+    guard let tokens = group.totalTokens else { return "—" }
+    let formatted = UsageFormatter.tokenCountString(tokens)
+    return group.hasPartialTokens ? "~\(formatted)" : formatted
+}
+
+func spendDashboardPartialSubscriptionsText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
+    L("%d of %d subscriptions have spend", group.pricedProviderCount, group.providers.count)
+}
+
+func spendDashboardHistoryCaption(
+    _ group: SpendDashboardModel.CurrencyGroup,
+    requestedDays: Int) -> String
+{
+    var parts: [String] = []
+    if group.hasPartialCost || group.hasPartialTokens {
+        parts.append(L("Partial estimate"))
+        if group.hasPartialCost {
+            parts.append(spendDashboardPartialSubscriptionsText(group))
+        }
+    } else {
+        parts.append(L("Local estimated history"))
+    }
+    parts.append(spendDashboardCoverageText(covered: group.coveredDayCount, requested: requestedDays))
+    return parts.joined(separator: " · ")
 }

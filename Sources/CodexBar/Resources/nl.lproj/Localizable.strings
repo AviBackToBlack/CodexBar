@@ -1316,6 +1316,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Oorspronkelijke valuta’s blijven gescheiden; rijen met Codex-accounts sluiten Pi-sessiegeschiedenis uit.";
 "Spend unavailable" = "Uitgaven niet beschikbaar";
 "Model breakdown unavailable" = "Uitsplitsing per model niet beschikbaar";
+"Partial estimate" = "Gedeeltelijke schatting";
+"Partial model breakdown" = "Gedeeltelijke modeluitsplitsing";
+"%d of %d subscriptions have spend" = "%d van %d abonnementen hebben uitgaven";
 "Local estimated history" = "Lokaal geschatte geschiedenis";
 "Coverage" = "Dekking";
 "Estimated spend" = "Geschatte uitgaven";

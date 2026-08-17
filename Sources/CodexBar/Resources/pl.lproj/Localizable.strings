@@ -1320,6 +1320,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Waluty źródłowe pozostają rozdzielone; wiersze kont Codex nie obejmują historii sesji Pi.";
 "Spend unavailable" = "Wydatki niedostępne";
 "Model breakdown unavailable" = "Podział według modeli jest niedostępny";
+"Partial estimate" = "Szacunek częściowy";
+"Partial model breakdown" = "Częściowe zestawienie modeli";
+"%d of %d subscriptions have spend" = "%d z %d subskrypcji ma wydatki";
 "Local estimated history" = "Lokalna historia szacunkowa";
 "Coverage" = "Pokrycie";
 "Estimated spend" = "Szacowane wydatki";
