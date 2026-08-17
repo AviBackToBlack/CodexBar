@@ -105,14 +105,6 @@ struct CodexBarApp: App {
 
     @SceneBuilder
     var body: some Scene {
-        // Hidden 1×1 window to keep SwiftUI's lifecycle alive so `Settings` scene
-        // shows the native toolbar tabs even though the UI is AppKit-based.
-        WindowGroup("CodexBarLifecycleKeepalive") {
-            HiddenWindowView()
-        }
-        .defaultSize(width: 20, height: 20)
-        .windowStyle(.hiddenTitleBar)
-
         Settings {
             PreferencesView(
                 settings: self.settings,
@@ -128,22 +120,6 @@ struct CodexBarApp: App {
         }
         .defaultSize(width: SettingsPane.windowWidth, height: SettingsPane.windowHeight)
         .windowResizability(.contentMinSize)
-    }
-
-    private func openSettings(pane: SettingsPane) {
-        self.preferencesSelection.pane = pane
-        DockIconController.shared.promote()
-        NSApp.activate(ignoringOtherApps: true)
-        let outcome = SettingsWindowOpener.live().open(preferred: .appKit)
-        let logger = CodexBarLog.logger(LogCategories.app)
-        switch outcome {
-        case .preferred:
-            break
-        case .fallback:
-            logger.warning("Settings AppKit action was not handled; used notification fallback")
-        case .failed:
-            logger.error("Failed to open Settings; AppKit action and notification fallback unavailable")
-        }
     }
 
     private static func applyLanguagePreference(from settings: SettingsStore) {

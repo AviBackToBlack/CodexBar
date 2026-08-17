@@ -8,6 +8,7 @@
 - Usage & Spend: add a Projects panel to the settings pane and let the Models and Projects lists expand beyond the top eight rows (#2985). Thanks @Yuxin-Qiao!
 
 ### Fixed
+- Settings: remove the invisible lifecycle keepalive window; the rebuilt Settings window no longer needs it, eliminating its Mission Control/WindowServer footprint entirely (#2955).
 - Mission Control: stop the lifecycle keepalive window from participating as a floating all-Spaces window on macOS 27 (#2955). Thanks @phuchong89 for the diagnostics!
 - Cost history chart: localize the Projects, Conversations, session, and standard/fast mode labels that previously stayed English for all 23 app languages (#2983). Thanks @Yuxin-Qiao!
 - Grok: show SuperGrok Heavy from the CLI settings `subscription_tier_display` instead of labeling every OIDC login as SuperGrok (#2991). Thanks @olddonkey!
