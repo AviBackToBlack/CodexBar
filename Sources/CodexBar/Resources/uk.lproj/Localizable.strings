@@ -1316,6 +1316,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Вихідні валюти залишаються розділеними; рядки облікових записів Codex не включають історію сеансів Pi.";
 "Spend unavailable" = "Витрати недоступні";
 "Model breakdown unavailable" = "Розподіл за моделями недоступний";
+"Partial estimate" = "Часткова оцінка";
+"Partial model breakdown" = "Часткова розбивка за моделями";
+"%d of %d subscriptions have spend" = "У %d з %d підписок є дані про витрати";
 "Local estimated history" = "Локальна історія оцінок";
 "Coverage" = "Охоплення";
 "Estimated spend" = "Орієнтовні витрати";

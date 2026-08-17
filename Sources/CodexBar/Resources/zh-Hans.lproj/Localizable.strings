@@ -1295,6 +1295,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "各原始币种保持分开；Codex 帐户行不包含 Pi 会话历史。";
 "Spend unavailable" = "支出数据不可用";
 "Model breakdown unavailable" = "模型明细不可用";
+"Partial estimate" = "部分估算";
+"Partial model breakdown" = "部分模型明细";
+"%d of %d subscriptions have spend" = "%d / %d 个订阅有支出数据";
 "Local estimated history" = "本地估算历史";
 "Coverage" = "覆盖范围";
 "Estimated spend" = "估算支出";

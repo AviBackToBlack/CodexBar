@@ -85,6 +85,19 @@ struct ShareStatsCurrencyPayload: Sendable, Equatable, Identifiable {
     let currencyCode: String
     let estimatedCost: Double?
     let coveredDayCount: Int
+    let isPartial: Bool
+
+    init(
+        currencyCode: String,
+        estimatedCost: Double?,
+        coveredDayCount: Int,
+        isPartial: Bool = false)
+    {
+        self.currencyCode = currencyCode
+        self.estimatedCost = estimatedCost
+        self.coveredDayCount = coveredDayCount
+        self.isPartial = isPartial
+    }
 
     var id: String {
         self.currencyCode
@@ -282,7 +295,8 @@ enum ShareStatsBuilder {
             ShareStatsCurrencyPayload(
                 currencyCode: $0.currencyCode,
                 estimatedCost: self.finiteCost($0.totalCost),
-                coveredDayCount: $0.coveredDayCount)
+                coveredDayCount: $0.coveredDayCount,
+                isPartial: $0.hasPartialCost)
         }
         let totalTokens = self.combinedTotalTokens(model.groups.map(\.totalTokens))
         let periodEnd = model.groups.map(\.chartDomain.upperBound).max() ?? Date()
@@ -302,9 +316,10 @@ enum ShareStatsBuilder {
     }
 
     static func combinedTotalTokens(_ values: [Int?]) -> Int? {
+        let known = values.compactMap(\.self)
+        guard !known.isEmpty else { return nil }
         var total = 0
-        for value in values {
-            guard let value else { return nil }
+        for value in known {
             let result = total.addingReportingOverflow(value)
             guard !result.overflow else { return nil }
             total = result.partialValue
@@ -348,8 +363,10 @@ enum ShareStatsFormatting {
             lines.append("\(self.compactCount(tokens)) tracked tokens")
         }
         lines.append(contentsOf: payload.currencies.map { currency in
-            let spend = currency.estimatedCost.map { "\(self.currency($0, code: currency.currencyCode)) estimated" }
-                ?? "Spend unavailable"
+            let spend = currency.estimatedCost.map { value in
+                let amount = "\(self.currency(value, code: currency.currencyCode)) estimated"
+                return currency.isPartial ? "\(amount) (partial)" : amount
+            } ?? "Spend unavailable"
             return "\(currency.currencyCode): \(spend) · "
                 + "coverage \(currency.coveredDayCount)/\(payload.days) days"
         })

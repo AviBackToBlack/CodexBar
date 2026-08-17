@@ -1320,6 +1320,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Mata uang asli tetap dipisahkan; baris akun Codex tidak menyertakan riwayat sesi Pi.";
 "Spend unavailable" = "Data pengeluaran tidak tersedia";
 "Model breakdown unavailable" = "Rincian per model tidak tersedia";
+"Partial estimate" = "Perkiraan sebagian";
+"Partial model breakdown" = "Rincian model sebagian";
+"%d of %d subscriptions have spend" = "%d dari %d langganan memiliki pengeluaran";
 "Local estimated history" = "Riwayat perkiraan lokal";
 "Coverage" = "Cakupan";
 "Estimated spend" = "Perkiraan pengeluaran";

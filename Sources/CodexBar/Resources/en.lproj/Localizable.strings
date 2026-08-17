@@ -1300,6 +1300,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Native currencies stay separate; Codex account rows exclude Pi session history.";
 "Spend unavailable" = "Spend unavailable";
 "Model breakdown unavailable" = "Model breakdown unavailable";
+"Partial estimate" = "Partial estimate";
+"Partial model breakdown" = "Partial model breakdown";
+"%d of %d subscriptions have spend" = "%d of %d subscriptions have spend";
 "Local estimated history" = "Local estimated history";
 "Coverage" = "Coverage";
 "Estimated spend" = "Estimated spend";
