@@ -749,6 +749,38 @@ struct CLICostTests {
             settings: nil,
             resolutionError: resolutionError) == nil)
     }
+
+    @Test
+    func `openCodex JSON payload stays on a separate source and omits invented projects`() {
+        let now = Date(timeIntervalSince1970: 1_784_179_200)
+        let snapshot = CostUsageTokenSnapshot(
+            sessionTokens: nil,
+            sessionCostUSD: nil,
+            last30DaysTokens: 12,
+            last30DaysCostUSD: 1.5,
+            currencyCode: "USD",
+            historyDays: 7,
+            daily: [
+                CostUsageDailyReport.Entry(
+                    date: "2026-07-16",
+                    inputTokens: 10,
+                    outputTokens: 2,
+                    reasoningTokens: 3,
+                    totalTokens: 12,
+                    costUSD: 1.5,
+                    modelsUsed: ["gpt-5.4"],
+                    modelBreakdowns: nil,
+                    estimatedRequestCount: 1),
+            ],
+            updatedAt: now)
+        let payload = CodexBarCLI.makeOpenCodexCostPayload(snapshot: snapshot)
+        #expect(payload.provider == "opencodex")
+        #expect(payload.source == "opencodex")
+        #expect(payload.projects.isEmpty)
+        #expect(payload.daily.first?.reasoningTokens == 3)
+        #expect(payload.provenance == CostProvenance.listPriceEstimate.rawValue)
+        #expect(payload.coverage?.estimated == 1)
+    }
 }
 
 private func sessionTimestamp(_ date: Date) -> String {
