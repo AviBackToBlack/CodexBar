@@ -1,9 +1,18 @@
 # Changelog
 
-## 0.50.2 — Unreleased
+## 0.51.1 — Unreleased
 
 ### Added
-- Usage & Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data. Thanks @Yuxin-Qiao!
+- Usage & Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data (#2984). Thanks @Yuxin-Qiao!
+
+## 0.51.0 — 2026-08-16
+
+### Added
+- CLI: add `codexbar cost --group-by session` for per-conversation Codex session cost breakdowns in text output (#2854). Thanks @Yuxin-Qiao!
+
+### Fixed
+- Keychain: keep background browser imports non-interactive, honor the global access gate, retire the obsolete prompt-capable startup migration, and retry unreadable unified migrations without clearing secrets (#2986).
+- OpenCode Go: label local-only quota windows as estimates in the menu and CLI when Auto has no server-confirmed usage (#2982). Thanks @Newarr!
 
 ## 0.50.1 — 2026-08-16
 
