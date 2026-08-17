@@ -1,7 +1,13 @@
 /* Thai localization for CodexBar */
 
 /* iCloud Sync */
+"+ %d more" = "+ อีก %d รายการ";
+"Conversations (%@)" = "บทสนทนา (%@)";
+"Fast" = "เร็ว";
 "iCloud Sync" = "iCloud Sync";
+"Projects" = "โปรเจกต์";
+"Session %@" = "เซสชัน %@";
+"Std" = "มาตรฐาน";
 "Show all (%d)" = "แสดงทั้งหมด (%d)";
 "Show less" = "แสดงน้อยลง";
 "Sync settings and providers across your Macs via iCloud" = "Sync settings and providers across your Macs via iCloud";

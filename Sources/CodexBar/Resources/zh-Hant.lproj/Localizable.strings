@@ -1,7 +1,13 @@
 /* Chinese (Traditional) localization for CodexBar */
 
 /* iCloud Sync */
+"+ %d more" = "還有 %d 個";
+"Conversations (%@)" = "對話（%@）";
+"Fast" = "高速";
 "iCloud Sync" = "iCloud Sync";
+"Projects" = "專案";
+"Session %@" = "對話 %@";
+"Std" = "標準";
 "Show all (%d)" = "顯示全部（%d）";
 "Show less" = "收起";
 "Sync settings and providers across your Macs via iCloud" = "Sync settings and providers across your Macs via iCloud";

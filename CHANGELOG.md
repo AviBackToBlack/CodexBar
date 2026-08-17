@@ -1,10 +1,14 @@
 # Changelog
 
 ## 0.51.1 — Unreleased
-
 ### Added
 - Usage & Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data (#2984). Thanks @Yuxin-Qiao!
 - Usage & Spend: add a Projects panel to the settings pane and let the Models and Projects lists expand beyond the top eight rows (#2985). Thanks @Yuxin-Qiao!
+
+### Fixed
+- Cost history chart: localize the Projects, Conversations, session, and standard/fast mode labels that previously stayed English for all 23 app languages (#2983). Thanks @Yuxin-Qiao!
+### Added
+- Usage & Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data (#2984). Thanks @Yuxin-Qiao!
 
 ## 0.51.0 — 2026-08-16
 

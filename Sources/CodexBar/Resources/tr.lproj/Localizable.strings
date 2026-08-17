@@ -1,7 +1,13 @@
 /* Turkish localization for CodexBar */
 
 /* iCloud Sync */
+"+ %d more" = "+ %d daha";
+"Conversations (%@)" = "Konuşmalar (%@)";
+"Fast" = "Hızlı";
 "iCloud Sync" = "iCloud Sync";
+"Projects" = "Projeler";
+"Session %@" = "Oturum %@";
+"Std" = "Std";
 "Show all (%d)" = "Tümünü göster (%d)";
 "Show less" = "Daha az göster";
 "Sync settings and providers across your Macs via iCloud" = "Sync settings and providers across your Macs via iCloud";

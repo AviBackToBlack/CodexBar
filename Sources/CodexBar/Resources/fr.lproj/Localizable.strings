@@ -1,7 +1,13 @@
 /* English localization for CodexBar (base/fallback) */
 
 /* iCloud Sync */
+"+ %d more" = "+ %d de plus";
+"Conversations (%@)" = "Conversations (%@)";
+"Fast" = "Rapide";
 "iCloud Sync" = "iCloud Sync";
+"Projects" = "Projets";
+"Session %@" = "Session %@";
+"Std" = "Std";
 "Show all (%d)" = "Tout afficher (%d)";
 "Show less" = "Afficher moins";
 "Sync settings and providers across your Macs via iCloud" = "Sync settings and providers across your Macs via iCloud";

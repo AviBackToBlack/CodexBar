@@ -1,7 +1,13 @@
 /* English localization for CodexBar (base/fallback) */
 
 /* iCloud Sync */
+"+ %d more" = "+ %d nữa";
+"Conversations (%@)" = "Cuộc trò chuyện (%@)";
+"Fast" = "Nhanh";
 "iCloud Sync" = "iCloud Sync";
+"Projects" = "Dự án";
+"Session %@" = "Phiên %@";
+"Std" = "Std";
 "Show all (%d)" = "Hiện tất cả (%d)";
 "Show less" = "Thu gọn";
 "Sync settings and providers across your Macs via iCloud" = "Sync settings and providers across your Macs via iCloud";
