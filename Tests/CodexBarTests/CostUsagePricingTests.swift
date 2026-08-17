@@ -1329,6 +1329,19 @@ extension CostUsagePricingTests {
               "claude-sonnet-4-6": {
                 "id": "claude-sonnet-4-6",
                 "cost": { "input": 3, "output": 15 }
+              },
+              "deepseek-v4-flash": {
+                "id": "deepseek-v4-flash",
+                "cost": { "input": 99, "output": 199 }
+              }
+            }
+          },
+          "openai": {
+            "id": "openai",
+            "models": {
+              "claude-sonnet-4-6": {
+                "id": "claude-sonnet-4-6",
+                "cost": { "input": 1, "output": 2 }
               }
             }
           },
@@ -1378,17 +1391,55 @@ extension CostUsagePricingTests {
         #expect(bare == (100.0 * 0.14e-6) + (5.0 * 0.28e-6))
         #expect(prefixed == (100.0 * 0.07e-6) + (5.0 * 0.14e-6))
         #expect(anthropic == (10.0 * 3e-6) + (5.0 * 15e-6))
-        #expect(CostUsagePricing.claudeModelsDevPricingTargets(for: "deepseek-v4-flash").contains {
-            $0.providerID == "deepseek" && $0.modelID == "deepseek-v4-flash"
-        })
+        #expect(CostUsagePricing.claudeModelsDevPricingTargets(for: "deepseek-v4-flash").first?.providerID
+            == "deepseek")
+        #expect(CostUsagePricing.claudeModelsDevPricingTargets(for: "claude-sonnet-4-6").first?.providerID
+            == "anthropic")
         #expect(Set(CostUsagePricing.claudeFirstPartyModelsDevProviderIDs).isSuperset(of: [
             "anthropic",
             "openai",
             "google",
             "moonshot",
+            "kimi-for-coding",
             "minimax",
             "deepseek",
         ]))
+    }
+
+    @Test
+    func `claude cost rejects an ambiguous bare model catalog collision`() throws {
+        let root = try Self.seedModelsDevCache("""
+        {
+          "openai": {
+            "id": "openai",
+            "models": {
+              "shared-model": {
+                "id": "shared-model",
+                "cost": { "input": 1, "output": 2 }
+              }
+            }
+          },
+          "google": {
+            "id": "google",
+            "models": {
+              "shared-model": {
+                "id": "shared-model",
+                "cost": { "input": 3, "output": 4 }
+              }
+            }
+          }
+        }
+        """)
+
+        let cost = CostUsagePricing.claudeCostUSD(
+            model: "shared-model",
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 5,
+            modelsDevCacheRoot: root)
+
+        #expect(cost == nil)
     }
 
     @Test
@@ -1414,8 +1465,16 @@ extension CostUsagePricingTests {
             cacheCreationInputTokens: 0,
             outputTokens: 5,
             modelsDevCacheRoot: root)
+        let unknownRoute = CostUsagePricing.claudeCostUSD(
+            model: "unknown-route/deepseek-v4-flash",
+            inputTokens: 100,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            outputTokens: 5,
+            modelsDevCacheRoot: root)
 
         #expect(cost == nil)
+        #expect(unknownRoute == nil)
     }
 
     private static func seedModelsDevCache(_ json: String) throws -> URL {

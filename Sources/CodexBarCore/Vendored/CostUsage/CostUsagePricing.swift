@@ -851,14 +851,15 @@ enum CostUsagePricing {
 }
 
 extension CostUsagePricing {
-    /// Bare Claude-routed IDs may match first-party models.dev vendors. Prefixed routes stay on
-    /// that route and never fall through to another vendor's official price.
-    /// Provider-specific by design: first-party vendor fallback for bare Claude model IDs.
+    /// Bare Claude-routed IDs may match first-party models.dev vendors. Recognizable model families
+    /// stay with their vendor, while unknown bare IDs must have one unambiguous catalog match.
+    /// Provider-specific by design: first-party vendor routing for bare Claude model IDs.
     static let claudeFirstPartyModelsDevProviderIDs: [String] = [
         Self.claudeModelsDevProviderID,
         "openai",
         "google",
         "moonshot",
+        "kimi-for-coding",
         "minimax",
         "deepseek",
     ]
@@ -866,18 +867,57 @@ extension CostUsagePricing {
     static func claudeModelsDevPricingTargets(for rawModel: String) -> [(providerID: String, modelID: String)] {
         let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        if trimmed.contains("/") {
-            return self.codexModelsDevPricingTargets(for: trimmed)
+        if let slash = trimmed.firstIndex(of: "/") {
+            let codexTargets = self.codexModelsDevPricingTargets(for: trimmed)
+            if !codexTargets.isEmpty {
+                return codexTargets
+            }
+
+            let routeID = String(trimmed[..<slash]).lowercased()
+            let modelID = String(trimmed[trimmed.index(after: slash)...])
+            guard !routeID.isEmpty, !modelID.isEmpty,
+                  self.claudeFirstPartyModelsDevProviderIDs.contains(routeID)
+            else { return [] }
+            return self.claudeModelsDevModelIDs(for: modelID).map { (routeID, $0) }
         }
 
-        let normalized = self.normalizeClaudeModel(trimmed)
-        var modelIDs = [trimmed]
-        if normalized != trimmed {
-            modelIDs.append(normalized)
+        let providerIDs = self.claudeFirstPartyModelsDevPreferredProviderIDs(for: trimmed)
+            ?? self.claudeFirstPartyModelsDevProviderIDs
+        let modelIDs = self.claudeModelsDevModelIDs(for: trimmed)
+        return providerIDs.flatMap { providerID in
+            modelIDs.map { (providerID, $0) }
         }
-        return modelIDs.flatMap { modelID in
-            self.claudeFirstPartyModelsDevProviderIDs.map { ($0, modelID) }
+    }
+
+    private static func claudeModelsDevModelIDs(for rawModel: String) -> [String] {
+        let normalized = self.normalizeClaudeModel(rawModel)
+        return normalized == rawModel ? [rawModel] : [rawModel, normalized]
+    }
+
+    private static func claudeFirstPartyModelsDevPreferredProviderIDs(for rawModel: String) -> [String]? {
+        let model = self.normalizeClaudeModel(rawModel).lowercased()
+        if model.hasPrefix("claude-") { return [self.claudeModelsDevProviderID] }
+        let openAIReasoningFamily = ["o1", "o3", "o4"].contains {
+            model == $0 || model.hasPrefix("\($0)-")
         }
+        if openAIReasoningFamily
+            || ["gpt-", "chatgpt-", "text-embedding-"].contains(where: model.hasPrefix)
+        {
+            // Provider-specific by design: recognizable model families stay in their owning first-party catalog.
+            return ["openai"]
+        }
+        if ["gemini-", "gemma-", "deep-research-", "veo-", "lyria-"].contains(where: model.hasPrefix) {
+            return ["google"]
+        }
+        if model == "kimi-for-coding" || model == "k3" || model.hasPrefix("k3-") {
+            return ["kimi-for-coding"]
+        }
+        if model.hasPrefix("kimi-") || model.hasPrefix("moonshot-") {
+            return ["moonshot", "kimi-for-coding"]
+        }
+        if model.hasPrefix("minimax-") { return ["minimax"] }
+        if model.hasPrefix("deepseek-") { return ["deepseek"] }
+        return nil
     }
 
     fileprivate static func claudeModelsDevLookup(
@@ -885,6 +925,10 @@ extension CostUsagePricing {
         catalog: ModelsDevCatalog?,
         cacheRoot: URL?) -> ModelsDevPricingLookup?
     {
+        let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasExplicitRoute = trimmed.contains("/")
+        let hasPreferredVendor = self.claudeFirstPartyModelsDevPreferredProviderIDs(for: trimmed) != nil
+        var matches: [ModelsDevPricingLookup] = []
         for target in self.claudeModelsDevPricingTargets(for: rawModel) {
             if let lookup = self.modelsDevLookup(
                 providerID: target.providerID,
@@ -892,9 +936,14 @@ extension CostUsagePricing {
                 catalog: catalog,
                 cacheRoot: cacheRoot)
             {
-                return lookup
+                if hasExplicitRoute || hasPreferredVendor {
+                    return lookup
+                }
+                matches.append(lookup)
             }
         }
-        return nil
+        let matchedProviderIDs = Set(matches.map(\.pricing.providerID))
+        guard matchedProviderIDs.count == 1 else { return nil }
+        return matches.first
     }
 }
