@@ -316,13 +316,14 @@ enum SpendDashboardSource {
             request,
             cacheRootResolver: cacheRootResolver,
             cachedCodexSnapshotLoader: { context in
-                await CostUsageFetcher(cacheRoot: context.cacheRoot)
+                await CostUsageFetcher(cacheRoot: context.cacheRoot, calendar: context.calendar)
                     .loadCachedCodexTokenSnapshotForScopedHome(
                         now: context.now,
                         codexHomePath: context.account.homePath,
                         historyDays: context.historyDays,
                         includePiSessions: false,
-                        includeProjectAndSessionBreakdowns: true)
+                        includeProjectAndSessionBreakdowns: true,
+                        calendar: context.calendar)
             })
     }
 
@@ -501,7 +502,8 @@ enum SpendDashboardSource {
             logURL: logURL,
             now: request.now,
             historyDays: Self.scanDays,
-            calendar: request.configuration.bucketCalendar)
+            calendar: request.configuration.bucketCalendar),
+            !snapshot.daily.isEmpty || !snapshot.sessions.isEmpty
         else { return nil }
         return SpendDashboardModel.ProviderInput(
             id: SpendDashboardModel.openCodexSourceID,
@@ -1008,7 +1010,9 @@ final class SpendDashboardController {
             false
         }
 
-        guard configuration.costUsageEnabled, !configuration.providerIDs.isEmpty else {
+        guard configuration.costUsageEnabled,
+              !configuration.providerIDs.isEmpty || configuration.openCodexUsageLogsEnabled
+        else {
             self.loadedInputs = []
             self.failedSourceCount = 0
             self.isRefreshing = false

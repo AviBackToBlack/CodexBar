@@ -1164,6 +1164,31 @@ extension SpendDashboardModelTests {
             now: now,
             hiddenSourceIDs: [SpendDashboardModel.openCodexSourceID])
         #expect(filtered.groups[0].providers.map(\.id) == ["codex:main"])
+        #expect(Set(filtered.availableSources.map(\.id)) == ["codex:main", SpendDashboardModel.openCodexSourceID])
+    }
+
+    @Test
+    func `metered spend stays on the snapshot window instead of a shorter range`() {
+        let now = Date(timeIntervalSince1970: 1_784_179_200)
+        let snapshot = CostUsageTokenSnapshot(
+            sessionTokens: 10,
+            sessionCostUSD: 1,
+            last30DaysTokens: 100,
+            last30DaysCostUSD: 10,
+            historyDays: 30,
+            meteredCostUSD: 4.5,
+            costProvenance: .mixed,
+            daily: [Self.entry(day: "2026-07-16", cost: 1)],
+            updatedAt: now)
+        let input = SpendDashboardModel.ProviderInput(
+            id: "cursor",
+            provider: .cursor,
+            displayName: "Cursor",
+            snapshot: snapshot)
+        let week = SpendDashboardModel.build(inputs: [input], requestedDays: 7, now: now)
+        let month = SpendDashboardModel.build(inputs: [input], requestedDays: 30, now: now)
+        #expect(week.groups[0].meteredCost == nil)
+        #expect(month.groups[0].meteredCost == 4.5)
     }
 }
 

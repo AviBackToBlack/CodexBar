@@ -20,6 +20,14 @@ enum SpendActivityViewMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum SpendActivityDaySelection {
+    static func day(from series: SpendActivitySeries, at index: Int, selectedDay: Date?) -> Date? {
+        guard series.isCovered.indices.contains(index), series.isCovered[index] else { return nil }
+        let day = series.date(at: index).map { series.calendar.startOfDay(for: $0) }
+        return day == selectedDay ? nil : day
+    }
+}
+
 struct SpendActivitySeries {
     static let weekCount = 53
     static let dayCount = 7
@@ -681,8 +689,8 @@ private struct SpendActivityDailyGrid: View {
 
     private func handleTap(at location: CGPoint, pitch: CGFloat) {
         guard let onSelectDay, let index = self.cellIndex(at: location, pitch: pitch) else { return }
-        let day = self.series.date(at: index).map { self.series.calendar.startOfDay(for: $0) }
-        onSelectDay(day == self.selectedDay ? nil : day)
+        guard self.series.isCovered.indices.contains(index), self.series.isCovered[index] else { return }
+        onSelectDay(SpendActivityDaySelection.day(from: self.series, at: index, selectedDay: self.selectedDay))
     }
 
     private func isVisibleCell(_ index: Int) -> Bool {

@@ -913,11 +913,11 @@ private struct SpendDashboardSourceFilter: View {
     }
 
     private var sourceIDs: [String] {
-        Array(Set(self.model.groups.flatMap(\.providers).map(\.id))).sorted()
+        self.model.availableSources.map(\.id)
     }
 
     private func label(for sourceID: String) -> String {
-        self.model.groups.flatMap(\.providers).first { $0.id == sourceID }?.displayName ?? sourceID
+        self.model.availableSources.first { $0.id == sourceID }?.displayName ?? sourceID
     }
 
     private func visibilityBinding(_ sourceID: String) -> Binding<Bool> {

@@ -38,6 +38,11 @@ struct SpendDashboardModel: Equatable, Sendable {
         let sourceKind: SpendDashboardModel.SourceKind
     }
 
+    struct SourceFilterItem: Identifiable, Equatable, Sendable {
+        let id: String
+        let displayName: String
+    }
+
     struct ProviderRow: Identifiable, Equatable, Sendable {
         let id: String
         let rank: Int
@@ -247,6 +252,7 @@ struct SpendDashboardModel: Equatable, Sendable {
 
     let requestedDays: Int
     let groups: [CurrencyGroup]
+    let availableSources: [SourceFilterItem]
     let tokenActivity: [TokenActivityPoint]
     let hourlyPoints: [HourlyPoint]
     let selectedDay: Date?
@@ -257,12 +263,14 @@ struct SpendDashboardModel: Equatable, Sendable {
     init(
         requestedDays: Int,
         groups: [CurrencyGroup],
+        availableSources: [SourceFilterItem] = [],
         tokenActivity: [TokenActivityPoint] = [],
         hourlyPoints: [HourlyPoint] = [],
         selectedDay: Date? = nil)
     {
         self.requestedDays = requestedDays
         self.groups = groups
+        self.availableSources = availableSources
         self.tokenActivity = tokenActivity
         self.hourlyPoints = hourlyPoints
         self.selectedDay = selectedDay
@@ -280,6 +288,9 @@ struct SpendDashboardModel: Equatable, Sendable {
     {
         let days = max(1, min(SpendDashboardSource.scanDays, requestedDays))
         let calculationCalendar = Self.gregorianCalendar(timeZone: calendar.timeZone)
+        let availableSources = inputs
+            .map { SourceFilterItem(id: $0.id, displayName: $0.displayName) }
+            .sorted { $0.id < $1.id }
         let visibleInputs = Self.visibleInputs(
             inputs,
             hiddenSourceIDs: hiddenSourceIDs,
@@ -312,6 +323,7 @@ struct SpendDashboardModel: Equatable, Sendable {
         return Self(
             requestedDays: days,
             groups: groups,
+            availableSources: availableSources,
             tokenActivity: Self.tokenActivity(
                 inputs: visibleInputs,
                 now: now,
@@ -442,7 +454,10 @@ struct SpendDashboardModel: Equatable, Sendable {
                 tokenMix.merge(.from(entry: windowEntry.entry))
                 coverage.merge(windowEntry.entry.coverageCounts)
             }
-            if let meteredCost = summary.input.snapshot.meteredCostUSD {
+            if selectedDay == nil,
+               let meteredCost = summary.input.snapshot.meteredCostUSD,
+               days >= summary.input.snapshot.historyDays
+            {
                 sawMetered = true
                 metered = (metered ?? 0) + meteredCost * summary.costMultiplier
             }
