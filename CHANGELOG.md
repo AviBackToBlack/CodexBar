@@ -2,6 +2,9 @@
 
 ## 0.52.1 — Unreleased
 
+### Fixed
+- Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
+
 ## 0.52.0 — 2026-08-17
 
 ### Added
