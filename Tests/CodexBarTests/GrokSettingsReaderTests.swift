@@ -23,6 +23,27 @@ struct GrokSettingsReaderTests {
     }
 
     @Test
+    func `prefers a pasted SuperGrok token when auth json is expired`() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexBar-GrokExpiredAuth-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data("""
+        {
+          "https://auth.x.ai::client": {
+            "key": "stale-file-token",
+            "auth_mode": "oidc",
+            "expires_at": "2020-01-01T00:00:00Z"
+          }
+        }
+        """.utf8).write(to: home.appendingPathComponent("auth.json"))
+
+        var env = [GrokSettingsReader.oauthTokenEnvironmentKey: "pasted-token"]
+        env["GROK_HOME"] = home.path
+        #expect(GrokSettingsReader.resolvedCredentials(environment: env)?.accessToken == "pasted-token")
+    }
+
+    @Test
     func `descriptor exposes SuperGrok token accounts`() {
         let support = GrokProviderDescriptor.descriptor.credentials?.tokenAccountSupport
         #expect(support?.title == "SuperGrok tokens")
