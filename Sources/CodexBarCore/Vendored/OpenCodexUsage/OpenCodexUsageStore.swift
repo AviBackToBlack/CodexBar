@@ -45,8 +45,16 @@ public struct OpenCodexUsageStore: Sendable {
         }
 
         let parsed = try OpenCodexUsageParser.parse(fileURL: logURL, fileManager: fileManager)
-        self.replaceCachedEntries(parsed, identity: identity)
-        return parsed
+        var unique: [String: OpenCodexUsageEntry] = [:]
+        for entry in parsed {
+            unique[entry.requestID] = entry
+        }
+        let deduped = unique.values.sorted {
+            if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
+            return $0.requestID < $1.requestID
+        }
+        self.replaceCachedEntries(deduped, identity: identity)
+        return deduped
     }
 
     private func readCachedEntries(identity: String) -> [OpenCodexUsageEntry]? {
@@ -81,7 +89,7 @@ public struct OpenCodexUsageStore: Sendable {
         Self.setMeta(db, key: "identity", value: identity)
         var statement: OpaquePointer?
         let sql = """
-        INSERT INTO entries(
+        INSERT OR REPLACE INTO entries(
             request_id, timestamp, provider, model, usage_status, account_label, surface, conversation_id, payload
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """

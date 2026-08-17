@@ -110,6 +110,10 @@ enum OpenCodexUsageAggregator {
             return lhs.sessionID < rhs.sessionID
         }
 
+        let todayEntry = CostUsageTokenSnapshot.entry(
+            in: daily,
+            forLocalDayContaining: now,
+            calendar: calendar)
         let windowSummary = CostUsageTokenSnapshot(
             sessionTokens: nil,
             sessionCostUSD: nil,
@@ -122,14 +126,15 @@ enum OpenCodexUsageAggregator {
             .summary(forLastDays: min(30, days), calendar: calendar)
 
         return CostUsageTokenSnapshot(
-            sessionTokens: daily.last.flatMap(\.totalTokens),
-            sessionCostUSD: daily.last.flatMap(\.costUSD),
-            sessionRequests: daily.last.flatMap(\.requestCount),
+            sessionTokens: todayEntry?.totalTokens ?? (daily.isEmpty ? nil : 0),
+            sessionCostUSD: todayEntry?.costUSD ?? (daily.isEmpty ? nil : 0),
+            sessionRequests: todayEntry?.requestCount ?? (daily.isEmpty ? nil : 0),
             last30DaysTokens: windowSummary.totalTokens,
             last30DaysCostUSD: windowSummary.totalCostUSD,
             last30DaysRequests: windowSummary.totalRequests,
             historyDays: days,
             historyLabel: "OpenCodex usage.jsonl",
+            costProvenance: .listPriceEstimate,
             daily: daily,
             sessions: Array(sessionRows.prefix(64)),
             updatedAt: now)
@@ -174,9 +179,12 @@ enum OpenCodexUsageAggregator {
         if let cost {
             day.cost += cost
             day.sawCost = true
-        } else if entry.usageStatus == .reported || entry.usageStatus == .estimated {
+        } else if entry.usageStatus == .reported {
             day.unpriced += 1
             if day.priced > 0 { day.priced -= 1 }
+        } else if entry.usageStatus == .estimated {
+            day.unpriced += 1
+            if day.estimated > 0 { day.estimated -= 1 }
         }
 
         var model = day.models[entry.model] ?? ModelAccumulator()
@@ -258,10 +266,18 @@ enum OpenCodexUsageAggregator {
         entry: OpenCodexUsageEntry,
         customPricing: CostUsageCustomPricing) -> Double?
     {
-        let input = entry.usage?.inputTokens ?? 0
-        let output = entry.usage?.outputTokens ?? 0
-        let cacheRead = entry.usage?.cacheReadTokens ?? 0
-        let cacheWrite = entry.usage?.cacheCreationInputTokens ?? 0
+        guard entry.usageStatus == .reported || entry.usageStatus == .estimated else { return nil }
+        let usage = entry.usage
+        let hasTokenData = entry.resolvedTotalTokens != nil
+            || usage?.inputTokens != nil
+            || usage?.outputTokens != nil
+            || usage?.cacheReadTokens != nil
+            || usage?.cacheCreationInputTokens != nil
+        guard hasTokenData else { return nil }
+        let input = usage?.inputTokens ?? 0
+        let output = usage?.outputTokens ?? 0
+        let cacheRead = usage?.cacheReadTokens ?? 0
+        let cacheWrite = usage?.cacheCreationInputTokens ?? 0
         if let overlay = customPricing.costUSD(
             providerID: entry.provider,
             model: entry.model,
