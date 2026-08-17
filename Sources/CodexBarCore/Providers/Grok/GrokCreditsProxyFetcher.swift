@@ -81,13 +81,7 @@ public enum GrokCreditsProxyFetcher {
                 subscriptionTier: subscriptionTier)
         }
 
-        guard subscriptionTier != nil else {
-            throw GrokWebBillingError.parseFailed
-        }
-        return GrokWebBillingSnapshot(
-            usedPercent: nil,
-            resetsAt: nil,
-            subscriptionTier: subscriptionTier)
+        throw GrokWebBillingError.parseFailed
     }
 
     private static func parseISO8601(_ raw: String) -> Date? {

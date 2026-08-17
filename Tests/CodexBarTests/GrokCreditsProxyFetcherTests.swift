@@ -147,17 +147,18 @@ struct GrokCreditsProxyFetcherTests {
     }
 
     @Test
-    func `keeps SuperGrok Heavy identity when only the tier is present`() throws {
-        let snapshot = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
-        {
-          "config": { "onDemandCap": { "val": 0 } },
-          "subscriptionTier": "supergrok_heavy"
+    func `rejects a tier-only response so legacy billing can run`() {
+        #expect {
+            _ = try GrokCreditsProxyFetcher.parseSnapshot(Data("""
+            {
+              "config": { "onDemandCap": { "val": 0 } },
+              "subscriptionTier": "supergrok_heavy"
+            }
+            """.utf8))
+        } throws: { error in
+            guard case GrokWebBillingError.parseFailed = error else { return false }
+            return true
         }
-        """.utf8))
-
-        #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
-        #expect(snapshot.usedPercent == nil)
-        #expect(snapshot.resetsAt == nil)
     }
 
     @Test
@@ -257,6 +258,31 @@ struct GrokCreditsProxyFetcherTests {
         #expect(result.snapshot.usedPercent == 12.5)
         #expect(result.sourceLabel == "grok-cli-proxy")
         #expect(result.authenticatedByAuthFile)
+    }
+
+    @Test
+    func `tier-only proxy parse failure falls through to legacy billing`() async throws {
+        let events = EventRecorder()
+        let result = try await GrokWebFetchStrategy.fetchProxyFirst(
+            credentials: Self.credentials,
+            proxyBilling: { _ in
+                events.append("proxy")
+                throw GrokWebBillingError.parseFailed
+            },
+            legacyBilling: {
+                events.append("legacy")
+                return (
+                    GrokWebBillingSnapshot(
+                        usedPercent: 33,
+                        resetsAt: Date(timeIntervalSince1970: 1_800_000_003)),
+                    "Chrome",
+                    false)
+            })
+
+        #expect(events.values == ["proxy", "legacy"])
+        #expect(result.snapshot.usedPercent == 33)
+        #expect(result.sourceLabel == "Chrome")
+        #expect(!result.authenticatedByAuthFile)
     }
 
     @Test
