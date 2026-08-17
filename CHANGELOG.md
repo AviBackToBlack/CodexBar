@@ -7,6 +7,7 @@
 - General settings: turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
 
 ### Fixed
+- Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
 - Cursor: keep an API-validated usage result when the Keychain cache is temporarily unavailable, instead of treating it as a missing or replaced session (#3000). Thanks @hxy91819!
 - Usage & Spend: sum priced subscriptions into a ~$ partial estimate with coverage shown when some subscriptions lack prices, instead of hiding the total (#3001). Thanks @Yuxin-Qiao!
 - Usage & Spend: keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
