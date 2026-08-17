@@ -712,7 +712,7 @@ struct SpendDashboardModelTests {
     }
 
     @Test
-    func `unpriced history stays unavailable instead of becoming zero`() throws {
+    func `unpriced history keeps spend unavailable and lists named models`() throws {
         let snapshot = Self.snapshot(
             currency: "CAD",
             entries: [Self.entry(day: "2026-07-16", cost: nil, tokens: 12)])
@@ -726,6 +726,9 @@ struct SpendDashboardModelTests {
         #expect(group.totalCost == nil)
         #expect(group.totalTokens == 12)
         #expect(group.providers.first?.totalCost == nil)
+        #expect(group.models.map(\.modelName) == ["test-model"])
+        #expect(group.models.map(\.totalCost) == [nil])
+        #expect(spendDashboardModelHistoryPresentation(group) == .partial)
     }
 
     @Test

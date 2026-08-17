@@ -259,13 +259,15 @@ struct SpendDashboardModel: Equatable, Sendable {
         }
         let providers = Self.providerRows(summaries)
         let modelSummaries = summaries.filter { summary in
-            guard summary.totalCost != nil else { return false }
             let summaryModelHistory = Self.modelSummary(summaries: [summary])
-            return summaryModelHistory.completeness == .complete ||
-                Self.canRetainPartialCodexModelHistory(summary)
+            if summary.totalCost != nil {
+                return summaryModelHistory.completeness == .complete ||
+                    Self.canRetainPartialCodexModelHistory(summary)
+            }
+            return Self.canRetainUnpricedModelHistory(summary)
         }
-        // A Codex session can have valid priced rows alongside model-less or unpriced rows.
-        // Keep only the directly priced portion, but mark the aggregate partial and remove ranking.
+        // Unpriced named models can still list. Incomplete priced coverage stays hidden so a
+        // partial list cannot look like a lower-bound total.
         let modelSummary = Self.modelSummary(summaries: modelSummaries)
         let modelHistoryCompleteness = modelSummaries.count == summaries.count &&
             modelSummary.completeness == .complete
