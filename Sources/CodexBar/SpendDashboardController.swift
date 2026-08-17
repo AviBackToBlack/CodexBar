@@ -126,8 +126,9 @@ enum SpendDashboardSource {
         -> CostUsageTokenSnapshot?
     typealias CodexCacheRootResolver = @Sendable (CodexSpendScanRequest) -> URL
 
-    static let scanDays = 30
     static let activityDays = 365
+    /// Local spend scan window. Matches token-activity depth so 7d / 30d / All share one snapshot.
+    static let scanDays = activityDays
 
     @MainActor
     static func configuration(settings: SettingsStore, store: UsageStore) -> SpendDashboardConfiguration {
@@ -1228,7 +1229,9 @@ final class SpendDashboardController {
         })
     }
 
+    private static let supportedDayRanges = [7, 30, SpendDashboardSource.scanDays]
+
     private static func normalizedDays(_ value: Int) -> Int {
-        value == 7 ? 7 : 30
+        self.supportedDayRanges.contains(value) ? value : 30
     }
 }
