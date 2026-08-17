@@ -205,14 +205,13 @@ struct GeneralPane: View {
                 }
             } header: {
                 Text(L("section_keyboard_shortcut"))
+            } footer: {
+                Button(L("quit_app")) { NSApp.terminate(nil) }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.top, 8)
             }
 
-            Section {
-                HStack {
-                    Spacer()
-                    Button(L("quit_app")) { NSApp.terminate(nil) }
-                }
-            }
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
