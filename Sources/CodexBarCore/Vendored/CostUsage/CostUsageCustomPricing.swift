@@ -128,14 +128,13 @@ public struct CostUsageCustomPricing: Sendable, Equatable {
         inputTokens: Int,
         cachedInputTokens: Int,
         outputTokens: Int,
-        cacheWriteInputTokens: Int,
-        providerID: String) -> Double?
+        cacheWriteInputTokens: Int) -> Double?
     {
         let cached = max(0, cachedInputTokens)
         let written = max(0, cacheWriteInputTokens)
         let uncachedInput = max(0, inputTokens - cached - written)
         return self.costUSD(
-            providerID: providerID,
+            providerID: CostUsagePricing.codexModelsDevProviderID,
             model: model,
             inputTokens: uncachedInput,
             outputTokens: outputTokens,

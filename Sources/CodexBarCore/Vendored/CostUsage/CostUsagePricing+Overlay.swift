@@ -16,8 +16,7 @@ extension CostUsagePricing {
             inputTokens: inputTokens,
             cachedInputTokens: cachedInputTokens,
             outputTokens: outputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            providerID: self.codexModelsDevProviderID)
+            cacheWriteInputTokens: cacheWriteInputTokens)
         {
             return cost
         }
@@ -49,8 +48,7 @@ extension CostUsagePricing {
             inputTokens: inputTokens,
             cachedInputTokens: cachedInputTokens,
             outputTokens: outputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            providerID: self.codexModelsDevProviderID)
+            cacheWriteInputTokens: cacheWriteInputTokens)
         {
             return cost
         }
