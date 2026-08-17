@@ -533,7 +533,7 @@ struct SpendDashboardControllerTests {
     }
 
     @Test
-    func `history scope change drops stale spend when replacement refresh is unconfirmed`() async {
+    func `menu history scope change does not drop spend dashboard ownership`() async {
         let settings = testSettingsStore(suiteName: "SpendDashboardControllerTests-history-scope")
         settings.costUsageEnabled = true
         for provider in UsageProvider.allCases {
@@ -556,14 +556,14 @@ struct SpendDashboardControllerTests {
 
         settings.costUsageHistoryDays = 7
         let replacementConfiguration = SpendDashboardSource.configuration(settings: settings, store: store)
-        #expect(firstConfiguration.sourceOwnershipFingerprints != replacementConfiguration.sourceOwnershipFingerprints)
+        #expect(firstConfiguration.sourceOwnershipFingerprints == replacementConfiguration.sourceOwnershipFingerprints)
         #expect(store.tokenSnapshotForCurrentProviderConfig(for: .claude) == nil)
 
         controller.update(configuration: replacementConfiguration)
-        #expect(controller.model.groups.isEmpty)
+        #expect(controller.model.groups.first?.totalCost == 5)
         await Self.waitUntil { !controller.isRefreshing }
-        #expect(controller.model.groups.isEmpty)
-        #expect(controller.failedSourceCount == 1)
+        #expect(controller.model.groups.first?.totalCost == 5)
+        #expect(controller.failedSourceCount == 0)
     }
 
     @Test

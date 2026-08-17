@@ -132,6 +132,7 @@ enum SpendDashboardSource {
 
     @MainActor
     static func configuration(settings: SettingsStore, store: UsageStore) -> SpendDashboardConfiguration {
+        store.discardSpendDashboardTokenPublicationsIfCostUsageDisabled()
         let providers = self.costCapableProviders(store: store)
         let codexRequests = providers.contains(.codex)
             ? self.codexRequests(settings: settings, store: store)
@@ -171,6 +172,7 @@ enum SpendDashboardSource {
         now: Date? = nil,
         nowProvider: @escaping @Sendable () -> Date = { Date() }) async -> SpendDashboardLoadRequest
     {
+        store.discardSpendDashboardTokenPublicationsIfCostUsageDisabled()
         guard settings.costUsageEnabled else {
             return SpendDashboardLoadRequest(
                 configuration: self.configuration(settings: settings, store: store),
@@ -183,16 +185,17 @@ enum SpendDashboardSource {
 
         let initialProviders = self.costCapableProviders(store: store)
         let providerBaselines = initialProviders.filter { $0 != .codex }.map { provider in
-            (
+            let captured = self.capturedTokenPublication(store: store, provider: provider)
+            return (
                 provider: provider,
-                publication: store.tokenSnapshotPublicationForCurrentProviderConfig(for: provider),
-                publicationRevision: store.tokenSnapshotPublicationRevision(for: provider))
+                publication: captured.publication,
+                publicationRevision: captured.revision)
         }
         for baseline in providerBaselines where mode.shouldRefresh(hasPublication: baseline.publication != nil) {
             if UsageStore.tokenCostRequiresProviderSnapshot(baseline.provider) {
                 await store.refreshProvider(baseline.provider)
             } else {
-                await store.refreshTokenUsageNow(for: baseline.provider, force: true)
+                await store.refreshSpendDashboardTokenUsageNow(for: baseline.provider, force: true)
             }
         }
 
@@ -228,16 +231,16 @@ enum SpendDashboardSource {
                 continue
             }
             let shouldRefresh = mode.shouldRefresh(hasPublication: baseline.publication != nil)
-            let current = store.tokenSnapshotPublicationForCurrentProviderConfig(for: provider)
-            guard let current else {
+            let current = self.capturedTokenPublication(store: store, provider: provider)
+            guard let currentPublication = current.publication else {
                 unavailableSourceIDs.insert(provider.rawValue)
                 continue
             }
-            if shouldRefresh, baseline.publicationRevision == current.publicationRevision {
+            if shouldRefresh, baseline.publicationRevision == current.revision {
                 unavailableSourceIDs.insert(provider.rawValue)
                 continue
             }
-            guard let snapshot = current.snapshot else {
+            guard let snapshot = currentPublication.snapshot else {
                 confirmedEmptySourceIDs.insert(provider.rawValue)
                 continue
             }
@@ -498,8 +501,14 @@ enum SpendDashboardSource {
             revisions.append("codex-dashboard:\(store.spendDashboardCodexCostCatchUpRevision)")
         }
         revisions += providers.compactMap { provider in
+            // Provider-specific by design: Codex revisions come from catch-up, not captured token publications.
             guard provider != .codex else { return nil }
-            let current = store.tokenSnapshotPublicationForCurrentProviderConfig(for: provider)
+            let current: CurrentProviderConfigTokenPublication? =
+                if UsageStore.usesSpendDashboardIndependentTokenSnapshot(provider) {
+                    store.spendDashboardTokenSnapshotPublicationForCurrentConfig(for: provider)
+                } else {
+                    store.tokenSnapshotPublicationForCurrentProviderConfig(for: provider)
+                }
             guard let current else { return "\(provider.rawValue):unavailable" }
             guard let snapshot = current.snapshot else {
                 return "\(provider.rawValue):empty:\(current.publicationRevision)"
@@ -559,13 +568,36 @@ enum SpendDashboardSource {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let encoded = (try? encoder.encode(config)) ?? Data()
-            let scope = store.tokenSnapshotScopeSignature(for: provider)
+            let scope = UsageStore.usesSpendDashboardIndependentTokenSnapshot(provider)
+                ? store.spendDashboardTokenSnapshotScopeSignature(for: provider)
+                : store.tokenSnapshotScopeSignature(for: provider)
             let accountOwnership = settings.effectiveSelectedTokenAccount(for: provider)
                 .map { store.tokenAccountSnapshotCacheKey(provider: provider, account: $0) }
                 ?? "ambient"
             return "\(provider.rawValue):\(self.sha256(encoded)):\(self.sha256(scope)):" +
                 self.sha256(accountOwnership)
         }
+    }
+
+    @MainActor
+    private static func capturedTokenPublication(
+        store: UsageStore,
+        provider: UsageProvider) -> (
+        publication: CurrentProviderConfigTokenPublication?,
+        revision: UInt64)
+    {
+        if UsageStore.usesSpendDashboardIndependentTokenSnapshot(provider) {
+            let revision = store.spendDashboardTokenSnapshotPublicationRevision(for: provider)
+            if let spend = store.spendDashboardTokenSnapshotPublicationForCurrentConfig(for: provider) {
+                return (spend, revision)
+            }
+            return (
+                store.tokenSnapshotPublicationForCurrentProviderConfig(for: provider),
+                revision)
+        }
+        return (
+            store.tokenSnapshotPublicationForCurrentProviderConfig(for: provider),
+            store.tokenSnapshotPublicationRevision(for: provider))
     }
 
     static func codexRequest(
