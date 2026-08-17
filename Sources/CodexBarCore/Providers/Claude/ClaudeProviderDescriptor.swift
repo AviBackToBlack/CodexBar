@@ -261,7 +261,7 @@ public enum ClaudeProviderDescriptor {
         let plan = ClaudeSourcePlanner.resolve(input: planningInput)
         let webEnrichmentAccess = Self.webEnrichmentAccess(context: context)
 
-        var strategies: [any ProviderFetchStrategy] = plan.orderedSteps.map { step in
+        return plan.orderedSteps.map { step in
             let strategy: any ProviderFetchStrategy = switch step.dataSource {
             case .api:
                 ClaudeAdminAPIFetchStrategy()
@@ -285,10 +285,6 @@ public enum ClaudeProviderDescriptor {
             }
             return ClaudePlannedFetchStrategy(base: strategy, plannedStep: step)
         }
-        if Self.shouldUseStatusLineStandalone(context: context) {
-            strategies.insert(ClaudeStatusLineFetchStrategy(), at: 0)
-        }
-        return strategies
     }
 
     private static func hasAutoAdminAPIKey(context: ProviderFetchContext) -> Bool {
@@ -331,17 +327,6 @@ public enum ClaudeProviderDescriptor {
             // App Auto and explicit OAuth perform one real, noninteractive OAuth attempt. Do not preflight here:
             // a preflight can mutate cache state and make the real fetch misclassify a typed error.
             hasOAuthCredentials: shouldAttemptOAuth)
-    }
-
-    private static func shouldUseStatusLineStandalone(context: ProviderFetchContext) -> Bool {
-        guard context.runtime == .app,
-              context.sourceMode == .auto,
-              context.selectedTokenAccountID == nil,
-              let settings = context.settings?.claude
-        else { return false }
-        return settings.statusLineFeedEnabled &&
-            settings.keychainAccessDisabled &&
-            settings.statusLineStandaloneAllowed
     }
 
     private static func hasPlausibleWebSession(context: ProviderFetchContext) -> Bool {

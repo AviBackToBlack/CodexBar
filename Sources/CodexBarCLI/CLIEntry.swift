@@ -79,8 +79,6 @@ enum CodexBarCLI {
                 await self.runGuard(invocation.parsedValues)
             case let path where path.first == "plugins":
                 await self.runPlugins(path: path, values: invocation.parsedValues)
-            case ["claude", "statusline", "capture"]:
-                self.runClaudeStatusLineCapture()
             default:
                 Self.exit(
                     code: .failure,
@@ -281,32 +279,7 @@ enum CodexBarCLI {
                 signature: diagnoseSignature),
         ]
         descriptors.append(Self.pluginsCommandDescriptor())
-        descriptors.append(Self.claudeCommandDescriptor())
         return descriptors
-    }
-
-    private static func claudeCommandDescriptor() -> CommandDescriptor {
-        CommandDescriptor(
-            name: "claude",
-            abstract: "Claude Code integrations",
-            discussion: nil,
-            signature: CommandSignature(),
-            subcommands: [
-                CommandDescriptor(
-                    name: "statusline",
-                    abstract: "Claude Code statusLine integration",
-                    discussion: nil,
-                    signature: CommandSignature(),
-                    subcommands: [
-                        CommandDescriptor(
-                            name: "capture",
-                            abstract: "Capture sanitized Claude Code rate-limit windows from stdin",
-                            discussion: nil,
-                            signature: CommandSignature()),
-                    ],
-                    defaultSubcommandName: "capture"),
-            ],
-            defaultSubcommandName: "statusline")
     }
 
     private static func pluginsCommandDescriptor() -> CommandDescriptor {

@@ -485,7 +485,6 @@ extension CodexBarCLI {
           codexbar cookie refresh <--provider <name>|--all> [--allow-keychain-prompt]
           codexbar diagnose --provider <name|all> --format json [--redact] [--output <path>] [--pretty]
           codexbar guard --provider <name> [--min-remaining <percent>] [--window session|weekly] [--json]
-          codexbar claude statusline capture
 
         Global flags:
           -h, --help      Show help
@@ -517,20 +516,6 @@ extension CodexBarCLI {
           codexbar diagnose --provider minimax --format json --pretty
           codexbar diagnose --provider all --format json
           codexbar guard --provider claude --min-remaining 20
-        """
-    }
-
-    static func claudeStatusLineHelp(version: String) -> String {
-        """
-        CodexBar \(version)
-
-        Usage:
-          codexbar claude statusline capture
-
-        Description:
-          Reads one bounded Claude Code statusLine JSON object from stdin and stores only the official
-          rate_limits.five_hour and rate_limits.seven_day percentages and reset times. Stdout is empty so
-          this helper does not add text to Claude Code's status line. Invalid input is ignored.
         """
     }
 }

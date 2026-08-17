@@ -127,22 +127,6 @@ struct KeychainPromptSafetyAuditTests {
     }
 
     @Test
-    func `Claude statusLine capture path has no Security item APIs`() throws {
-        let securityItemCalls = ["SecItemCopyMatching", "SecItemUpdate", "SecItemAdd", "SecItemDelete"]
-        let paths = [
-            "Sources/CodexBarCLI/CLIClaudeStatusLineCommand.swift",
-            "Sources/CodexBarCore/Providers/Claude/ClaudeStatusLinePayload.swift",
-            "Sources/CodexBarCore/Providers/Claude/ClaudeStatusLineDropStore.swift",
-        ]
-        for path in paths {
-            let source = try Self.readRepoFile(path)
-            #expect(
-                !securityItemCalls.contains(where: source.contains),
-                "\(path) must not contain a Security item API")
-        }
-    }
-
-    @Test
     func `production source routes Security item APIs through the test safety gateway`() throws {
         let securityItemCalls = ["SecItemCopyMatching", "SecItemUpdate", "SecItemAdd", "SecItemDelete"]
         let offenders = try Self.swiftFiles(

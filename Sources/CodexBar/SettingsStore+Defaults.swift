@@ -673,18 +673,6 @@ extension SettingsStore {
         set { self.claudeWebExtrasEnabledRaw = newValue }
     }
 
-    var claudeStatusLineFeedEnabled: Bool {
-        get { self.defaultsState.claudeStatusLineFeedEnabledRaw }
-        set {
-            self.defaultsState.claudeStatusLineFeedEnabledRaw = newValue
-            self.userDefaults.set(newValue, forKey: "claudeStatusLineFeedEnabled")
-            CodexBarLog.logger(LogCategories.settings).info(
-                "Claude statusLine feed updated",
-                metadata: ["enabled": newValue ? "1" : "0"])
-            self.noteBackgroundWorkSettingsChanged()
-        }
-    }
-
     var copilotBudgetExtrasEnabled: Bool {
         get { self.defaultsState.copilotBudgetExtrasEnabled }
         set {

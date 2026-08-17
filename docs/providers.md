@@ -11,10 +11,6 @@ read_when:
 CodexBar currently registers 69 provider IDs. Some companies expose multiple surfaces, such as Codex vs OpenAI API or
 OpenCode vs OpenCode Go, because the auth source and quota shape differ.
 
-Claude also offers an optional, off-by-default Claude Code statusLine observation. It is not a selectable provider
-source: it can only supply available anonymous 5-hour/7-day ambient windows while global Keychain access is disabled. See
-[Claude statusLine feed](claude-statusline-feed.md).
-
 ## Fetch strategies (current)
 Legend: web (browser cookies/WebView), cli (RPC/PTy or provider CLI), oauth (provider OAuth), api token, local probe, web dashboard.
 Source labels (CLI/header): `openai-web`, `web`, `oauth`, `api`, `local`, `cli`, plus provider-specific CLI labels (e.g. `codex-cli`, `claude`).

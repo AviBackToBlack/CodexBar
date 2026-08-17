@@ -35,14 +35,6 @@ tar -xzf CodexBarCLI-v0.17.0-macos-x86_64.tar.gz
 - Standalone: `swift build -c release --product CodexBarCLI` (binary at `./.build/release/CodexBarCLI`).
 - Dependencies: Swift 6.2+, Commander package (`https://github.com/steipete/Commander`).
 
-### Claude Code statusLine capture
-
-`codexbar claude statusline capture` is the noninteractive stdin helper used by CodexBar's optional Claude Code
-statusLine integration. It accepts one JSON object up to 1 MiB, persists only the official 5-hour and 7-day usage
-percentages that are present plus sane optional numeric reset times, and writes no stdout so it does not add visible
-statusLine text. Each window is independent; invalid fields are ignored and an observation with no valid window is
-discarded. The command never reads the Keychain.
-
 ## Configuration
 CodexBar reads the resolved config file for provider settings, secrets, and ordering. New installs use
 `~/.config/codexbar/config.json`; absolute `XDG_CONFIG_HOME` paths and `CODEXBAR_CONFIG` are supported, and existing

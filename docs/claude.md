@@ -17,27 +17,6 @@ pending. For the exact current-state parity contract, see
 When an Anthropic Admin API key is configured, Claude can also show organization-level spend/messages/tokens in the
 same inline dashboard pattern used by the OpenAI API provider.
 
-## Optional Claude Code statusLine observation
-
-CodexBar can install an off-by-default command in Claude Code's single user-level `statusLine` slot. The bundled
-`CodexBarCLI` helper reads Claude Code's JSON from stdin, allowlists only
-`rate_limits.five_hour.used_percentage/resets_at` and
-`rate_limits.seven_day.used_percentage/resets_at`, and writes a short-lived local observation. It never reads a
-credential or calls the Keychain.
-
-The two windows are independent: CodexBar shows whichever valid percentages Claude Code provides. Reset timestamps
-are optional numeric Unix epochs; invalid or missing reset metadata does not discard a valid percentage.
-
-This source intentionally has reduced fidelity. It is used only for the anonymous ambient Claude card when
-**Settings → Advanced → Disable Keychain access** is enabled, Claude is in Auto mode, and no explicit token,
-Admin API, claude-swap, or multi-account presentation is active. The card has no email, organization, plan, login
-method, model-scoped quotas, Daily Routines/Cowork, extra usage, cost, or other account-derived fields. When
-Keychain access is enabled, CodexBar ignores the observation and continues through OAuth, CLI, and Web normally.
-
-Enable it under **Settings → Providers → Claude → Use your Claude Code statusLine feed**, then choose **Install**.
-CodexBar refuses to replace a custom statusLine. See [the statusLine feed guide](claude-statusline-feed.md) for
-installation ownership, manual composition, privacy, and schema limitations.
-
 ## Data sources + selection order
 
 ### Default selection (debug menu disabled)

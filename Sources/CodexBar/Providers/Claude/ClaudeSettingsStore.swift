@@ -104,23 +104,11 @@ extension SettingsStore {
                 routing: routing,
                 hasSelectedAccount: account != nil),
             webExtrasEnabled: self.claudeWebExtrasEnabled,
-            statusLineFeedEnabled: self.claudeStatusLineFeedEnabled,
-            keychainAccessDisabled: self.debugDisableKeychainAccess,
-            statusLineStandaloneAllowed: self.claudeStatusLineStandaloneAllowed(account: account),
             cookieSource: self.claudeSnapshotCookieSource(tokenOverride: tokenOverride, routing: routing),
             manualCookieHeader: self.claudeSnapshotCookieHeader(
                 routing: routing,
                 hasSelectedAccount: account != nil),
             organizationID: account?.sanitizedOrganizationID)
-    }
-
-    private func claudeStatusLineStandaloneAllowed(account: ProviderTokenAccount?) -> Bool {
-        self.debugDisableKeychainAccess &&
-            self.claudeStatusLineFeedEnabled &&
-            self.claudeUsageDataSource == .auto &&
-            account == nil &&
-            self.tokenAccounts(for: .claude).isEmpty &&
-            !self.claudeSwapEnabled
     }
 
     private static func claudeUsageDataSource(from source: ProviderSourceMode?) -> ClaudeUsageDataSource {
@@ -186,9 +174,7 @@ extension SettingsStore {
         if routing.adminAPIKey != nil {
             return .off
         }
-        if self.tokenAccounts(for: .claude).isEmpty {
-            return fallback
-        }
+        if self.tokenAccounts(for: .claude).isEmpty { return fallback }
         return .manual
     }
 

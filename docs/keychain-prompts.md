@@ -68,9 +68,6 @@ Alternatives depend on the provider:
 - Configure an API key or OAuth/device flow that does not depend on browser Safe Storage.
 - Use a supported file-backed or local provider source.
 - For Claude, leave direct foreign-item consent off and choose a CLI, Web, or usable credentials-file path.
-- For a reduced-fidelity Claude fallback, explicitly enable the Claude Code statusLine feed. It reads a sanitized
-  local observation without Security.framework and may show whichever anonymous 5-hour/7-day windows are available while global
-  Keychain access is disabled; detailed account limits remain unavailable.
 
 ## Safe troubleshooting
 

@@ -303,8 +303,7 @@ final class SettingsStore {
         copilotTokenStore: any CopilotTokenStoring = KeychainCopilotTokenStore(),
         tokenAccountStore: any ProviderTokenAccountStoring = FileTokenAccountStore(),
         antigravityOAuthCredentialsStore: AntigravityOAuthCredentialsStore = AntigravityOAuthCredentialsStore(),
-        performInitialProviderDetection: Bool = !SettingsStore.isRunningTests,
-        writesLaunchResetsToRawState: Bool = !SettingsStore.isRunningTests)
+        performInitialProviderDetection: Bool = !SettingsStore.isRunningTests)
     {
         if !Self.isRunningTests {
             _ = UserProviderPluginRegistry.refresh()
@@ -381,13 +380,10 @@ final class SettingsStore {
         self.ensureAlibabaProviderAutoEnabledIfNeeded()
         self.applyTokenCostDefaultIfNeeded()
         if self.claudeUsageDataSource != .cli {
-            // Why: this reset is CLI-scoped on purpose. The statusLine feed is deliberately not cleared
-            // here — the planner emits its step only under `.auto`, which is exactly the branch this
-            // condition covers, so resetting it would clear the opt-in in the one mode that consumes it.
-            if writesLaunchResetsToRawState {
-                self.defaultsState.claudeWebExtrasEnabledRaw = false
-            } else {
+            if Self.isRunningTests {
                 self.claudeWebExtrasEnabled = false
+            } else {
+                self.defaultsState.claudeWebExtrasEnabledRaw = false
             }
         }
         let resolvedOpenAIWebAccessEnabled = if hasStoredOpenAIWebAccessPreference {
@@ -525,9 +521,6 @@ extension SettingsStore {
         let claudeOAuthDirectKeychainReadAllowed = userDefaults.object(
             forKey: ClaudeOAuthDirectKeychainReadConsent.userDefaultsKey) as? Bool ?? false
         let claudeWebExtrasEnabledRaw = userDefaults.object(forKey: "claudeWebExtrasEnabled") as? Bool ?? false
-        // Off unless the user opts in (owner ruling, #2733).
-        let claudeStatusLineFeedEnabledRaw = userDefaults
-            .object(forKey: "claudeStatusLineFeedEnabled") as? Bool ?? false
         let creditsExtrasDefault = userDefaults.object(forKey: "showOptionalCreditsAndExtraUsage") as? Bool
         let showOptionalCreditsAndExtraUsage = creditsExtrasDefault ?? true
         if Self.isRunningTests, creditsExtrasDefault == nil {
@@ -652,7 +645,6 @@ extension SettingsStore {
             claudeOAuthKeychainReadStrategyRaw: claudeOAuthKeychainReadStrategyRaw,
             claudeOAuthDirectKeychainReadAllowed: claudeOAuthDirectKeychainReadAllowed,
             claudeWebExtrasEnabledRaw: claudeWebExtrasEnabledRaw,
-            claudeStatusLineFeedEnabledRaw: claudeStatusLineFeedEnabledRaw,
             showOptionalCreditsAndExtraUsage: showOptionalCreditsAndExtraUsage,
             claudeDailyRoutinesUsageVisible: claudeDailyRoutinesUsageVisible,
             claudeModelScopedWeeklyUsageVisible: claudeModelScopedWeeklyUsageVisible,

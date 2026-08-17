@@ -245,24 +245,11 @@ extension UsageMenuCardView.Model {
         }
     }
 
-    static func isClaudeStatusLineSource(_ sourceLabel: String?) -> Bool {
-        sourceLabel?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .caseInsensitiveCompare(ClaudeStatusLineFeed.standaloneSourceLabel) == .orderedSame
-    }
-
     static func usageNotes(input: Input) -> [String] {
         let subscriptionNotes = self.subscriptionMetadataNotes(snapshot: input.snapshot, provider: input.provider)
 
         if input.provider == .kiro {
             return self.kiroUsageNotes(input: input) + subscriptionNotes
-        }
-
-        if input.provider == .claude, Self.isClaudeStatusLineSource(input.sourceLabel) {
-            return [
-                L("Available 5h/7d usage from your Claude Code statusLine configuration."),
-                L("Detailed Claude limits are unavailable while Keychain access is disabled."),
-            ]
         }
 
         if input.provider == .kilo {

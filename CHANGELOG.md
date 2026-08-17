@@ -3,7 +3,6 @@
 ## 0.51.1 — Unreleased
 
 ### Added
-- Claude: add an off-by-default Claude Code statusLine integration that stores only sanitized 5-hour/7-day observations and can show an anonymous reduced-detail card while Keychain access is disabled (#2769). Thanks @luisgonzaleznf!
 - Usage & Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data (#2984). Thanks @Yuxin-Qiao!
 - Usage & Spend: add a Projects panel to the settings pane and let the Models and Projects lists expand beyond the top eight rows (#2985). Thanks @Yuxin-Qiao!
 

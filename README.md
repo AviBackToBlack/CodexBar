@@ -79,7 +79,7 @@ See [CLI configuration](docs/cli-configuration.md) for the full flow.
 - [Codex](docs/codex.md) — OAuth API or local Codex CLI, plus optional OpenAI web dashboard extras.
 - [OpenAI](docs/openai.md) — Admin API key usage/cost graphs with legacy credit-balance fallback.
 - [Azure OpenAI](docs/azure-openai.md) — API key, endpoint, and deployment validation probe.
-- [Claude](docs/claude.md) — OAuth API, browser cookies, CLI PTY fallback, or an optional sanitized Claude Code statusLine observation while Keychain access is disabled.
+- [Claude](docs/claude.md) — OAuth API, browser cookies, or CLI PTY fallback; session and weekly usage where available.
 - [Cursor](docs/cursor.md) — Browser session cookies for plan + usage + billing resets.
 - [OpenCode](docs/opencode.md) — Browser cookies for workspace subscription usage.
 - [OpenCode Go](docs/opencode.md) — Browser or local SQLite data for Go usage windows.

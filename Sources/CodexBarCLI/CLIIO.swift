@@ -51,8 +51,6 @@ extension CodexBarCLI {
             print(Self.guardHelp(version: version))
         case "plugins":
             print(Self.pluginsHelp(version: version))
-        case "claude", "statusline", "capture":
-            print(Self.claudeStatusLineHelp(version: version))
         default:
             print(Self.rootHelp(version: version))
         }

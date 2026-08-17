@@ -124,22 +124,13 @@ func testConfigStore(suiteName: String, reset: Bool = true) -> CodexBarConfigSto
 func testSettingsStore(
     suiteName: String,
     tokenAccountStore: any ProviderTokenAccountStoring = InMemoryTokenAccountStore(),
-    config: CodexBarConfig? = nil,
-    userDefaults: UserDefaults? = nil,
-    writesLaunchResetsToRawState: Bool = false) -> SettingsStore
+    config: CodexBarConfig? = nil) -> SettingsStore
 {
     let isolatedSuiteName = "\(suiteName)-\(UUID().uuidString)"
-    let defaults: UserDefaults
-    if let userDefaults {
-        // Caller pre-seeded the suite (e.g. to exercise a launch-time migration), so leave it intact.
-        defaults = userDefaults
-    } else {
-        guard let created = UserDefaults(suiteName: isolatedSuiteName) else {
-            preconditionFailure("Could not create test defaults suite")
-        }
-        created.removePersistentDomain(forName: isolatedSuiteName)
-        defaults = created
+    guard let defaults = UserDefaults(suiteName: isolatedSuiteName) else {
+        preconditionFailure("Could not create test defaults suite")
     }
+    defaults.removePersistentDomain(forName: isolatedSuiteName)
     let configStore = testConfigStore(suiteName: isolatedSuiteName)
     if let config {
         do {
@@ -164,8 +155,7 @@ func testSettingsStore(
         augmentCookieStore: InMemoryCookieHeaderStore(),
         ampCookieStore: InMemoryCookieHeaderStore(),
         copilotTokenStore: InMemoryCopilotTokenStore(),
-        tokenAccountStore: tokenAccountStore,
-        writesLaunchResetsToRawState: writesLaunchResetsToRawState)
+        tokenAccountStore: tokenAccountStore)
 }
 
 #if os(macOS)

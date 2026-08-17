@@ -1,4 +1,3 @@
-import AppKit
 import CodexBarCore
 import SwiftUI
 
@@ -27,7 +26,6 @@ struct ClaudeProviderImplementation: ProviderImplementation {
         _ = settings.claudeOAuthDirectKeychainReadAllowed
         _ = settings.claudeOAuthKeychainReadStrategy
         _ = settings.claudeWebExtrasEnabled
-        _ = settings.claudeStatusLineFeedEnabled
         _ = settings.claudeSwapEnabled
         _ = settings.claudeSwapShowSingleAccount
         _ = settings.claudeSwapExecutablePath
@@ -41,9 +39,7 @@ struct ClaudeProviderImplementation: ProviderImplementation {
     @MainActor
     func tokenAccountsVisibility(context: ProviderSettingsContext, support: TokenAccountSupport) -> Bool {
         guard support.requiresManualCookieSource else { return true }
-        if !context.settings.tokenAccounts(for: context.provider).isEmpty {
-            return true
-        }
+        if !context.settings.tokenAccounts(for: context.provider).isEmpty { return true }
         return context.settings.claudeCookieSource == .manual
     }
 
@@ -141,7 +137,6 @@ struct ClaudeProviderImplementation: ProviderImplementation {
                 onChange: nil,
                 onAppDidBecomeActive: nil,
                 onAppearWhenEnabled: nil),
-            Self.statusLineToggle(context: context),
             ProviderSettingsToggleDescriptor(
                 id: "claude-oauth-prompt-free-credentials",
                 title: "Avoid Keychain prompts",
@@ -180,119 +175,6 @@ struct ClaudeProviderImplementation: ProviderImplementation {
                 onAppDidBecomeActive: nil,
                 onAppearWhenEnabled: nil),
         ]
-    }
-
-    @MainActor
-    private static func statusLineToggle(context: ProviderSettingsContext) -> ProviderSettingsToggleDescriptor {
-        let state = { Self.statusLineInstallState() }
-        return ProviderSettingsToggleDescriptor(
-            id: "claude-statusline-feed",
-            title: "Use your Claude Code statusLine feed",
-            subtitle: "Off by default. Reads sanitized 5-hour and/or 7-day limits when your Claude Code "
-                + "statusLine configuration provides them. With Keychain access disabled, it can show an "
-                + "anonymous reduced-detail card.",
-            binding: context.boolBinding(\.claudeStatusLineFeedEnabled),
-            statusText: {
-                context.statusText("claude-statusline-feed") ?? Self.statusLineStatusText(state: state())
-            },
-            actions: [
-                ProviderSettingsActionDescriptor(
-                    id: "claude-statusline-install",
-                    title: "Install",
-                    style: .bordered,
-                    isVisible: { state() == .absent },
-                    perform: { await Self.updateStatusLineInstallation(context: context, uninstall: false) }),
-                ProviderSettingsActionDescriptor(
-                    id: "claude-statusline-repair",
-                    title: "Repair",
-                    style: .bordered,
-                    isVisible: { state() == .needsRepair },
-                    perform: { await Self.updateStatusLineInstallation(context: context, uninstall: false) }),
-                ProviderSettingsActionDescriptor(
-                    id: "claude-statusline-uninstall",
-                    title: "Uninstall",
-                    style: .bordered,
-                    isVisible: {
-                        let value = state()
-                        return value == .installed || value == .needsRepair
-                    },
-                    perform: { await Self.updateStatusLineInstallation(context: context, uninstall: true) }),
-                ProviderSettingsActionDescriptor(
-                    id: "claude-statusline-guide",
-                    title: "Manual composition guide",
-                    style: .link,
-                    isVisible: nil,
-                    perform: {
-                        guard let url = URL(
-                            string: "https://github.com/steipete/CodexBar/blob/main/docs/claude-statusline-feed.md")
-                        else { return }
-                        NSWorkspace.shared.open(url)
-                    }),
-            ],
-            isVisible: nil,
-            isEnabled: nil,
-            onChange: { enabled in
-                guard !enabled else { return }
-                let value = state()
-                guard value == .installed || value == .needsRepair else { return }
-                await Self.updateStatusLineInstallation(context: context, uninstall: true)
-            },
-            onAppDidBecomeActive: nil,
-            onAppearWhenEnabled: nil)
-    }
-
-    private static func statusLineInstallState() -> ClaudeStatusLineInstallState? {
-        guard let executable = ClaudeStatusLineInstaller.bundledCLIURL() else { return nil }
-        return ClaudeStatusLineInstaller.inspect(
-            settingsURL: ClaudeStatusLineInstaller.settingsURL(),
-            executableURL: executable)
-    }
-
-    private static func statusLineStatusText(state: ClaudeStatusLineInstallState?) -> String {
-        switch state {
-        case nil: L("CodexBarCLI was not found in the installed app bundle.")
-        case .absent?: L("Managed statusLine command is not installed.")
-        case .installed?: L("Managed statusLine command is installed.")
-        case .needsRepair?: L("Managed statusLine command points to another CodexBar app. Repair it.")
-        case .userOwned?: L("Claude Code already has a custom statusLine. Use the manual composition guide.")
-        case .malformed?: L("Claude Code settings are malformed; CodexBar will not overwrite them.")
-        case .unsafeSymlink?: L("Claude Code settings use a symbolic link; CodexBar will not write them.")
-        }
-    }
-
-    @MainActor
-    private static func updateStatusLineInstallation(context: ProviderSettingsContext, uninstall: Bool) async {
-        let statusID = "claude-statusline-feed"
-        guard let executable = ClaudeStatusLineInstaller.bundledCLIURL() else {
-            context.setStatusText(statusID, L("CodexBarCLI was not found in the installed app bundle."))
-            return
-        }
-        do {
-            if uninstall {
-                try ClaudeStatusLineInstaller.uninstall(
-                    settingsURL: ClaudeStatusLineInstaller.settingsURL(),
-                    executableURL: executable)
-                context.setStatusText(statusID, L("CodexBar statusLine command removed."))
-            } else {
-                try ClaudeStatusLineInstaller.install(
-                    settingsURL: ClaudeStatusLineInstaller.settingsURL(),
-                    executableURL: executable)
-                context.setStatusText(statusID, L("CodexBar statusLine command installed."))
-            }
-        } catch {
-            context.setStatusText(statusID, L(Self.statusLineErrorMessage(error)))
-        }
-    }
-
-    private static func statusLineErrorMessage(_ error: Error) -> String {
-        switch error as? ClaudeStatusLineInstallerError {
-        case .helperUnavailable?: "CodexBarCLI was not found in the installed app bundle."
-        case .userOwned?: "Claude Code already has a custom statusLine. Use the manual composition guide."
-        case .malformedSettings?: "Claude Code settings are malformed; CodexBar will not overwrite them."
-        case .unsafeSymlink?: "Claude Code settings use a symbolic link; CodexBar will not write them."
-        case .notInstalled?: "Managed statusLine command is not installed."
-        case nil: "The statusLine integration could not be updated."
-        }
     }
 
     @MainActor
