@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import CodexBarCore
 
@@ -60,11 +63,8 @@ struct GrokPlanTests {
     }
 
     @Test
-    func `settings cache is scoped to the credential identity`() {
-        GrokCLISettingsFetcher.resetCacheForTesting()
-        defer { GrokCLISettingsFetcher.resetCacheForTesting() }
-
-        let first = GrokCredentials(
+    func `settings load failure does not invent a previous Heavy tier`() async throws {
+        let credentials = GrokCredentials(
             accessToken: "token-a",
             refreshToken: nil,
             scope: "https://auth.x.ai::client",
@@ -76,63 +76,16 @@ struct GrokPlanTests {
             teamId: nil,
             oidcIssuer: nil,
             oidcClientId: nil,
-            expiresAt: nil,
+            expiresAt: Date(timeIntervalSince1970: 1_900_000_000),
             createTime: nil)
-        let second = GrokCredentials(
-            accessToken: "token-b",
-            refreshToken: nil,
-            scope: "https://auth.x.ai::client",
-            authMode: "oidc",
-            userId: "user-b",
-            email: "b@example.com",
-            firstName: nil,
-            lastName: nil,
-            teamId: nil,
-            oidcIssuer: nil,
-            oidcClientId: nil,
-            expiresAt: nil,
-            createTime: nil)
+        let transport = GrokSettingsFailingTransport()
 
-        GrokCLISettingsFetcher.remember("SuperGrok Heavy", for: first)
-        #expect(GrokCLISettingsFetcher.cachedTier(for: first) == "SuperGrok Heavy")
-        #expect(GrokCLISettingsFetcher.cachedTier(for: second) == nil)
+        let tier = try await GrokStatusProbe.loadSettingsTier(
+            credentials: credentials,
+            session: transport)
 
-        let personal = GrokCredentials(
-            accessToken: "token-a",
-            refreshToken: nil,
-            scope: "https://auth.x.ai::client",
-            authMode: "oidc",
-            userId: "user-a",
-            email: "a@example.com",
-            firstName: nil,
-            lastName: nil,
-            teamId: "team-a",
-            principalType: "User",
-            oidcIssuer: nil,
-            oidcClientId: nil,
-            expiresAt: nil,
-            createTime: nil)
-        let team = GrokCredentials(
-            accessToken: "token-a",
-            refreshToken: nil,
-            scope: "https://auth.x.ai::client",
-            authMode: "oidc",
-            userId: "user-a",
-            email: "a@example.com",
-            firstName: nil,
-            lastName: nil,
-            teamId: "team-a",
-            principalType: "Team",
-            oidcIssuer: nil,
-            oidcClientId: nil,
-            expiresAt: nil,
-            createTime: nil)
-        #expect(GrokCLISettingsFetcher.cacheKey(for: personal) == "user:user-a")
-        #expect(GrokCLISettingsFetcher.cacheKey(for: team) == "team:team-a:user-a")
-        GrokCLISettingsFetcher.remember("SuperGrok", for: personal)
-        GrokCLISettingsFetcher.remember("SuperGrok Heavy", for: team)
-        #expect(GrokCLISettingsFetcher.cachedTier(for: personal) == "SuperGrok")
-        #expect(GrokCLISettingsFetcher.cachedTier(for: team) == "SuperGrok Heavy")
+        #expect(tier == nil)
+        #expect(GrokPlan.loginMethod(subscriptionTier: tier, credentials: credentials) == "SuperGrok")
     }
 
     @Test
@@ -146,5 +99,20 @@ struct GrokPlanTests {
         let billing = try #require(URL(string: "https://grok.test/v1/billing?format=credits"))
         #expect(GrokCLISettingsFetcher.endpoint(fromBilling: billing).absoluteString
             == "https://grok.test/v1/settings")
+    }
+}
+
+private struct GrokSettingsFailingTransport: ProviderHTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+                  url: url,
+                  statusCode: 500,
+                  httpVersion: nil,
+                  headerFields: nil)
+        else {
+            throw URLError(.badURL)
+        }
+        return (Data("nope".utf8), response)
     }
 }

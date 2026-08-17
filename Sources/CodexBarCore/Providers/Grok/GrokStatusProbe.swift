@@ -188,10 +188,9 @@ public struct GrokStatusProbe: Sendable {
         try Task.checkCancellation()
         switch outcome {
         case let .value(tier):
-            GrokCLISettingsFetcher.remember(tier, for: credentials)
-            return tier ?? GrokCLISettingsFetcher.cachedTier(for: credentials)
+            return tier
         case .timedOut:
-            return GrokCLISettingsFetcher.cachedTier(for: credentials)
+            return nil
         case let .failure(error):
             if error is CancellationError {
                 throw CancellationError()
@@ -199,7 +198,7 @@ public struct GrokStatusProbe: Sendable {
             if let urlError = error as? URLError, urlError.code == .cancelled {
                 throw urlError
             }
-            return GrokCLISettingsFetcher.cachedTier(for: credentials)
+            return nil
         }
     }
 

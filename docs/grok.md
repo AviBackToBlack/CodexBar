@@ -55,10 +55,9 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `SuperGrok`). Cookie/gRPC fallbacks are a different browser session and do
      not reuse the auth-file settings tier. The request uses a 2-second timeout
      and `BoundedTaskJoin`, so a stuck settings call cannot delay already-fetched
-     usage by 15 seconds. A recent successful tier is cached per principal
-     (`userId`/`email`, `principalType`, and `teamId` for Team) as a fallback.
-     OIDC `auth_mode` alone cannot distinguish those plans. A settings failure
-     keeps billing data and falls back to the OIDC SuperGrok label.
+     usage by 15 seconds. Settings timeouts, request failures, and 200 responses
+     that omit `subscription_tier_display` all drop the plan overlay and fall
+     back to the OIDC SuperGrok label. There is no process-lifetime tier cache.
    - This is the Grok CLI's supported token-authenticated billing backend. If it
      fails, CodexBar continues through the existing browser-cookie and legacy
      bearer fallbacks.
