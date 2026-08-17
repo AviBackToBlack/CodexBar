@@ -503,7 +503,7 @@ enum SpendDashboardSource {
             now: request.now,
             historyDays: Self.scanDays,
             calendar: request.configuration.bucketCalendar),
-            !snapshot.daily.isEmpty || !snapshot.sessions.isEmpty
+            Self.shouldPublishOpenCodexSnapshot(snapshot)
         else { return nil }
         return SpendDashboardModel.ProviderInput(
             id: SpendDashboardModel.openCodexSourceID,
@@ -512,6 +512,10 @@ enum SpendDashboardSource {
             modelProviderName: OpenCodexUsageLog.displayName,
             snapshot: snapshot,
             sourceKind: .openCodex)
+    }
+
+    static func shouldPublishOpenCodexSnapshot(_ snapshot: CostUsageTokenSnapshot) -> Bool {
+        !snapshot.daily.isEmpty || !snapshot.sessions.isEmpty
     }
 
     private static func loadCodexSnapshot(
