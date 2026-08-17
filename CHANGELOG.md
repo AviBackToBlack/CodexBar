@@ -3,7 +3,7 @@
 ## 0.51.1 — Unreleased
 
 ### Fixed
-- Grok: show SuperGrok Heavy from the CLI settings `subscription_tier_display` instead of labeling every OIDC login as SuperGrok.
+- Grok: show SuperGrok Heavy from the CLI settings `subscription_tier_display` instead of labeling every OIDC login as SuperGrok (#2991). Thanks @olddonkey!
 
 ## 0.51.0 — 2026-08-16
 
