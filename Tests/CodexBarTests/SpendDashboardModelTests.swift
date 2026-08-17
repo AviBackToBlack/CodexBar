@@ -260,8 +260,11 @@ struct SpendDashboardModelTests {
             now: Self.now,
             calendar: Self.calendar).groups.first)
 
-        #expect(group.totalCost == nil)
-        #expect(group.totalTokens == nil)
+        #expect(group.totalCost == 4)
+        #expect(group.totalTokens == 10)
+        #expect(group.hasPartialCost)
+        #expect(group.hasPartialTokens)
+        #expect(group.pricedProviderCount == 1)
         #expect(group.modelHistoryCompleteness == .incomplete)
         #expect(group.models.map(\.provider) == [.claude])
         #expect(group.models.map(\.modelName) == ["test-model"])
@@ -395,7 +398,8 @@ struct SpendDashboardModelTests {
 
         #expect(group.providers.first(where: { $0.id == "invalid" })?.totalCost == nil)
         #expect(group.totalCost == nil)
-        #expect(group.totalTokens == nil)
+        #expect(group.totalTokens == 20)
+        #expect(group.hasPartialTokens)
         #expect(group.dailyPoints.isEmpty)
     }
 
@@ -513,7 +517,8 @@ struct SpendDashboardModelTests {
         #expect(group.providers.first(where: { $0.id == "nonfinite" })?.totalTokens == 2)
         #expect(group.providers.filter { $0.id != "nonfinite" }.allSatisfy { $0.totalTokens == nil })
         #expect(group.totalCost == nil)
-        #expect(group.totalTokens == nil)
+        #expect(group.totalTokens == 2)
+        #expect(group.hasPartialTokens)
     }
 
     @Test
@@ -707,7 +712,7 @@ struct SpendDashboardModelTests {
     }
 
     @Test
-    func `unpriced history stays unavailable instead of becoming zero`() throws {
+    func `unpriced history keeps spend unavailable and lists named models`() throws {
         let snapshot = Self.snapshot(
             currency: "CAD",
             entries: [Self.entry(day: "2026-07-16", cost: nil, tokens: 12)])
@@ -721,6 +726,9 @@ struct SpendDashboardModelTests {
         #expect(group.totalCost == nil)
         #expect(group.totalTokens == 12)
         #expect(group.providers.first?.totalCost == nil)
+        #expect(group.models.map(\.modelName) == ["test-model"])
+        #expect(group.models.map(\.totalCost) == [nil])
+        #expect(spendDashboardModelHistoryPresentation(group) == .partial)
     }
 
     @Test

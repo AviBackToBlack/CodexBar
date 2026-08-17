@@ -1318,6 +1318,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "Kaynak para birimleri ayrı tutulur; Codex hesap satırlarına Pi oturum geçmişi dahil edilmez.";
 "Spend unavailable" = "Harcama verisi kullanılamıyor";
 "Model breakdown unavailable" = "Model dökümü kullanılamıyor";
+"Partial estimate" = "Kısmi tahmin";
+"Partial model breakdown" = "Kısmi model dökümü";
+"%d of %d subscriptions have spend" = "%d / %d abonelikte harcama var";
 "Local estimated history" = "Yerel tahmini geçmiş";
 "Coverage" = "Kapsam";
 "Estimated spend" = "Tahmini harcama";

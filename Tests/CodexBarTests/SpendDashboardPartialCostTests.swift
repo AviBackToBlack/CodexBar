@@ -105,9 +105,118 @@ struct SpendDashboardPartialCostTests {
         #expect(group.dailyPoints.map(\.cost) == [3, 4])
     }
 
+    @Test
+    func `priced subscription keeps group spend when peers lack prices`() throws {
+        let priced = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: 4, tokens: 40, model: "gpt-5.4-mini")],
+            last30DaysTokens: 40,
+            last30DaysCostUSD: 4)
+        let unpriced = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: nil, tokens: 100, model: "deepseek-v4-flash")],
+            last30DaysTokens: 100,
+            last30DaysCostUSD: nil)
+        let group = try Self.group(inputs: [
+            .init(provider: .codex, displayName: "Codex", snapshot: priced),
+            .init(provider: .claude, displayName: "Claude", snapshot: unpriced),
+            .init(provider: .cursor, displayName: "Cursor", snapshot: unpriced),
+        ])
+
+        #expect(group.totalCost == 4)
+        #expect(group.totalTokens == 240)
+        #expect(group.hasPartialCost)
+        #expect(!group.hasPartialTokens)
+        #expect(group.pricedProviderCount == 1)
+        #expect(group.providers.count == 3)
+        #expect(group.providers.map(\SpendDashboardModel.ProviderRow.totalCost) == [4, nil, nil])
+        #expect(group.modelHistoryCompleteness == .incomplete)
+        #expect(group.models.map(\.modelName) == ["gpt-5.4-mini", "deepseek-v4-flash", "deepseek-v4-flash"])
+        #expect(group.models.map(\.totalCost) == [4, nil, nil])
+        #expect(spendDashboardModelHistoryPresentation(group) == .partial)
+        CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            #expect(spendDashboardGroupCostText(group).hasPrefix("~"))
+            #expect(spendDashboardPartialSubscriptionsText(group) == "1 of 3 subscriptions have spend")
+            #expect(spendDashboardHistoryCaption(group, requestedDays: 30).contains("Partial estimate"))
+        }
+    }
+
+    @Test
+    func `all unpriced subscriptions keep group spend unavailable`() throws {
+        let unpriced = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: nil, tokens: 100, model: "deepseek-v4-flash")],
+            last30DaysTokens: 100,
+            last30DaysCostUSD: nil)
+        let group = try Self.group(inputs: [
+            .init(provider: .claude, displayName: "Claude", snapshot: unpriced),
+            .init(provider: .cursor, displayName: "Cursor", snapshot: unpriced),
+        ])
+
+        #expect(group.totalCost == nil)
+        #expect(group.totalTokens == 200)
+        #expect(!group.hasPartialCost)
+        #expect(!group.hasPartialTokens)
+        #expect(group.modelHistoryCompleteness == .incomplete)
+        #expect(group.models.map(\.modelName) == ["deepseek-v4-flash", "deepseek-v4-flash"])
+        #expect(group.models.map(\.totalCost) == [nil, nil])
+        #expect(spendDashboardModelHistoryPresentation(group) == .partial)
+        CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            #expect(spendDashboardGroupCostText(group) == "Spend unavailable")
+        }
+    }
+
+    @Test
+    func `unpriced named models stay listed when spend is unavailable`() throws {
+        let snapshot = Self.snapshot(
+            entries: [Self.entry(day: "2026-07-15", cost: nil, tokens: 100, model: "deepseek-v4-flash")],
+            last30DaysTokens: 100,
+            last30DaysCostUSD: nil)
+        let group = try Self.group(inputs: [
+            .init(provider: .claude, displayName: "Claude", snapshot: snapshot),
+        ])
+
+        #expect(group.totalCost == nil)
+        #expect(group.totalTokens == 100)
+        #expect(group.models.map(\.modelName) == ["deepseek-v4-flash"])
+        #expect(group.models.map(\.totalCost) == [nil])
+        #expect(group.models.map(\.totalTokens) == [100])
+        #expect(group.modelHistoryCompleteness == .incomplete)
+        #expect(spendDashboardModelHistoryPresentation(group) == .partial)
+    }
+
+    @Test
+    func `model-less unpriced history stays unavailable instead of listing a lower bound`() throws {
+        let modelLess = CostUsageDailyReport.Entry(
+            date: "2026-07-15",
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: 100,
+            costUSD: nil,
+            modelsUsed: nil,
+            modelBreakdowns: nil)
+        let group = try Self.group(inputs: [
+            .init(
+                provider: .claude,
+                displayName: "Claude",
+                snapshot: Self.snapshot(
+                    entries: [modelLess],
+                    last30DaysTokens: 100,
+                    last30DaysCostUSD: nil)),
+        ])
+
+        #expect(group.totalCost == nil)
+        #expect(group.models.isEmpty)
+        #expect(group.modelHistoryCompleteness == .incomplete)
+        #expect(spendDashboardModelHistoryPresentation(group) == .unavailable)
+    }
+
     private static func group(_ snapshot: CostUsageTokenSnapshot) throws -> SpendDashboardModel.CurrencyGroup {
+        try self.group(inputs: [.init(provider: .codex, displayName: "Codex", snapshot: snapshot)])
+    }
+
+    private static func group(
+        inputs: [SpendDashboardModel.ProviderInput]) throws -> SpendDashboardModel.CurrencyGroup
+    {
         try #require(SpendDashboardModel.build(
-            inputs: [.init(provider: .codex, displayName: "Codex", snapshot: snapshot)],
+            inputs: inputs,
             requestedDays: 30,
             now: self.now,
             calendar: self.calendar).groups.first)

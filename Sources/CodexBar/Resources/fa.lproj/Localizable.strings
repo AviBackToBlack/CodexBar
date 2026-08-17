@@ -1320,6 +1320,9 @@
 "Native currencies stay separate; Codex account rows exclude Pi session history." = "ارزهای اصلی جدا نگه داشته می‌شوند؛ ردیف‌های حساب Codex تاریخچه نشست‌های Pi را دربر نمی‌گیرند.";
 "Spend unavailable" = "هزینه در دسترس نیست";
 "Model breakdown unavailable" = "تفکیک مدل در دسترس نیست";
+"Partial estimate" = "برآورد جزئی";
+"Partial model breakdown" = "جزئیات ناقص مدلها";
+"%d of %d subscriptions have spend" = "%d از %d اشتراک دارای هزینه هستند";
 "Local estimated history" = "تاریخچه برآورد محلی";
 "Coverage" = "پوشش";
 "Estimated spend" = "برآورد هزینه";

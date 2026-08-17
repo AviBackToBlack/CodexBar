@@ -418,18 +418,12 @@ private struct SpendCurrencySection: View {
                 Text(self.group.currencyCode)
                     .font(.headline)
                 Spacer()
-                Text(self.group.totalCost.map {
-                    UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                } ?? L("Spend unavailable"))
+                Text(spendDashboardGroupCostText(self.group))
                     .font(.title3.weight(.semibold))
                     .monospacedDigit()
             }
 
-            Text(
-                "\(L("Local estimated history")) · " +
-                    spendDashboardCoverageText(
-                        covered: self.group.coveredDayCount,
-                        requested: self.requestedDays))
+            Text(spendDashboardHistoryCaption(self.group, requestedDays: self.requestedDays))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -437,9 +431,7 @@ private struct SpendCurrencySection: View {
                 HStack(spacing: 24) {
                     SpendSummaryValue(
                         title: L("Estimated spend"),
-                        value: self.group.totalCost.map {
-                            UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                        } ?? "—")
+                        value: self.group.totalCost == nil ? "—" : spendDashboardGroupCostText(self.group))
                     SpendSummaryValue(
                         title: L("Tracked tokens"),
                         value: self.group.totalTokens.map(UsageFormatter.tokenCountString) ?? "—")
@@ -530,7 +522,7 @@ private struct SpendModelPanel: View {
                         .padding(.vertical, 10)
                 case .partial, .complete:
                     if presentation == .partial {
-                        Label(L("Model breakdown unavailable"), systemImage: "exclamationmark.triangle")
+                        Label(L("Partial model breakdown"), systemImage: "exclamationmark.triangle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.bottom, 6)
@@ -771,4 +763,29 @@ private struct SpendDashboardPanel<Content: View>: View {
                     .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35))
             }
     }
+}
+
+func spendDashboardGroupCostText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
+    guard let cost = group.totalCost else { return L("Spend unavailable") }
+    let formatted = UsageFormatter.currencyString(cost, currencyCode: group.currencyCode)
+    return group.hasPartialCost ? "~\(formatted)" : formatted
+}
+
+func spendDashboardPartialSubscriptionsText(_ group: SpendDashboardModel.CurrencyGroup) -> String {
+    L("%d of %d subscriptions have spend", group.pricedProviderCount, group.providers.count)
+}
+
+func spendDashboardHistoryCaption(
+    _ group: SpendDashboardModel.CurrencyGroup,
+    requestedDays: Int) -> String
+{
+    var parts: [String] = []
+    if group.hasPartialCost {
+        parts.append(L("Partial estimate"))
+        parts.append(spendDashboardPartialSubscriptionsText(group))
+    } else {
+        parts.append(L("Local estimated history"))
+    }
+    parts.append(spendDashboardCoverageText(covered: group.coveredDayCount, requested: requestedDays))
+    return parts.joined(separator: " · ")
 }

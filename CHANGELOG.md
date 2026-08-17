@@ -4,6 +4,7 @@
 
 ### Fixed
 - Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
+- Cursor: keep a successfully validated refresh result when its session cache is temporarily unavailable, instead of reporting that the session changed.
 
 ## 0.52.0 — 2026-08-17
 
