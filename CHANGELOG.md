@@ -7,6 +7,7 @@
 - General settings: turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
 
 ### Fixed
+- OpenCode Go: surface expired selected session tokens instead of silently replacing failed server usage with local quota estimates (#2993). Thanks @Niclassslua!
 - Claude spend: price bare first-party model IDs from their models.dev vendor catalog, preserve explicit routes, and leave ambiguous cross-vendor matches unpriced (#3002). Thanks @Yuxin-Qiao!
 - Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
 - Cursor: keep an API-validated usage result when the Keychain cache is temporarily unavailable, instead of treating it as a missing or replaced session (#3000). Thanks @hxy91819!
