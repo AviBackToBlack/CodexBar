@@ -104,7 +104,31 @@ struct GrokSettingsReaderTests {
             adapter?.selectedAccountSourceMode(base: .auto, account: cookieAccount, config: nil)
                 == .web)
         #expect(adapter?.selectedAccountSourceMode(base: .auto, account: nil, config: nil) == .auto)
+        #expect(adapter?.selectedAccountSourceMode(base: .cli, account: oauthAccount, config: nil) == .cli)
+        #expect(adapter?.selectedAccountSourceMode(base: .web, account: oauthAccount, config: nil) == .web)
         #expect(
             GrokProviderDescriptor.descriptor.fetchPlan.sourceModes == [.auto, .cli, .oauth, .web])
+    }
+
+    @Test
+    func `selected pasted SuperGrok token wins over a valid auth json file`() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexBar-GrokSelectedBearer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data("""
+        {
+          "https://auth.x.ai::client": {
+            "key": "file-token",
+            "auth_mode": "oidc"
+          }
+        }
+        """.utf8).write(to: home.appendingPathComponent("auth.json"))
+
+        var env = [GrokSettingsReader.oauthTokenEnvironmentKey: "pasted-token"]
+        env["GROK_HOME"] = home.path
+        #expect(GrokSettingsReader.resolvedCredentials(environment: env)?.accessToken == "pasted-token")
+        env.removeValue(forKey: GrokSettingsReader.oauthTokenEnvironmentKey)
+        #expect(GrokSettingsReader.resolvedCredentials(environment: env)?.accessToken == "file-token")
     }
 }

@@ -24,10 +24,13 @@ public enum GrokSettingsReader {
         environment: [String: String],
         settings: ProviderSettingsSnapshot? = nil) -> GrokCredentials?
     {
+        if let pasted = self.pastedCredentials(environment: environment, settings: settings) {
+            return pasted
+        }
         if let file = try? GrokCredentialsStore.load(env: environment), !file.isExpired {
             return file
         }
-        return self.pastedCredentials(environment: environment, settings: settings)
+        return nil
     }
 
     public static func normalizedOAuthToken(_ raw: String?) -> String? {

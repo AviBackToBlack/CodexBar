@@ -18,7 +18,7 @@ public enum GrokProviderDescriptor {
                 return [GrokSettingsReader.oauthTokenEnvironmentKey: oauth]
             }),
         selectedAccountSourceModeResolver: { base, account, _ in
-            guard let account else { return base }
+            guard base == .auto, let account else { return base }
             return GrokCredentialRouting.resolve(
                 tokenAccountToken: account.token,
                 manualCookieHeader: nil).sourceMode ?? base
@@ -446,16 +446,12 @@ struct GrokWebFetchStrategy: ProviderFetchStrategy {
     static func resolvedCredentialsResult(context: ProviderFetchContext) -> Result<
         GrokCredentials, Error,
     > {
-        let fileResult: Result<GrokCredentials, Error> = Result {
+        if let credentials = GrokSettingsReader.resolvedCredentials(environment: context.env) {
+            return .success(credentials)
+        }
+        return Result {
             try GrokCredentialsStore.load(env: context.env)
         }
-        if let file = try? fileResult.get(), !file.isExpired {
-            return .success(file)
-        }
-        if let pasted = GrokSettingsReader.pastedCredentials(environment: context.env) {
-            return .success(pasted)
-        }
-        return fileResult
     }
 
     static func credentialsForWebBillingSnapshot(
