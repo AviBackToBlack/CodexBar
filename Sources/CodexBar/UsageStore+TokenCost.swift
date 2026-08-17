@@ -75,7 +75,8 @@ extension UsageStore {
                     historyDays: historyDays,
                     cursorCookieHeaderOverride: cursorCookieHeaderOverride,
                     allowPricingRefresh: allowPricingRefresh,
-                    bypassScannerDebounce: true)
+                    bypassScannerDebounce: true,
+                    calendar: self.settings.costUsageBucketCalendar)
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))

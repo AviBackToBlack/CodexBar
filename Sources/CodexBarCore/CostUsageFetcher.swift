@@ -66,8 +66,17 @@ public struct CostUsageFetcher: Sendable {
 
     private let scannerOptions: CostUsageScanner.Options?
 
-    public init(cacheRoot: URL? = nil) {
-        self.scannerOptions = cacheRoot.map { CostUsageScanner.Options(cacheRoot: $0) }
+    public init(cacheRoot: URL? = nil, calendar: Calendar? = nil) {
+        if cacheRoot == nil, calendar == nil {
+            self.scannerOptions = nil
+        } else {
+            var options = CostUsageScanner.Options()
+            options.cacheRoot = cacheRoot
+            if let calendar {
+                options.calendar = calendar
+            }
+            self.scannerOptions = options
+        }
     }
 
     init(scannerOptions: CostUsageScanner.Options) {
@@ -207,9 +216,14 @@ public struct CostUsageFetcher: Sendable {
         allowPricingRefresh: Bool = true,
         refreshPricingInBackground: Bool = true,
         includePiSessions: Bool = true,
-        bypassScannerDebounce: Bool) async throws -> CostUsageTokenSnapshot
+        bypassScannerDebounce: Bool,
+        calendar: Calendar? = nil) async throws -> CostUsageTokenSnapshot
     {
-        try await Self.loadTokenSnapshot(
+        var options = self.scannerOptionsOverride() ?? CostUsageScanner.Options()
+        if let calendar {
+            options.calendar = calendar
+        }
+        return try await Self.loadTokenSnapshot(
             provider: provider,
             environment: environment,
             now: now,
@@ -222,7 +236,7 @@ public struct CostUsageFetcher: Sendable {
             refreshPricingInBackground: refreshPricingInBackground,
             includePiSessions: includePiSessions,
             bypassScannerDebounce: bypassScannerDebounce,
-            scannerOptions: self.scannerOptionsOverride())
+            scannerOptions: options)
     }
 
     @available(*, deprecated, message: "Codex token-cost scans are uncapped; this limit is ignored.")
