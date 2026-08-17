@@ -118,6 +118,24 @@ enum KiroMenuBarDisplayMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum LowPowerModePreference: String, CaseIterable, Identifiable {
+    case off
+    case on
+    case automatic
+
+    var id: String {
+        self.rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .off: L("Off")
+        case .on: L("On")
+        case .automatic: L("Automatic")
+        }
+    }
+}
+
 enum MultiAccountMenuLayout: String, CaseIterable, Identifiable {
     case segmented
     case stacked
@@ -247,6 +265,7 @@ final class SettingsStore {
     #endif
     @ObservationIgnored var mergedMenuLastSelectedWasOverviewStorage = false
     @ObservationIgnored var selectedMenuProviderRawStorage: String?
+    @ObservationIgnored private nonisolated(unsafe) var lowPowerModeObserver: NSObjectProtocol?
     var defaultsState: SettingsDefaultsState
     var configRevision: Int = 0
     var providerDetailSettingsRevision: Int = 0
@@ -400,10 +419,31 @@ final class SettingsStore {
         }
         KeychainAccessGate.isDisabled = self.debugDisableKeychainAccess
         self.startConfigFileWatcher()
+        self.observeSystemPowerStateChanges()
     }
 
     deinit {
         self.configFileWatcher?.stop()
+        if let lowPowerModeObserver {
+            NotificationCenter.default.removeObserver(lowPowerModeObserver)
+        }
+    }
+
+    /// Automatic Low Power Mode reads `ProcessInfo.isLowPowerModeEnabled` live, but background
+    /// timers only restart when `backgroundWorkSettingsRevision` changes. Without this, toggling
+    /// the system's Low Power Mode mid-session would leave a running fixed-frequency timer stuck
+    /// at its previously computed interval until an unrelated settings change restarted it.
+    private func observeSystemPowerStateChanges() {
+        self.lowPowerModeObserver = NotificationCenter.default.addObserver(
+            forName: .NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: .main)
+        { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.backgroundWorkLowPowerModePreference == .automatic else { return }
+                self.noteBackgroundWorkSettingsChanged()
+            }
+        }
     }
 }
 
@@ -555,8 +595,7 @@ extension SettingsStore {
         if Self.isRunningTests, openAIWebBatterySaverDefault == nil {
             userDefaults.set(false, forKey: "openAIWebBatterySaverEnabled")
         }
-        let backgroundWorkLowPowerModeEnabled =
-            userDefaults.object(forKey: "backgroundWorkLowPowerModeEnabled") as? Bool ?? false
+        let backgroundWorkLowPowerModePreference = Self.loadLowPowerModePreference(userDefaults: userDefaults)
         let providerStorageFootprintsDefault = userDefaults.object(forKey: "providerStorageFootprintsEnabled") as? Bool
         let providerStorageFootprintsEnabled = providerStorageFootprintsDefault ?? false
         if Self.isRunningTests, providerStorageFootprintsDefault == nil {
@@ -652,7 +691,7 @@ extension SettingsStore {
             codexExternalOAuthSourcesAllowed: codexExternalOAuthSourcesAllowed,
             openAIWebAccessEnabled: openAIWebAccessEnabled,
             openAIWebBatterySaverEnabled: openAIWebBatterySaverEnabled,
-            backgroundWorkLowPowerModeEnabled: backgroundWorkLowPowerModeEnabled,
+            backgroundWorkLowPowerModePreference: backgroundWorkLowPowerModePreference,
             providerStorageFootprintsEnabled: providerStorageFootprintsEnabled,
             jetbrainsIDEBasePath: jetbrainsIDEBasePath,
             mergeIcons: mergeIcons,
@@ -696,6 +735,20 @@ extension SettingsStore {
         let frequency: RefreshFrequency = rawValue == nil && !hadPreviousInstallationState ? .adaptive : .fiveMinutes
         userDefaults.set(frequency.rawValue, forKey: "refreshFrequency")
         return frequency
+    }
+
+    private static func loadLowPowerModePreference(userDefaults: UserDefaults) -> LowPowerModePreference {
+        if let stored = userDefaults.string(forKey: "backgroundWorkLowPowerModePreference"),
+           let preference = LowPowerModePreference(rawValue: stored)
+        {
+            return preference
+        }
+
+        // Migrate the legacy on/off toggle, preserving prior behavior exactly (default off).
+        let legacyEnabled = userDefaults.object(forKey: "backgroundWorkLowPowerModeEnabled") as? Bool ?? false
+        let preference: LowPowerModePreference = legacyEnabled ? .on : .off
+        userDefaults.set(preference.rawValue, forKey: "backgroundWorkLowPowerModePreference")
+        return preference
     }
 
     private static func loadAdaptiveActivityScanConsent(

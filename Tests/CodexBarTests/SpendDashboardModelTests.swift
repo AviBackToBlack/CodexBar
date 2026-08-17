@@ -19,6 +19,7 @@ struct SpendDashboardModelTests {
             #expect(codexBarLocalizedInteger(12) == "۱۲")
             #expect(spendDashboardDayRangeText(7) == "۷ روز")
             #expect(spendDashboardDayRangeText(30) == "۳۰ روز")
+            #expect(spendDashboardDayRangeText(SpendDashboardSource.scanDays) == "همه")
             #expect(spendDashboardRankText(1234) == "#۱٬۲۳۴")
             #expect(spendDashboardRefreshFailureText(2) == "\(L("Refresh failures")): ۲")
             #expect(spendDashboardCoverageText(covered: 3, requested: 30) == "پوشش: ۳ / ۳۰")
@@ -127,6 +128,34 @@ struct SpendDashboardModelTests {
             calendar: Self.calendar)
         #expect(thirtyDays.groups.first?.totalCost == 7)
         #expect(thirtyDays.groups.first?.coveredDayCount == 30)
+
+        let cumulativeSnapshot = Self.snapshot(
+            currency: "USD",
+            entries: [
+                Self.entry(day: "2026-07-16", cost: 1),
+                Self.entry(day: "2026-07-09", cost: 2),
+                Self.entry(day: "2026-07-08", cost: 4),
+                Self.entry(day: "2026-06-06", cost: 8),
+                Self.entry(day: "2026-08-01", cost: 100),
+            ],
+            historyDays: SpendDashboardSource.scanDays)
+        let cumulativeInput = SpendDashboardModel.ProviderInput(
+            provider: .claude,
+            displayName: "Claude",
+            snapshot: cumulativeSnapshot)
+        #expect(SpendDashboardModel.build(
+            inputs: [cumulativeInput],
+            requestedDays: 30,
+            now: Self.now,
+            calendar: Self.calendar).groups.first?.totalCost == 7)
+        let allTime = SpendDashboardModel.build(
+            inputs: [cumulativeInput],
+            requestedDays: SpendDashboardSource.scanDays,
+            now: Self.now,
+            calendar: Self.calendar)
+        #expect(allTime.requestedDays == SpendDashboardSource.scanDays)
+        #expect(allTime.groups.first?.totalCost == 15)
+        #expect(allTime.groups.first?.coveredDayCount == SpendDashboardSource.scanDays)
 
         let futureSnapshot = Self.snapshot(
             currency: "USD",
@@ -270,6 +299,10 @@ struct SpendDashboardModelTests {
         #expect(group.models.map(\.modelName) == ["test-model"])
         #expect(group.models.map(\.totalCost) == [4])
         #expect(spendDashboardModelHistoryPresentation(group) == .partial)
+        CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            #expect(spendDashboardGroupTokenText(group).hasPrefix("~"))
+            #expect(spendDashboardHistoryCaption(group, requestedDays: 7).contains("Partial estimate"))
+        }
     }
 
     @Test
@@ -712,7 +745,7 @@ struct SpendDashboardModelTests {
     }
 
     @Test
-    func `unpriced history stays unavailable instead of becoming zero`() throws {
+    func `unpriced history keeps spend unavailable and lists named models`() throws {
         let snapshot = Self.snapshot(
             currency: "CAD",
             entries: [Self.entry(day: "2026-07-16", cost: nil, tokens: 12)])
@@ -726,6 +759,9 @@ struct SpendDashboardModelTests {
         #expect(group.totalCost == nil)
         #expect(group.totalTokens == 12)
         #expect(group.providers.first?.totalCost == nil)
+        #expect(group.models.map(\.modelName) == ["test-model"])
+        #expect(group.models.map(\.totalCost) == [nil])
+        #expect(spendDashboardModelHistoryPresentation(group) == .partial)
     }
 
     @Test
@@ -758,7 +794,8 @@ struct SpendDashboardModelTests {
         #expect(!request.authFileWasReadable)
         #expect(request.displayName == "Codex · #2")
         #expect(request.cacheIdentity.count == 64)
-        #expect(SpendDashboardSource.scanDays == 30)
+        #expect(SpendDashboardSource.scanDays == SpendDashboardSource.activityDays)
+        #expect(SpendDashboardSource.scanDays == 365)
         #expect(SpendDashboardSource.codexRequest(
             account: account,
             homePath: "relative/path",

@@ -3,6 +3,29 @@
     <channel>
         <title>CodexBar</title>
         <item>
+            <title>0.52.0</title>
+            <pubDate>Mon, 17 Aug 2026 04:24:21 -0700</pubDate>
+            <link>https://raw.githubusercontent.com/steipete/CodexBar/main/appcast.xml</link>
+            <sparkle:version>124</sparkle:version>
+            <sparkle:shortVersionString>0.52.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>CodexBar 0.52.0</h2>
+<h3>Added</h3>
+<ul>
+<li>Usage &amp; Spend: aggregate per-project spend into ranked, window-scoped rows and carry project/session breakdowns through the cached Codex prefill so the dashboard and the menu chart agree on project data (#2984). Thanks @Yuxin-Qiao!</li>
+<li>Usage &amp; Spend: add a Projects panel to the settings pane and let the Models and Projects lists expand beyond the top eight rows (#2985). Thanks @Yuxin-Qiao!</li>
+</ul>
+<h3>Fixed</h3>
+<ul>
+<li>Mission Control: remove the invisible lifecycle keepalive window entirely; the rebuilt Settings window no longer needs it, eliminating the floating all-Spaces WindowServer footprint that dismissed Mission Control on macOS 27 (#2955, #2997, #3003). Thanks @phuchong89 for the diagnostics!</li>
+<li>Cost history chart: localize the Projects, Conversations, session, and standard/fast mode labels that previously stayed English for all 23 app languages (#2983). Thanks @Yuxin-Qiao!</li>
+<li>Grok: show SuperGrok Heavy from the CLI settings <code>subscription_tier_display</code> instead of labeling every OIDC login as SuperGrok (#2991). Thanks @olddonkey!</li>
+</ul>
+<p><a href="https://github.com/steipete/CodexBar/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/steipete/CodexBar/releases/download/v0.52.0/CodexBar-macos-universal-0.52.0.zip" length="63543623" type="application/octet-stream" sparkle:edSignature="ZnXGYl6YbrQrSbyxIMYTq8JhmQxsHzpQUo0UDOmtaMNfESmJzHA1/c9t3wOJCF2blHGkZOQuJQ+tcqP/nHWCBg=="/>
+        </item>
+        <item>
             <title>0.51.0</title>
             <pubDate>Sun, 16 Aug 2026 13:36:12 -0700</pubDate>
             <link>https://raw.githubusercontent.com/steipete/CodexBar/main/appcast.xml</link>
@@ -61,33 +84,6 @@
 <p><a href="https://github.com/steipete/CodexBar/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/steipete/CodexBar/releases/download/v0.50.1/CodexBar-macos-universal-0.50.1.zip" length="63447777" type="application/octet-stream" sparkle:edSignature="KM5skn7L2uT58bxWAIJqIaH6OHr/T7tZwWHzf/bxdP6jMSlZEniHCaHu4yNEOvcsoWHqPrULbOBd+S2vBjvQBA=="/>
-        </item>
-        <item>
-            <title>0.50.0</title>
-            <pubDate>Sat, 15 Aug 2026 00:40:03 -0700</pubDate>
-            <link>https://raw.githubusercontent.com/steipete/CodexBar/main/appcast.xml</link>
-            <sparkle:version>121</sparkle:version>
-            <sparkle:shortVersionString>0.50.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>CodexBar 0.50.0</h2>
-<h3>Added</h3>
-<ul>
-<li>Cursor: on macOS, prefer Cursor.app&#x27;s read-only local session in Automatic mode, persist validated sessions securely, and surface account mismatches before falling back to browser cookies (#2398). Thanks @markmay for the direction!</li>
-<li>Cost history: add a Tokens/Cost switch to daily status-menu charts, defaulting Codex to exact local token totals and marking incomplete local history as refreshing (#2930). Thanks @Carl723000!</li>
-<li>Menu bar layout: add a compact run-out forecast token that shows only the predicted duration (#2865). Thanks @gnattu!</li>
-</ul>
-<h3>Fixed</h3>
-<ul>
-<li>Codex: replace OpenAI login instructions with accurate rate-limit guidance when the CLI uses Amazon Bedrock or another custom backend without ChatGPT authentication (#2679). Thanks @italo-drm!</li>
-<li>Widgets: let macOS desktop styling remove the Burn Down widgets&#x27; gradient container background (#2367). Thanks @FrancisKa!</li>
-<li>Grok: label the current weekly credit window near reset instead of falling back to the ambiguous “Credits” title (#2929). Thanks @byteofsam!</li>
-<li>Codex: show Business accounts&#x27; monthly credit remaining in the provider switcher when no session or weekly rate-limit window is available, and keep quota indicators visible on the selected provider tab (#2926). Thanks @jey3dayo!</li>
-<li>Gemini: offer the Antigravity provider migration when local OAuth recovery cannot use Gemini CLI and an <code>agy</code> or Antigravity installation is available (#2808). Thanks @axisrow!</li>
-<li>Provider status: omit status-page transport errors from menus until a real status fetch succeeds, while preserving the last successful status through later fetch failures (#2925). Thanks @tomarai85!</li>
-</ul>
-<p><a href="https://github.com/steipete/CodexBar/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/steipete/CodexBar/releases/download/v0.50.0/CodexBar-macos-universal-0.50.0.zip" length="63173025" type="application/octet-stream" sparkle:edSignature="jOmuKSZIdgIS8GCk0g9rjx8CG1cwlGijAf6H4C2UcmIwj77nWgOKNa6Tt7yow8KL6vVtX8PvqayuMuq/yOnPCQ=="/>
         </item>
         <item>
             <title>0.14.0</title>
