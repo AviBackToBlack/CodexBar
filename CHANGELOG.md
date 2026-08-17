@@ -12,9 +12,6 @@
 - Usage & Spend: keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
 - Settings: style the Quit CodexBar button as a prominent accent-color button and remove its stray section background (#2992). Thanks @elijahfriedman!
 
-### Fixed
-- Cursor: keep a successfully validated refresh result when its session cache is temporarily unavailable, instead of reporting that the session changed.
-
 ## 0.52.0 — 2026-08-17
 
 ### Added
