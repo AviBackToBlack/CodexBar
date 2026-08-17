@@ -5,7 +5,6 @@
 ### Added
 - Usage & Spend: add an All time range alongside 7d/30d, backed by 365 days of local history with dedicated Claude and Cursor spend snapshot slots (#3009). Thanks @Yuxin-Qiao!
 - General settings: turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
-
 ### Fixed
 - Claude spend: price bare first-party model IDs from their models.dev vendor catalog, preserve explicit routes, and leave ambiguous cross-vendor matches unpriced (#3002). Thanks @Yuxin-Qiao!
 - Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
@@ -14,7 +13,8 @@
 - Usage & Spend: keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
 - Usage & Spend: keep priced Cursor days visible when some events omit totalCents, and stop invalid Cursor model costs from reviving on later events (#3005). Thanks @Yuxin-Qiao!
 - Settings: style the Quit CodexBar button as a prominent accent-color button and remove its stray section background (#2992). Thanks @elijahfriedman!
-
+- Grok: add an Auto / Grok CLI / SuperGrok OAuth / Browser cookies source picker, and paste a SuperGrok bearer or grok.com cookie into token accounts. OAuth and cookies stay separate paths.
+- Grok: Open token file opens `~/.grok/auth.json` instead of CodexBar's `config.json`.
 ## 0.52.0 — 2026-08-17
 
 ### Added
