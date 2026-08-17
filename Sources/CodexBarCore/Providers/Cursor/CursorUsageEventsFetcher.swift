@@ -501,6 +501,7 @@ struct CursorUsageEventsFetcher: Sendable {
         var cacheReadTokens: Int? = 0
         var cacheCreationTokens: Int? = 0
         var costUSD: Double?
+        var costInvalid = false
         var requestCount: Int? = 0
 
         mutating func add(_ usage: CursorEventTokenUsage) {
@@ -508,7 +509,10 @@ struct CursorUsageEventsFetcher: Sendable {
             self.outputTokens = Self.checkedSum(self.outputTokens, usage.outputTokens)
             self.cacheReadTokens = Self.checkedSum(self.cacheReadTokens, usage.cacheReadTokens)
             self.cacheCreationTokens = Self.checkedSum(self.cacheCreationTokens, usage.cacheWriteTokens)
-            self.costUSD = Self.checkedKnownCostSum(self.costUSD, usage.totalCents)
+            self.costUSD = Self.checkedKnownCostSum(
+                self.costUSD,
+                usage.totalCents,
+                alreadyInvalid: &self.costInvalid)
             self.requestCount = Self.checkedSum(self.requestCount, 1)
         }
 
@@ -534,11 +538,25 @@ struct CursorUsageEventsFetcher: Sendable {
             }
         }
 
-        static func checkedKnownCostSum(_ lhsUSD: Double?, _ rhsCents: Double?) -> Double? {
+        static func checkedKnownCostSum(
+            _ lhsUSD: Double?,
+            _ rhsCents: Double?,
+            alreadyInvalid: inout Bool) -> Double?
+        {
+            if alreadyInvalid {
+                return nil
+            }
             guard let rhsCents else { return lhsUSD }
-            guard rhsCents >= 0 else { return nil }
+            guard rhsCents >= 0, rhsCents.isFinite else {
+                alreadyInvalid = true
+                return nil
+            }
             let sum = (lhsUSD ?? 0) + rhsCents / 100.0
-            return sum.isFinite ? sum : nil
+            guard sum.isFinite else {
+                alreadyInvalid = true
+                return nil
+            }
+            return sum
         }
     }
 

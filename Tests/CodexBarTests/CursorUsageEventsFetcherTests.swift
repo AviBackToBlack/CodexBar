@@ -362,6 +362,35 @@ struct CursorUsageEventsFetcherTests {
     }
 
     @Test
+    func `reports do not revive a model cost after an invalid cents event`() {
+        let events = [
+            Self.event(
+                timestampMS: 1_700_000_000_000,
+                model: "gpt-5",
+                input: 5,
+                totalCents: 100),
+            Self.event(
+                timestampMS: 1_700_000_001_000,
+                model: "gpt-5",
+                input: 7,
+                totalCents: -1),
+            Self.event(
+                timestampMS: 1_700_000_002_000,
+                model: "gpt-5",
+                input: 3,
+                totalCents: 50),
+        ]
+
+        let report = CursorUsageEventsFetcher.makeDailyReport(from: events, calendar: Self.utcCalendar)
+
+        #expect(report.data.count == 1)
+        #expect(report.data[0].costUSD == nil)
+        #expect(report.data[0].modelBreakdowns?.first?.costUSD == nil)
+        #expect(report.data[0].modelBreakdowns?.first?.totalTokens == 15)
+        #expect(report.summary?.totalCostUSD == nil)
+    }
+
+    @Test
     func `reports keep priced days when another day omits total cents`() {
         let events = [
             Self.event(
