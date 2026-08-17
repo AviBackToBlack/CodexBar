@@ -2,6 +2,9 @@
 
 ## 0.51.1 — Unreleased
 
+### Fixed
+- Cost history chart: localize the Projects, Conversations, session, and standard/fast mode labels that previously stayed English for all 23 app languages (#2983). Thanks @Yuxin-Qiao!
+
 ## 0.51.0 — 2026-08-16
 
 ### Added
