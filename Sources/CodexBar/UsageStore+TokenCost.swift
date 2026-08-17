@@ -442,24 +442,26 @@ extension UsageStore {
 
     func tokenSnapshot(
         fromProviderSnapshot snapshot: UsageSnapshot?,
-        provider: UsageProvider)
+        provider: UsageProvider,
+        historyDays: Int? = nil)
         -> CostUsageTokenSnapshot?
     {
+        let windowDays = historyDays ?? self.settings.costUsageHistoryDays
         switch provider {
         case .openai:
-            snapshot?.openAIAPIUsage?.toCostUsageTokenSnapshot()
+            return snapshot?.openAIAPIUsage?.toCostUsageTokenSnapshot()
         case .mistral:
-            snapshot?.mistralUsage?.toCostUsageTokenSnapshot(historyDays: self.settings.costUsageHistoryDays)
+            return snapshot?.mistralUsage?.toCostUsageTokenSnapshot(historyDays: windowDays)
         case .opencodego:
             // Web-only source mode and machines with no readable local database leave
             // `opencodegoUsage.daily` empty; a non-nil-but-dataless projection would still
             // surface a Cost row whose history submenu has nothing to render.
-            snapshot?.opencodegoUsage.flatMap { usage in
+            return snapshot?.opencodegoUsage.flatMap { usage in
                 usage.daily.isEmpty ? nil : usage
-                    .toCostUsageTokenSnapshot(historyDays: self.settings.costUsageHistoryDays)
+                    .toCostUsageTokenSnapshot(historyDays: windowDays)
             }
         default:
-            nil
+            return nil
         }
     }
 

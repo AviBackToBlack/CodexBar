@@ -378,8 +378,24 @@ enum ShareStatsFormatting {
         return formatter.string(from: date)
     }
 
+    static func isAllTime(_ payload: ShareStatsPayload) -> Bool {
+        payload.days >= SpendDashboardSource.scanDays
+    }
+
+    static func periodHeadline(_ payload: ShareStatsPayload) -> String {
+        self.isAllTime(payload)
+            ? "My AI subscriptions · all time"
+            : "My AI subscriptions · last \(payload.days) days"
+    }
+
+    static func coverageFraction(covered: Int, payload: ShareStatsPayload) -> String {
+        self.isAllTime(payload)
+            ? "\(covered)/all"
+            : "\(covered)/\(payload.days) days"
+    }
+
     static func text(_ payload: ShareStatsPayload) -> String {
-        var lines = ["My AI subscriptions · last \(payload.days) days"]
+        var lines = [self.periodHeadline(payload)]
         if let tokens = payload.totalTokens {
             let count = self.compactCount(tokens)
             lines.append(
@@ -392,8 +408,8 @@ enum ShareStatsFormatting {
                 let amount = "\(self.currency(value, code: currency.currencyCode)) estimated"
                 return currency.isPartial ? "\(amount) (partial)" : amount
             } ?? "Spend unavailable"
-            return "\(currency.currencyCode): \(spend) · "
-                + "coverage \(currency.coveredDayCount)/\(payload.days) days"
+            let coverage = self.coverageFraction(covered: currency.coveredDayCount, payload: payload)
+            return "\(currency.currencyCode): \(spend) · coverage \(coverage)"
         })
         lines.append(contentsOf: payload.providers.map { provider in
             var metrics: [String] = []
@@ -406,7 +422,7 @@ enum ShareStatsFormatting {
                 metrics.append("Spend unavailable")
             }
             if provider.estimatedCost != nil, provider.coveredDayCount < payload.days {
-                metrics.append("\(provider.coveredDayCount)/\(payload.days) days")
+                metrics.append(self.coverageFraction(covered: provider.coveredDayCount, payload: payload))
             }
             let subscription = provider.subscriptionName.map { " · \($0)" } ?? ""
             return "\(provider.providerName)\(subscription): \(metrics.joined(separator: " · "))"

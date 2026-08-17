@@ -240,7 +240,11 @@ enum SpendDashboardSource {
                 unavailableSourceIDs.insert(provider.rawValue)
                 continue
             }
-            guard let snapshot = currentPublication.snapshot else {
+            guard let snapshot = self.dashboardTokenSnapshot(
+                store: store,
+                provider: provider,
+                publication: currentPublication)
+            else {
                 confirmedEmptySourceIDs.insert(provider.rawValue)
                 continue
             }
@@ -577,6 +581,24 @@ enum SpendDashboardSource {
             return "\(provider.rawValue):\(self.sha256(encoded)):\(self.sha256(scope)):" +
                 self.sha256(accountOwnership)
         }
+    }
+
+    @MainActor
+    private static func dashboardTokenSnapshot(
+        store: UsageStore,
+        provider: UsageProvider,
+        publication: CurrentProviderConfigTokenPublication) -> CostUsageTokenSnapshot?
+    {
+        if UsageStore.tokenCostRequiresProviderSnapshot(provider),
+           let usage = store.snapshot(for: provider.instanceID),
+           let derived = store.tokenSnapshot(
+               fromProviderSnapshot: usage,
+               provider: provider,
+               historyDays: scanDays)
+        {
+            return derived
+        }
+        return publication.snapshot
     }
 
     @MainActor

@@ -60,6 +60,49 @@ struct SpendDashboardAllTimeTokenSnapshotTests {
         #expect(allTime.groups.first?.totalCost == 2)
     }
 
+    @Test
+    func `Mistral spend dashboard projects all-time without widening the menu window`() async throws {
+        let (settings, store) = Self.store(provider: .mistral)
+        settings.costUsageHistoryDays = 30
+        let calendar = Self.gmtCalendar
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 12)))
+        let recentDay = try #require(Self.dayString(now, calendar: calendar))
+        let oldDate = try #require(calendar.date(byAdding: .day, value: -40, to: now))
+        let oldDay = try #require(Self.dayString(oldDate, calendar: calendar))
+        let usage = MistralUsageSnapshot(
+            totalCost: 2,
+            currency: "USD",
+            currencySymbol: "$",
+            totalInputTokens: 20,
+            totalOutputTokens: 0,
+            totalCachedTokens: 0,
+            modelCount: 1,
+            daily: [
+                Self.mistralBucket(day: oldDay, cost: 1, tokens: 10),
+                Self.mistralBucket(day: recentDay, cost: 1, tokens: 10),
+            ],
+            startDate: nil,
+            endDate: nil,
+            updatedAt: now)
+        store._setSnapshotForTesting(usage.toUsageSnapshot(), provider: .mistral)
+        store._setTokenSnapshotForTesting(
+            usage.toCostUsageTokenSnapshot(historyDays: 30),
+            provider: .mistral)
+
+        let request = await SpendDashboardSource.makeRequest(
+            settings: settings,
+            store: store,
+            mode: .captureOnly,
+            now: now)
+        let captured = try #require(request.capturedInputs.first)
+        let menuDays = Set(
+            store.tokenSnapshotForCurrentProviderConfig(for: .mistral)?.snapshot.daily.compactMap(\.date) ?? [])
+
+        #expect(!menuDays.contains(oldDay))
+        #expect(menuDays.contains(recentDay))
+        #expect(Set(captured.snapshot.daily.compactMap(\.date)) == [oldDay, recentDay])
+    }
+
     private static func store(provider: UsageProvider) -> (SettingsStore, UsageStore) {
         let settings = testSettingsStore(suiteName: "SpendDashboardAllTimeTokenSnapshotTests-\(provider.rawValue)")
         settings.costUsageEnabled = true
@@ -100,6 +143,23 @@ struct SpendDashboardAllTimeTokenSnapshotTests {
             historyDays: historyDays,
             daily: entries,
             updatedAt: now)
+    }
+
+    private static func mistralBucket(day: String, cost: Double, tokens: Int) -> MistralDailyUsageBucket {
+        MistralDailyUsageBucket(
+            day: day,
+            cost: cost,
+            inputTokens: tokens,
+            cachedTokens: 0,
+            outputTokens: 0,
+            models: [
+                .init(
+                    name: "test-model",
+                    cost: cost,
+                    inputTokens: tokens,
+                    cachedTokens: 0,
+                    outputTokens: 0),
+            ])
     }
 
     private static func dayString(_ date: Date, calendar: Calendar) -> String? {

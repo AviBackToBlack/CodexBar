@@ -56,6 +56,22 @@ struct ShareStatsTests {
     }
 
     @Test
+    func `copied share stats uses all-time labels for the scan window`() throws {
+        let payload = try #require(ShareStatsBuilder.make(
+            model: SpendDashboardModel(
+                requestedDays: SpendDashboardSource.scanDays,
+                groups: Self.dashboard.groups)))
+        let text = ShareStatsFormatting.text(payload)
+
+        #expect(payload.days == SpendDashboardSource.scanDays)
+        #expect(text.contains("My AI subscriptions · all time"))
+        #expect(text.contains("GBP: £12.00 estimated · coverage 10/all"))
+        #expect(text.contains("Claude: 300 tokens · ~£12.00 est · 10/all"))
+        #expect(!text.contains("last \(SpendDashboardSource.scanDays) days"))
+        #expect(!text.contains("/\(SpendDashboardSource.scanDays) days"))
+    }
+
+    @Test
     func `payload sanitizer excludes emails identifiers paths and prompts`() throws {
         let model = Self.dashboard(models: [
             "gpt-5.4",
