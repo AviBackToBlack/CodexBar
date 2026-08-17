@@ -754,6 +754,9 @@ struct SpendDashboardControllerTests {
         #expect(defaults.integer(forKey: "settingsSpendDashboardDays") == SpendDashboardSource.scanDays)
         controller.selectDays(9)
         #expect(controller.selectedDays == 30)
+        controller.selectDays(90)
+        #expect(controller.selectedDays == 90)
+        #expect(defaults.integer(forKey: "settingsSpendDashboardDays") == 90)
     }
 
     private nonisolated static let fixtureNow = Date(timeIntervalSince1970: 1_784_179_200)

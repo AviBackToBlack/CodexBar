@@ -1467,3 +1467,25 @@
 "Total usage" = "การใช้งานทั้งหมด";
 "claude_oauth_keychain_access_revoked" = "สิทธิ์เข้าถึงพวงกุญแจ Claude ถูกเพิกถอนจากการหมุนเวียนโทเค็นของ Claude Code คลิกรีเฟรชเพื่อให้สิทธิ์อีกครั้ง หรือเปลี่ยนแหล่งที่มาการใช้งาน Claude เป็น CLI/Web";
 "claude_showing_last_known_usage" = "กำลังแสดงการใช้งานล่าสุดที่ทราบ ซึ่งบันทึกเมื่อ %@";
+/* Spend dashboard cost analysis */
+"90d" = "90d";
+"Input" = "Input";
+"Output" = "Output";
+"Cache write" = "Cache write";
+"Reasoning" = "Reasoning";
+"Sessions" = "Sessions";
+"Projects" = "Projects";
+"Plan metered" = "Plan metered";
+"List-price equivalent" = "List-price equivalent";
+"Metered and list-price" = "Metered and list-price";
+"List-price equivalent — not a billing receipt." = "List-price equivalent — not a billing receipt.";
+"Priced" = "Priced";
+"Unpriced" = "Unpriced";
+"Unmetered" = "Unmetered";
+"Estimated" = "Estimated";
+"Other models" = "Other models";
+"Include OpenCodex usage logs" = "Include OpenCodex usage logs";
+"Hide native Codex when OpenCodex is present" = "Hide native Codex when OpenCodex is present";
+"Export JSON" = "Export JSON";
+"Sources" = "Sources";
+"OpenCodex" = "OpenCodex";
