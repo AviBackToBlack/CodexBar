@@ -30,6 +30,10 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      fallback, while a team principal degrades to identity-only with an explicit
      unsupported-team-usage diagnostic. When xAI exposes billing on the agent
      protocol, no code change is required.
+   - After a successful RPC billing result (or the identity-only team fallback),
+     CodexBar still GETs `/v1/settings` for `subscription_tier_display` so the
+     billed plan is not lost just because the CLI route succeeded first. The
+     settings lookup is optional enrichment with a 2-second budget.
    - One non-obvious quirk: grok's ACP parser does not unescape `\/` in method
      names. `Foundation.JSONSerialization.data` defaults to escaping forward
      slashes, so payloads must be re-encoded with `\/` → `/` before being
@@ -44,6 +48,16 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `onDemandUsed.val / onDemandCap.val * 100`. A parseable current period
      without either value represents zero usage. The reset timestamp comes from
      `config.currentPeriod.end`, then `config.billingPeriodEnd`.
+   - Plan name does not come from the credits payload. After a successful
+     auth-file web billing result (CLI-proxy) or the team identity-only path,
+     CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the same
+     bearer headers and reads `subscription_tier_display` (`SuperGrok Heavy` vs
+     `SuperGrok`). Cookie/gRPC fallbacks are a different browser session and do
+     not reuse the auth-file settings tier. The request uses a 2-second timeout
+     and `BoundedTaskJoin`, so a stuck settings call cannot delay already-fetched
+     usage by 15 seconds. Settings timeouts, request failures, and 200 responses
+     that omit `subscription_tier_display` all drop the plan overlay and fall
+     back to the OIDC SuperGrok label. There is no process-lifetime tier cache.
    - This is the Grok CLI's supported token-authenticated billing backend. If it
      fails, CodexBar continues through the existing browser-cookie and legacy
      bearer fallbacks.
@@ -143,7 +157,10 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
 - **Identity**:
   - `accountEmail` from credential `email`.
   - `accountOrganization` from credential `team_id`.
-  - `loginMethod` = "SuperGrok" for OIDC, otherwise the raw `auth_mode`.
+  - `loginMethod` = CLI settings `subscription_tier_display` when present
+    (`SuperGrok Heavy` or `SuperGrok`), on both the CLI RPC route and the
+    CLI-proxy web route. Otherwise "SuperGrok" for OIDC and the raw `auth_mode`
+    for other login modes.
 
 ## Local fallback (`~/.grok/sessions/`)
 
@@ -174,8 +191,10 @@ points to `https://status.x.ai`.
 
 - `Sources/CodexBarCore/Providers/Grok/GrokProviderDescriptor.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokAuth.swift`
+- `Sources/CodexBarCore/Providers/Grok/GrokPlan.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokRPCClient.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokCreditsProxyFetcher.swift`
+- `Sources/CodexBarCore/Providers/Grok/GrokCLISettingsFetcher.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokWebBillingFetcher.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokStatusProbe.swift`
 - `Sources/CodexBarCore/Providers/Grok/GrokLocalSessionScanner.swift`
