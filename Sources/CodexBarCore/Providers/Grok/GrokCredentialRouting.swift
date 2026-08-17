@@ -66,9 +66,15 @@ public enum GrokCredentialRouting: Sendable, Equatable {
         }
         guard !token.isEmpty else { return nil }
         let lower = token.lowercased()
-        if lower.hasPrefix("cookie:") { return nil }
-        if lower.hasPrefix("xai-") { return nil }
-        if token.contains("=") { return nil }
+        if lower.hasPrefix("cookie:") {
+            return nil
+        }
+        if lower.hasPrefix("xai-") {
+            return nil
+        }
+        if token.contains("=") {
+            return nil
+        }
         return token
     }
 

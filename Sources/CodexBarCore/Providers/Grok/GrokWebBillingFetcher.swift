@@ -75,7 +75,9 @@ public enum GrokWebBillingError: LocalizedError, Sendable {
     }
 
     static func isAuthenticationFailure(status: Int, message: String) -> Bool {
-        if status == 16 { return true }
+        if status == 16 {
+            return true
+        }
         guard status == 7 else { return false }
         let lower = message.lowercased()
         return lower.contains("bad-credentials") || lower.contains("unauthenticated")
@@ -222,12 +224,16 @@ public enum GrokWebBillingFetcher {
             return urlError.code == .timedOut || urlError.code == .networkConnectionLost
         }
         if case let GrokWebBillingError.requestFailed(status, body) = error {
-            if [408, 502, 503, 504].contains(status) { return true }
+            if [408, 502, 503, 504].contains(status) {
+                return true
+            }
             return body.localizedCaseInsensitiveContains("timeout")
                 || body.localizedCaseInsensitiveContains("deadline")
         }
         guard case let GrokWebBillingError.rpcFailed(status, message) = error else { return false }
-        if status == 4 { return true }
+        if status == 4 {
+            return true
+        }
         guard status == 1 else { return false }
         return message.localizedCaseInsensitiveContains("timeout")
             || message.localizedCaseInsensitiveContains("deadline")
@@ -485,7 +491,9 @@ public enum GrokWebBillingFetcher {
             let byte = bytes[index]
             index += 1
             value |= UInt64(byte & 0x7F) << shift
-            if byte & 0x80 == 0 { return value }
+            if byte & 0x80 == 0 {
+                return value
+            }
             shift += 7
         }
         return nil

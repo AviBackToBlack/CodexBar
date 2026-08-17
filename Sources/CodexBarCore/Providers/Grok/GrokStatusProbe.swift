@@ -239,7 +239,9 @@ public struct GrokStatusProbe: Sendable {
     {
         // If remote usage succeeded, xAI accepted auth and the local
         // identity is still useful even when the persisted expires_at is stale.
-        if billing != nil || webBilling != nil { return credentials }
+        if billing != nil || webBilling != nil {
+            return credentials
+        }
         return credentials.flatMap { $0.isExpired ? nil : $0 }
     }
 
