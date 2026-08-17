@@ -435,7 +435,7 @@ extension CodexBarCLI {
             daily: snapshot.daily.map(self.costDailyPayload(from:)),
             projects: [],
             totals: self.costTotals(from: snapshot),
-            provenance: summary.provenance.rawValue,
+            provenance: CostProvenance.listPriceEstimate.rawValue,
             coverage: summary.coverage,
             error: nil)
     }

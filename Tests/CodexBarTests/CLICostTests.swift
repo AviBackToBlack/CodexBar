@@ -760,6 +760,7 @@ struct CLICostTests {
             last30DaysCostUSD: 1.5,
             currencyCode: "USD",
             historyDays: 7,
+            costProvenance: .listPriceEstimate,
             daily: [
                 CostUsageDailyReport.Entry(
                     date: "2026-07-16",
