@@ -33,6 +33,22 @@ public enum GrokCredentialRouting: Sendable, Equatable {
         }
     }
 
+    public static func cookieSettings(
+        configuredSource: ProviderCookieSource,
+        configuredHeader: String?,
+        selectedAccountToken: String?) -> CookieProviderSettings
+    {
+        if let header = self.resolve(
+            tokenAccountToken: selectedAccountToken,
+            manualCookieHeader: nil).manualCookieHeader
+        {
+            return CookieProviderSettings(cookieSource: .manual, manualCookieHeader: header)
+        }
+        return CookieProviderSettings(
+            cookieSource: configuredSource,
+            manualCookieHeader: configuredHeader)
+    }
+
     private static func resolvePrimaryCredential(_ raw: String) -> Self? {
         if let accessToken = self.normalizedOAuthToken(raw) {
             return .oauth(accessToken: accessToken)

@@ -45,12 +45,13 @@ public enum GrokProviderDescriptor {
                 },
                 credentialSettings: { context in
                     let cookies = context.cookieSettings(for: .grok)
-                    let routing = GrokCredentialRouting.resolve(
-                        tokenAccountToken: context.account?.token,
-                        manualCookieHeader: context.account == nil ? cookies.manualCookieHeader : nil)
+                    let resolved = GrokCredentialRouting.cookieSettings(
+                        configuredSource: cookies.cookieSource,
+                        configuredHeader: cookies.manualCookieHeader,
+                        selectedAccountToken: context.account?.token)
                     return GrokProviderSettings(
-                        cookieSource: routing.manualCookieHeader != nil ? .manual : cookies.cookieSource,
-                        manualCookieHeader: routing.manualCookieHeader ?? cookies.manualCookieHeader)
+                        cookieSource: resolved.cookieSource,
+                        manualCookieHeader: resolved.manualCookieHeader)
                 }),
             credentials: self.credentials,
             metadata: ProviderMetadata(

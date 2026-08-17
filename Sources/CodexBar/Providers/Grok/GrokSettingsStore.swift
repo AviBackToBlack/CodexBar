@@ -41,10 +41,16 @@ extension SettingsStore {
         -> ProviderSettingsSnapshot
         .GrokProviderSettings
     {
-        self.resolvedCookieSettings(
+        let account = ProviderTokenAccountSelection.selectedAccount(
             provider: .grok,
+            settings: self,
+            override: tokenOverride)
+        let resolved = GrokCredentialRouting.cookieSettings(
             configuredSource: self.grokCookieSource,
             configuredHeader: self.grokCookieHeader,
-            tokenOverride: tokenOverride)
+            selectedAccountToken: account?.token)
+        return GrokProviderSettings(
+            cookieSource: resolved.cookieSource,
+            manualCookieHeader: resolved.manualCookieHeader)
     }
 }

@@ -131,4 +131,28 @@ struct GrokSettingsReaderTests {
         env.removeValue(forKey: GrokSettingsReader.oauthTokenEnvironmentKey)
         #expect(GrokSettingsReader.resolvedCredentials(environment: env)?.accessToken == "file-token")
     }
+
+    @Test
+    func `selected cookie account overrides the configured Grok cookie header`() {
+        let selected = GrokCredentialRouting.cookieSettings(
+            configuredSource: .auto,
+            configuredHeader: "sso=configured",
+            selectedAccountToken: "Cookie: sso=selected")
+        #expect(selected.cookieSource == .manual)
+        #expect(selected.manualCookieHeader == "sso=selected")
+
+        let bearerKeepsConfigured = GrokCredentialRouting.cookieSettings(
+            configuredSource: .auto,
+            configuredHeader: "sso=configured",
+            selectedAccountToken: "pasted-token")
+        #expect(bearerKeepsConfigured.cookieSource == .auto)
+        #expect(bearerKeepsConfigured.manualCookieHeader == "sso=configured")
+
+        let none = GrokCredentialRouting.cookieSettings(
+            configuredSource: .auto,
+            configuredHeader: "sso=configured",
+            selectedAccountToken: nil)
+        #expect(none.cookieSource == .auto)
+        #expect(none.manualCookieHeader == "sso=configured")
+    }
 }
