@@ -60,6 +60,51 @@ struct GrokPlanTests {
     }
 
     @Test
+    func `settings cache is scoped to the credential identity`() {
+        GrokCLISettingsFetcher.resetCacheForTesting()
+        defer { GrokCLISettingsFetcher.resetCacheForTesting() }
+
+        let first = GrokCredentials(
+            accessToken: "token-a",
+            refreshToken: nil,
+            scope: "https://auth.x.ai::client",
+            authMode: "oidc",
+            userId: "user-a",
+            email: "a@example.com",
+            firstName: nil,
+            lastName: nil,
+            teamId: nil,
+            oidcIssuer: nil,
+            oidcClientId: nil,
+            expiresAt: nil,
+            createTime: nil)
+        let second = GrokCredentials(
+            accessToken: "token-b",
+            refreshToken: nil,
+            scope: "https://auth.x.ai::client",
+            authMode: "oidc",
+            userId: "user-b",
+            email: "b@example.com",
+            firstName: nil,
+            lastName: nil,
+            teamId: nil,
+            oidcIssuer: nil,
+            oidcClientId: nil,
+            expiresAt: nil,
+            createTime: nil)
+
+        GrokCLISettingsFetcher.remember("SuperGrok Heavy", for: first)
+        #expect(GrokCLISettingsFetcher.cachedTier(for: first) == "SuperGrok Heavy")
+        #expect(GrokCLISettingsFetcher.cachedTier(for: second) == nil)
+    }
+
+    @Test
+    func `settings request uses a short enrichment timeout`() {
+        #expect(GrokCLISettingsFetcher.requestTimeoutSeconds == 2)
+        #expect(GrokStatusProbe.settingsJoinGrace == .seconds(2))
+    }
+
+    @Test
     func `settings endpoint is derived from the billing host`() throws {
         let billing = try #require(URL(string: "https://grok.test/v1/billing?format=credits"))
         #expect(GrokCLISettingsFetcher.endpoint(fromBilling: billing).absoluteString

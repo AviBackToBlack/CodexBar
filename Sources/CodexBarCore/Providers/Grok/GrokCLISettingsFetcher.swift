@@ -7,7 +7,39 @@ import FoundationNetworking
 /// not on `/v1/billing?format=credits`.
 enum GrokCLISettingsFetcher {
     static let defaultEndpoint = URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!
-    private static let requestTimeoutSeconds: TimeInterval = 15
+    static let requestTimeoutSeconds: TimeInterval = 2
+
+    private struct CacheEntry: Sendable {
+        let key: String
+        let tier: String
+    }
+
+    private final class Cache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entry: CacheEntry?
+
+        func remember(_ tier: String?, key: String) {
+            guard let tier else { return }
+            self.lock.lock()
+            self.entry = CacheEntry(key: key, tier: tier)
+            self.lock.unlock()
+        }
+
+        func tier(for key: String) -> String? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard let entry, entry.key == key else { return nil }
+            return entry.tier
+        }
+
+        func reset() {
+            self.lock.lock()
+            self.entry = nil
+            self.lock.unlock()
+        }
+    }
+
+    private static let cache = Cache()
 
     static func endpoint(fromBilling billing: URL) -> URL {
         var components = URLComponents(url: billing, resolvingAgainstBaseURL: false)
@@ -43,6 +75,24 @@ enum GrokCLISettingsFetcher {
         }
         guard response.statusCode == 200 else { return nil }
         return self.parse(response.data)
+    }
+
+    static func remember(_ tier: String?, for credentials: GrokCredentials) {
+        guard let key = self.cacheKey(for: credentials) else { return }
+        self.cache.remember(tier, key: key)
+    }
+
+    static func cachedTier(for credentials: GrokCredentials) -> String? {
+        guard let key = self.cacheKey(for: credentials) else { return nil }
+        return self.cache.tier(for: key)
+    }
+
+    static func resetCacheForTesting() {
+        self.cache.reset()
+    }
+
+    private static func cacheKey(for credentials: GrokCredentials) -> String? {
+        credentials.userId ?? credentials.email
     }
 
     static func parse(_ data: Data) -> String? {

@@ -32,7 +32,8 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      protocol, no code change is required.
    - After a successful RPC billing result (or the identity-only team fallback),
      CodexBar still GETs `/v1/settings` for `subscription_tier_display` so the
-     billed plan is not lost just because the CLI route succeeded first.
+     billed plan is not lost just because the CLI route succeeded first. The
+     settings lookup is optional enrichment with a 2-second budget.
    - One non-obvious quirk: grok's ACP parser does not unescape `\/` in method
      names. `Foundation.JSONSerialization.data` defaults to escaping forward
      slashes, so payloads must be re-encoded with `\/` → `/` before being
@@ -47,12 +48,15 @@ The grok.com billing gRPC-web endpoint remains a best-effort fallback.
      `onDemandUsed.val / onDemandCap.val * 100`. A parseable current period
      without either value represents zero usage. The reset timestamp comes from
      `config.currentPeriod.end`, then `config.billingPeriodEnd`.
-   - Plan name does not come from the credits payload. After a successful credits
-     fetch, CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the
+   - Plan name does not come from the credits payload. After any successful web
+     billing result — CLI-proxy, cookie/gRPC fallback, or the team identity-only
+     path — CodexBar GETs `https://cli-chat-proxy.grok.com/v1/settings` with the
      same bearer headers and reads `subscription_tier_display` (`SuperGrok Heavy`
-     vs `SuperGrok`). OIDC `auth_mode` alone cannot distinguish those plans. A
-     settings failure keeps billing data and falls back to the OIDC SuperGrok
-     label.
+     vs `SuperGrok`). The request uses a 2-second timeout and `BoundedTaskJoin`,
+     so a stuck settings call cannot delay already-fetched usage by 15 seconds.
+     A recent successful tier is cached per user as a fallback. OIDC `auth_mode`
+     alone cannot distinguish those plans. A settings failure keeps billing data
+     and falls back to the OIDC SuperGrok label.
    - This is the Grok CLI's supported token-authenticated billing backend. If it
      fails, CodexBar continues through the existing browser-cookie and legacy
      bearer fallbacks.

@@ -14,16 +14,13 @@ struct GrokCreditsProxyFetcherTests {
         defer { GrokCreditsProxyStubURLProtocol.reset() }
         GrokCreditsProxyStubURLProtocol.reset()
         GrokCreditsProxyStubURLProtocol.handler = { request in
+            #expect(request.url == endpoint)
             #expect(request.httpMethod == "GET")
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token-123")
             #expect(request.value(forHTTPHeaderField: "x-xai-token-auth") == "xai-grok-cli")
             #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
             #expect(request.value(forHTTPHeaderField: "User-Agent") == "CodexBar")
             #expect(request.timeoutInterval == 15)
-            if request.url?.path == "/v1/settings" {
-                return try Self.response(for: request, body: #"{"subscription_tier_display":"SuperGrok"}"#)
-            }
-            #expect(request.url == endpoint)
             return try Self.response(
                 for: request,
                 body: """
@@ -49,88 +46,9 @@ struct GrokCreditsProxyFetcherTests {
             endpoint: endpoint)
         let expectedReset = try Self.date("2026-08-13T00:00:00Z")
 
-        #expect(GrokCreditsProxyStubURLProtocol.requests.count == 2)
+        #expect(GrokCreditsProxyStubURLProtocol.requests.count == 1)
         #expect(snapshot.usedPercent == 12.5)
         #expect(snapshot.resetsAt == expectedReset)
-        #expect(snapshot.subscriptionTier == "SuperGrok")
-    }
-
-    @Test
-    func `reads SuperGrok Heavy from CLI settings and keeps period-only usage at zero`() async throws {
-        let session = Self.makeSession()
-        let endpoint = try #require(URL(string: "https://grok.test/v1/billing?format=credits"))
-        defer { GrokCreditsProxyStubURLProtocol.reset() }
-        GrokCreditsProxyStubURLProtocol.reset()
-        GrokCreditsProxyStubURLProtocol.handler = { request in
-            if request.url?.path == "/v1/settings" {
-                return try Self.response(
-                    for: request,
-                    body: #"{"subscription_tier_display":"SuperGrok Heavy"}"#)
-            }
-            return try Self.response(
-                for: request,
-                body: """
-                {
-                  "config": {
-                    "currentPeriod": {
-                      "type": "USAGE_PERIOD_TYPE_WEEKLY",
-                      "start": "2026-08-16T18:42:45.537749+00:00",
-                      "end": "2026-08-23T18:42:45.537749+00:00"
-                    },
-                    "onDemandCap": { "val": 0 },
-                    "onDemandUsed": { "val": 0 },
-                    "isUnifiedBillingUser": true,
-                    "prepaidBalance": { "val": 0 },
-                    "billingPeriodStart": "2026-08-16T18:42:45.537749+00:00",
-                    "billingPeriodEnd": "2026-08-23T18:42:45.537749+00:00"
-                  }
-                }
-                """)
-        }
-
-        let snapshot = try await GrokCreditsProxyFetcher.fetch(
-            credentials: Self.credentials,
-            session: session,
-            endpoint: endpoint)
-        let expectedReset = try Self.date("2026-08-23T18:42:45.537749+00:00")
-
-        #expect(snapshot.subscriptionTier == "SuperGrok Heavy")
-        #expect(snapshot.usedPercent == 0)
-        #expect(snapshot.resetsAt == expectedReset)
-        #expect(GrokCreditsProxyStubURLProtocol.requests.map(\.url?.path) == [
-            "/v1/billing",
-            "/v1/settings",
-        ])
-    }
-
-    @Test
-    func `settings failure keeps credits and the OIDC fallback`() async throws {
-        let session = Self.makeSession()
-        let endpoint = try #require(URL(string: "https://grok.test/v1/billing?format=credits"))
-        defer { GrokCreditsProxyStubURLProtocol.reset() }
-        GrokCreditsProxyStubURLProtocol.reset()
-        GrokCreditsProxyStubURLProtocol.handler = { request in
-            if request.url?.path == "/v1/settings" {
-                return try Self.response(for: request, statusCode: 500, body: "nope")
-            }
-            return try Self.response(
-                for: request,
-                body: """
-                {
-                  "config": {
-                    "creditUsagePercent": 18,
-                    "billingPeriodEnd": "2026-08-13T00:00:00Z"
-                  }
-                }
-                """)
-        }
-
-        let snapshot = try await GrokCreditsProxyFetcher.fetch(
-            credentials: Self.credentials,
-            session: session,
-            endpoint: endpoint)
-
-        #expect(snapshot.usedPercent == 18)
         #expect(snapshot.subscriptionTier == nil)
     }
 

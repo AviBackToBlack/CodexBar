@@ -128,17 +128,19 @@ public struct GrokStatusProbe: Sendable {
                billingAttempted: billingAttempted,
                error: rpcError)
         {
+            let subscriptionTier = try await Self.loadSettingsTier(credentials: credentials)
             return Self.identityOnlySnapshot(
                 credentials: credentials,
                 localSummary: localSummary,
                 cliVersion: cliVersion,
-                subscriptionTier: try await Self.loadSettingsTier(credentials: credentials))
+                subscriptionTier: subscriptionTier)
         }
 
         if billing == nil {
             throw rpcError ?? GrokRPCError.notAuthenticated
         }
 
+        let subscriptionTier = try await Self.loadSettingsTier(credentials: credentials)
         return GrokUsageSnapshot(
             billing: billing,
             webBilling: nil,
@@ -149,7 +151,7 @@ public struct GrokStatusProbe: Sendable {
             localSummary: localSummary,
             cliVersion: cliVersion,
             updatedAt: Date(),
-            subscriptionTier: try await Self.loadSettingsTier(credentials: credentials))
+            subscriptionTier: subscriptionTier)
     }
 
     static func identityOnlySnapshot(
@@ -170,14 +172,35 @@ public struct GrokStatusProbe: Sendable {
             subscriptionTier: subscriptionTier)
     }
 
+    static let settingsJoinGrace = Duration.seconds(2)
+
     static func loadSettingsTier(
         credentials: GrokCredentials?,
         session transport: any ProviderHTTPTransport = ProviderHTTPClient.shared) async throws -> String?
     {
         guard let credentials, !credentials.isExpired else { return nil }
-        return try await GrokCLISettingsFetcher.subscriptionTierDisplay(
-            credentials: credentials,
-            session: transport)
+        let sourceTask = Task<String?, Error> {
+            try await GrokCLISettingsFetcher.subscriptionTierDisplay(
+                credentials: credentials,
+                session: transport)
+        }
+        let outcome = await BoundedTaskJoin(sourceTask: sourceTask).value(joinGrace: Self.settingsJoinGrace)
+        try Task.checkCancellation()
+        switch outcome {
+        case let .value(tier):
+            GrokCLISettingsFetcher.remember(tier, for: credentials)
+            return tier ?? GrokCLISettingsFetcher.cachedTier(for: credentials)
+        case .timedOut:
+            return GrokCLISettingsFetcher.cachedTier(for: credentials)
+        case let .failure(error):
+            if error is CancellationError {
+                throw CancellationError()
+            }
+            if let urlError = error as? URLError, urlError.code == .cancelled {
+                throw urlError
+            }
+            return GrokCLISettingsFetcher.cachedTier(for: credentials)
+        }
     }
 
     static func isBillingMethodUnavailable(_ error: Error?) -> Bool {

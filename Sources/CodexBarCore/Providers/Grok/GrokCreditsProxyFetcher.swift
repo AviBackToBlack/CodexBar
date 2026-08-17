@@ -38,12 +38,7 @@ public enum GrokCreditsProxyFetcher {
             let body = String(data: response.data.prefix(400), encoding: .utf8) ?? ""
             throw GrokWebBillingError.requestFailed(response.statusCode, body)
         }
-        let snapshot = try Self.parseSnapshot(response.data)
-        let settingsTier = try await GrokCLISettingsFetcher.subscriptionTierDisplay(
-            credentials: credentials,
-            session: transport,
-            endpoint: GrokCLISettingsFetcher.endpoint(fromBilling: endpoint))
-        return snapshot.applying(subscriptionTier: settingsTier)
+        return try Self.parseSnapshot(response.data)
     }
 
     static func parseSnapshot(_ data: Data) throws -> GrokWebBillingSnapshot {
