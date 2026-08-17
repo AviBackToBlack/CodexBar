@@ -1378,6 +1378,17 @@ extension CostUsagePricingTests {
         #expect(bare == (100.0 * 0.14e-6) + (5.0 * 0.28e-6))
         #expect(prefixed == (100.0 * 0.07e-6) + (5.0 * 0.14e-6))
         #expect(anthropic == (10.0 * 3e-6) + (5.0 * 15e-6))
+        #expect(CostUsagePricing.claudeModelsDevPricingTargets(for: "deepseek-v4-flash").contains {
+            $0.providerID == "deepseek" && $0.modelID == "deepseek-v4-flash"
+        })
+        #expect(Set(CostUsagePricing.claudeFirstPartyModelsDevProviderIDs).isSuperset(of: [
+            "anthropic",
+            "openai",
+            "google",
+            "moonshot",
+            "minimax",
+            "deepseek",
+        ]))
     }
 
     @Test

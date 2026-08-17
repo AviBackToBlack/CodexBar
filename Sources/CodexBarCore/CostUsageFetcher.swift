@@ -667,7 +667,11 @@ public struct CostUsageFetcher: Sendable {
                         targets.insert(ModelsDevPricingTarget(providerID: target.providerID, modelID: target.modelID))
                     }
                 } else {
-                    targets.insert(ModelsDevPricingTarget(providerID: "anthropic", modelID: breakdown.modelName))
+                    for target in CostUsagePricing.claudeModelsDevPricingTargets(for: breakdown.modelName) {
+                        targets.insert(ModelsDevPricingTarget(
+                            providerID: target.providerID,
+                            modelID: target.modelID))
+                    }
                 }
             }
         }

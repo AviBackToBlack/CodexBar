@@ -854,7 +854,7 @@ extension CostUsagePricing {
     /// Bare Claude-routed IDs may match first-party models.dev vendors. Prefixed routes stay on
     /// that route and never fall through to another vendor's official price.
     /// Provider-specific by design: first-party vendor fallback for bare Claude model IDs.
-    private static let claudeFirstPartyModelsDevProviderIDs: [String] = [
+    static let claudeFirstPartyModelsDevProviderIDs: [String] = [
         Self.claudeModelsDevProviderID,
         "openai",
         "google",
@@ -863,7 +863,7 @@ extension CostUsagePricing {
         "deepseek",
     ]
 
-    private static func claudeModelsDevPricingTargets(for rawModel: String) -> [(providerID: String, modelID: String)] {
+    static func claudeModelsDevPricingTargets(for rawModel: String) -> [(providerID: String, modelID: String)] {
         let trimmed = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         if trimmed.contains("/") {
