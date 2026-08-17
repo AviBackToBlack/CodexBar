@@ -211,7 +211,6 @@ struct GeneralPane: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .padding(.top, 8)
             }
-
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
