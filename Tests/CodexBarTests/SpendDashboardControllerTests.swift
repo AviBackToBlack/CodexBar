@@ -732,44 +732,6 @@ struct SpendDashboardControllerTests {
     }
 
     @Test
-    func `OpenCodex-only configuration still starts a dashboard load`() async {
-        let gate = SpendDashboardLoaderGate()
-        let controller = Self.controller(gate: gate)
-        controller.update(configuration: SpendDashboardConfiguration(
-            costUsageEnabled: true,
-            providerIDs: [],
-            codexAccountIdentities: [],
-            openCodexUsageLogsEnabled: true))
-        await Self.waitForPendingCount(1, gate: gate)
-        #expect(controller.isRefreshing)
-        await gate.resume(at: 0, result: .init(inputs: [
-            SpendDashboardModel.ProviderInput(
-                id: SpendDashboardModel.openCodexSourceID,
-                provider: .codex,
-                displayName: "OpenCodex",
-                snapshot: CostUsageTokenSnapshot(
-                    sessionTokens: 0,
-                    sessionCostUSD: 0,
-                    last30DaysTokens: 12,
-                    last30DaysCostUSD: 1,
-                    daily: [
-                        CostUsageDailyReport.Entry(
-                            date: "2026-07-16",
-                            inputTokens: 10,
-                            outputTokens: 2,
-                            totalTokens: 12,
-                            costUSD: 1,
-                            modelsUsed: nil,
-                            modelBreakdowns: nil),
-                    ],
-                    updatedAt: Date(timeIntervalSince1970: 1_784_179_200)),
-                sourceKind: .openCodex),
-        ], failedSourceIDs: []))
-        await Self.waitUntil { !controller.isRefreshing }
-        #expect(controller.model.groups.first?.providers.first?.id == SpendDashboardModel.openCodexSourceID)
-    }
-
-    @Test
     func `range selection persists only supported windows`() throws {
         let suite = "SpendDashboardControllerTests-days"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -815,7 +777,7 @@ struct SpendDashboardControllerTests {
             nowProvider: { Self.fixtureNow })
     }
 
-    private static func controller(gate: SpendDashboardLoaderGate) -> SpendDashboardController {
+    static func controller(gate: SpendDashboardLoaderGate) -> SpendDashboardController {
         let controllerBox = SpendDashboardControllerBox()
         let captureStore = SpendDashboardCapturedInputStore()
         let controller = SpendDashboardController(
@@ -893,7 +855,7 @@ struct SpendDashboardControllerTests {
             snapshot: snapshot)
     }
 
-    private static func waitForPendingCount(_ count: Int, gate: SpendDashboardLoaderGate) async {
+    static func waitForPendingCount(_ count: Int, gate: SpendDashboardLoaderGate) async {
         for _ in 0..<1000 {
             if await gate.pendingCount == count {
                 return
@@ -913,7 +875,7 @@ struct SpendDashboardControllerTests {
         Issue.record("Timed out waiting for \(count) pending Codex loads")
     }
 
-    private static func waitUntil(_ condition: @MainActor () -> Bool) async {
+    static func waitUntil(_ condition: @MainActor () -> Bool) async {
         for _ in 0..<1000 {
             if condition() {
                 return
@@ -1289,7 +1251,7 @@ private actor SpendDashboardCodexSnapshotGate {
     }
 }
 
-private actor SpendDashboardLoaderGate {
+actor SpendDashboardLoaderGate {
     private var continuations: [CheckedContinuation<SpendDashboardLoadResult, Never>] = []
 
     var pendingCount: Int {
