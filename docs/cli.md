@@ -212,6 +212,7 @@ codexbar --format json --provider both
 codexbar cost                     # cost usage (default 30-day window + today)
 codexbar cost --days 90           # choose a 1...365 day cost window
 codexbar cost --provider codex --group-by project
+codexbar cost --provider codex --group-by session
 codexbar cost --provider claude --format json --pretty
 codexbar guard --provider codex --min-remaining 20 --window weekly --json
 codexbar cost --provider cursor   # Cursor dashboard cost (API-rate + Cursor-metered)
