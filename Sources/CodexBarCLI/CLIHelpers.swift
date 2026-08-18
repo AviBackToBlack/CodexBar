@@ -39,13 +39,7 @@ extension CodexBarCLI {
     }
 
     static func decodeFormat(from values: ParsedValues) -> OutputFormat {
-        if let raw = values.options["format"]?.last, let parsed = OutputFormat(argument: raw) {
-            return parsed
-        }
-        if values.flags.contains("jsonShortcut") || values.flags.contains("json") || values.flags.contains("jsonOnly") {
-            return .json
-        }
-        return .text
+        CLIOutputPreferences.resolveOutputFormat(from: values).format
     }
 
     static func decodeTokenAccountSelection(from values: ParsedValues) throws -> TokenAccountCLISelection {
@@ -387,7 +381,7 @@ extension CodexBarCLI {
                     antigravityPlanInfo: nil,
                     openaiDashboard: nil,
                     error: self.makeErrorPayload(code: .failure, message: error.localizedDescription, kind: .config))
-                self.printJSON([payload], pretty: output.pretty)
+                self.printProviderPayloads([payload], output: output)
             } else {
                 self.writeStderr("Error: \(error.localizedDescription)\n")
             }
