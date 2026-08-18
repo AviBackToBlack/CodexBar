@@ -7,6 +7,7 @@ use codexbar::core::{
     instantiate_provider,
 };
 use codexbar::locale;
+use codexbar::login::{self, LoginOutcome, LoginPhase};
 use codexbar::providers::copilot::{CopilotApi, device_flow::CopilotDeviceFlow};
 use codexbar::secure_file::{self, SecureFileStatus};
 use codexbar::settings::{
