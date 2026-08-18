@@ -43,6 +43,7 @@ export type MetricPreference =
   | "tertiary"
   | "credits"
   | "extraUsage"
+  | "monthlyPlan"
   | "average";
 
 export type Language =
@@ -52,7 +53,8 @@ export type Language =
   | "japanese"
   | "korean"
   | "spanish"
-  | "russian";
+  | "russian"
+  | "turkish";
 
 /** Language catalog entry from the Rust backend. */
 export type LanguageOption = {
@@ -67,6 +69,9 @@ export type UpdateChannel = "stable" | "beta";
 export type ThemePreference = "auto" | "light" | "dark";
 
 export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
+
+/** How cost is rendered on provider MenuCards (#2976). */
+export type CostSummaryDisplayStyle = "compact" | "detailed" | "hidden";
 export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
 
@@ -231,7 +236,7 @@ export interface SettingsSnapshot {
   floatBarProviderIds: string[];
   /** When true, render with dark text/glass for light desktops. */
   floatBarDarkText: boolean;
-  /** When true, render the next primary reset inline in each provider pill. */
+  /** When true, render the selected metric's next reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
   /** When true, scan and render local cost summaries. */
   floatBarShowCost: boolean;
@@ -243,6 +248,10 @@ export interface SettingsSnapshot {
   alibabaTokenPlanRegion: string;
   /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
   weeklyProgressWorkDays?: number | null;
+  /** How cost is rendered on provider cards (#2976). */
+  costSummaryDisplayStyle: CostSummaryDisplayStyle;
+  /** Per-provider accent color overrides (CLI name → hex color, #2972). */
+  providerAccentColors: Record<string, string>;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -309,6 +318,8 @@ export interface SettingsUpdate {
   claudeDailyRoutinesUsageVisible?: boolean;
   alibabaTokenPlanRegion?: string;
   weeklyProgressWorkDays?: number | null;
+  costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  providerAccentColors?: Record<string, string | null>;
 }
 
 export interface UsageThresholdOverride {
@@ -425,6 +436,8 @@ export interface CostSnapshotBridge {
   limit: number | null;
   remaining: number | null;
   currencyCode: string;
+  /** Optional currency symbol (e.g. "€", "$", "¥") for localized rendering. */
+  currencySymbol?: string | null;
   period: string;
   resetsAt: string | null;
   formattedUsed: string;
@@ -455,6 +468,8 @@ export interface ProviderUsageSnapshot {
   providerId: string;
   displayName: string;
   primary: RateWindowSnapshot;
+  /** Settings-selected metric shared by native and webview presentation surfaces. */
+  selectedMetric: RateWindowSnapshot;
   primaryLabel?: string;
   secondary: RateWindowSnapshot | null;
   secondaryLabel?: string;

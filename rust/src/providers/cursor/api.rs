@@ -297,7 +297,6 @@ fn plan_period_label(billing_cycle_start: Option<&str>) -> String {
         _ => "Cursor and Third Party (billing cycle)".to_string(),
     }
 }
-
 impl Default for CursorApi {
     fn default() -> Self {
         Self::new()

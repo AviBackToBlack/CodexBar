@@ -167,6 +167,10 @@ pub(super) struct RawSettings {
     weekly_progress_work_days: Option<u8>,
     #[serde(default = "default_alibaba_token_plan_region")]
     alibaba_token_plan_region: String,
+    #[serde(default)]
+    codex_external_oauth_sources_allowed: bool,
+    #[serde(default)]
+    cost_summary_display_style: CostSummaryDisplayStyle,
 }
 
 impl Default for RawSettings {
@@ -265,6 +269,8 @@ impl Default for RawSettings {
                 .claude_allow_reading_claude_code_credentials,
             weekly_progress_work_days: s.weekly_progress_work_days,
             alibaba_token_plan_region: s.alibaba_token_plan_region,
+            codex_external_oauth_sources_allowed: s.codex_external_oauth_sources_allowed,
+            cost_summary_display_style: s.cost_summary_display_style,
         }
     }
 }
@@ -558,6 +564,8 @@ impl From<RawSettings> for Settings {
                     trimmed.to_string()
                 }
             },
+            cost_summary_display_style: raw.cost_summary_display_style,
+            codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
         }
     }
 }
