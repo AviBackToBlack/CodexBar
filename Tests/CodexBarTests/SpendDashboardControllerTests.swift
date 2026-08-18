@@ -754,6 +754,9 @@ struct SpendDashboardControllerTests {
         #expect(defaults.integer(forKey: "settingsSpendDashboardDays") == SpendDashboardSource.scanDays)
         controller.selectDays(9)
         #expect(controller.selectedDays == 30)
+        controller.selectDays(90)
+        #expect(controller.selectedDays == 90)
+        #expect(defaults.integer(forKey: "settingsSpendDashboardDays") == 90)
     }
 
     private nonisolated static let fixtureNow = Date(timeIntervalSince1970: 1_784_179_200)
@@ -774,7 +777,7 @@ struct SpendDashboardControllerTests {
             nowProvider: { Self.fixtureNow })
     }
 
-    private static func controller(gate: SpendDashboardLoaderGate) -> SpendDashboardController {
+    static func controller(gate: SpendDashboardLoaderGate) -> SpendDashboardController {
         let controllerBox = SpendDashboardControllerBox()
         let captureStore = SpendDashboardCapturedInputStore()
         let controller = SpendDashboardController(
@@ -852,7 +855,7 @@ struct SpendDashboardControllerTests {
             snapshot: snapshot)
     }
 
-    private static func waitForPendingCount(_ count: Int, gate: SpendDashboardLoaderGate) async {
+    static func waitForPendingCount(_ count: Int, gate: SpendDashboardLoaderGate) async {
         for _ in 0..<1000 {
             if await gate.pendingCount == count {
                 return
@@ -872,7 +875,7 @@ struct SpendDashboardControllerTests {
         Issue.record("Timed out waiting for \(count) pending Codex loads")
     }
 
-    private static func waitUntil(_ condition: @MainActor () -> Bool) async {
+    static func waitUntil(_ condition: @MainActor () -> Bool) async {
         for _ in 0..<1000 {
             if condition() {
                 return
@@ -1248,7 +1251,7 @@ private actor SpendDashboardCodexSnapshotGate {
     }
 }
 
-private actor SpendDashboardLoaderGate {
+actor SpendDashboardLoaderGate {
     private var continuations: [CheckedContinuation<SpendDashboardLoadResult, Never>] = []
 
     var pendingCount: Int {

@@ -1467,3 +1467,25 @@
 "Total usage" = "Utilizzo totale";
 "claude_oauth_keychain_access_revoked" = "L'accesso al portachiavi di Claude è stato revocato dalla rotazione del token di Claude Code. Fai clic su Aggiorna per concedere nuovamente l'accesso oppure imposta la fonte di utilizzo di Claude su CLI/Web.";
 "claude_showing_last_known_usage" = "Visualizzazione dell'ultimo utilizzo noto, acquisito %@.";
+/* Spend dashboard cost analysis */
+"90d" = "90 g";
+"Input" = "Ingresso";
+"Output" = "Uscita";
+"Cache write" = "Scrittura cache";
+"Reasoning" = "Ragionamento";
+"Sessions" = "Sessioni";
+"Projects" = "Progetti";
+"Plan metered" = "Piano misurato";
+"List-price equivalent" = "Equivalente a listino";
+"Metered and list-price" = "Misurato e a listino";
+"List-price equivalent — not a billing receipt." = "Equivalente a listino — non è una fattura.";
+"Priced" = "Prezzati";
+"Unpriced" = "Non prezzati";
+"Unmetered" = "Non misurati";
+"Estimated" = "Stimati";
+"Other models" = "Altri modelli";
+"Include OpenCodex usage logs" = "Includi i log di utilizzo OpenCodex";
+"Hide native Codex when OpenCodex is present" = "Nascondi Codex nativo quando è presente OpenCodex";
+"Export JSON" = "Esporta JSON";
+"Sources" = "Origini";
+"OpenCodex" = "OpenCodex";

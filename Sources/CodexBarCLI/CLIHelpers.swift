@@ -199,16 +199,36 @@ extension CodexBarCLI {
     /// serve dashboard follows the setting without a restart, the same way reset style
     /// and weekly work days already do.
     static func hidePersonalInfoFromDefaults() -> Bool {
+        self.boolFromAppDefaults("hidePersonalInfo") ?? false
+    }
+
+    static func boolFromAppDefaults(_ key: String) -> Bool? {
         let domains = [
             "com.steipete.codexbar",
             "com.steipete.codexbar.debug",
         ]
         for domain in domains {
-            if let value = UserDefaults(suiteName: domain)?.object(forKey: "hidePersonalInfo") as? Bool {
+            if let value = UserDefaults(suiteName: domain)?.object(forKey: key) as? Bool {
                 return value
             }
         }
-        return UserDefaults.standard.object(forKey: "hidePersonalInfo") as? Bool ?? false
+        return UserDefaults.standard.object(forKey: key) as? Bool
+    }
+
+    static func stringFromAppDefaults(_ key: String) -> String? {
+        let domains = [
+            "com.steipete.codexbar",
+            "com.steipete.codexbar.debug",
+        ]
+        for domain in domains {
+            if let value = UserDefaults(suiteName: domain)?.string(forKey: key), !value.isEmpty {
+                return value
+            }
+        }
+        if let value = UserDefaults.standard.string(forKey: key), !value.isEmpty {
+            return value
+        }
+        return nil
     }
 
     static func fetchProviderUsage(

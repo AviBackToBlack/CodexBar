@@ -5,6 +5,10 @@
 ### Added
 - CLI: add `codexbar usage --format toon` emitting the JSON payload as TOON v4.1 for agents that prefer denser structured output (#2996, #3021). Thanks @elijahfriedman and @teseo for the spec!
 - Usage & Spend: add an All time range alongside 7d/30d, backed by 365 days of local history with dedicated Claude and Cursor spend snapshot slots (#3009). Thanks @Yuxin-Qiao!
+- Usage & Spend: add explicit cost provenance, coverage counters, and a pinned IANA day-bucketing timezone while making uncertain Codex fork accounting fail closed (#3015). Thanks @Yuxin-Qiao!
+- Codex cost: support exact-match custom pricing above models.dev and built-in rates, preserving missing fields as unknown and explicit zero rates as free (#3016). Thanks @Yuxin-Qiao!
+- Usage & Spend: add token mix, coverage, conversation totals, source visibility controls, and an hourly activity heatmap to the spend dashboard (#3017). Thanks @Yuxin-Qiao!
+- Usage & Spend: add opt-in, read-only OpenCodex `usage.jsonl` import with its SQLite cache isolated in CodexBar's own cache directory (#3018). Thanks @Yuxin-Qiao!
 - General settings: turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
 - Grok: add an Auto / Grok CLI / SuperGrok OAuth / Browser cookies source picker, support pasted SuperGrok bearers and grok.com cookies in token accounts, and open `~/.grok/auth.json` from Open token file (#3010). Thanks @oakimov!
 
@@ -17,6 +21,7 @@
 - Usage & Spend: sum priced subscriptions into a ~$ partial estimate with coverage shown when some subscriptions lack prices, instead of hiding the total (#3001). Thanks @Yuxin-Qiao!
 - Usage & Spend: keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
 - Usage & Spend: keep priced Cursor days visible when some events omit totalCents, and stop invalid Cursor model costs from reviving on later events (#3005). Thanks @Yuxin-Qiao!
+- CLI: align `codexbar cost --json` with spend provenance, token mix, coverage, and opt-in OpenCodex payloads (#3019). Thanks @Yuxin-Qiao!
 - Settings: style the Quit CodexBar button as a prominent accent-color button and remove its stray section background (#2992). Thanks @elijahfriedman!
 
 ## 0.52.0 — 2026-08-17

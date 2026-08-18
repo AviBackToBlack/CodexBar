@@ -546,6 +546,17 @@ extension SettingsStore {
             forKey: "codexLocalSessionCostLedgerEnabled") as? Bool ?? false
         let rawCostUsageHistoryDays = userDefaults.object(forKey: "tokenCostUsageHistoryDays") as? Int ?? 30
         let costUsageHistoryDays = max(1, min(365, rawCostUsageHistoryDays))
+        let storedBucketTimeZone = userDefaults.string(forKey: "tokenCostUsageBucketTimeZone") ?? ""
+        let costUsageBucketTimeZoneIdentifier = CostUsageBucketTimeZone.isValidIdentifier(storedBucketTimeZone)
+            ? storedBucketTimeZone
+            : (costUsageEnabled ? CostUsageBucketTimeZone.pinIdentifier() : "")
+        if costUsageEnabled, storedBucketTimeZone.isEmpty, !costUsageBucketTimeZoneIdentifier.isEmpty {
+            userDefaults.set(costUsageBucketTimeZoneIdentifier, forKey: "tokenCostUsageBucketTimeZone")
+        }
+        let openCodexUsageLogsEnabled = userDefaults.object(forKey: "openCodexUsageLogsEnabled") as? Bool ?? false
+        let hideNativeCodexCostWhenOpenCodexPresent = userDefaults.object(
+            forKey: "hideNativeCodexCostWhenOpenCodexPresent") as? Bool ?? false
+        let spendDashboardHiddenSourceIDs = userDefaults.stringArray(forKey: "spendDashboardHiddenSourceIDs") ?? []
         let costComparisonPeriodsEnabled = userDefaults.object(
             forKey: "costComparisonPeriodsEnabled") as? Bool ?? false
         let costSummaryDisplayStyleRaw = Self.loadCostSummaryDisplayStyleRaw(
@@ -673,6 +684,10 @@ extension SettingsStore {
             costUsageEnabled: costUsageEnabled,
             codexLocalSessionCostLedgerEnabled: codexLocalSessionCostLedgerEnabled,
             costUsageHistoryDays: costUsageHistoryDays,
+            costUsageBucketTimeZoneIdentifier: costUsageBucketTimeZoneIdentifier,
+            openCodexUsageLogsEnabled: openCodexUsageLogsEnabled,
+            hideNativeCodexCostWhenOpenCodexPresent: hideNativeCodexCostWhenOpenCodexPresent,
+            spendDashboardHiddenSourceIDs: spendDashboardHiddenSourceIDs,
             costComparisonPeriodsEnabled: costComparisonPeriodsEnabled,
             costSummaryDisplayStyleRaw: costSummaryDisplayStyleRaw,
             hidePersonalInfo: hidePersonalInfo,
