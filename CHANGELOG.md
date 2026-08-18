@@ -2,6 +2,9 @@
 
 ## 0.53.1 — Unreleased
 
+- Added direct primary/secondary/tertiary usage lane tokens to provider-specific menu bar layouts, so Cursor layouts can pin `Total %`, `Cursor %`, or `Third Party %` (#3038, #3039). Thanks @giuseppebisemi!
+- Show spend dashboard row metrics as cost and tokens together instead of cost-only (#3043). Thanks @Yuxin-Qiao!
+- Documented custom-pricing overlays and the Usage & Spend surface (#3033). Thanks @Yuxin-Qiao!
 - Localized the Codex local session cost estimate setting in Korean (#3034). Thanks @Yoonkeee!
 
 ## 0.53.0 — 2026-08-18
