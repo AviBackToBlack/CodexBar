@@ -169,7 +169,6 @@ struct SpendDashboardPane: View {
         .background(FocusResigningBackground())
         .onAppear {
             self.isVisible = true
-            self.controller.refreshDateWindow()
             self.controller.update(configuration: self.configuration)
             if !self.controller.isRefreshing {
                 self.synchronizeCodexCostCatchUp()
@@ -177,6 +176,13 @@ struct SpendDashboardPane: View {
         }
         .onChange(of: self.configuration) { _, configuration in
             self.controller.update(configuration: configuration)
+        }
+        .onChange(of: self.configuration.codexAccountIdentities) { _, _ in
+            if self.isVisible, !self.controller.isRefreshing {
+                self.synchronizeCodexCostCatchUp()
+            }
+        }
+        .onChange(of: self.configuration.costUsageEnabled) { _, _ in
             if self.isVisible, !self.controller.isRefreshing {
                 self.synchronizeCodexCostCatchUp()
             }
