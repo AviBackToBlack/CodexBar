@@ -9,6 +9,7 @@ struct SettingsWindowControllerTests {
         _ = NSApplication.shared
         let selection = self.makeSelection(suffix: "create")
         let window = self.makeWindow()
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenPrimary]
         var events: [String] = []
         let controller = SettingsWindowController(
             selection: selection,
@@ -36,6 +37,7 @@ struct SettingsWindowControllerTests {
 
         #expect(outcome == .created)
         #expect(selection.pane == .about)
+        #expect(window.collectionBehavior == SettingsWindowStageBehavior.collectionBehavior)
         #expect(events == ["prepare", "make", "register", "present", "did-present"])
     }
 
