@@ -578,11 +578,12 @@ extension StatusItemController {
         let t0 = CACurrentMediaTime()
         defer { self.logChartRenderDurationIfSlow("addOverviewRows(\(rows.count))", startedAt: t0) }
 
-        let spendModel = self.overviewSpendDashboardModel(providers: overviewProviders)
+        let spendProviders = overviewProviders.filter { self.settings.costSummaryShowsInline(for: $0) }
+        let spendModel = self.overviewSpendDashboardModel(providers: spendProviders)
         if !spendModel.groups.isEmpty {
             let spendSummary = OverviewSpendSummary(
                 model: spendModel,
-                providerCount: overviewProviders.count)
+                providerCount: spendProviders.count)
             let summaryItem = self.makeMenuCardItem(
                 OverviewSpendSummaryCardView(
                     summary: spendSummary,
@@ -593,8 +594,11 @@ extension StatusItemController {
                 heightCacheScope: "overviewSpendSummary",
                 heightCacheFingerprint: [
                     spendSummary.primarySpendText,
-                    spendSummary.coverageText,
+                    spendSummary.providerCoverageText,
                     spendSummary.tokenText ?? "",
+                    spendSummary.historyCoverageText,
+                    spendSummary.pricingCoverageText,
+                    spendSummary.provenanceText,
                 ].joined(separator: "|"))
             menu.addItem(summaryItem)
             menu.addItem(.separator())

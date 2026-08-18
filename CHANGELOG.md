@@ -3,6 +3,7 @@
 ## 0.52.1 — Unreleased
 
 ### Added
+- Overview: show selected-provider usage and spend with partial-price, coverage, and provenance context (#3023). Thanks @Chipagosfinest!
 - CLI: add `codexbar usage --format toon` emitting the JSON payload as TOON v4.1 for agents that prefer denser structured output (#2996, #3021). Thanks @elijahfriedman and @teseo for the spec!
 - Usage & Spend: add an All time range alongside 7d/30d, backed by 365 days of local history with dedicated Claude and Cursor spend snapshot slots (#3009). Thanks @Yuxin-Qiao!
 - Usage & Spend: add explicit cost provenance, coverage counters, and a pinned IANA day-bucketing timezone while making uncertain Codex fork accounting fail closed (#3015). Thanks @Yuxin-Qiao!

@@ -13,16 +13,20 @@ struct OverviewSpendSummaryTests {
                 self.provider(.openrouter, tokens: 9_640_000, cost: 282.74),
                 self.provider(.cursor, tokens: 1_250_000, cost: 64.18),
             ],
-            totalTokens: nil,
-            totalCost: nil)
+            totalTokens: 15_690_000,
+            totalCost: 759.56,
+            coverage: CostUsageCoverageCounts(priced: 3, unpriced: 1))
 
         let summary = OverviewSpendSummary(
             model: SpendDashboardModel(requestedDays: 30, groups: [group]),
             providerCount: 4)
 
         #expect(summary.primarySpendText == "~$759.56")
-        #expect(summary.coverageText == "3 / 4 Providers")
+        #expect(summary.providerCoverageText == "3 of 4 subscriptions have spend")
         #expect(summary.tokenText == "~15.7M tokens")
+        #expect(summary.historyCoverageText == "Coverage: 30 / 30")
+        #expect(summary.pricingCoverageText == "Priced 3 · Unpriced 1 · Unmetered 0 · Estimated 0")
+        #expect(summary.provenanceText == "List-price equivalent")
         #expect(summary.isPartial)
     }
 
@@ -32,12 +36,15 @@ struct OverviewSpendSummaryTests {
             currencyCode: "USD",
             providers: [self.provider(.codex, tokens: 1000, cost: 12)],
             totalTokens: 1000,
-            totalCost: 12)
+            totalCost: 12,
+            coveredDayCount: 7)
         let eur = self.group(
             currencyCode: "EUR",
             providers: [self.provider(.claude, tokens: 2000, cost: 8)],
             totalTokens: 2000,
-            totalCost: 8)
+            totalCost: 8,
+            coveredDayCount: 7,
+            provenance: .vendorMetered)
 
         let summary = OverviewSpendSummary(
             model: SpendDashboardModel(requestedDays: 7, groups: [eur, usd]),
@@ -45,9 +52,49 @@ struct OverviewSpendSummaryTests {
 
         #expect(summary.primarySpendText.contains("$12.00"))
         #expect(summary.primarySpendText.contains("€8.00"))
-        #expect(summary.coverageText == "2 / 2 Providers")
+        #expect(summary.providerCoverageText == "2 of 2 subscriptions have spend")
         #expect(summary.tokenText == "3K tokens")
+        #expect(summary.historyCoverageText == "Coverage: 7 / 7")
+        #expect(summary.provenanceText == "Plan metered · List-price equivalent")
         #expect(!summary.isPartial)
+    }
+
+    @Test
+    func `summary keeps wholly unpriced spend unavailable`() {
+        let group = self.group(
+            providers: [self.provider(.claude, tokens: 2000, cost: nil)],
+            totalTokens: 2000,
+            totalCost: nil,
+            coverage: CostUsageCoverageCounts(unpriced: 1),
+            provenance: .unknown)
+
+        let summary = OverviewSpendSummary(
+            model: SpendDashboardModel(requestedDays: 30, groups: [group]),
+            providerCount: 1)
+
+        #expect(summary.primarySpendText == "Spend unavailable")
+        #expect(summary.providerCoverageText == "0 of 1 subscriptions have spend")
+        #expect(summary.pricingCoverageText == "Priced 0 · Unpriced 1 · Unmetered 0 · Estimated 0")
+        #expect(summary.provenanceText == "Spend unavailable")
+        #expect(!summary.isPartial)
+    }
+
+    @Test
+    func `summary marks a missing selected provider as partial`() {
+        let group = self.group(
+            providers: [self.provider(.codex, tokens: 1000, cost: 12)],
+            totalTokens: 1000,
+            totalCost: 12)
+
+        let summary = OverviewSpendSummary(
+            model: SpendDashboardModel(requestedDays: 30, groups: [group]),
+            providerCount: 2)
+
+        #expect(summary.primarySpendText == "~$12.00")
+        #expect(summary.providerCoverageText == "1 of 2 subscriptions have spend")
+        #expect(summary.tokenText == "~1K tokens")
+        #expect(summary.historyCoverageText == "Coverage: 0 / 30")
+        #expect(summary.isPartial)
     }
 
     private func provider(
@@ -69,7 +116,10 @@ struct OverviewSpendSummaryTests {
         currencyCode: String = "USD",
         providers: [SpendDashboardModel.ProviderRow],
         totalTokens: Int?,
-        totalCost: Double?) -> SpendDashboardModel.CurrencyGroup
+        totalCost: Double?,
+        coveredDayCount: Int = 30,
+        coverage: CostUsageCoverageCounts? = nil,
+        provenance: CostProvenance = .listPriceEstimate) -> SpendDashboardModel.CurrencyGroup
     {
         SpendDashboardModel.CurrencyGroup(
             currencyCode: currencyCode,
@@ -79,8 +129,10 @@ struct OverviewSpendSummaryTests {
             dailyPoints: [],
             totalTokens: totalTokens,
             totalCost: totalCost,
-            coveredDayCount: 30,
+            coveredDayCount: coveredDayCount,
             chartDomain: Date(timeIntervalSince1970: 0)...Date(timeIntervalSince1970: 86400),
-            modelHistoryCompleteness: totalCost == nil ? .incomplete : .complete)
+            modelHistoryCompleteness: totalCost == nil ? .incomplete : .complete,
+            coverage: coverage ?? CostUsageCoverageCounts(priced: providers.count),
+            provenance: provenance)
     }
 }
