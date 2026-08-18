@@ -2705,10 +2705,15 @@ body:has(.tray-panel-reveal) {
 }
 
 .chart__axis {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
   font-size: 0.7rem;
   color: var(--provider-row-text-secondary);
+}
+
+.chart__axis > span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .chart__axis-max {
