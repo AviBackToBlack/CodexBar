@@ -8,11 +8,59 @@ enum PercentWindow: String, CaseIterable, Codable, Hashable, Sendable {
     case automatic
 }
 
+enum MenuBarLayoutLane: String, CaseIterable, Codable, Hashable, Sendable {
+    case primary
+    case secondary
+    case tertiary
+
+    static func available(for provider: UsageProvider?, snapshot: UsageSnapshot? = nil) -> [Self] {
+        guard let provider else { return [] }
+        let capabilities = ProviderDescriptorRegistry.descriptor(for: provider).menuBarMetrics
+        return Self.allCases.filter { lane in
+            guard capabilities.supports(lane.providerMetric) else { return false }
+            return lane != .tertiary || !capabilities.tertiaryRequiresWindow || snapshot?.tertiary != nil
+        }
+    }
+
+    private var providerMetric: ProviderMenuBarMetric {
+        switch self {
+        case .primary: .primary
+        case .secondary: .secondary
+        case .tertiary: .tertiary
+        }
+    }
+}
+
+struct MenuBarLayoutLaneLabels: Hashable {
+    let primary: String
+    let secondary: String
+    let tertiary: String
+
+    init(provider: UsageProvider, snapshot: UsageSnapshot?) {
+        let descriptor = ProviderDescriptorRegistry.descriptor(for: provider)
+        let labels = snapshot.map {
+            descriptor.presentation.rateWindowLabels(metadata: descriptor.metadata, snapshot: $0)
+        }
+        self.primary = L(labels?.primary ?? descriptor.metadata.sessionLabel)
+        self.secondary = L(labels?.secondary ?? descriptor.metadata.weeklyLabel)
+        self.tertiary = L(labels?.tertiary ?? descriptor.metadata.opusLabel ?? "Tertiary")
+    }
+
+    func label(for lane: MenuBarLayoutLane) -> String {
+        switch lane {
+        case .primary: self.primary
+        case .secondary: self.secondary
+        case .tertiary: self.tertiary
+        }
+    }
+}
+
 enum MenuBarLayoutToken: Codable, Hashable, Sendable {
     case icon
     case providerName
     case accountLabel
     case percent(window: PercentWindow)
+    case lanePercent(lane: MenuBarLayoutLane)
     /// Signed pace delta for a window, e.g. `+11%` when usage runs ahead of the sustainable rate.
     /// `runsOut` answers "when does this end"; this token answers "how far off the even rate am I".
     case pace(window: PercentWindow)
