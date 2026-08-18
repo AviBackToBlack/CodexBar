@@ -274,6 +274,14 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub claude_daily_routines_usage_visible: bool,
 
+    /// Explicit consent to read (and refresh) Claude Code's own credentials
+    /// (`~/.claude/.credentials.json` / Credential Manager). Default OFF —
+    /// upstream #2634: without consent the OAuth source stays closed and Auto
+    /// falls back to labeled reduced-fidelity CLI usage; refreshed tokens are
+    /// never rotated into Claude Code's storage without consent (#2745).
+    #[serde(default)]
+    pub claude_allow_reading_claude_code_credentials: bool,
+
     /// Optional work-week length [2,6] for session-equivalent weekly forecast.
     /// `None` uses wall-clock time until weekly reset.
     #[serde(default)]
@@ -481,6 +489,7 @@ impl Default for Settings {
             float_bar_show_cost: false,
             promote_tray_icon: true,
             claude_daily_routines_usage_visible: true,
+            claude_allow_reading_claude_code_credentials: false,
             weekly_progress_work_days: None,
             alibaba_token_plan_region: default_alibaba_token_plan_region(),
         }

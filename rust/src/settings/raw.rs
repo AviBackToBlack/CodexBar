@@ -162,6 +162,8 @@ pub(super) struct RawSettings {
     #[serde(default = "default_true")]
     claude_daily_routines_usage_visible: bool,
     #[serde(default)]
+    claude_allow_reading_claude_code_credentials: bool,
+    #[serde(default)]
     weekly_progress_work_days: Option<u8>,
     #[serde(default = "default_alibaba_token_plan_region")]
     alibaba_token_plan_region: String,
@@ -259,6 +261,8 @@ impl Default for RawSettings {
             float_bar_show_cost: s.float_bar_show_cost,
             promote_tray_icon: s.promote_tray_icon,
             claude_daily_routines_usage_visible: s.claude_daily_routines_usage_visible,
+            claude_allow_reading_claude_code_credentials: s
+                .claude_allow_reading_claude_code_credentials,
             weekly_progress_work_days: s.weekly_progress_work_days,
             alibaba_token_plan_region: s.alibaba_token_plan_region,
         }
@@ -543,6 +547,8 @@ impl From<RawSettings> for Settings {
             float_bar_show_cost: raw.float_bar_show_cost,
             promote_tray_icon: raw.promote_tray_icon,
             claude_daily_routines_usage_visible: raw.claude_daily_routines_usage_visible,
+            claude_allow_reading_claude_code_credentials: raw
+                .claude_allow_reading_claude_code_credentials,
             weekly_progress_work_days: raw.weekly_progress_work_days,
             alibaba_token_plan_region: {
                 let trimmed = raw.alibaba_token_plan_region.trim();

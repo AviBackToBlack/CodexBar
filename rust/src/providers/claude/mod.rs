@@ -30,6 +30,15 @@ use cli_reset::{
 pub use oauth::ClaudeOAuthFetcher;
 pub use web_api::ClaudeWebApiFetcher;
 
+/// Whether the user explicitly consented to reading (and refreshing) Claude
+/// Code's own credentials. Upstream #2634/#2745: without consent the
+/// file/keyring sources stay closed and refreshed tokens are never rotated
+/// into Claude Code's storage; Auto then falls back to labeled
+/// reduced-fidelity CLI usage.
+pub(crate) fn claude_code_consent() -> bool {
+    crate::settings::Settings::load().claude_allow_reading_claude_code_credentials
+}
+
 /// Claude provider implementation
 pub struct ClaudeProvider {
     metadata: ProviderMetadata,
@@ -402,9 +411,15 @@ impl ClaudeProvider {
             return Ok(result);
         }
 
-        if let Some(result) =
+        if let Some(mut result) =
             record_auto_source(&mut failures, "CLI", self.fetch_via_cli(ctx).await)
         {
+            // Upstream #2634: when consent for reading Claude Code's
+            // credentials is off, the automatic CLI fallback is explicitly
+            // labeled as reduced fidelity.
+            if !claude_code_consent() {
+                result.source_label = "cli (reduced fidelity)".to_string();
+            }
             return Ok(result);
         }
 
