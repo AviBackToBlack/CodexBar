@@ -2,9 +2,8 @@
 
 ## 0.53.1 — Unreleased
 
-- Usage & Spend: chart OpenCodex spend by request hour when proxy logs are enabled, without inventing hourly totals from native Codex session timestamps.
 - Added direct primary/secondary/tertiary usage lane tokens to provider-specific menu bar layouts, so Cursor layouts can pin `Total %`, `Cursor %`, or `Third Party %` (#3038, #3039). Thanks @giuseppebisemi!
-- Keep custom menu bar layouts when an older release reads the new usage-lane tokens, map Kimi lanes through its reversed semantic windows, honor layout edits made in the older release, materialize a downgrade-safe copy at startup for layouts already saved on current main, and refresh direct tertiary lanes when they change independently.
+- Keep custom menu bar layouts safe across downgrades: older releases read a Session/Weekly/Auto projection of lane tokens, Kimi lanes map through its reversed semantic windows, and direct tertiary lanes refresh independently (#3052). Thanks @giuseppebisemi!
 - Fixed the cost, credits, and usage-breakdown charts so the hover highlight aligns with the bar under the cursor instead of sitting half a day off (#3040, #3049).
 - Chart OpenCodex spend by per-request hour in the pinned timezone instead of session last-activity (#3031). Thanks @Yuxin-Qiao!
 - Coalesce spend dashboard refreshes during in-flight same-owner revision churn and skip same-day rescans on pane revisits (#3041). Thanks @Yuxin-Qiao!
@@ -16,7 +15,6 @@
 - Show spend dashboard row metrics as cost and tokens together instead of cost-only (#3043). Thanks @Yuxin-Qiao!
 - Documented custom-pricing overlays and the Usage & Spend surface (#3033). Thanks @Yuxin-Qiao!
 - Localized the Codex local session cost estimate setting in Korean (#3034). Thanks @Yoonkeee!
-- Fixed: cost chart hover highlight now aligns with the bar under the cursor (#3040).
 
 ## 0.53.0 — 2026-08-18
 
