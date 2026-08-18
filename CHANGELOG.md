@@ -10,6 +10,7 @@
 - Show spend dashboard row metrics as cost and tokens together instead of cost-only (#3043). Thanks @Yuxin-Qiao!
 - Documented custom-pricing overlays and the Usage & Spend surface (#3033). Thanks @Yuxin-Qiao!
 - Localized the Codex local session cost estimate setting in Korean (#3034). Thanks @Yoonkeee!
+- Fixed: cost chart hover highlight now aligns with the bar under the cursor (#3040).
 
 ## 0.53.0 — 2026-08-18
 
