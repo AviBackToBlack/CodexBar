@@ -47,6 +47,10 @@ struct SettingsDefaultsState {
     var costUsageEnabled: Bool
     var codexLocalSessionCostLedgerEnabled: Bool
     var costUsageHistoryDays: Int
+    var costUsageBucketTimeZoneIdentifier: String
+    var openCodexUsageLogsEnabled: Bool
+    var hideNativeCodexCostWhenOpenCodexPresent: Bool
+    var spendDashboardHiddenSourceIDs: [String]
     var costComparisonPeriodsEnabled: Bool
     var costSummaryDisplayStyleRaw: String
     var hidePersonalInfo: Bool

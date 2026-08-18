@@ -1,7 +1,14 @@
 import CodexBarCore
 import Foundation
 
+// swiftlint:disable:next type_body_length
 struct SpendDashboardModel: Equatable, Sendable {
+    enum SourceKind: String, Sendable, Equatable {
+        case native
+        case openCodex
+    }
+
+    static let openCodexSourceID = "opencodex"
     struct ProviderInput: Sendable {
         let id: String
         let provider: UsageProvider
@@ -16,7 +23,8 @@ struct SpendDashboardModel: Equatable, Sendable {
             displayName: String,
             modelProviderName: String? = nil,
             snapshot: CostUsageTokenSnapshot,
-            tokenActivityCache: CostUsageTokenActivityCache? = nil)
+            tokenActivityCache: CostUsageTokenActivityCache? = nil,
+            sourceKind: SpendDashboardModel.SourceKind = .native)
         {
             self.id = id ?? provider.rawValue
             self.provider = provider
@@ -24,7 +32,15 @@ struct SpendDashboardModel: Equatable, Sendable {
             self.modelProviderName = modelProviderName ?? displayName
             self.snapshot = snapshot
             self.tokenActivityCache = tokenActivityCache
+            self.sourceKind = sourceKind
         }
+
+        let sourceKind: SpendDashboardModel.SourceKind
+    }
+
+    struct SourceFilterItem: Identifiable, Equatable, Sendable {
+        let id: String
+        let displayName: String
     }
 
     struct ProviderRow: Identifiable, Equatable, Sendable {
@@ -35,6 +51,27 @@ struct SpendDashboardModel: Equatable, Sendable {
         let totalTokens: Int?
         let totalCost: Double?
         let coveredDayCount: Int
+        let sourceKind: SourceKind
+
+        init(
+            id: String,
+            rank: Int,
+            provider: UsageProvider,
+            displayName: String,
+            totalTokens: Int?,
+            totalCost: Double?,
+            coveredDayCount: Int,
+            sourceKind: SourceKind = .native)
+        {
+            self.id = id
+            self.rank = rank
+            self.provider = provider
+            self.displayName = displayName
+            self.totalTokens = totalTokens
+            self.totalCost = totalCost
+            self.coveredDayCount = coveredDayCount
+            self.sourceKind = sourceKind
+        }
     }
 
     struct ModelRow: Identifiable, Equatable, Sendable {
@@ -44,9 +81,28 @@ struct SpendDashboardModel: Equatable, Sendable {
         let modelName: String
         let totalTokens: Int?
         let totalCost: Double?
+        let tokenMix: CostUsageTokenMix
 
         var id: String {
             "\(self.provider.rawValue):\(self.modelName)"
+        }
+
+        init(
+            rank: Int,
+            provider: UsageProvider,
+            providerName: String,
+            modelName: String,
+            totalTokens: Int?,
+            totalCost: Double?,
+            tokenMix: CostUsageTokenMix = CostUsageTokenMix())
+        {
+            self.rank = rank
+            self.provider = provider
+            self.providerName = providerName
+            self.modelName = modelName
+            self.totalTokens = totalTokens
+            self.totalCost = totalCost
+            self.tokenMix = tokenMix
         }
     }
 
@@ -111,33 +167,113 @@ struct SpendDashboardModel: Equatable, Sendable {
         let currencyCode: String
         let providers: [ProviderRow]
         let models: [ModelRow]
-        let projects: [ProjectRow]
         let dailyPoints: [DailyPoint]
         let totalTokens: Int?
         let totalCost: Double?
         let coveredDayCount: Int
         let chartDomain: ClosedRange<Date>
         let modelHistoryCompleteness: ModelHistoryCompleteness
+        let tokenMix: CostUsageTokenMix
+        let coverage: CostUsageCoverageCounts
+        let provenance: CostProvenance
+        let meteredCost: Double?
+        let sessions: [SessionRow]
+        let projects: [ProjectRow]
+        let overflowModelCount: Int
+        let displayedModels: [ModelRow]
+        let selectedDay: Date?
 
         var id: String {
             self.currencyCode
+        }
+
+        init(
+            currencyCode: String,
+            providers: [ProviderRow],
+            models: [ModelRow],
+            projects: [ProjectRow] = [],
+            dailyPoints: [DailyPoint],
+            totalTokens: Int?,
+            totalCost: Double?,
+            coveredDayCount: Int,
+            chartDomain: ClosedRange<Date>,
+            modelHistoryCompleteness: ModelHistoryCompleteness,
+            tokenMix: CostUsageTokenMix = CostUsageTokenMix(),
+            coverage: CostUsageCoverageCounts = CostUsageCoverageCounts(),
+            provenance: CostProvenance = .unknown,
+            meteredCost: Double? = nil,
+            sessions: [SessionRow] = [],
+            overflowModelCount: Int = 0,
+            selectedDay: Date? = nil)
+        {
+            self.currencyCode = currencyCode
+            self.providers = providers
+            self.models = models
+            self.dailyPoints = dailyPoints
+            self.totalTokens = totalTokens
+            self.totalCost = totalCost
+            self.coveredDayCount = coveredDayCount
+            self.chartDomain = chartDomain
+            self.modelHistoryCompleteness = modelHistoryCompleteness
+            self.tokenMix = tokenMix
+            self.coverage = coverage
+            self.provenance = provenance
+            self.meteredCost = meteredCost
+            self.sessions = sessions
+            self.projects = projects
+            self.overflowModelCount = overflowModelCount
+            self.displayedModels = Array(models.prefix(Self.modelRowDisplayLimit))
+            self.selectedDay = selectedDay
+        }
+
+        static let modelRowDisplayLimit = 8
+    }
+
+    struct SessionRow: Identifiable, Equatable, Sendable {
+        let id: String
+        let sourceID: String
+        let provider: UsageProvider
+        let displayName: String
+        let lastActivity: Date
+        let totalTokens: Int?
+        let totalCost: Double?
+        let modelName: String?
+    }
+
+    struct HourlyPoint: Identifiable, Equatable, Sendable {
+        let hour: Date
+        let tokens: Int
+        let cost: Double?
+
+        var id: Date {
+            self.hour
         }
     }
 
     let requestedDays: Int
     let groups: [CurrencyGroup]
+    let availableSources: [SourceFilterItem]
     let tokenActivity: [TokenActivityPoint]
+    let hourlyPoints: [HourlyPoint]
+    let selectedDay: Date?
 
     static let tokenActivityDayCount = 365
+    static let modelRowDisplayLimit = 8
 
     init(
         requestedDays: Int,
         groups: [CurrencyGroup],
-        tokenActivity: [TokenActivityPoint] = [])
+        availableSources: [SourceFilterItem] = [],
+        tokenActivity: [TokenActivityPoint] = [],
+        hourlyPoints: [HourlyPoint] = [],
+        selectedDay: Date? = nil)
     {
         self.requestedDays = requestedDays
         self.groups = groups
+        self.availableSources = availableSources
         self.tokenActivity = tokenActivity
+        self.hourlyPoints = hourlyPoints
+        self.selectedDay = selectedDay
     }
 
     static func build(
@@ -145,11 +281,21 @@ struct SpendDashboardModel: Equatable, Sendable {
         requestedDays: Int,
         now: Date,
         calendar: Calendar = .current,
-        preferredCurrencyCode: String = "auto") -> Self
+        preferredCurrencyCode: String = "auto",
+        hiddenSourceIDs: Set<String> = [],
+        hideNativeCodexWhenOpenCodexPresent: Bool = false,
+        selectedDay: Date? = nil) -> Self
     {
         let days = max(1, min(SpendDashboardSource.scanDays, requestedDays))
         let calculationCalendar = Self.gregorianCalendar(timeZone: calendar.timeZone)
-        let classifiedInputs = inputs.compactMap { input -> ClassifiedInput? in
+        let availableSources = inputs
+            .map { SourceFilterItem(id: $0.id, displayName: $0.displayName) }
+            .sorted { $0.id < $1.id }
+        let visibleInputs = Self.visibleInputs(
+            inputs,
+            hiddenSourceIDs: hiddenSourceIDs,
+            hideNativeCodexWhenOpenCodexPresent: hideNativeCodexWhenOpenCodexPresent)
+        let classifiedInputs = visibleInputs.compactMap { input -> ClassifiedInput? in
             guard let sourceCurrencyCode = Self.currencyCode(input.snapshot.currencyCode) else { return nil }
             let targetCurrencyCode = UsageFormatter.effectiveCurrencyCode(
                 preferred: preferredCurrencyCode,
@@ -170,16 +316,38 @@ struct SpendDashboardModel: Equatable, Sendable {
                     inputs: inputs,
                     days: days,
                     now: now,
-                    calendar: calculationCalendar)
+                    calendar: calculationCalendar,
+                    selectedDay: selectedDay.map { calculationCalendar.startOfDay(for: $0) })
             }
             .sorted { $0.currencyCode < $1.currencyCode }
         return Self(
             requestedDays: days,
             groups: groups,
+            availableSources: availableSources,
             tokenActivity: Self.tokenActivity(
-                inputs: inputs,
+                inputs: visibleInputs,
                 now: now,
-                calendar: calculationCalendar))
+                calendar: calculationCalendar),
+            hourlyPoints: Self.hourlyPoints(
+                inputs: visibleInputs,
+                days: days,
+                now: now,
+                calendar: calculationCalendar),
+            selectedDay: selectedDay.map { calculationCalendar.startOfDay(for: $0) })
+    }
+
+    static func visibleInputs(
+        _ inputs: [ProviderInput],
+        hiddenSourceIDs: Set<String>,
+        hideNativeCodexWhenOpenCodexPresent: Bool) -> [ProviderInput]
+    {
+        var filtered = inputs.filter { !hiddenSourceIDs.contains($0.id) }
+        let hasOpenCodex = filtered.contains { $0.sourceKind == .openCodex }
+        if hideNativeCodexWhenOpenCodexPresent, hasOpenCodex {
+            // Provider-specific by design: the OpenCodex source can explicitly replace native Codex rows.
+            filtered.removeAll { $0.sourceKind == .native && $0.provider == .codex }
+        }
+        return filtered
     }
 
     private struct ClassifiedInput {
@@ -242,12 +410,14 @@ struct SpendDashboardModel: Equatable, Sendable {
         }
     }
 
+    // swiftlint:disable:next function_parameter_count
     private static func buildCurrencyGroup(
         currencyCode: String,
         inputs: [ClassifiedInput],
         days: Int,
         now: Date,
-        calendar: Calendar) -> CurrencyGroup
+        calendar: Calendar,
+        selectedDay: Date?) -> CurrencyGroup
     {
         let bounds = Self.bounds(days: days, now: now, calendar: calendar)
         let summaries = inputs.map { classified in
@@ -258,7 +428,8 @@ struct SpendDashboardModel: Equatable, Sendable {
                 calendar: calendar)
         }
         let providers = Self.providerRows(summaries)
-        let modelSummaries = summaries.filter { summary in
+        let scopedSummaries = Self.summaries(summaries, matching: selectedDay)
+        let modelSummaries = scopedSummaries.filter { summary in
             let summaryModelHistory = Self.modelSummary(summaries: [summary])
             if summary.totalCost != nil {
                 return summaryModelHistory.completeness == .complete ||
@@ -269,11 +440,39 @@ struct SpendDashboardModel: Equatable, Sendable {
         // Unpriced named models can still list. Incomplete priced coverage stays hidden so a
         // partial list cannot look like a lower-bound total.
         let modelSummary = Self.modelSummary(summaries: modelSummaries)
-        let modelHistoryCompleteness = modelSummaries.count == summaries.count &&
+        let modelHistoryCompleteness = modelSummaries.count == scopedSummaries.count &&
             modelSummary.completeness == .complete
             ? ModelHistoryCompleteness.complete
             : ModelHistoryCompleteness.incomplete
         let dailyPoints = Self.dailyPoints(summaries: summaries)
+        var tokenMix = CostUsageTokenMix()
+        var coverage = CostUsageCoverageCounts()
+        var metered: Double?
+        var sawMetered = false
+        var sawEstimate = false
+        for summary in scopedSummaries {
+            for windowEntry in summary.entries {
+                tokenMix.merge(.from(entry: windowEntry.entry))
+                coverage.merge(windowEntry.entry.coverageCounts)
+            }
+            if selectedDay == nil,
+               let meteredCost = summary.input.snapshot.meteredCostUSD,
+               days >= summary.input.snapshot.historyDays
+            {
+                sawMetered = true
+                metered = (metered ?? 0) + meteredCost * summary.costMultiplier
+            }
+            if summary.totalCost != nil {
+                sawEstimate = true
+            }
+        }
+        let provenance: CostProvenance = switch (sawMetered, sawEstimate) {
+        case (true, true): .mixed
+        case (true, false): .vendorMetered
+        case (false, true): .listPriceEstimate
+        case (false, false): .unknown
+        }
+        let overflowCount = max(0, modelSummary.rows.count - CurrencyGroup.modelRowDisplayLimit)
         return CurrencyGroup(
             currencyCode: currencyCode,
             providers: providers,
@@ -284,7 +483,29 @@ struct SpendDashboardModel: Equatable, Sendable {
             totalCost: Self.knownCostSum(providers.map(\.totalCost)),
             coveredDayCount: Self.commonCoverageDayCount(summaries: summaries, calendar: calendar),
             chartDomain: Self.chartDomain(bounds: bounds, calendar: calendar),
-            modelHistoryCompleteness: modelHistoryCompleteness)
+            modelHistoryCompleteness: modelHistoryCompleteness,
+            tokenMix: tokenMix,
+            coverage: coverage,
+            provenance: provenance,
+            meteredCost: sawMetered ? metered : nil,
+            sessions: Self.sessionRows(summaries: summaries, bounds: bounds, calendar: calendar),
+            overflowModelCount: overflowCount,
+            selectedDay: selectedDay)
+    }
+
+    private static func summaries(_ summaries: [InputSummary], matching selectedDay: Date?) -> [InputSummary] {
+        guard let selectedDay else { return summaries }
+        return summaries.map { summary in
+            InputSummary(
+                input: summary.input,
+                costMultiplier: summary.costMultiplier,
+                entries: summary.entries.filter { $0.day == selectedDay },
+                totalTokens: summary.totalTokens,
+                totalCost: summary.totalCost,
+                coveredInterval: summary.coveredInterval,
+                coveredDayCount: summary.coveredDayCount,
+                hasInvalidCostHistory: summary.hasInvalidCostHistory)
+        }
     }
 
     private static func inputSummary(
@@ -366,7 +587,8 @@ struct SpendDashboardModel: Equatable, Sendable {
                     displayName: entry.element.input.displayName,
                     totalTokens: entry.element.totalTokens,
                     totalCost: entry.element.totalCost,
-                    coveredDayCount: entry.element.coveredDayCount)
+                    coveredDayCount: entry.element.coveredDayCount,
+                    sourceKind: entry.element.input.sourceKind)
             }
     }
 
@@ -884,6 +1106,63 @@ struct SpendDashboardModel: Equatable, Sendable {
             return nil
         }
         return result
+    }
+
+    static func sessionRows(
+        summaries: [InputSummary],
+        bounds: ClosedRange<Date>,
+        calendar: Calendar) -> [SessionRow]
+    {
+        let rows = summaries.flatMap { summary -> [SessionRow] in
+            summary.input.snapshot.sessions.compactMap { session -> SessionRow? in
+                let day = calendar.startOfDay(for: session.lastActivity)
+                guard bounds.contains(day) else { return nil }
+                let modelName = session.modelBreakdowns.max {
+                    ($0.totalTokens ?? 0) < ($1.totalTokens ?? 0)
+                }?.modelName
+                return SessionRow(
+                    id: "\(summary.input.id):\(session.sessionID)",
+                    sourceID: summary.input.id,
+                    provider: summary.input.provider,
+                    displayName: summary.input.displayName,
+                    lastActivity: session.lastActivity,
+                    totalTokens: session.totalTokens,
+                    totalCost: session.costUSD.map { $0 * summary.costMultiplier },
+                    modelName: modelName)
+            }
+        }
+        .sorted { lhs, rhs in
+            if lhs.lastActivity != rhs.lastActivity {
+                return lhs.lastActivity > rhs.lastActivity
+            }
+            return lhs.id < rhs.id
+        }
+        return Array(rows.prefix(12))
+    }
+
+    static func hourlyPoints(
+        inputs: [ProviderInput],
+        days: Int,
+        now: Date,
+        calendar: Calendar) -> [HourlyPoint]
+    {
+        let today = calendar.startOfDay(for: now)
+        guard let windowStart = calendar.date(byAdding: .day, value: -(days - 1), to: today) else { return [] }
+        var totals: [Date: (tokens: Int, cost: Double)] = [:]
+        for input in inputs {
+            for session in input.snapshot.sessions {
+                let hour = calendar.dateInterval(of: .hour, for: session.lastActivity)?.start ?? session.lastActivity
+                guard hour >= windowStart else { continue }
+                let current = totals[hour] ?? (0, 0)
+                totals[hour] = (
+                    current.tokens + max(0, session.totalTokens ?? 0),
+                    current.cost + max(0, session.costUSD ?? 0))
+            }
+        }
+        return totals.keys.sorted().map { hour in
+            let value = totals[hour] ?? (0, 0)
+            return HourlyPoint(hour: hour, tokens: value.tokens, cost: value.cost > 0 ? value.cost : nil)
+        }
     }
 }
 

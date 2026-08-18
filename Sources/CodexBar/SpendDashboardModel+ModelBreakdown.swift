@@ -13,6 +13,7 @@ extension SpendDashboardModel {
         let providerName: String
         var tokens: Int?
         var cost: Double?
+        var mix = CostUsageTokenMix()
         var sawTokens = false
         var sawCost = false
         var invalidTokens = false
@@ -65,6 +66,12 @@ extension SpendDashboardModel {
                     } else {
                         aggregate.invalidCost = true
                     }
+                    aggregate.mix.merge(CostUsageTokenMix(
+                        inputTokens: breakdown.inputTokens,
+                        outputTokens: breakdown.outputTokens,
+                        cacheReadTokens: breakdown.cacheReadTokens,
+                        cacheCreationTokens: breakdown.cacheCreationTokens,
+                        reasoningTokens: breakdown.reasoningTokens))
                     aggregates[key] = aggregate
                 }
             }
@@ -82,7 +89,8 @@ extension SpendDashboardModel {
                 providerName: value.providerName,
                 modelName: key.modelName,
                 totalTokens: value.sawTokens && !value.invalidTokens && !value.overflowedTokens ? value.tokens : nil,
-                totalCost: value.sawCost && !value.invalidCost && !value.overflowedCost ? value.cost : nil)
+                totalCost: value.sawCost && !value.invalidCost && !value.overflowedCost ? value.cost : nil,
+                tokenMix: value.mix)
         }
         .sorted { lhs, rhs in
             switch (lhs.totalCost, rhs.totalCost) {
@@ -104,7 +112,8 @@ extension SpendDashboardModel {
                 providerName: row.providerName,
                 modelName: row.modelName,
                 totalTokens: row.totalTokens,
-                totalCost: row.totalCost)
+                totalCost: row.totalCost,
+                tokenMix: row.tokenMix)
         }
         return ModelSummary(rows: rows, completeness: completeness)
     }

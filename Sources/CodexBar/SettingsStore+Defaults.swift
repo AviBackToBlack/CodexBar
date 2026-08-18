@@ -517,6 +517,9 @@ extension SettingsStore {
             if changed {
                 self.costUsageSettingsRevision &+= 1
             }
+            if newValue {
+                self.pinCostUsageBucketTimeZoneIfNeeded()
+            }
             self.noteBackgroundWorkSettingsChanged()
         }
     }
@@ -542,6 +545,66 @@ extension SettingsStore {
             }
             self.noteBackgroundWorkSettingsChanged()
         }
+    }
+
+    var costUsageBucketTimeZoneIdentifier: String {
+        get { self.defaultsState.costUsageBucketTimeZoneIdentifier }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = CostUsageBucketTimeZone.isValidIdentifier(trimmed) ? trimmed : ""
+            let changed = self.defaultsState.costUsageBucketTimeZoneIdentifier != normalized
+            self.defaultsState.costUsageBucketTimeZoneIdentifier = normalized
+            self.userDefaults.set(normalized, forKey: "tokenCostUsageBucketTimeZone")
+            if changed {
+                self.costUsageSettingsRevision &+= 1
+            }
+        }
+    }
+
+    var costUsageBucketCalendar: Calendar {
+        CostUsageBucketTimeZone.calendar(identifier: self.costUsageBucketTimeZoneIdentifier)
+    }
+
+    var openCodexUsageLogsEnabled: Bool {
+        get { self.defaultsState.openCodexUsageLogsEnabled }
+        set {
+            let changed = self.defaultsState.openCodexUsageLogsEnabled != newValue
+            self.defaultsState.openCodexUsageLogsEnabled = newValue
+            self.userDefaults.set(newValue, forKey: "openCodexUsageLogsEnabled")
+            if changed {
+                self.costUsageSettingsRevision &+= 1
+            }
+        }
+    }
+
+    var hideNativeCodexCostWhenOpenCodexPresent: Bool {
+        get { self.defaultsState.hideNativeCodexCostWhenOpenCodexPresent }
+        set {
+            let changed = self.defaultsState.hideNativeCodexCostWhenOpenCodexPresent != newValue
+            self.defaultsState.hideNativeCodexCostWhenOpenCodexPresent = newValue
+            self.userDefaults.set(newValue, forKey: "hideNativeCodexCostWhenOpenCodexPresent")
+            if changed {
+                self.costUsageSettingsRevision &+= 1
+            }
+        }
+    }
+
+    var spendDashboardHiddenSourceIDs: [String] {
+        get { self.defaultsState.spendDashboardHiddenSourceIDs }
+        set {
+            let normalized = Array(Set(newValue.filter { !$0.isEmpty })).sorted()
+            let changed = self.defaultsState.spendDashboardHiddenSourceIDs != normalized
+            self.defaultsState.spendDashboardHiddenSourceIDs = normalized
+            self.userDefaults.set(normalized, forKey: "spendDashboardHiddenSourceIDs")
+            if changed {
+                self.costUsageSettingsRevision &+= 1
+            }
+        }
+    }
+
+    func pinCostUsageBucketTimeZoneIfNeeded() {
+        guard self.costUsageBucketTimeZoneIdentifier.isEmpty else { return }
+        self.costUsageBucketTimeZoneIdentifier = CostUsageBucketTimeZone.pinIdentifier()
     }
 
     var costComparisonPeriodsEnabled: Bool {

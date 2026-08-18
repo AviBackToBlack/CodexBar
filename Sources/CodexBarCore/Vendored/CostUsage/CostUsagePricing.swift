@@ -420,7 +420,7 @@ enum CostUsagePricing {
             cacheReadInputCostPerTokenAboveThreshold: 6e-7),
     ]
 
-    private static let codexModelsDevProviderID = "openai"
+    static let codexModelsDevProviderID = "openai"
     /// Provider IDs emitted by Codex-compatible clients that have matching entries in models.dev.
     ///
     /// The route prefix is part of the model identity for local usage estimates. Keep both the
@@ -539,56 +539,11 @@ enum CostUsagePricing {
         return trimmed
     }
 
-    static func codexCostUSD(
-        model: String,
-        inputTokens: Int,
-        cachedInputTokens: Int,
-        outputTokens: Int,
-        cacheWriteInputTokens: Int = 0,
-        modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil) -> Double?
-    {
-        guard let pricing = self.resolvedCodexPricing(
-            model: model,
-            modelsDevCatalog: modelsDevCatalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
-        else { return nil }
-        return self.codexCostUSD(
-            pricing: pricing,
-            inputTokens: inputTokens,
-            cachedInputTokens: cachedInputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            outputTokens: outputTokens)
+    static func customPricingOverlay(fileURL: URL? = nil) -> CostUsageCustomPricing {
+        CostUsageCustomPricing.load(fileURL: fileURL)
     }
 
-    static func codexAggregateCostUSD(
-        model: String,
-        inputTokens: Int,
-        cachedInputTokens: Int,
-        outputTokens: Int,
-        cacheWriteInputTokens: Int = 0,
-        modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil) -> Double?
-    {
-        guard let pricing = self.resolvedCodexPricing(
-            model: model,
-            modelsDevCatalog: modelsDevCatalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
-        else { return nil }
-        if let thresholdTokens = pricing.thresholdTokens,
-           max(0, inputTokens) > thresholdTokens
-        {
-            return nil
-        }
-        return self.codexCostUSD(
-            pricing: pricing,
-            inputTokens: inputTokens,
-            cachedInputTokens: cachedInputTokens,
-            cacheWriteInputTokens: cacheWriteInputTokens,
-            outputTokens: outputTokens)
-    }
-
-    private static func resolvedCodexPricing(
+    static func resolvedCodexPricing(
         model: String,
         modelsDevCatalog: ModelsDevCatalog?,
         modelsDevCacheRoot: URL?) -> CodexPricing?
@@ -666,7 +621,8 @@ enum CostUsagePricing {
         cacheWriteInputTokens: Int = 0,
         outputTokens: Int,
         modelsDevCatalog: ModelsDevCatalog? = nil,
-        modelsDevCacheRoot: URL? = nil) -> Double?
+        modelsDevCacheRoot: URL? = nil,
+        customPricing: CostUsageCustomPricing? = nil) -> Double?
     {
         guard let multiplier = self.codexAPIFastMultiplier(model: model) else { return nil }
         // OpenAI does not support API Fast processing for long-context requests. Do not combine
@@ -682,7 +638,8 @@ enum CostUsagePricing {
             outputTokens: outputTokens,
             cacheWriteInputTokens: cacheWriteInputTokens,
             modelsDevCatalog: modelsDevCatalog,
-            modelsDevCacheRoot: modelsDevCacheRoot)
+            modelsDevCacheRoot: modelsDevCacheRoot,
+            customPricing: customPricing)
             .map { $0 * multiplier }
     }
 
@@ -696,7 +653,7 @@ enum CostUsagePricing {
         }
     }
 
-    private static func codexCostUSD(
+    static func codexCostUSD(
         pricing: CodexPricing,
         inputTokens: Int,
         cachedInputTokens: Int,
@@ -896,7 +853,9 @@ extension CostUsagePricing {
 
     private static func claudeFirstPartyModelsDevPreferredProviderIDs(for rawModel: String) -> [String]? {
         let model = self.normalizeClaudeModel(rawModel).lowercased()
-        if model.hasPrefix("claude-") { return [self.claudeModelsDevProviderID] }
+        if model.hasPrefix("claude-") {
+            return [self.claudeModelsDevProviderID]
+        }
         let openAIReasoningFamily = ["o1", "o3", "o4"].contains {
             model == $0 || model.hasPrefix("\($0)-")
         }
@@ -915,8 +874,12 @@ extension CostUsagePricing {
         if model.hasPrefix("kimi-") || model.hasPrefix("moonshot-") {
             return ["moonshot", "kimi-for-coding"]
         }
-        if model.hasPrefix("minimax-") { return ["minimax"] }
-        if model.hasPrefix("deepseek-") { return ["deepseek"] }
+        if model.hasPrefix("minimax-") {
+            return ["minimax"]
+        }
+        if model.hasPrefix("deepseek-") {
+            return ["deepseek"]
+        }
         return nil
     }
 

@@ -1467,3 +1467,25 @@
 "Total usage" = "مصرف کل";
 "claude_oauth_keychain_access_revoked" = "دسترسی به Keychain کلود با چرخش توکن Claude Code لغو شد. برای اعطای مجدد دسترسی روی «تازه‌سازی» کلیک کنید، یا منبع استفاده Claude را به CLI/Web تغییر دهید.";
 "claude_showing_last_known_usage" = "آخرین میزان استفاده شناخته‌شده که در %@ ثبت شده نمایش داده می‌شود.";
+/* Spend dashboard cost analysis */
+"90d" = "90d";
+"Input" = "Input";
+"Output" = "Output";
+"Cache write" = "Cache write";
+"Reasoning" = "Reasoning";
+"Sessions" = "Sessions";
+"Projects" = "Projects";
+"Plan metered" = "Plan metered";
+"List-price equivalent" = "List-price equivalent";
+"Metered and list-price" = "Metered and list-price";
+"List-price equivalent — not a billing receipt." = "List-price equivalent — not a billing receipt.";
+"Priced" = "Priced";
+"Unpriced" = "Unpriced";
+"Unmetered" = "Unmetered";
+"Estimated" = "Estimated";
+"Other models" = "Other models";
+"Include OpenCodex usage logs" = "Include OpenCodex usage logs";
+"Hide native Codex when OpenCodex is present" = "Hide native Codex when OpenCodex is present";
+"Export JSON" = "Export JSON";
+"Sources" = "Sources";
+"OpenCodex" = "OpenCodex";
