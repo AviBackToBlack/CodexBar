@@ -329,6 +329,35 @@ struct CloudSyncSettingsTests {
         #expect(backoff.nextDelay(serverRetryAfter: 30) == 30)
     }
 
+    @Test
+    func `delegate events leave callback context before engine work and stay ordered`() async {
+        let queue = CloudSyncDelegateEventQueue()
+        let recorder = CloudSyncDelegateEventRecorder()
+
+        let inheritedCallbackContext = await withCheckedContinuation { continuation in
+            CloudSyncDelegateCallbackContext.$isActive.withValue(true) {
+                queue.enqueue {
+                    continuation.resume(returning: CloudSyncDelegateCallbackContext.isActive)
+                }
+            }
+        }
+
+        #expect(!inheritedCallbackContext)
+
+        await withCheckedContinuation { continuation in
+            queue.enqueue {
+                try? await Task.sleep(for: .milliseconds(50))
+                await recorder.append(1)
+            }
+            queue.enqueue {
+                await recorder.append(2)
+                continuation.resume()
+            }
+        }
+
+        #expect(await recorder.values == [1, 2])
+    }
+
     private func makeFixture(_ name: String) throws -> (store: SettingsStore, defaults: UserDefaults) {
         let suite = "CloudSyncSettingsTests-\(name)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -361,5 +390,17 @@ private final class LockedCounter: @unchecked Sendable {
 
     func increment() {
         self.lock.withLock { self.storage += 1 }
+    }
+}
+
+private enum CloudSyncDelegateCallbackContext {
+    @TaskLocal static var isActive = false
+}
+
+private actor CloudSyncDelegateEventRecorder {
+    private(set) var values: [Int] = []
+
+    func append(_ value: Int) {
+        self.values.append(value)
     }
 }

@@ -14,6 +14,7 @@
 - Grok: add an Auto / Grok CLI / SuperGrok OAuth / Browser cookies source picker, support pasted SuperGrok bearers and grok.com cookies in token accounts, and open `~/.grok/auth.json` from Open token file (#3010). Thanks @oakimov!
 
 ### Fixed
+- iCloud sync: stop awaiting CKSyncEngine from within its own delegate callbacks, fixing a fatal CloudKit assertion crash minutes after launch with sync enabled (#3030). Thanks @toads for the crash forensics!
 - Settings: replace the selector-based Settings opener with a retained window controller, fixing silently failing or behind-other-apps Settings opening after the keepalive removal, and repairing localized application-menu commands (#3029). Thanks @Zihao-Qi!
 - Codex: classify app-server request timeouts before terminating the subprocess, so timeouts no longer surface as misleading EOF/malformed-response errors (#3022). Thanks @Chipagosfinest!
 - OpenCode Go: surface expired selected session tokens instead of silently replacing failed server usage with local quota estimates (#2993). Thanks @Niclassslua!
