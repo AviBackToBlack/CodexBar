@@ -4267,14 +4267,20 @@ html:has(.menu-surface--tray) {
 .menu-metric__reset {
   font-size: 11px;
   color: var(--text-secondary);
-  white-space: nowrap;
-  /* Long provider descriptions (credits remaining, etc.) used to overflow
-     the tray card because nowrap had no max-width/ellipsis. */
+  /* Upstream 0.49.0 #2742 (refs #2182): long metric reset and pace details
+     wrap to a second line instead of truncating, so non-English locales keep
+     the full reset information. #2846: the percent value keeps its own line
+     slot (row only stacks when both cannot fit) and the two-line clamp keeps
+     cached card heights bounded. */
   min-width: 0;
   max-width: 62%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   text-align: right;
+  white-space: normal;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .menu-metric__exhausted {

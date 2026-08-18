@@ -343,7 +343,8 @@ impl TokenAccountSupport {
             | ProviderId::CrossModel
             | ProviderId::LongCat
             | ProviderId::Wayfinder
-            | ProviderId::QwenCloud => None,
+            | ProviderId::QwenCloud
+            | ProviderId::Fireworks => None,
         }
     }
 
