@@ -1,31 +1,40 @@
 # Changelog
 
-## 0.52.1 — Unreleased
+## 0.53.0 — 2026-08-18
 
-### Added
-- Overview: show selected-provider usage and spend with partial-price, coverage, and provenance context (#3023). Thanks @Chipagosfinest!
-- CLI: add `codexbar usage --format toon` emitting the JSON payload as TOON v4.1 for agents that prefer denser structured output (#2996, #3021). Thanks @elijahfriedman and @teseo for the spec!
-- Usage & Spend: add an All time range alongside 7d/30d, backed by 365 days of local history with dedicated Claude and Cursor spend snapshot slots (#3009). Thanks @Yuxin-Qiao!
-- Usage & Spend: add explicit cost provenance, coverage counters, and a pinned IANA day-bucketing timezone while making uncertain Codex fork accounting fail closed (#3015). Thanks @Yuxin-Qiao!
-- Codex cost: support exact-match custom pricing above models.dev and built-in rates, preserving missing fields as unknown and explicit zero rates as free (#3016). Thanks @Yuxin-Qiao!
-- Usage & Spend: add token mix, coverage, conversation totals, source visibility controls, and an hourly activity heatmap to the spend dashboard (#3017). Thanks @Yuxin-Qiao!
-- Usage & Spend: add opt-in, read-only OpenCodex `usage.jsonl` import with its SQLite cache isolated in CodexBar's own cache directory (#3018). Thanks @Yuxin-Qiao!
-- General settings: turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
-- Grok: add an Auto / Grok CLI / SuperGrok OAuth / Browser cookies source picker, support pasted SuperGrok bearers and grok.com cookies in token accounts, and open `~/.grok/auth.json` from Open token file (#3010). Thanks @oakimov!
+### Highlights
+- **Usage & Spend, rebuilt**: explicit cost provenance and coverage everywhere — token mix, an hourly activity heatmap, an All-time range, per-request custom pricing overlays, and opt-in read-only OpenCodex import. Estimates are labeled, partial totals show their coverage, and nothing unpriced masquerades as a real bill.
+- **Settings window fixed for good**: the invisible keepalive-window hack is gone (#3003) and its regression is repaired with a proper retained window controller (#3029) — Settings now opens reliably, in front, every time.
+- **Crash fixes**: the fatal CloudKit sync assertion (#3030) and misleading Codex RPC timeout errors (#3022) are gone.
 
-### Fixed
+### Usage & Spend
+- Add explicit cost provenance, coverage counters, and a pinned IANA day-bucketing timezone while making uncertain Codex fork accounting fail closed (#3015). Thanks @Yuxin-Qiao!
+- Add token mix, coverage, conversation totals, source visibility controls, and an hourly activity heatmap to the spend dashboard (#3017). Thanks @Yuxin-Qiao!
+- Add an All time range alongside 7d/30d, backed by 365 days of local history with dedicated Claude and Cursor spend snapshot slots (#3009). Thanks @Yuxin-Qiao!
+- Support exact-match custom pricing above models.dev and built-in rates, preserving missing fields as unknown and explicit zero rates as free (#3016). Thanks @Yuxin-Qiao!
+- Add opt-in, read-only OpenCodex `usage.jsonl` import with its SQLite cache isolated in CodexBar's own cache directory (#3018). Thanks @Yuxin-Qiao!
+- Show selected-provider usage and spend in the Overview with partial-price, coverage, and provenance context (#3023). Thanks @Chipagosfinest!
+- Sum priced subscriptions into a ~$ partial estimate with coverage shown when some subscriptions lack prices, instead of hiding the total (#3001). Thanks @Yuxin-Qiao!
+- Keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
+- Keep priced Cursor days visible when some events omit totalCents, and stop invalid Cursor model costs from reviving on later events (#3005). Thanks @Yuxin-Qiao!
+- Claude spend: price bare first-party model IDs from their models.dev vendor catalog, preserve explicit routes, and leave ambiguous cross-vendor matches unpriced (#3002). Thanks @Yuxin-Qiao!
+
+### Reliability
 - iCloud sync: stop awaiting CKSyncEngine from within its own delegate callbacks, fixing a fatal CloudKit assertion crash minutes after launch with sync enabled (#3030). Thanks @toads for the crash forensics!
 - Settings: replace the selector-based Settings opener with a retained window controller, fixing silently failing or behind-other-apps Settings opening after the keepalive removal, and repairing localized application-menu commands (#3029). Thanks @Zihao-Qi!
 - Codex: classify app-server request timeouts before terminating the subprocess, so timeouts no longer surface as misleading EOF/malformed-response errors (#3022). Thanks @Chipagosfinest!
 - OpenCode Go: surface expired selected session tokens instead of silently replacing failed server usage with local quota estimates (#2993). Thanks @Niclassslua!
-- Claude spend: price bare first-party model IDs from their models.dev vendor catalog, preserve explicit routes, and leave ambiguous cross-vendor matches unpriced (#3002). Thanks @Yuxin-Qiao!
-- Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
 - Cursor: keep an API-validated usage result when the Keychain cache is temporarily unavailable, instead of treating it as a missing or replaced session (#3000). Thanks @hxy91819!
-- Usage & Spend: sum priced subscriptions into a ~$ partial estimate with coverage shown when some subscriptions lack prices, instead of hiding the total (#3001). Thanks @Yuxin-Qiao!
-- Usage & Spend: keep unpriced named models visible in the model breakdown list instead of dropping the whole source (#3004). Thanks @Yuxin-Qiao!
-- Usage & Spend: keep priced Cursor days visible when some events omit totalCents, and stop invalid Cursor model costs from reviving on later events (#3005). Thanks @Yuxin-Qiao!
+- Menu: prevent the system menu highlight from painting behind provider detail cards on macOS 27 beta (#2998). Thanks @Tan1103!
+
+### Providers & CLI
+- Grok: add an Auto / Grok CLI / SuperGrok OAuth / Browser cookies source picker, support pasted SuperGrok bearers and grok.com cookies in token accounts, and open `~/.grok/auth.json` from Open token file (#3010). Thanks @oakimov!
+- CLI: add `codexbar usage --format toon` emitting the JSON payload as TOON v4.1 for agents that prefer denser structured output (#2996, #3021). Thanks @elijahfriedman and @teseo for the spec!
 - CLI: align `codexbar cost --json` with spend provenance, token mix, coverage, and opt-in OpenCodex payloads (#3019). Thanks @Yuxin-Qiao!
-- Settings: style the Quit CodexBar button as a prominent accent-color button and remove its stray section background (#2992). Thanks @elijahfriedman!
+
+### Settings
+- Turn Low Power Mode into an Off/On/Automatic preference, with Automatic following the system Low Power Mode state (#2995). Thanks @elijahfriedman!
+- Style the Quit CodexBar button as a prominent accent-color button and remove its stray section background (#2992). Thanks @elijahfriedman!
 
 ## 0.52.0 — 2026-08-17
 
