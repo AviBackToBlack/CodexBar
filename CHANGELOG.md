@@ -2,6 +2,8 @@
 
 ## 0.53.1 — Unreleased
 
+- Localized the Codex local session cost estimate setting in Korean (#3034). Thanks @Yoonkeee!
+
 ## 0.53.0 — 2026-08-18
 
 ### Highlights
