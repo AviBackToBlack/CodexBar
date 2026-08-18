@@ -230,7 +230,7 @@ impl OllamaProvider {
     }
 
     fn normalize_cookie_header(input: &str) -> Option<String> {
-        let mut header = input.trim();
+        let mut header = Self::strip_curl_cookie_wrapper(input);
         if header.is_empty() {
             return None;
         }
@@ -247,13 +247,45 @@ impl OllamaProvider {
         }
 
         if header.contains('=') {
-            Some(header.to_string())
+            // Upstream 0.50.1 #2949: a copied `Cookie:` label can appear
+            // mid-string when another cookie comes first — drop the label
+            // from every `;`-separated segment before sending.
+            let cleaned = header
+                .split(';')
+                .map(str::trim)
+                .map(|segment| {
+                    if segment
+                        .get(.."cookie:".len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+                    {
+                        segment["cookie:".len()..].trim().to_string()
+                    } else {
+                        segment.to_string()
+                    }
+                })
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
+            (!cleaned.is_empty()).then_some(cleaned)
         } else {
             Some(format!("{OLLAMA_SESSION_COOKIE_NAME}={header}"))
         }
     }
 
-    /// Resolve cookies from manual cookies, validated cache, or browser import.
+/// Strip copied cURL cookie syntax (`-b …`, `--cookie …`, `-H …`) and the
+/// surrounding quotes before normalizing the header value (upstream 0.50.1
+/// #2949).
+fn strip_curl_cookie_wrapper(raw: &str) -> &str {
+    let mut header = raw.trim();
+    for prefix in ["-b ", "--cookie ", "-H "] {
+        if let Some(rest) = header.strip_prefix(prefix) {
+            header = rest.trim();
+        }
+    }
+    header.trim_matches('\'').trim_matches('"').trim()
+}
+
+/// Resolve cookies from manual cookies, validated cache, or browser import.
     ///
     /// Upstream #2404: reuse the last validated browser session cookie header
     /// across refreshes until auth fails, then re-import.
@@ -722,6 +754,26 @@ mod tests {
     fn strips_cookie_header_prefix() {
         assert_eq!(
             OllamaProvider::normalize_cookie_header("Cookie: __Secure-session=abc123"),
+            Some("__Secure-session=abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn strips_mid_string_cookie_label_and_curl_syntax() {
+        // Upstream 0.50.1 #2949: a copied `Cookie:` label after another
+        // cookie, and cURL `-H`/`-b` wrappers with quotes.
+        assert_eq!(
+            OllamaProvider::normalize_cookie_header(
+                "aid=device; Cookie: __Secure-session=abc123"
+            ),
+            Some("aid=device; __Secure-session=abc123".to_string())
+        );
+        assert_eq!(
+            OllamaProvider::normalize_cookie_header("-H 'Cookie: __Secure-session=abc123'"),
+            Some("__Secure-session=abc123".to_string())
+        );
+        assert_eq!(
+            OllamaProvider::normalize_cookie_header("-b \"__Secure-session=abc123\""),
             Some("__Secure-session=abc123".to_string())
         );
     }
