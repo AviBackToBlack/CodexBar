@@ -35,6 +35,25 @@ func spendDashboardTokenMixValue(_ value: Int?) -> String {
     value.map(UsageFormatter.tokenCountString) ?? "—"
 }
 
+func spendDashboardMetricText(
+    cost: Double?,
+    tokens: Int?,
+    currencyCode: String) -> String
+{
+    let costText = cost.map { UsageFormatter.currencyString($0, currencyCode: currencyCode) }
+    let tokenText = tokens.map(UsageFormatter.tokenCountString)
+    switch (costText, tokenText) {
+    case let (cost?, tokens?):
+        return "\(cost) · \(L("%@ tokens", tokens))"
+    case let (cost?, nil):
+        return cost
+    case let (nil, tokens?):
+        return L("%@ tokens", tokens)
+    case (nil, nil):
+        return "—"
+    }
+}
+
 func spendDashboardCoverageChipText(_ coverage: CostUsageCoverageCounts) -> String {
     "\(L("Priced")) \(codexBarLocalizedInteger(coverage.priced)) · "
         + "\(L("Unpriced")) \(codexBarLocalizedInteger(coverage.unpriced)) · "
@@ -594,10 +613,14 @@ private struct SpendProviderPanel: View {
                         SpendProviderIcon(provider: row.provider, sourceKind: row.sourceKind)
                         Text(row.displayName).lineLimit(1)
                         Spacer()
-                        Text(row.totalCost.map {
-                            UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                        } ?? L("Spend unavailable"))
-                            .foregroundStyle(row.totalCost == nil ? .secondary : .primary)
+                        Text(
+                            row.totalCost == nil && row.totalTokens == nil
+                                ? L("Spend unavailable")
+                                : spendDashboardMetricText(
+                                    cost: row.totalCost,
+                                    tokens: row.totalTokens,
+                                    currencyCode: self.group.currencyCode))
+                            .foregroundStyle(row.totalCost == nil && row.totalTokens == nil ? .secondary : .primary)
                             .monospacedDigit()
                     }
                     .padding(.vertical, 9)
@@ -653,9 +676,10 @@ private struct SpendModelPanel: View {
                                 Text(row.providerName).font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(row.totalCost.map {
-                                UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                            } ?? "—")
+                            Text(spendDashboardMetricText(
+                                cost: row.totalCost,
+                                tokens: row.totalTokens,
+                                currencyCode: self.group.currencyCode))
                                 .monospacedDigit()
                         }
                         .padding(.vertical, 9)
@@ -701,9 +725,10 @@ private struct SpendProjectPanel: View {
                             Text(row.providerName).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(row.totalCost.map {
-                            UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                        } ?? "—")
+                        Text(spendDashboardMetricText(
+                            cost: row.totalCost,
+                            tokens: row.totalTokens,
+                            currencyCode: self.group.currencyCode))
                             .monospacedDigit()
                     }
                     .padding(.vertical, 9)
@@ -879,9 +904,10 @@ private struct SpendSessionPanel: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(row.totalCost.map {
-                                UsageFormatter.currencyString($0, currencyCode: self.group.currencyCode)
-                            } ?? spendDashboardTokenMixValue(row.totalTokens))
+                            Text(spendDashboardMetricText(
+                                cost: row.totalCost,
+                                tokens: row.totalTokens,
+                                currencyCode: self.group.currencyCode))
                                 .monospacedDigit()
                         }
                         .padding(.vertical, 9)
