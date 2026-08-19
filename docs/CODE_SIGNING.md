@@ -2,7 +2,7 @@
 
 Free code signing of Win-CodexBar releases via SignPath.io, certificate by SignPath Foundation.
 
-> **Status: pending onboarding — not yet implemented.** All current release artifacts (installer and portable build) are **unsigned**; authenticity relies on the SHA-256 `.sha256` sidecar files published alongside each release. The sections below describe the target process once SignPath onboarding and pipeline wiring are complete.
+> **Status: SignPath Foundation approved — pipeline wiring in progress.** The release workflow (`.github/workflows/release.yml`) includes SignPath signing steps; signing activates once the secrets (`SIGNPATH_API_TOKEN`, `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`) are added to the GitHub repo. Until then, artifacts are unsigned with SHA-256 `.sha256` sidecar files. See `.signpath/SETUP.md` for the onboarding checklist.
 
 ## Project identity
 

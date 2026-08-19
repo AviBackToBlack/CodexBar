@@ -51,6 +51,52 @@ jobs:
           & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/circleci-release-build.ps1 -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot .
           if ($LASTEXITCODE -ne 0) { throw "circleci-release-build failed: $LASTEXITCODE" }
 
+      - name: Upload unsigned artifacts for signing
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexbar-unsigned-${{ github.ref_name }}
+          path: release-output/CodexBar-*.exe
+          if-no-files-found: error
+
+      - name: Submit to SignPath for code signing
+        id: signpath
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: release-signed
+          parameters: |
+            version: "${{ github.ref_name }}"
+
+      - name: Replace unsigned artifacts with signed versions
+        shell: pwsh
+        if: ${{ steps.signpath.conclusion == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ github.ref_name }}'.Substring(1)
+          $outputDir = 'release-output'
+          $signedDir = 'release-signed'
+          foreach ($name in @("CodexBar-$version-Setup.exe", "CodexBar-$version-portable.exe")) {
+            $signedPath = Join-Path $signedDir $name
+            $outputPath = Join-Path $outputDir $name
+            if (Test-Path $signedPath) {
+              Copy-Item $signedPath $outputPath -Force
+              $hash = (Get-FileHash -Algorithm SHA256 $outputPath).Hash.ToLower()
+              "$hash  $name" | Set-Content -Encoding ascii "$outputPath.sha256"
+              Write-Host "[ok] Signed: $name ($hash)"
+            } else {
+              Write-Host "[warn] Signed version not found, keeping unsigned: $name"
+            }
+          }
+
       - name: Publish draft GitHub release
         shell: pwsh
         env:
