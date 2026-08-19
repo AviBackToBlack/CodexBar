@@ -382,6 +382,7 @@ fn load_native_spend(provider_id: &str, history_days: u32) -> NativeSpendData {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_spend(
     native_cost: Option<f64>,
     native_coverage: CostCoverageCounts,

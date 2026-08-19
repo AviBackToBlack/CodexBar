@@ -258,13 +258,12 @@ fn load_entries(source_path: &Path) -> Option<Vec<OpenCodexEntry>> {
         .unwrap_or(0);
     let source_path_text = source_path.to_string_lossy().to_string();
 
-    if let Some(cache) = read_cache() {
-        if cache.source_path == source_path_text
-            && cache.source_len == source_len
-            && cache.source_modified_ms == source_modified_ms
-        {
-            return Some(cache.entries);
-        }
+    if let Some(cache) = read_cache()
+        && cache.source_path == source_path_text
+        && cache.source_len == source_len
+        && cache.source_modified_ms == source_modified_ms
+    {
+        return Some(cache.entries);
     }
 
     let text = fs::read_to_string(source_path).ok()?;
@@ -375,11 +374,12 @@ impl OpenCodexEntry {
                 self.input_tokens,
                 self.output_tokens,
                 self.cache_creation_tokens,
-            ] {
-                if let Some(value) = value {
-                    saw = true;
-                    total = total.saturating_add(value);
-                }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                saw = true;
+                total = total.saturating_add(value);
             }
             saw.then_some(total)
         })
