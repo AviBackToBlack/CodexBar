@@ -176,6 +176,7 @@ export interface SettingsSnapshot {
   adaptiveRefresh: boolean;
   refreshAllProvidersOnMenuOpen: boolean;
   lowPowerMode: boolean;
+  lowPowerModePreference?: "off" | "on" | "automatic";
   startAtLogin: boolean;
   startMinimized: boolean;
   showNotifications: boolean;
@@ -250,6 +251,9 @@ export interface SettingsSnapshot {
   weeklyProgressWorkDays?: number | null;
   /** How cost is rendered on provider cards (#2976). */
   costSummaryDisplayStyle: CostSummaryDisplayStyle;
+  /** Opt-in read-only OpenCodex usage.jsonl import. */
+  openCodexUsageLogsEnabled?: boolean;
+  hideNativeCodexCostWhenOpenCodexPresent?: boolean;
   /** Per-provider accent color overrides (CLI name → hex color, #2972). */
   providerAccentColors: Record<string, string>;
 }
@@ -261,6 +265,7 @@ export interface SettingsUpdate {
   adaptiveRefresh?: boolean;
   refreshAllProvidersOnMenuOpen?: boolean;
   lowPowerMode?: boolean;
+  lowPowerModePreference?: "off" | "on" | "automatic";
   startAtLogin?: boolean;
   startMinimized?: boolean;
   showNotifications?: boolean;
@@ -319,6 +324,8 @@ export interface SettingsUpdate {
   alibabaTokenPlanRegion?: string;
   weeklyProgressWorkDays?: number | null;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  openCodexUsageLogsEnabled?: boolean;
+  hideNativeCodexCostWhenOpenCodexPresent?: boolean;
   providerAccentColors?: Record<string, string | null>;
 }
 
@@ -343,6 +350,57 @@ export interface UsageSpendRow {
 
 export interface UsageSpendSummary {
   rows: UsageSpendRow[];
+  contract: SpendContract;
+}
+
+export type CostProvenance = "listPriceEstimate" | "vendorMetered" | "mixed" | "unknown";
+
+export interface CostCoverageCounts {
+  priced: number;
+  unpriced: number;
+  unmetered: number;
+  estimated: number;
+}
+
+export interface SpendTokenMix {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  reasoningTokens: number | null;
+}
+
+export interface SpendModelRow {
+  model: string;
+  costUsd: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  customPricing: boolean;
+}
+
+export interface SpendDailyPoint {
+  day: string;
+  costUsd: number | null;
+  totalTokens: number | null;
+}
+
+export interface SpendActivityCell {
+  weekday: number;
+  hour: number;
+  conversations: number;
+}
+
+export interface ImportedSpendSource {
+  sourceId: string;
+  displayName: string;
+  requestCount: number;
+  conversationCount: number;
+  tokenMix: SpendTokenMix;
+  coverage: CostCoverageCounts;
+  models: SpendModelRow[];
+  hourlyActivity: SpendActivityCell[];
 }
 
 /** Codex local Workspaces snapshot (get_codex_workspaces_snapshot). */
@@ -403,9 +461,33 @@ export interface CodexLocalProjectUsageSnapshot {
   indexedFileCount: number;
   skippedFileCount: number;
   total: CodexWorkspacesUsageTotals;
+  /** All indexed conversations in the selected history window. */
+  sessions: CodexWorkspacesSessionUsage[];
   projects: CodexWorkspacesProjectUsage[];
   daily: CodexWorkspacesDailyPoint[];
   sourceStatus: CodexWorkspacesSourceStatus;
+}
+
+
+export interface SpendContract {
+  providerId: string;
+  historyDays: number;
+  knownCostUsd: number | null;
+  knownZero: boolean;
+  provenance: CostProvenance;
+  priceCoverage: CostCoverageCounts;
+  priceCoverageRatio: number | null;
+  historyCoverageEstablished: boolean;
+  tokenMix: SpendTokenMix;
+  conversationCount: number;
+  models: SpendModelRow[];
+  projects: CodexWorkspacesProjectUsage[];
+  conversations: CodexWorkspacesSessionUsage[];
+  daily: SpendDailyPoint[];
+  hourlyActivity: SpendActivityCell[];
+  projectSourceStatus: CodexWorkspacesSourceStatus | null;
+  customPricingActive: boolean;
+  imports: ImportedSpendSource[];
 }
 
 
@@ -761,6 +843,8 @@ export interface ProviderDetail {
 
   hasSnapshot: boolean;
 
+  /** Persisted provider usage source (auto | cli | oauth | web). */
+  usageSource?: string | null;
   /** Phase 6c — currently-persisted cookie source value ("auto" | "manual" | "off" | …).
    *  `null` for providers that do not expose a cookie-source picker. */
   cookieSource: string | null;

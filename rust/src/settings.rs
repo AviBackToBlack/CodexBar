@@ -32,6 +32,42 @@ pub use types::*;
 mod tests;
 
 /// Application settings
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LowPowerModePreference {
+    #[default]
+    Off,
+    On,
+    Automatic,
+}
+
+impl LowPowerModePreference {
+    pub fn resolve(self, system_battery_saver_enabled: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::On => true,
+            Self::Automatic => system_battery_saver_enabled,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Automatic => "automatic",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "on" => Some(Self::On),
+            "automatic" => Some(Self::Automatic),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "RawSettings", default)]
 pub struct Settings {
@@ -50,10 +86,9 @@ pub struct Settings {
     #[serde(default)]
     pub refresh_all_providers_on_menu_open: bool,
 
-    /// When true, automatic background refresh is floored to once per 30 minutes.
-    /// Manual refresh stays immediate.
+    /// Off/On/Automatic background-work power preference (upstream 0.53).
     #[serde(default)]
-    pub low_power_mode: bool,
+    pub low_power_mode_preference: LowPowerModePreference,
 
     /// Whether to start minimized
     pub start_minimized: bool,
@@ -302,6 +337,14 @@ pub struct Settings {
     /// How cost is rendered on provider MenuCards (#2976).
     #[serde(default)]
     pub cost_summary_display_style: CostSummaryDisplayStyle,
+
+    /// Opt-in read-only import of OpenCodex usage.jsonl into Usage & Spend / CLI cost output.
+    #[serde(default)]
+    pub open_codex_usage_logs_enabled: bool,
+
+    /// Hide native Codex spend rows when an OpenCodex import is present.
+    #[serde(default)]
+    pub hide_native_codex_cost_when_open_codex_present: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -445,7 +488,7 @@ impl Default for Settings {
             refresh_interval_secs: 300, // 5 minutes
             adaptive_refresh: false,
             refresh_all_providers_on_menu_open: false,
-            low_power_mode: false,
+            low_power_mode_preference: LowPowerModePreference::Off,
             start_minimized: false,
             start_at_login: false,
             show_notifications: true,
@@ -506,6 +549,8 @@ impl Default for Settings {
             alibaba_token_plan_region: default_alibaba_token_plan_region(),
             codex_external_oauth_sources_allowed: false,
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
+            open_codex_usage_logs_enabled: false,
+            hide_native_codex_cost_when_open_codex_present: false,
         }
     }
 }

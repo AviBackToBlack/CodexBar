@@ -33,6 +33,7 @@ import type {
   SessionFocusResult,
   TrayVisibilityStatusDto,
   UsageSpendSummary,
+  SpendContract,
   CodexLocalProjectUsageSnapshot,
   CodexAccount,
   CodexAccountUsageSnapshot,
@@ -242,8 +243,21 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getUsageSpendSummary(): Promise<UsageSpendSummary> {
-  return invoke<UsageSpendSummary>("get_usage_spend_summary");
+export function getUsageSpendSummary(options?: { historyDays?: number }): Promise<UsageSpendSummary> {
+  return invoke<UsageSpendSummary>("get_usage_spend_summary", {
+    historyDays: options?.historyDays ?? null,
+  });
+}
+
+export function getSpendContract(
+  providerId: string,
+  options?: { historyDays?: number; includeOpenCodex?: boolean },
+): Promise<SpendContract> {
+  return invoke<SpendContract>("get_spend_contract", {
+    providerId,
+    historyDays: options?.historyDays ?? null,
+    includeOpenCodex: options?.includeOpenCodex ?? null,
+  });
 }
 
 export function getCodexWorkspacesSnapshot(options?: {
@@ -348,6 +362,10 @@ export function getProviderCookieSourceOptions(
 
 export function getProviderRegionOptions(providerId: string): Promise<RegionOption[]> {
   return invoke<RegionOption[]>("get_provider_region_options", { providerId });
+}
+
+export function setProviderUsageSource(providerId: string, source: string): Promise<void> {
+  return invoke<void>("set_provider_usage_source", { providerId, source });
 }
 
 export function setProviderCookieSource(providerId: string, source: string): Promise<void> {

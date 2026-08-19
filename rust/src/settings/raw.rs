@@ -21,6 +21,8 @@ pub(super) struct RawSettings {
     refresh_all_providers_on_menu_open: bool,
     #[serde(default)]
     low_power_mode: bool,
+    #[serde(default)]
+    low_power_mode_preference: Option<LowPowerModePreference>,
 
     start_minimized: bool,
     start_at_login: bool,
@@ -171,6 +173,10 @@ pub(super) struct RawSettings {
     codex_external_oauth_sources_allowed: bool,
     #[serde(default)]
     cost_summary_display_style: CostSummaryDisplayStyle,
+    #[serde(default)]
+    open_codex_usage_logs_enabled: bool,
+    #[serde(default)]
+    hide_native_codex_cost_when_open_codex_present: bool,
 }
 
 impl Default for RawSettings {
@@ -181,7 +187,8 @@ impl Default for RawSettings {
             refresh_interval_secs: s.refresh_interval_secs,
             adaptive_refresh: s.adaptive_refresh,
             refresh_all_providers_on_menu_open: s.refresh_all_providers_on_menu_open,
-            low_power_mode: s.low_power_mode,
+            low_power_mode: s.low_power_mode_preference == LowPowerModePreference::On,
+            low_power_mode_preference: Some(s.low_power_mode_preference),
             start_minimized: s.start_minimized,
             start_at_login: s.start_at_login,
             show_notifications: s.show_notifications,
@@ -271,6 +278,8 @@ impl Default for RawSettings {
             alibaba_token_plan_region: s.alibaba_token_plan_region,
             codex_external_oauth_sources_allowed: s.codex_external_oauth_sources_allowed,
             cost_summary_display_style: s.cost_summary_display_style,
+            open_codex_usage_logs_enabled: s.open_codex_usage_logs_enabled,
+            hide_native_codex_cost_when_open_codex_present: s.hide_native_codex_cost_when_open_codex_present,
         }
     }
 }
@@ -486,12 +495,21 @@ impl From<RawSettings> for Settings {
                 .avoid_keychain_prompts = true;
         }
 
+        let low_power_mode_preference = match raw.low_power_mode_preference {
+            // A legacy writer may know only the boolean and leave the new field
+            // at its serialized default. Preserve the previously enabled state.
+            Some(LowPowerModePreference::Off) if raw.low_power_mode => LowPowerModePreference::On,
+            Some(preference) => preference,
+            None if raw.low_power_mode => LowPowerModePreference::On,
+            None => LowPowerModePreference::Off,
+        };
+
         Settings {
             enabled_providers: raw.enabled_providers,
             refresh_interval_secs: raw.refresh_interval_secs,
             adaptive_refresh: raw.adaptive_refresh,
             refresh_all_providers_on_menu_open: raw.refresh_all_providers_on_menu_open,
-            low_power_mode: raw.low_power_mode,
+            low_power_mode_preference,
             start_minimized: raw.start_minimized,
             start_at_login: raw.start_at_login,
             show_notifications: raw.show_notifications,
@@ -565,6 +583,8 @@ impl From<RawSettings> for Settings {
                 }
             },
             cost_summary_display_style: raw.cost_summary_display_style,
+            open_codex_usage_logs_enabled: raw.open_codex_usage_logs_enabled,
+            hide_native_codex_cost_when_open_codex_present: raw.hide_native_codex_cost_when_open_codex_present,
             codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
         }
     }

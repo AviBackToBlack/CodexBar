@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { playNotificationSound } from "../../../lib/tauri";
+import { playNotificationSound, quitApp } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type {
   Language,
@@ -551,15 +551,29 @@ export default function GeneralTab({
           <Field
             label={t("LowPowerMode")}
             description={t("LowPowerModeHelper")}
-            leading
           >
-            <Toggle
-              checked={settings.lowPowerMode}
+            <Select
+              value={settings.lowPowerModePreference ?? (settings.lowPowerMode ? "on" : "off")}
               disabled={saving}
-              ariaLabel={t("LowPowerMode")}
-              onChange={(v) => set({ lowPowerMode: v })}
+              options={[
+                { value: "off", label: t("LowPowerModeOff") },
+                { value: "on", label: t("LowPowerModeOn") },
+                { value: "automatic", label: t("LowPowerModeAutomatic") },
+              ]}
+              onChange={(v) => set({
+                lowPowerModePreference: v as "off" | "on" | "automatic",
+              })}
             />
           </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", paddingTop: 8 }}>
+            <button
+              type="button"
+              className="credential-btn credential-btn--primary"
+              onClick={() => void quitApp()}
+            >
+              {t("MenuQuit")}
+            </button>
+          </div>
         </div>
       </section>}
     </>

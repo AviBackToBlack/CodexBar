@@ -1,6 +1,6 @@
 //! Cost usage pricing — model-specific token pricing for Codex (OpenAI) and Claude (Anthropic).
 
-use super::codex_routed_pricing;
+use super::{claude_routed_pricing, codex_routed_pricing};
 use super::models_dev_pricing;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -833,6 +833,11 @@ impl CostUsagePricing {
         ))
     }
 
+    #[cfg(test)]
+    pub(crate) fn claude_models_dev_target(model: &str) -> Option<(&'static str, String)> {
+        claude_routed_pricing::models_dev_target(model, Self::normalize_claude_model(model))
+    }
+
     /// Calculate cost for Claude usage in USD
     pub fn claude_cost_usd(
         model: &str,
@@ -881,56 +886,13 @@ impl CostUsagePricing {
             return Some(cost);
         }
 
-        let pricing = models_dev_pricing::lookup("anthropic", model)?;
-        let input_tokens = input_tokens.max(0);
-        let cache_read_input_tokens = cache_read_input_tokens.max(0);
-        let cache_creation_input_tokens = cache_creation_input_tokens.max(0);
-        let output_tokens = output_tokens.max(0);
-        let use_tier = pricing.threshold_tokens.is_some_and(|threshold| {
-            (input_tokens as u64)
-                + (cache_read_input_tokens as u64)
-                + (cache_creation_input_tokens as u64)
-                > threshold
-        });
-        let input_rate = if use_tier {
-            pricing
-                .input_cost_per_token_above_threshold
-                .unwrap_or(pricing.input_cost_per_token)
-        } else {
-            pricing.input_cost_per_token
-        };
-        let cache_read_rate = if use_tier {
-            pricing
-                .cache_read_input_cost_per_token_above_threshold
-                .or(pricing.cache_read_input_cost_per_token)
-                .unwrap_or(input_rate)
-        } else {
-            pricing
-                .cache_read_input_cost_per_token
-                .unwrap_or(input_rate)
-        };
-        let cache_write_rate = if use_tier {
-            pricing
-                .cache_write_input_cost_per_token_above_threshold
-                .or(pricing.cache_write_input_cost_per_token)
-                .unwrap_or(input_rate)
-        } else {
-            pricing
-                .cache_write_input_cost_per_token
-                .unwrap_or(input_rate)
-        };
-        let output_rate = if use_tier {
-            pricing
-                .output_cost_per_token_above_threshold
-                .unwrap_or(pricing.output_cost_per_token)
-        } else {
-            pricing.output_cost_per_token
-        };
-        Some(
-            (input_tokens as f64) * input_rate
-                + (cache_read_input_tokens as f64) * cache_read_rate
-                + (cache_creation_input_tokens as f64) * cache_write_rate
-                + (output_tokens as f64) * output_rate,
+        claude_routed_pricing::cost_usd(
+            model,
+            Self::normalize_claude_model(model),
+            input_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            output_tokens,
         )
     }
 
@@ -942,7 +904,7 @@ impl CostUsagePricing {
         if let Some(pricing) = CLAUDE_PRICING.get(key.as_str()) {
             return Some(pricing.input_cost_per_token);
         }
-        models_dev_pricing::lookup("anthropic", model).map(|p| p.input_cost_per_token)
+        claude_routed_pricing::input_cost_per_token(model, Self::normalize_claude_model(model))
     }
 
     /// Format model name for display (e.g., "claude-3.5-sonnet" → "Sonnet 3.5")

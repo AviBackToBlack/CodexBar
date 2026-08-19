@@ -642,6 +642,7 @@ pub struct SettingsSnapshot {
     adaptive_refresh: bool,
     refresh_all_providers_on_menu_open: bool,
     low_power_mode: bool,
+    low_power_mode_preference: &'static str,
     start_at_login: bool,
     start_minimized: bool,
     show_notifications: bool,
@@ -701,6 +702,8 @@ pub struct SettingsSnapshot {
     alibaba_token_plan_region: String,
     weekly_progress_work_days: Option<u8>,
     cost_summary_display_style: &'static str,
+    open_codex_usage_logs_enabled: bool,
+    hide_native_codex_cost_when_open_codex_present: bool,
     provider_accent_colors: std::collections::HashMap<String, String>,
 }
 
@@ -749,7 +752,8 @@ impl From<Settings> for SettingsSnapshot {
             refresh_interval_secs: settings.refresh_interval_secs,
             adaptive_refresh: settings.adaptive_refresh,
             refresh_all_providers_on_menu_open: settings.refresh_all_providers_on_menu_open,
-            low_power_mode: settings.low_power_mode,
+            low_power_mode: settings.low_power_mode_preference == codexbar::settings::LowPowerModePreference::On,
+            low_power_mode_preference: settings.low_power_mode_preference.as_str(),
             start_at_login: settings.start_at_login,
             start_minimized: settings.start_minimized,
             show_notifications: settings.show_notifications,
@@ -810,6 +814,8 @@ impl From<Settings> for SettingsSnapshot {
             cost_summary_display_style: cost_summary_display_style_label(
                 settings.cost_summary_display_style,
             ),
+            open_codex_usage_logs_enabled: settings.open_codex_usage_logs_enabled,
+            hide_native_codex_cost_when_open_codex_present: settings.hide_native_codex_cost_when_open_codex_present,
             provider_accent_colors: settings
                 .provider_configs
                 .iter()
