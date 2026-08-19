@@ -752,7 +752,8 @@ impl From<Settings> for SettingsSnapshot {
             refresh_interval_secs: settings.refresh_interval_secs,
             adaptive_refresh: settings.adaptive_refresh,
             refresh_all_providers_on_menu_open: settings.refresh_all_providers_on_menu_open,
-            low_power_mode: settings.low_power_mode_preference == codexbar::settings::LowPowerModePreference::On,
+            low_power_mode: settings.low_power_mode_preference
+                == codexbar::settings::LowPowerModePreference::On,
             low_power_mode_preference: settings.low_power_mode_preference.as_str(),
             start_at_login: settings.start_at_login,
             start_minimized: settings.start_minimized,
@@ -815,7 +816,8 @@ impl From<Settings> for SettingsSnapshot {
                 settings.cost_summary_display_style,
             ),
             open_codex_usage_logs_enabled: settings.open_codex_usage_logs_enabled,
-            hide_native_codex_cost_when_open_codex_present: settings.hide_native_codex_cost_when_open_codex_present,
+            hide_native_codex_cost_when_open_codex_present: settings
+                .hide_native_codex_cost_when_open_codex_present,
             provider_accent_colors: settings
                 .provider_configs
                 .iter()

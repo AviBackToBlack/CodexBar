@@ -1,8 +1,8 @@
 //! Upstream 0.53 Usage & Spend accounting bridge.
 
+use codexbar::cost_scanner::CostScanner;
 use codexbar::settings::Settings;
 use codexbar::spend_contract::{SpendContract, build_local_spend_contract_from_summary};
-use codexbar::cost_scanner::CostScanner;
 
 #[tauri::command]
 pub async fn get_spend_contract(
@@ -12,7 +12,9 @@ pub async fn get_spend_contract(
 ) -> Result<SpendContract, String> {
     let provider = provider_id.trim().to_ascii_lowercase();
     if !matches!(provider.as_str(), "codex" | "claude" | "opencodego") {
-        return Err(format!("Spend contract is unavailable for provider: {provider}"));
+        return Err(format!(
+            "Spend contract is unavailable for provider: {provider}"
+        ));
     }
     let days = history_days.unwrap_or(30);
     let include_import = include_open_codex.unwrap_or(false) && provider == "codex";
@@ -27,7 +29,9 @@ pub async fn get_spend_contract(
         };
         let settings = Settings::load();
         build_local_spend_contract_from_summary(
-            &provider, history_days, include_import,
+            &provider,
+            history_days,
+            include_import,
             settings.hide_native_codex_cost_when_open_codex_present && provider == "codex",
             summary,
         )

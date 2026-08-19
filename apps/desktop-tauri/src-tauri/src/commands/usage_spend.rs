@@ -51,10 +51,21 @@ pub async fn get_usage_spend_summary(
         .map_err(|e| format!("usage spend worker failed: {e}"))
 }
 
-fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot], selected_days: u32) -> UsageSpendSummary {
-    let codex_cache = codexbar::core::JsonlScanner::load_cache(codexbar::core::ProviderId::Codex, None);
+fn build_usage_spend_summary(
+    cached: &[ProviderUsageSnapshot],
+    selected_days: u32,
+) -> UsageSpendSummary {
+    let codex_cache =
+        codexbar::core::JsonlScanner::load_cache(codexbar::core::ProviderId::Codex, None);
     let codex_stale = !codex_cache.days.is_empty() && codex_cache.previous_report.is_some();
-    let codex_stale_updated_at = codex_stale.then(|| codex_cache.previous_report.as_ref().and_then(|r| r.updated_at.clone())).flatten();
+    let codex_stale_updated_at = codex_stale
+        .then(|| {
+            codex_cache
+                .previous_report
+                .as_ref()
+                .and_then(|r| r.updated_at.clone())
+        })
+        .flatten();
 
     let codex_7_summary = CostScanner::new(7).scan_codex();
     let codex_30_summary = CostScanner::new(30).scan_codex();
@@ -63,29 +74,55 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot], selected_days: u3
 
     let mut rows = vec![
         UsageSpendRow {
-            provider_id: "codex".into(), display_name: "Codex".into(),
-            seven_day: Some(codex_7_summary.total_cost_usd), thirty_day: Some(codex_30_summary.total_cost_usd),
-            currency: "USD".into(), source: "local logs".into(), refreshing: codex_stale, stale_updated_at: codex_stale_updated_at,
+            provider_id: "codex".into(),
+            display_name: "Codex".into(),
+            seven_day: Some(codex_7_summary.total_cost_usd),
+            thirty_day: Some(codex_30_summary.total_cost_usd),
+            currency: "USD".into(),
+            source: "local logs".into(),
+            refreshing: codex_stale,
+            stale_updated_at: codex_stale_updated_at,
         },
         UsageSpendRow {
-            provider_id: "claude".into(), display_name: "Claude".into(),
-            seven_day: Some(claude_7_summary.total_cost_usd), thirty_day: Some(claude_30_summary.total_cost_usd),
-            currency: "USD".into(), source: "local logs".into(), refreshing: false, stale_updated_at: None,
+            provider_id: "claude".into(),
+            display_name: "Claude".into(),
+            seven_day: Some(claude_7_summary.total_cost_usd),
+            thirty_day: Some(claude_30_summary.total_cost_usd),
+            currency: "USD".into(),
+            source: "local logs".into(),
+            refreshing: false,
+            stale_updated_at: None,
         },
     ];
 
     for snapshot in cached {
-        if snapshot.provider_id == "codex" || snapshot.provider_id == "claude" { continue; }
-        let Some(cost) = &snapshot.cost else { continue; };
+        if snapshot.provider_id == "codex" || snapshot.provider_id == "claude" {
+            continue;
+        }
+        let Some(cost) = &snapshot.cost else {
+            continue;
+        };
         rows.push(UsageSpendRow {
             provider_id: snapshot.provider_id.clone(),
-            display_name: if snapshot.display_name.is_empty() { snapshot.provider_id.clone() } else { snapshot.display_name.clone() },
-            refreshing: false, stale_updated_at: None, seven_day: None, thirty_day: None,
-            currency: cost.currency_code.clone(), source: format!("period ({})", cost.period),
+            display_name: if snapshot.display_name.is_empty() {
+                snapshot.provider_id.clone()
+            } else {
+                snapshot.display_name.clone()
+            },
+            refreshing: false,
+            stale_updated_at: None,
+            seven_day: None,
+            thirty_day: None,
+            currency: cost.currency_code.clone(),
+            source: format!("period ({})", cost.period),
         });
     }
 
-    let history_days = if selected_days == 0 { 365 } else { selected_days.clamp(1, 365) };
+    let history_days = if selected_days == 0 {
+        365
+    } else {
+        selected_days.clamp(1, 365)
+    };
     let selected_summary: CostSummary = match history_days {
         7 => codex_7_summary,
         30 => codex_30_summary,
@@ -93,7 +130,11 @@ fn build_usage_spend_summary(cached: &[ProviderUsageSnapshot], selected_days: u3
     };
     let settings = codexbar::settings::Settings::load();
     let contract = build_local_spend_contract_from_summary(
-        "codex", history_days, settings.open_codex_usage_logs_enabled, settings.hide_native_codex_cost_when_open_codex_present, selected_summary,
+        "codex",
+        history_days,
+        settings.open_codex_usage_logs_enabled,
+        settings.hide_native_codex_cost_when_open_codex_present,
+        selected_summary,
     );
     UsageSpendSummary { rows, contract }
 }

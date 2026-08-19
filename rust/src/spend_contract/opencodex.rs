@@ -11,7 +11,7 @@ use crate::core::CostUsagePricing;
 
 use super::{
     CostCoverageCounts, CustomPricing, ImportedSpendSource, SpendActivityCell, SpendDailyPoint,
-    SpendModelRow, SpendTokenMix
+    SpendModelRow, SpendTokenMix,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,9 +117,7 @@ fn aggregate(
 
         let cost = entry_cost(entry, custom);
         match entry.usage_status.as_str() {
-            "reported" if cost.is_some() => {
-                coverage.priced = coverage.priced.saturating_add(1)
-            }
+            "reported" if cost.is_some() => coverage.priced = coverage.priced.saturating_add(1),
             "estimated" if cost.is_some() => {
                 coverage.estimated = coverage.estimated.saturating_add(1)
             }
@@ -155,7 +153,9 @@ fn aggregate(
 
         let model = models.entry(entry.model.clone()).or_default();
         model.input = model.input.saturating_add(entry.input_tokens.unwrap_or(0));
-        model.output = model.output.saturating_add(entry.output_tokens.unwrap_or(0));
+        model.output = model
+            .output
+            .saturating_add(entry.output_tokens.unwrap_or(0));
         model.cache_read = model
             .cache_read
             .saturating_add(entry.cache_read_tokens.unwrap_or(0));
@@ -298,7 +298,7 @@ fn write_cache(cache: &CacheFile) {
     let Some(parent) = path.parent() else {
         return;
     };
-    if fs::create_dir_all(parent).is_err () {
+    if fs::create_dir_all(parent).is_err() {
         return;
     }
     let Ok(bytes) = serde_json::to_vec(cache) else {
@@ -418,8 +418,7 @@ fn nonnegative_u64(value: Option<&Value>) -> Option<u64> {
         return Some(number);
     }
     let number = value.as_f64()?;
-    (number.is_finite() && number >= 0.0 && number <= u64::MAX as f64)
-        .then_some(number as u64)
+    (number.is_finite() && number >= 0.0 && number <= u64::MAX as f64).then_some(number as u64)
 }
 
 fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
@@ -437,19 +436,36 @@ mod tests {
 
     #[test]
     fn aggregate_deduplicates_requests_and_applies_history_window() {
-        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z").unwrap().with_timezone(&Utc);
+        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let make = |request_id: &str, timestamp: &str, input: u64| OpenCodexEntry {
             request_id: request_id.into(),
-            timestamp: DateTime::parse_from_rfc3339(timestamp).unwrap().with_timezone(&Utc),
-            provider: "openai".into(), model: "gpt-5".into(), usage_status: "reported".into(),
-            conversation_id: Some(request_id.into()), input_tokens: Some(input), output_tokens: Some(1),
-            cache_read_tokens: Some(0), cache_creation_tokens: None, reasoning_tokens: None, total_tokens: Some(input + 1),
+            timestamp: DateTime::parse_from_rfc3339(timestamp)
+                .unwrap()
+                .with_timezone(&Utc),
+            provider: "openai".into(),
+            model: "gpt-5".into(),
+            usage_status: "reported".into(),
+            conversation_id: Some(request_id.into()),
+            input_tokens: Some(input),
+            output_tokens: Some(1),
+            cache_read_tokens: Some(0),
+            cache_creation_tokens: None,
+            reasoning_tokens: None,
+            total_tokens: Some(input + 1),
         };
-        let source = aggregate(vec![
-            make("same", "2026-08-18T10:00:00Z", 10),
-            make("same", "2026-08-18T11:00:00Z", 20),
-            make("old", "2026-08-01T10:00:00Z", 30),
-        ], now, 7, &CustomPricing::default()).expect("source");
+        let source = aggregate(
+            vec![
+                make("same", "2026-08-18T10:00:00Z", 10),
+                make("same", "2026-08-18T11:00:00Z", 20),
+                make("old", "2026-08-01T10:00:00Z", 30),
+            ],
+            now,
+            7,
+            &CustomPricing::default(),
+        )
+        .expect("source");
         assert_eq!(source.request_count, 1);
         assert_eq!(source.conversation_count, 1);
         assert_eq!(source.token_mix.input_tokens, Some(20));

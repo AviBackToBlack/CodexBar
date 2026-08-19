@@ -369,19 +369,27 @@ mod tests {
                 timestamp_ms: Some(1),
                 model: Some("gpt-5".into()),
                 token_usage: Some(EventTokenUsage {
-                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_write_tokens: 0,
+                    cache_read_tokens: 0,
                     total_cents: Some(25.0),
                 }),
-                charged_cents: Some(0.0), cursor_token_fee: None,
+                charged_cents: Some(0.0),
+                cursor_token_fee: None,
             },
             UsageEvent {
                 timestamp_ms: Some(2),
                 model: Some("gpt-5".into()),
                 token_usage: Some(EventTokenUsage {
-                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_write_tokens: 0,
+                    cache_read_tokens: 0,
                     total_cents: None,
                 }),
-                charged_cents: Some(0.0), cursor_token_fee: None,
+                charged_cents: Some(0.0),
+                cursor_token_fee: None,
             },
         ];
         let report = summarize_events(&events);
@@ -396,19 +404,27 @@ mod tests {
                 timestamp_ms: Some(1),
                 model: Some("gpt-5".into()),
                 token_usage: Some(EventTokenUsage {
-                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_write_tokens: 0,
+                    cache_read_tokens: 0,
                     total_cents: Some(-1.0),
                 }),
-                charged_cents: Some(0.0), cursor_token_fee: None,
+                charged_cents: Some(0.0),
+                cursor_token_fee: None,
             },
             UsageEvent {
                 timestamp_ms: Some(2),
                 model: Some("gpt-5".into()),
                 token_usage: Some(EventTokenUsage {
-                    input_tokens: 1, output_tokens: 1, cache_write_tokens: 0, cache_read_tokens: 0,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cache_write_tokens: 0,
+                    cache_read_tokens: 0,
                     total_cents: Some(50.0),
                 }),
-                charged_cents: Some(0.0), cursor_token_fee: None,
+                charged_cents: Some(0.0),
+                cursor_token_fee: None,
             },
         ];
         let report = summarize_events(&events);

@@ -415,7 +415,11 @@ impl TokenAccountSupport {
         if value.len() >= 7 && value[..7].eq_ignore_ascii_case("bearer ") {
             value = value[7..].trim();
         }
-        if value.is_empty() || value.contains('=') || value.to_ascii_lowercase().starts_with("cookie:") || value.to_ascii_lowercase().starts_with("xai-") {
+        if value.is_empty()
+            || value.contains('=')
+            || value.to_ascii_lowercase().starts_with("cookie:")
+            || value.to_ascii_lowercase().starts_with("xai-")
+        {
             return None;
         }
         Some(value.to_string())
@@ -766,10 +770,17 @@ mod tests {
 
     #[test]
     fn grok_token_accounts_route_bearer_and_cookie_credentials() {
-        let bearer = TokenAccountSupport::env_override(ProviderId::Grok, "Bearer oauth-token").unwrap();
-        assert_eq!(bearer.get("CODEXBAR_GROK_OAUTH_TOKEN").map(String::as_str), Some("oauth-token"));
+        let bearer =
+            TokenAccountSupport::env_override(ProviderId::Grok, "Bearer oauth-token").unwrap();
+        assert_eq!(
+            bearer.get("CODEXBAR_GROK_OAUTH_TOKEN").map(String::as_str),
+            Some("oauth-token")
+        );
         assert!(TokenAccountSupport::env_override(ProviderId::Grok, "Cookie: sso=abc").is_none());
-        assert_eq!(TokenAccountSupport::normalized_cookie_header(ProviderId::Grok, "Cookie: sso=abc"), "Cookie: sso=abc");
+        assert_eq!(
+            TokenAccountSupport::normalized_cookie_header(ProviderId::Grok, "Cookie: sso=abc"),
+            "Cookie: sso=abc"
+        );
     }
 
     #[test]

@@ -18,8 +18,8 @@ pub mod guard;
 pub mod hooks;
 pub mod serve;
 pub mod sessions;
-pub mod tty_runner;
 pub mod toon;
+pub mod tty_runner;
 pub mod usage;
 pub mod workspaces;
 

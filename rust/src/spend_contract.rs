@@ -207,14 +207,28 @@ impl CustomRates {
         )
     }
 
-    fn cost_parts(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> Option<f64> {
+    fn cost_parts(
+        &self,
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        cache_write: u64,
+    ) -> Option<f64> {
         let cached = cache_read.min(input);
         let uncached = input.saturating_sub(cached);
         let mut total = 0.0;
-        if uncached > 0 { total += uncached as f64 * self.input? / 1_000_000.0; }
-        if output > 0 { total += output as f64 * self.output? / 1_000_000.0; }
-        if cached > 0 { total += cached as f64 * self.cache_read? / 1_000_000.0; }
-        if cache_write > 0 { total += cache_write as f64 * self.cache_write? / 1_000_000.0; }
+        if uncached > 0 {
+            total += uncached as f64 * self.input? / 1_000_000.0;
+        }
+        if output > 0 {
+            total += output as f64 * self.output? / 1_000_000.0;
+        }
+        if cached > 0 {
+            total += cached as f64 * self.cache_read? / 1_000_000.0;
+        }
+        if cache_write > 0 {
+            total += cache_write as f64 * self.cache_write? / 1_000_000.0;
+        }
         total.is_finite().then_some(total)
     }
 }
@@ -295,7 +309,9 @@ pub fn build_local_spend_contract_from_summary(
         native_conversations.saturating_add(imported_conversations)
     };
     let known_zero = if replace_native {
-        imported.is_some_and(|source| source.known_cost_usd == Some(0.0) && source.coverage.unpriced == 0)
+        imported.is_some_and(|source| {
+            source.known_cost_usd == Some(0.0) && source.coverage.unpriced == 0
+        })
     } else {
         summary.known_zero && imports.is_empty()
     };
@@ -305,7 +321,11 @@ pub fn build_local_spend_contract_from_summary(
         history_days,
         known_cost_usd: resolved.known_cost_usd,
         known_zero,
-        provenance: if resolved.known_cost_usd.is_some() { CostProvenance::ListPriceEstimate } else { CostProvenance::Unknown },
+        provenance: if resolved.known_cost_usd.is_some() {
+            CostProvenance::ListPriceEstimate
+        } else {
+            CostProvenance::Unknown
+        },
         price_coverage_ratio: resolved.price_coverage.coverage_ratio(),
         price_coverage: resolved.price_coverage,
         history_coverage_established: summary.history_coverage_established,
@@ -324,36 +344,79 @@ pub fn build_local_spend_contract_from_summary(
 
 fn load_native_spend(provider_id: &str, history_days: u32) -> NativeSpendData {
     if provider_id != "codex" {
-        return NativeSpendData { projects: Vec::new(), conversations: Vec::new(), project_source_status: None, activity: Vec::new(), daily: daily_points(provider_id, history_days) };
+        return NativeSpendData {
+            projects: Vec::new(),
+            conversations: Vec::new(),
+            project_source_status: None,
+            activity: Vec::new(),
+            daily: daily_points(provider_id, history_days),
+        };
     }
     match CodexWorkspacesIndex::new(history_days).load_snapshot(false, |_| {}) {
         Ok(snapshot) => {
             let activity = activity_from_sessions(&snapshot.sessions);
-            let daily = snapshot.daily.iter().map(|point| SpendDailyPoint { day: point.day.clone(), cost_usd: point.estimated_cost_usd, total_tokens: Some(point.total_tokens) }).collect();
-            NativeSpendData { projects: snapshot.projects, conversations: snapshot.sessions, project_source_status: Some(snapshot.source_status), activity, daily }
+            let daily = snapshot
+                .daily
+                .iter()
+                .map(|point| SpendDailyPoint {
+                    day: point.day.clone(),
+                    cost_usd: point.estimated_cost_usd,
+                    total_tokens: Some(point.total_tokens),
+                })
+                .collect();
+            NativeSpendData {
+                projects: snapshot.projects,
+                conversations: snapshot.sessions,
+                project_source_status: Some(snapshot.source_status),
+                activity,
+                daily,
+            }
         }
-        Err(_) => NativeSpendData { projects: Vec::new(), conversations: Vec::new(), project_source_status: None, activity: Vec::new(), daily: daily_points(provider_id, history_days) },
+        Err(_) => NativeSpendData {
+            projects: Vec::new(),
+            conversations: Vec::new(),
+            project_source_status: None,
+            activity: Vec::new(),
+            daily: daily_points(provider_id, history_days),
+        },
     }
 }
 
 fn resolve_spend(
-    native_cost: Option<f64>, native_coverage: CostCoverageCounts, native_token_mix: SpendTokenMix,
-    native_models: Vec<SpendModelRow>, native_daily: Vec<SpendDailyPoint>, native_activity: Vec<SpendActivityCell>,
-    imported: Option<&ImportedSpendSource>, replace_native: bool,
+    native_cost: Option<f64>,
+    native_coverage: CostCoverageCounts,
+    native_token_mix: SpendTokenMix,
+    native_models: Vec<SpendModelRow>,
+    native_daily: Vec<SpendDailyPoint>,
+    native_activity: Vec<SpendActivityCell>,
+    imported: Option<&ImportedSpendSource>,
+    replace_native: bool,
 ) -> ResolvedSpendData {
     match imported {
         Some(imported) if replace_native => ResolvedSpendData {
-            known_cost_usd: imported.known_cost_usd, price_coverage: imported.coverage.clone(), token_mix: imported.token_mix.clone(),
-            models: imported.models.clone(), daily: imported.daily.clone(), hourly_activity: imported.hourly_activity.clone(),
+            known_cost_usd: imported.known_cost_usd,
+            price_coverage: imported.coverage.clone(),
+            token_mix: imported.token_mix.clone(),
+            models: imported.models.clone(),
+            daily: imported.daily.clone(),
+            hourly_activity: imported.hourly_activity.clone(),
         },
         Some(imported) => ResolvedSpendData {
             known_cost_usd: sum_optional_cost(native_cost, imported.known_cost_usd),
             price_coverage: merge_coverage(native_coverage, &imported.coverage),
             token_mix: merge_token_mix(native_token_mix, &imported.token_mix),
-            models: merge_models(native_models, &imported.models), daily: merge_daily(native_daily, &imported.daily),
+            models: merge_models(native_models, &imported.models),
+            daily: merge_daily(native_daily, &imported.daily),
             hourly_activity: merge_activity(native_activity, &imported.hourly_activity),
         },
-        None => ResolvedSpendData { known_cost_usd: native_cost, price_coverage: native_coverage, token_mix: native_token_mix, models: native_models, daily: native_daily, hourly_activity: native_activity },
+        None => ResolvedSpendData {
+            known_cost_usd: native_cost,
+            price_coverage: native_coverage,
+            token_mix: native_token_mix,
+            models: native_models,
+            daily: native_daily,
+            hourly_activity: native_activity,
+        },
     }
 }
 
@@ -368,7 +431,11 @@ fn model_rows(
     let mut rows: Vec<_> = names
         .into_iter()
         .map(|model| {
-            let counts = summary.by_model_tokens.get(&model).cloned().unwrap_or_default();
+            let counts = summary
+                .by_model_tokens
+                .get(&model)
+                .cloned()
+                .unwrap_or_default();
             let custom_rates = custom.rates(provider_id, &model);
             // Exact-match overlay is authoritative when present. Missing fields
             // remain unknown rather than falling back to built-in/model.dev rates.
@@ -434,8 +501,9 @@ fn known_subtotal(models: &[SpendModelRow], summary: &CostSummary) -> Option<f64
 }
 
 fn daily_points(provider_id: &str, days: u32) -> Vec<SpendDailyPoint> {
-    let costs: HashMap<String, f64> =
-        get_daily_cost_history(provider_id, days).into_iter().collect();
+    let costs: HashMap<String, f64> = get_daily_cost_history(provider_id, days)
+        .into_iter()
+        .collect();
     let (tokens, incomplete) = get_daily_token_history(provider_id, days);
     tokens
         .into_iter()
@@ -490,7 +558,8 @@ fn merge_token_mix(mut left: SpendTokenMix, right: &SpendTokenMix) -> SpendToken
     left.input_tokens = add_optional(left.input_tokens, right.input_tokens);
     left.output_tokens = add_optional(left.output_tokens, right.output_tokens);
     left.cache_read_tokens = add_optional(left.cache_read_tokens, right.cache_read_tokens);
-    left.cache_creation_tokens = add_optional(left.cache_creation_tokens, right.cache_creation_tokens);
+    left.cache_creation_tokens =
+        add_optional(left.cache_creation_tokens, right.cache_creation_tokens);
     left.reasoning_tokens = add_optional(left.reasoning_tokens, right.reasoning_tokens);
     left
 }
@@ -509,39 +578,69 @@ fn merge_models(mut left: Vec<SpendModelRow>, right: &[SpendModelRow]) -> Vec<Sp
         if let Some(existing) = left.iter_mut().find(|row| row.model == incoming.model) {
             existing.cost_usd = sum_optional_cost(existing.cost_usd, incoming.cost_usd);
             existing.input_tokens = existing.input_tokens.saturating_add(incoming.input_tokens);
-            existing.output_tokens = existing.output_tokens.saturating_add(incoming.output_tokens);
-            existing.cache_read_tokens = existing.cache_read_tokens.saturating_add(incoming.cache_read_tokens);
+            existing.output_tokens = existing
+                .output_tokens
+                .saturating_add(incoming.output_tokens);
+            existing.cache_read_tokens = existing
+                .cache_read_tokens
+                .saturating_add(incoming.cache_read_tokens);
             existing.total_tokens = existing.total_tokens.saturating_add(incoming.total_tokens);
             existing.custom_pricing |= incoming.custom_pricing;
         } else {
             left.push(incoming.clone());
         }
     }
-    left.sort_by(|a, b| b.cost_usd.partial_cmp(&a.cost_usd).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.model.cmp(&b.model)));
+    left.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.model.cmp(&b.model))
+    });
     left
 }
 
 fn merge_daily(left: Vec<SpendDailyPoint>, right: &[SpendDailyPoint]) -> Vec<SpendDailyPoint> {
-    let mut days: BTreeMap<String, SpendDailyPoint> = left.into_iter().map(|point| (point.day.clone(), point)).collect();
+    let mut days: BTreeMap<String, SpendDailyPoint> = left
+        .into_iter()
+        .map(|point| (point.day.clone(), point))
+        .collect();
     for incoming in right {
-        let entry = days.entry(incoming.day.clone()).or_insert_with(|| SpendDailyPoint {
-            day: incoming.day.clone(),
-            cost_usd: None,
-            total_tokens: None,
-        });
+        let entry = days
+            .entry(incoming.day.clone())
+            .or_insert_with(|| SpendDailyPoint {
+                day: incoming.day.clone(),
+                cost_usd: None,
+                total_tokens: None,
+            });
         entry.cost_usd = sum_optional_cost(entry.cost_usd, incoming.cost_usd);
         entry.total_tokens = add_optional(entry.total_tokens, incoming.total_tokens);
     }
     days.into_values().collect()
 }
 
-fn merge_activity(left: Vec<SpendActivityCell>, right: &[SpendActivityCell]) -> Vec<SpendActivityCell> {
-    let mut cells: BTreeMap<(u8, u8), u32> = left.into_iter().map(|cell| ((cell.weekday, cell.hour), cell.conversations)).collect();
+fn merge_activity(
+    left: Vec<SpendActivityCell>,
+    right: &[SpendActivityCell],
+) -> Vec<SpendActivityCell> {
+    let mut cells: BTreeMap<(u8, u8), u32> = left
+        .into_iter()
+        .map(|cell| ((cell.weekday, cell.hour), cell.conversations))
+        .collect();
     for cell in right {
         let current = cells.get(&(cell.weekday, cell.hour)).copied().unwrap_or(0);
-        cells.insert((cell.weekday, cell.hour), current.saturating_add(cell.conversations));
+        cells.insert(
+            (cell.weekday, cell.hour),
+            current.saturating_add(cell.conversations),
+        );
     }
-    cells.into_iter().map(|((weekday, hour), conversations)| SpendActivityCell { weekday, hour, conversations }).collect()
+    cells
+        .into_iter()
+        .map(|((weekday, hour), conversations)| SpendActivityCell {
+            weekday,
+            hour,
+            conversations,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -570,10 +669,8 @@ mod tests {
             input: Some(0.0),
             ..CustomRates::default()
         };
-        let missing = CustomRates ::default();
+        let missing = CustomRates::default();
         assert_eq!(free.cost(&counts), Some(0.0));
         assert_eq!(missing.cost(&counts), None);
     }
-
-
 }

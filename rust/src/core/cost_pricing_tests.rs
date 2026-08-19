@@ -356,10 +356,30 @@ fn codex_routed_model_strips_prefix_for_lookup() {
 
 #[test]
 fn claude_bare_models_route_to_first_party_vendors() {
-    assert_eq!(CostUsagePricing::claude_models_dev_target("gpt-5").unwrap().0, "openai");
-    assert_eq!(CostUsagePricing::claude_models_dev_target("gemini-2.5-pro").unwrap().0, "google");
-    assert_eq!(CostUsagePricing::claude_models_dev_target("deepseek-chat").unwrap().0, "deepseek");
-    assert_eq!(CostUsagePricing::claude_models_dev_target("claude-sonnet-4-6").unwrap().0, "anthropic");
+    assert_eq!(
+        CostUsagePricing::claude_models_dev_target("gpt-5")
+            .unwrap()
+            .0,
+        "openai"
+    );
+    assert_eq!(
+        CostUsagePricing::claude_models_dev_target("gemini-2.5-pro")
+            .unwrap()
+            .0,
+        "google"
+    );
+    assert_eq!(
+        CostUsagePricing::claude_models_dev_target("deepseek-chat")
+            .unwrap()
+            .0,
+        "deepseek"
+    );
+    assert_eq!(
+        CostUsagePricing::claude_models_dev_target("claude-sonnet-4-6")
+            .unwrap()
+            .0,
+        "anthropic"
+    );
 }
 
 #[test]

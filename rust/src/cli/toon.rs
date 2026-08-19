@@ -9,7 +9,11 @@ pub fn encode(value: &Value) -> String {
 fn render_value(key: Option<&str>, value: &Value, indent: usize) -> Vec<String> {
     match value {
         Value::Null => vec![scalar_line(key, "null", indent)],
-        Value::Bool(value) => vec![scalar_line(key, if *value { "true" } else { "false" }, indent)],
+        Value::Bool(value) => vec![scalar_line(
+            key,
+            if *value { "true" } else { "false" },
+            indent,
+        )],
         Value::Number(value) => vec![scalar_line(key, &value.to_string(), indent)],
         Value::String(value) => vec![scalar_line(key, &quote_if_needed(value), indent)],
         Value::Array(items) => render_array(key, items, indent),
@@ -58,7 +62,11 @@ fn render_array(key: Option<&str>, items: &[Value], indent: usize) -> Vec<String
     }
 
     if items.iter().all(is_scalar) {
-        let values = items.iter().map(scalar_literal).collect::<Vec<_>>().join(",");
+        let values = items
+            .iter()
+            .map(scalar_literal)
+            .collect::<Vec<_>>()
+            .join(",");
         return vec![format!("{prefix}{header}[{}]: {values}", items.len())];
     }
 
@@ -68,9 +76,14 @@ fn render_array(key: Option<&str>, items: &[Value], indent: usize) -> Vec<String
             .map(|field| quote_key_if_needed(field))
             .collect::<Vec<_>>()
             .join(",");
-        let mut lines = vec![format!("{prefix}{header}[{}]{{{field_list}}}:", items.len())];
+        let mut lines = vec![format!(
+            "{prefix}{header}[{}]{{{field_list}}}:",
+            items.len()
+        )];
         for item in items {
-            let Value::Object(object) = item else { continue };
+            let Value::Object(object) = item else {
+                continue;
+            };
             let cells = fields
                 .iter()
                 .map(|field| scalar_literal(object.get(field).unwrap_or(&Value::Null)))
@@ -120,15 +133,22 @@ fn render_list_item(value: &Value, indent: usize) -> Vec<String> {
 }
 
 fn tabular_fields(items: &[Value]) -> Option<Vec<String>> {
-    let Value::Object(first) = items.first()? else { return None };
+    let Value::Object(first) = items.first()? else {
+        return None;
+    };
     if first.is_empty() || !first.values().all(is_scalar) {
         return None;
     }
     let fields = first.keys().cloned().collect::<Vec<_>>();
     for item in items.iter().skip(1) {
-        let Value::Object(object) = item else { return None };
+        let Value::Object(object) = item else {
+            return None;
+        };
         if object.len() != fields.len()
-            || !fields.iter().zip(object.keys()).all(|(left, right)| left == right)
+            || !fields
+                .iter()
+                .zip(object.keys())
+                .all(|(left, right)| left == right)
             || !object.values().all(is_scalar)
         {
             return None;
@@ -138,7 +158,10 @@ fn tabular_fields(items: &[Value]) -> Option<Vec<String>> {
 }
 
 fn is_scalar(value: &Value) -> bool {
-    matches!(value, Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_))
+    matches!(
+        value,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+    )
 }
 
 fn scalar_literal(value: &Value) -> String {
@@ -186,9 +209,9 @@ fn needs_quoting(value: &str) -> bool {
     {
         return true;
     }
-    value.chars().any(|ch| {
-        matches!(ch, ':' | '"' | '\\' | '[' | ']' | '{' | '}' | ',') || ch.is_control()
-    })
+    value
+        .chars()
+        .any(|ch| matches!(ch, ':' | '"' | '\\' | '[' | ']' | '{' | '}' | ',') || ch.is_control())
 }
 
 fn escape(value: &str) -> String {
@@ -218,7 +241,10 @@ mod tests {
             { "provider": "codex", "used": 10 },
             { "provider": "claude", "used": 20 }
         ]);
-        assert_eq!(encode(&value), "[2]{provider,used}:\n  codex,10\n  claude,20");
+        assert_eq!(
+            encode(&value),
+            "[2]{provider,used}:\n  codex,10\n  claude,20"
+        );
     }
 
     #[test]

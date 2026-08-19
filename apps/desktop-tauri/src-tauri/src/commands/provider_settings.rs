@@ -81,7 +81,9 @@ pub fn set_provider_usage_source(provider_id: String, source: String) -> Result<
         .ok_or_else(|| format!("Invalid usage source '{source}' for provider '{provider_id}'"))?;
     let provider = instantiate_provider(id);
     if !provider.available_sources().contains(&mode) {
-        return Err(format!("Usage source '{source}' is unavailable for provider '{provider_id}'"));
+        return Err(format!(
+            "Usage source '{source}' is unavailable for provider '{provider_id}'"
+        ));
     }
     let value = match mode {
         SourceMode::Auto => "auto",

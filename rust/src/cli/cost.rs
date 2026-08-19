@@ -241,7 +241,6 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
     }
 }
 
-
 fn print_codex_session_output(result: &CostResult, days: u32) {
     let index = crate::codex_workspaces::CodexWorkspacesIndex::new(days);
     let snapshot = match index.load_snapshot(false, |_| {}) {
@@ -275,7 +274,9 @@ fn print_codex_session_output(result: &CostResult, days: u32) {
             if let Some(activity) = session.latest_activity {
                 println!(
                     "    {}",
-                    activity.with_timezone(&chrono::Local).format("%b %d, %H:%M")
+                    activity
+                        .with_timezone(&chrono::Local)
+                        .format("%b %d, %H:%M")
                 );
             }
         }

@@ -97,7 +97,10 @@ impl std::str::FromStr for UsageOutputFormat {
             "text" => Ok(UsageOutputFormat::Text),
             "json" => Ok(UsageOutputFormat::Json),
             "toon" => Ok(UsageOutputFormat::Toon),
-            _ => Err(format!("Invalid format: {}. Use 'text', 'json', or 'toon'", s)),
+            _ => Err(format!(
+                "Invalid format: {}. Use 'text', 'json', or 'toon'",
+                s
+            )),
         }
     }
 }
@@ -448,7 +451,10 @@ fn print_usage_output(output: UsageOutput) -> anyhow::Result<()> {
             println!("{}", output);
         }
         UsageOutput::Toon(results) => {
-            println!("{}", super::toon::encode(&serde_json::Value::Array(results)));
+            println!(
+                "{}",
+                super::toon::encode(&serde_json::Value::Array(results))
+            );
         }
     }
 
@@ -738,7 +744,10 @@ mod tests {
 
     #[test]
     fn usage_output_format_accepts_toon() {
-        assert_eq!("toon".parse::<UsageOutputFormat>(), Ok(UsageOutputFormat::Toon));
+        assert_eq!(
+            "toon".parse::<UsageOutputFormat>(),
+            Ok(UsageOutputFormat::Toon)
+        );
         assert!("toon".parse::<OutputFormat>().is_err());
     }
 

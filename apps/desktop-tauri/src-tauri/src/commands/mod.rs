@@ -24,10 +24,10 @@ use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 
 mod chart;
+mod spend_contract;
 mod tokens;
 mod updater;
 mod usage_spend;
-mod spend_contract;
 
 mod agent_sessions;
 mod bridge;
@@ -65,10 +65,10 @@ pub use system::*;
 mod tests;
 
 pub use chart::*;
+pub use spend_contract::*;
 pub use tokens::*;
 pub use updater::*;
 pub use usage_spend::*;
-pub use spend_contract::*;
 
 const PROVIDER_CACHE_STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_API_KEY_LEN: usize = 16 * 1024;

@@ -230,8 +230,10 @@ impl CodexWorkspacesIndex {
             .collect();
         daily.sort_by(|a, b| a.day.cmp(&b.day));
 
-        let mut sessions: Vec<SessionUsage> =
-            session_buckets.values().map(SessionBucket::to_session_usage).collect();
+        let mut sessions: Vec<SessionUsage> = session_buckets
+            .values()
+            .map(SessionBucket::to_session_usage)
+            .collect();
         sessions.sort_by(|a, b| {
             b.latest_activity
                 .cmp(&a.latest_activity)

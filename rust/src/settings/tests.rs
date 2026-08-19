@@ -22,17 +22,24 @@ fn test_settings_default() {
     assert!(!settings.float_bar_show_cost);
     assert!(settings.promote_tray_icon);
     assert!(settings.claude_daily_routines_usage_visible);
-    assert_eq!(settings.low_power_mode_preference, LowPowerModePreference::Off);
+    assert_eq!(
+        settings.low_power_mode_preference,
+        LowPowerModePreference::Off
+    );
 }
 
 #[test]
 fn low_power_mode_migrates_legacy_boolean_and_round_trips_preference() {
     let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
         .expect("missing low power fields defaults off");
-    assert_eq!(defaulted.low_power_mode_preference, LowPowerModePreference::Off);
+    assert_eq!(
+        defaulted.low_power_mode_preference,
+        LowPowerModePreference::Off
+    );
 
-    let legacy: Settings = serde_json::from_str(r#"{ "enabled_providers": [], "low_power_mode": true }"#)
-        .expect("legacy low_power_mode migrates");
+    let legacy: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "low_power_mode": true }"#)
+            .expect("legacy low_power_mode migrates");
     assert_eq!(legacy.low_power_mode_preference, LowPowerModePreference::On);
 
     let automatic = Settings {
@@ -42,7 +49,10 @@ fn low_power_mode_migrates_legacy_boolean_and_round_trips_preference() {
     let json = serde_json::to_string(&automatic).expect("serialize low power preference");
     assert!(json.contains(r#""low_power_mode_preference":"automatic""#));
     let loaded: Settings = serde_json::from_str(&json).expect("deserialize low power preference");
-    assert_eq!(loaded.low_power_mode_preference, LowPowerModePreference::Automatic);
+    assert_eq!(
+        loaded.low_power_mode_preference,
+        LowPowerModePreference::Automatic
+    );
 }
 
 #[test]
