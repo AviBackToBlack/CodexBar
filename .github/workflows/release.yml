@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+  CARGO_TERM_COLOR: never
+  CARGO_TERM_PROGRESS_WHEN: never
+  NO_COLOR: '1'
+
+jobs:
+  release:
+    name: Release build
+    runs-on: blacksmith-4vcpu-windows-2025
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install release prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/install-release-prerequisites.ps1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "install-release-prerequisites failed: $LASTEXITCODE" }
+
+      - name: Release preflight
+        shell: pwsh
+        env:
+          CIRCLE_TAG: ${{ github.ref_name }}
+          CIRCLE_SHA1: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/release-preflight.ps1 -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "release-preflight failed: $LASTEXITCODE" }
+
+      - name: Build release artifacts
+        shell: pwsh
+        env:
+          CIRCLE_TAG: ${{ github.ref_name }}
+          CIRCLE_SHA1: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/circleci-release-build.ps1 -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "circleci-release-build failed: $LASTEXITCODE" }
+
+      - name: Publish draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CIRCLE_TAG: ${{ github.ref_name }}
+          CIRCLE_SHA1: ${{ github.sha }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outputDir = Join-Path '.' 'release-output'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/publish-github-release.ps1 -Tag $env:CIRCLE_TAG -AssetsDir $outputDir
+          if ($LASTEXITCODE -ne 0) { throw "publish-github-release failed: $LASTEXITCODE" }
