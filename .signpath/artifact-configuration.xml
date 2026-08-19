@@ -5,10 +5,10 @@
   </parameters>
   <zip-file>
     <pe-file path="CodexBar-${version}-Setup.exe">
-      <authenticode-sign description="CodexBar ${version}" description-url="https://github.com/nesszer/Win-CodexBar/releases" />
+      <authenticode-sign />
     </pe-file>
     <pe-file path="CodexBar-${version}-portable.exe">
-      <authenticode-sign description="CodexBar ${version} (portable)" description-url="https://github.com/nesszer/Win-CodexBar/releases" />
+      <authenticode-sign />
     </pe-file>
   </zip-file>
 </artifact-configuration>
