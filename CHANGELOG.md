@@ -2,9 +2,11 @@
 
 ## 0.54.1 — Unreleased
 
-- Codex: treat `personal_access_token` in `auth.json` as a dedicated PAT usage source (not OAuth), calling whoami then `/wham/usage` with the Settings Codex CLI version in the CLI User-Agent.
-- Codex: load PAT credentials from the ambient Codex CLI home when a stale managed-account selection fail-closes `CODEX_HOME`, or when a profile `CODEX_HOME` has no PAT; send the token's whoami ChatGPT account id instead of that managed workspace id.
-- Codex: skip stacked-account fan-out and ownership guards for Auto/PAT, including a PAT that lives only in the selected profile home, so results are not dropped as “Not fetched yet”. Auto continues to OAuth/CLI after an unusable PAT; explicit PAT mode stays terminal.
+- Fixed `codexbar cost` SIGSEGV on Linux: `Bundle.allBundles` crashes under swift-corelibs-foundation, so test detection now checks the main executable path instead (#3058, #3059). Thanks @Lucenx9!
+- Codex: added a personal-access-token usage source — `personal_access_token` in `auth.json` gets its own PAT strategy (whoami then `/wham/usage`), Auto prefers a usable PAT and falls back to OAuth/CLI, and ambient-home PATs are found when a managed profile would hide them (#3060). Thanks @oakimov!
+- Count every enabled provider in Overview spend instead of only the six displayed cards, and bucket Overview spend with the configured calendar so boundary days match the dashboard (#3063, #3064). Thanks @Chipagosfinest!
+- Hide untouched Antigravity model families in the `codexbar serve` web dashboard, matching the menu and widgets (#3061). Thanks @urda!
+- Documented the AI Usage Limits Stream Deck plugin in the README integrations list (#3066). Thanks @lenadweb!
 
 ## 0.54.0 — 2026-08-18
 
