@@ -299,6 +299,8 @@ export const ALL_LOCALE_KEYS = [
   "ProviderClaudeAvoidKeychainPromptsHelp",
   "ProviderClaudeDailyRoutinesUsage",
   "ProviderClaudeDailyRoutinesUsageHelp",
+  "ProviderClaudeAllowReadingClaudeCodeCredentials",
+  "ProviderClaudeAllowReadingClaudeCodeCredentialsHelp",
   "ProviderCodexSparkUsage",
   "ProviderCodexSparkUsageHelp",
   "CodexAccountsTitle",
