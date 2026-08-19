@@ -59,6 +59,11 @@ jobs:
           path: release-output/CodexBar-*.exe
           if-no-files-found: error
 
+      - name: Prepare version (strip v prefix)
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Submit to SignPath for code signing
         id: signpath
         if: ${{ env.SIGNPATH_API_TOKEN != '' }}
@@ -74,7 +79,7 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: release-signed
           parameters: |
-            version: "${{ github.ref_name }}"
+            version: "${{ steps.version.outputs.version }}"
 
       - name: Replace unsigned artifacts with signed versions
         shell: pwsh
