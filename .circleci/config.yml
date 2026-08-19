@@ -119,15 +119,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "publish-github-release.ps1 failed with exit code $LASTEXITCODE" }
 
 workflows:
-  # Disabled — release pipeline moved to GitHub Actions on Blacksmith (CircleCI compute)
-  # for SignPath trusted build system integration. Retained for reference/future use.
-  # To re-enable: change tag filter back to /^v[0-9]+\.[0-9]+\.[0-9]+$/ and remove this comment.
   release:
     jobs:
       - release-build:
           filters: &release-tag-filter
             tags:
-              only: /^disabled$/
+              only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
             branches:
               ignore: /.*/
       - release-approval:
