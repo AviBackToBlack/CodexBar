@@ -1500,3 +1500,20 @@
 "menu_bar_layout_conditional_default_session_spent" = "会话即将用尽";
 "menu_bar_layout_conditional_default_either_high" = "会话或每周用量偏高";
 "menu_bar_layout_conditional_default_scoped_weekly" = "模型专属每周已用超过 60%";
+
+/* Provider usage details */
+"Detailed usage" = "用量明细";
+"Cache-hit input" = "缓存命中输入";
+"Cache-miss input" = "缓存未命中输入";
+"Daily tokens" = "每日 token";
+"Quota details" = "配额详情";
+"Token quota" = "Token 配额";
+"Credit quota" = "额度配额";
+"Session token quota" = "会话 Token 配额";
+"Session credit quota" = "会话额度配额";
+"MCP quota" = "MCP 配额";
+"Hourly tokens" = "每小时 token";
+"%@ used" = "已使用 %@";
+"%@ limit · %@ remaining" = "上限 %@ · 剩余 %@";
+"%@ (Paid: %@ / Granted: %@)" = "%@（付费：%@ / 赠送：%@）";
+"Resets every 5 hours" = "每 5 小时重置";
