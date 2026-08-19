@@ -17,6 +17,7 @@ jobs:
     runs-on: blacksmith-4vcpu-windows-2025
     permissions:
       contents: write
+      actions: read
 
     steps:
       - name: Checkout code
