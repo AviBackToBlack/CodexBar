@@ -20,8 +20,10 @@ In `nesszer/Win-CodexBar` → Settings → Secrets and variables → Actions →
 |---|---|---|
 | `SIGNPATH_API_TOKEN` | API token with submitter permissions | SignPath → User → API Tokens |
 | `SIGNPATH_ORGANIZATION_ID` | Your SignPath organization ID | SignPath → Organization → Settings |
-| `SIGNPATH_PROJECT_SLUG` | Project slug (e.g. `win-codexbar`) | SignPath → Project → Settings |
-| `SIGNPATH_SIGNING_POLICY_SLUG` | Signing policy slug (e.g. `release-signing`) | SignPath → Project → Signing Policies |
+| `SIGNPATH_PROJECT_SLUG` | `Win-CodexBar` (case-sensitive, capital W and B) | SignPath → Project → Settings |
+| `SIGNPATH_SIGNING_POLICY_SLUG` | `test-signing` (initial) | SignPath → Project → Signing Policies |
+
+> **Note:** Use `test-signing` initially — the `release-signing` certificate is pending (CSR not yet issued by SignPath). Switch to `release-signing` in Step 7 after the production certificate is available.
 
 ## Step 3: Upload the artifact configuration
 
@@ -68,21 +70,36 @@ github-policies:
 
 ## Step 6: Test with the self-signed certificate
 
-SignPath provides a test certificate during onboarding. To test:
+SignPath provides a test certificate (the `test-signing` policy). To test:
 
-1. Ensure all secrets from Step 2 are set
-2. Push a test tag (e.g. `v0.0.0-test`)
-3. The Release workflow will:
-   - Build artifacts
-   - Upload unsigned artifacts as GitHub Actions artifacts
-   - Submit to SignPath for signing
-   - Replace unsigned files with signed versions
-   - Publish a draft GitHub release
-4. Verify the signed artifacts:
+**Option A — Wait for the next real release:** Simplest. On your next release (e.g. `v0.54.0`), the workflow automatically submits artifacts to SignPath. Download the signed installer and verify:
+
+```powershell
+Get-AuthenticodeSignature .\CodexBar-0.54.0-Setup.exe
+```
+
+**Option B — Test with a throwaway canonical tag:**
+
+1. Temporarily bump all 5 version files to `0.0.1`:
+   - `rust/Cargo.toml`
+   - `apps/desktop-tauri/src-tauri/Cargo.toml`
+   - `apps/desktop-tauri/package.json`
+   - `apps/desktop-tauri/src-tauri/tauri.conf.json`
+   - `version.env` (MARKETING_VERSION)
+2. Commit: `git commit -am "Temp bump for SignPath test"`
+3. Tag and push: `git tag v0.0.1 && git push origin main && git push origin v0.0.1`
+4. Wait for the workflow to complete
+5. Download the signed exe and verify with `Get-AuthenticodeSignature`
+6. Clean up:
    ```powershell
-   Get-AuthenticodeSignature .\CodexBar-0.0.0-test-Setup.exe
+   git tag -d v0.0.1
+   git push origin :refs/tags/v0.0.1
+   gh release delete v0.0.1 --repo nesszer/Win-CodexBar --yes
+   git revert HEAD --no-edit
+   git push origin main
    ```
-   The signature should show "SignPath Foundation" as the publisher.
+
+Do NOT use non-canonical tags like `v0.0.0-test` — the release preflight rejects them.
 
 ## Step 7: Production certificate
 
