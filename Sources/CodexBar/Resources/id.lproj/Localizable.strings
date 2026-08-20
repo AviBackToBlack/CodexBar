@@ -941,6 +941,7 @@
 "Monthly" = "Bulanan";
 "Sonnet" = "Sonnet";
 "Overages" = "Kelebihan";
+"Overage" = "Kelebihan";
 "Activity" = "Aktivitas";
 "Copied" = "Disalin";
 "Copy error" = "Salin error";
@@ -951,6 +952,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "Saldo diperbarui hampir real-time (hingga 5 menit keterlambatan)";
 "Daily billing data finalizes at 07:00 UTC" = "Data tagihan harian final pada 07:00 UTC";
 "%@ of %@ credits left" = "%@ dari %@ kredit tersisa";
+"of %@" = "dari %@";
 "%@ of %@ bonus credits left" = "%@ dari %@ kredit bonus tersisa";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ tersisa)";
 "%@/%@ left" = "%@/%@ tersisa";
@@ -962,6 +964,7 @@
 "Full in ~1 regen" = "Penuh dalam ~1 regenerasi";
 "Full in ~%.0f regens" = "Penuh dalam ~%.0f regenerasi";
 "Overage usage" = "Penggunaan kelebihan";
+"Overage credits left" = "Sisa kredit kelebihan";
 "Overage cost" = "Biaya kelebihan";
 "credits" = "kredit";
 "Zen balance" = "Saldo Zen";

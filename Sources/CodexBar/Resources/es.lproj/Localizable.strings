@@ -811,6 +811,7 @@
 "Sonnet" = "Sonnet";
 "Auth" = "Autenticación";
 "Overages" = "Excesos";
+"Overage" = "Exceso";
 "Activity" = "Actividad";
 "Copied" = "Copiado";
 "Copy error" = "Error al copiar";
@@ -821,6 +822,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "El saldo se actualiza casi en tiempo real (hasta 5 min de retraso)";
 "Daily billing data finalizes at 07:00 UTC" = "Los datos diarios de facturación se cierran a las 07:00 UTC";
 "%@ of %@ credits left" = "Quedan %@ de %@ créditos";
+"of %@" = "de %@";
 "%@ of %@ bonus credits left" = "Quedan %@ de %@ créditos de bonificación";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ restante)";
 "%@/%@ left" = "%@/%@ restante";
@@ -832,6 +834,7 @@
 "Full in ~1 regen" = "Lleno en ~1 regeneración";
 "Full in ~%.0f regens" = "Lleno en ~%.0f regeneraciones";
 "Overage usage" = "Uso excedente";
+"Overage credits left" = "Créditos excedentes restantes";
 "Overage cost" = "Coste excedente";
 "credits" = "créditos";
 "Zen balance" = "Saldo Zen";

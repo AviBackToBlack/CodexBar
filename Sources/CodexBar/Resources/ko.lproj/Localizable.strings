@@ -901,6 +901,7 @@
 "Monthly" = "월간";
 "Sonnet" = "Sonnet";
 "Overages" = "초과분";
+"Overage" = "초과분";
 "Activity" = "활동";
 "Copied" = "복사됨";
 "Copy error" = "오류 복사";
@@ -911,6 +912,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "잔액은 거의 실시간으로 업데이트됩니다(최대 5분 지연)";
 "Daily billing data finalizes at 07:00 UTC" = "일간 청구 데이터는 07:00 UTC에 확정됩니다";
 "%@ of %@ credits left" = "크레딧 %2$@개 중 %1$@개 남음";
+"of %@" = "/ %@";
 "%@ of %@ bonus credits left" = "보너스 크레딧 %2$@개 중 %1$@개 남음";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ 남음)";
 "%@/%@ left" = "%@/%@ 남음";
@@ -922,6 +924,7 @@
 "Full in ~1 regen" = "약 1회 재생성 후 가득 참";
 "Full in ~%.0f regens" = "약 %.0f회 재생성 후 가득 참";
 "Overage usage" = "초과 사용량";
+"Overage credits left" = "남은 초과 크레딧";
 "Overage cost" = "초과 비용";
 "credits" = "크레딧";
 "Zen balance" = "Zen 잔액";

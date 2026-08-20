@@ -929,6 +929,7 @@
 "Monthly" = "月間";
 "Sonnet" = "Sonnet";
 "Overages" = "超過分";
+"Overage" = "超過分";
 "Activity" = "アクティビティ";
 "Copied" = "コピーしました";
 "Copy error" = "エラーをコピー";
@@ -939,6 +940,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "残高はほぼリアルタイムで更新されます（最大5分の遅延）";
 "Daily billing data finalizes at 07:00 UTC" = "日次請求データは 07:00 UTC に確定します";
 "%@ of %@ credits left" = "クレジット残り %@ / %@";
+"of %@" = "/ %@";
 "%@ of %@ bonus credits left" = "ボーナスクレジット残り %@ / %@";
 "%@ / %@ (%@ remaining)" = "%@ / %@（残り %@）";
 "%@/%@ left" = "残り %@/%@";
@@ -950,6 +952,7 @@
 "Full in ~1 regen" = "約1回の再生成で満タン";
 "Full in ~%.0f regens" = "約%.0f回の再生成で満タン";
 "Overage usage" = "超過使用量";
+"Overage credits left" = "残り超過クレジット";
 "Overage cost" = "超過コスト";
 "credits" = "クレジット";
 "Zen balance" = "Zen 残高";

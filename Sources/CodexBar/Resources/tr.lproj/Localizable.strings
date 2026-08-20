@@ -935,6 +935,7 @@
 "Monthly" = "Aylık";
 "Sonnet" = "Sonnet";
 "Overages" = "Aşmalar";
+"Overage" = "Aşım";
 "Activity" = "Etkinlik";
 "Copied" = "Kopyalandı";
 "Copy error" = "Hata kopyala";
@@ -945,6 +946,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "Bakiye neredeyse gerçek zamanlı güncellenir (en fazla 5 dk gecikme)";
 "Daily billing data finalizes at 07:00 UTC" = "Günlük faturalandırma verisi 07:00 UTC'de kesinleşir";
 "%@ of %@ credits left" = "%@ / %@ kredi kaldı";
+"of %@" = "/ %@";
 "%@ of %@ bonus credits left" = "%@ / %@ bonus kredi kaldı";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ kaldı)";
 "%@/%@ left" = "%@/%@ kaldı";
@@ -956,6 +958,7 @@
 "Full in ~1 regen" = "~1 yenilemede dolacak";
 "Full in ~%.0f regens" = "~%.0f yenilemede dolacak";
 "Overage usage" = "Aşım kullanımı";
+"Overage credits left" = "Kalan aşım kredileri";
 "Overage cost" = "Aşım maliyeti";
 "credits" = "kredi";
 "Zen balance" = "Zen bakiye";

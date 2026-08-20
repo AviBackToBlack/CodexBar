@@ -941,6 +941,7 @@
 "Monthly" = "Miesięcznie";
 "Sonnet" = "Sonnet";
 "Overages" = "Nadwyżki";
+"Overage" = "Nadwyżka";
 "Activity" = "Aktywność";
 "Copied" = "Skopiowano";
 "Copy error" = "Błąd kopiowania";
@@ -951,6 +952,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "Saldo aktualizuje się prawie w czasie rzeczywistym (opóźnienie do 5 min)";
 "Daily billing data finalizes at 07:00 UTC" = "Dzienne dane rozliczeniowe finalizują się o 07:00 UTC";
 "%@ of %@ credits left" = "%@ z %@ kredytów pozostało";
+"of %@" = "z %@";
 "%@ of %@ bonus credits left" = "%@ z %@ bonusowych kredytów pozostało";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ pozostało)";
 "%@/%@ left" = "%@/%@ pozostało";
@@ -962,6 +964,7 @@
 "Full in ~1 regen" = "Pełne za ~1 odnowienie";
 "Full in ~%.0f regens" = "Pełne za ~%.0f odnowień";
 "Overage usage" = "Użycie nadwyżki";
+"Overage credits left" = "Pozostałe kredyty nadwyżkowe";
 "Overage cost" = "Koszt nadwyżki";
 "credits" = "kredyty";
 "Zen balance" = "Saldo Zen";

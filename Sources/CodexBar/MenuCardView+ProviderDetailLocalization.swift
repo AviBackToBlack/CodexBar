@@ -6,9 +6,9 @@ extension UsageMenuCardView.Model {
         _ details: [ProviderDetailSection],
         provider: UsageProvider) -> [ProviderDetailSection]
     {
-        // Provider-specific by design: only DeepSeek and z.ai expose these localized detail contracts.
+        // Provider-specific by design: DeepSeek, z.ai, and Kiro rewrite unit phrasing.
         // Other providers localize section titles and row labels through the shared catalog; values stay canonical.
-        guard provider == .deepseek || provider == .zai else {
+        guard provider == .deepseek || provider == .zai || provider == .kiro else {
             return details.compactMap { section in
                 let rows = section.rows.compactMap { row in
                     try? ProviderDetailSection.Row(
@@ -85,7 +85,7 @@ extension UsageMenuCardView.Model {
         return L("Resets every 5 hours")
     }
 
-    /// Provider-specific by design: DeepSeek and z.ai detail values carry provider-owned unit phrasing that
+    /// Provider-specific by design: DeepSeek, z.ai, and Kiro detail values carry provider-owned unit phrasing that
     /// localizes at the presentation boundary without touching other providers.
     private static func localizedProviderDetailValue(_ value: String, provider: UsageProvider) -> String {
         switch provider {
@@ -93,9 +93,21 @@ extension UsageMenuCardView.Model {
             self.localizedTokenSuffix(value)
         case .zai:
             self.localizedZaiValue(value)
+        case .kiro:
+            self.localizedKiroCapPhrase(value)
         default:
             value
         }
+    }
+
+    private static func localizedKiroCapPhrase(_ value: String) -> String {
+        let prefix = "of "
+        if value.hasPrefix(prefix) {
+            return L("of %@", String(value.dropFirst(prefix.count)))
+        }
+        let suffix = " credits"
+        guard value.hasSuffix(suffix) else { return value }
+        return "\(String(value.dropLast(suffix.count))) \(L("credits"))"
     }
 
     private static func localizedTokenSuffix(_ value: String) -> String {

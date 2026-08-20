@@ -928,6 +928,7 @@
 "Monthly" = "Hàng tháng";
 "Sonnet" = "Sonnet";
 "Overages" = "Quá tải";
+"Overage" = "Vượt mức";
 "Activity" = "Hoạt động";
 "Copied" = "Đã sao chép";
 "Copy error" = "Lỗi sao chép";
@@ -938,6 +939,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "Cập nhật số dư trong thời gian gần như thực (độ trễ tối đa 5 phút)";
 "Daily billing data finalizes at 07:00 UTC" = "Dữ liệu thanh toán hàng ngày sẽ hoàn tất lúc 07:00 UTC";
 "%@ of %@ credits left" = "%@ trong số %@ tín dụng còn lại";
+"of %@" = "/ %@";
 "%@ of %@ bonus credits left" = "%@ trong số %@ tín dụng thưởng còn lại";
 "%@ / %@ (%@ remaining)" = "%@ / %@ ( %@ còn lại)";
 "%@/%@ left" = "%@ / %@ left";
@@ -949,6 +951,7 @@
 "Full in ~1 regen" = "Đầy đủ trong ~1 regen";
 "Full in ~%.0f regens" = "Đầy đủ trong ~%.0f regens";
 "Overage usage" = "Quá mức Mức sử dụng";
+"Overage credits left" = "Tín dụng vượt mức còn lại";
 "Overage cost" = "Chi phí quá mức";
 "credits" = "tín dụng";
 "Zen balance" = "Số dư Zen";

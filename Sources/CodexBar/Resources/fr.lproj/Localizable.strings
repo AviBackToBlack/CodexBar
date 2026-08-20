@@ -932,6 +932,7 @@
 "Monthly" = "Mensuel";
 "Sonnet" = "Sonnet";
 "Overages" = "Dépassements";
+"Overage" = "Dépassement";
 "Activity" = "Activité";
 "Copied" = "Copié";
 "Copy error" = "Erreur de copie";
@@ -942,6 +943,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "Mises à jour du solde en temps quasi réel (jusqu'à 5 minutes de décalage)";
 "Daily billing data finalizes at 07:00 UTC" = "Les données de facturation quotidiennes se terminent à 07h00 UTC";
 "%@ of %@ credits left" = "%@ sur %@ crédits restants";
+"of %@" = "sur %@";
 "%@ of %@ bonus credits left" = "%@ de %@ crédits bonus restants";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ restant)";
 "%@/%@ left" = "%@/%@ gauche";
@@ -953,6 +955,7 @@
 "Full in ~1 regen" = "Complet en ~1 régénération";
 "Full in ~%.0f regens" = "Plein en ~%.0f régénérations";
 "Overage usage" = "Utilisation excédentaire";
+"Overage credits left" = "Crédits de dépassement restants";
 "Overage cost" = "Coût excédentaire";
 "credits" = "crédits";
 "Zen balance" = "L'équilibre zen";

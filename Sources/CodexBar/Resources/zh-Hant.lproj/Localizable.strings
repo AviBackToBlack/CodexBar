@@ -805,6 +805,7 @@
 "Monthly" = "每月";
 "Sonnet" = "Sonnet";
 "Overages" = "超額";
+"Overage" = "超額";
 "Activity" = "活動";
 "Copied" = "已複製";
 "Copy error" = "複製錯誤";
@@ -815,6 +816,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "餘額接近即時更新（最多延遲 5 分鐘）";
 "Daily billing data finalizes at 07:00 UTC" = "每日帳單資料會在 UTC 07:00 完成結算";
 "%@ of %@ credits left" = "剩餘 %@ / %@ 點額度";
+"of %@" = "/ %@";
 "%@ of %@ bonus credits left" = "剩餘 %@ / %@ 點獎勵額度";
 "%@ / %@ (%@ remaining)" = "%@ / %@（剩餘 %@）";
 "%@/%@ left" = "剩餘 %@ / %@";
@@ -826,6 +828,7 @@
 "Full in ~1 regen" = "約 1 次恢復後全滿";
 "Full in ~%.0f regens" = "約 %.0f 次恢復後全滿";
 "Overage usage" = "超額使用量";
+"Overage credits left" = "剩餘超額額度";
 "Overage cost" = "超額費用";
 "credits" = "額度";
 "Zen balance" = "Zen 餘額";

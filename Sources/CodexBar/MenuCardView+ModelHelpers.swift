@@ -939,6 +939,16 @@ extension UsageMenuCardView.Model {
             let title = input.provider == .doubao && namedWindow.id.contains("-team-")
                 ? "\(L(namedWindow.title)) (\(L("Team")))"
                 : L(namedWindow.title)
+            // Provider-specific by design: Kiro overage remaining copy is unique to that extra window.
+            let detailLeftText: String? = if usageKnown {
+                Self.kiroOverageRemainingDetail(
+                    snapshot: snapshot,
+                    namedWindow: namedWindow,
+                    provider: input.provider)
+                    ?? paceDetail?.leftLabel
+            } else {
+                nil
+            }
             return Metric(
                 id: namedWindow.id,
                 title: title,
@@ -950,7 +960,7 @@ extension UsageMenuCardView.Model {
                 statusText: statusText,
                 resetText: usageKnown ? resetText : nil,
                 detailText: usageKnown ? detailText : nil,
-                detailLeftText: usageKnown ? paceDetail?.leftLabel : nil,
+                detailLeftText: detailLeftText,
                 detailRightText: usageKnown ? paceDetail?.rightLabel : nil,
                 pacePercent: usageKnown ? paceDetail?.pacePercent : nil,
                 detailIsPaceDerived: paceDetail?.isPaceDerived ?? false,
@@ -967,6 +977,21 @@ extension UsageMenuCardView.Model {
     private static func isCodexSparkRateWindow(_ namedWindow: NamedRateWindow) -> Bool {
         namedWindow.id == CodexAdditionalRateLimitMapper.sparkWindowID ||
             namedWindow.id == CodexAdditionalRateLimitMapper.sparkWeeklyWindowID
+    }
+
+    private static func kiroOverageRemainingDetail(
+        snapshot: UsageSnapshot,
+        namedWindow: NamedRateWindow,
+        provider: UsageProvider) -> String?
+    {
+        guard provider == .kiro, namedWindow.id == "kiro-overage",
+              let remaining = snapshot.detailRow(label: "Overage credits left")?.value,
+              let capPhrase = snapshot.detailRow(label: "Overage usage")?.secondaryValue,
+              capPhrase.hasPrefix("of ")
+        else { return nil }
+        let total = String(capPhrase.dropFirst(3))
+        guard !total.isEmpty else { return nil }
+        return String(format: L("%@ of %@ credits left"), remaining, total)
     }
 
     private static func isClaudeDailyRoutinesRateWindow(_ namedWindow: NamedRateWindow) -> Bool {

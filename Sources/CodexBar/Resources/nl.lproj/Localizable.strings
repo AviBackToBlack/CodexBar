@@ -932,6 +932,7 @@
 "Monthly" = "Maandelijks";
 "Sonnet" = "Sonnet";
 "Overages" = "Overschotten";
+"Overage" = "Overschot";
 "Activity" = "Activiteit";
 "Copied" = "Gekopieerd";
 "Copy error" = "Kopieerfout";
@@ -942,6 +943,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "Saldo-updates in bijna realtime (tot 5 minuten vertraging)";
 "Daily billing data finalizes at 07:00 UTC" = "De dagelijkse factureringsgegevens worden afgerond om 07:00 UTC";
 "%@ of %@ credits left" = "%@ van %@ credits over";
+"of %@" = "van %@";
 "%@ of %@ bonus credits left" = "Er zijn nog %@ van %@ bonuscredits over";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ resterend)";
 "%@/%@ left" = "%@/%@ over";
@@ -953,6 +955,7 @@
 "Full in ~1 regen" = "Volledig in ~1 regeneratie";
 "Full in ~%.0f regens" = "Volledig in ~%.0f regens";
 "Overage usage" = "Overmatig gebruik";
+"Overage credits left" = "Resterende overschrijdingscredits";
 "Overage cost" = "Overschrijdingskosten";
 "credits" = "tegoeden";
 "Zen balance" = "Zen-balans";

@@ -2,6 +2,21 @@
 
 ## 0.54.1 — Unreleased
 
+- Added conditional tokens to the menu bar layout editor: named, reusable if/then/else rules (1–4 AND/OR clauses over Session/Weekly/Scoped/Auto thresholds) that swap or hide tokens based on live usage, downgrade-safe and localized across all 23 catalogs (#3076). Thanks @wdmitchelluk!
+- Fixed inconsistent German localization of "About" ("Um" → "Über") (#3077). Thanks @dwt!
+- Localized provider usage details in Simplified Chinese: DeepSeek detailed usage/balance, z.ai/GLM quota details, token charts, and the 5-hour reset text (#3084). Thanks @haixing23!
+- Localized remaining provider-detail edge cases in Simplified Chinese: DeepSeek zero-balance/unavailable-API text, z.ai one-sided quota values, credit-plan rates, peak/off-peak states, and countdown shapes (#3086). Thanks @haixing23!
+- Fireworks: auto-discover account slugs from API keys and report invalid or ambiguous accounts instead of silently showing no spend (#3068, #3074).
+- Fixed Codex cost catch-up getting stuck when recently touched session files contain only out-of-window usage — processed zero-row files now drain from the pending queue and existing stuck states self-heal (#3071, #3075).
+- Share one immutable spend-source catalog between Overview and Usage & Spend: multi-account Codex identities, per-source states, 365-day inputs, configured calendar/currency, and OpenCodex enrichment without double counting (#3067). Thanks @Chipagosfinest!
+- Fixed `codexbar cost` SIGSEGV on Linux: `Bundle.allBundles` crashes under swift-corelibs-foundation, so test detection now checks the main executable path instead (#3058, #3059). Thanks @Lucenx9!
+- Codex: added a personal-access-token usage source — `personal_access_token` in `auth.json` gets its own PAT strategy (whoami then `/wham/usage`), Auto prefers a usable PAT and falls back to OAuth/CLI, and ambient-home PATs are found when a managed profile would hide them (#3060). Thanks @oakimov!
+- Count every enabled provider in Overview spend instead of only the six displayed cards, and bucket Overview spend with the configured calendar so boundary days match the dashboard (#3063, #3064). Thanks @Chipagosfinest!
+- Hide untouched Antigravity model families in the `codexbar serve` web dashboard, matching the menu and widgets (#3061). Thanks @urda!
+- Documented the AI Usage Limits Stream Deck plugin in the README integrations list (#3066). Thanks @lenadweb!
+- OpenCode Go: use the public authenticated usage API when `OPENCODE_API_KEY` is configured, overlaying authoritative rolling/weekly/monthly windows on local history with cookie fallback (#2879, #3065). Thanks @akshayprabhu200!
+- Claude: keep 100% claude-swap usage bars when cswap defers polling at a limit, and name the exhausted window and reset instead of showing "Usage fetch failed." (#3081). Thanks @sf-jin-ku!
+- Kiro: show overage credits spent against their cap, plus accrued charges against the overage budget. The `kiro-cli` report states credits against the plan alone and omits the overage section entirely for organization accounts, so CodexBar now reads the plan and overage ceilings from the same `GetUsageLimits` service the CLI itself calls, falling back to the CLI report when it is unavailable.
 - z.ai: show the BigModel CN pay-as-you-go account balance inside Quota details, best-effort and CN-only (#3109). Thanks @RunhuaHuang!
 - Fixed the mainland Alibaba Personal/Solo Token Plan always reporting "login required": the console shell now serves its `sec_token` to CodexBar's fetch and the upper-case `SEC_TOKEN` shape is parsed (#2891, #3098). Thanks @LeoLin990405!
 - Fixed long agent session names stretching the menu: session rows now truncate inside the menu's width with the full label in a tooltip (#3096). Thanks @KaranocaVe!

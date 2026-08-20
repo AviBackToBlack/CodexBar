@@ -939,6 +939,7 @@
 "Monthly" = "شهريا";
 "Sonnet" = "السوناتة";
 "Overages" = "الزيادات";
+"Overage" = "التجاوز";
 "Activity" = "النشاط";
 "Copied" = "تم النسخ";
 "Copy error" = "خطأ في النسخ.";
@@ -949,6 +950,7 @@
 "Balance updates in near-real time (up to 5 min lag)" = "تحديثات التوازن في الوقت شبه الحقيقي (حتى تأخير 5 دقائق)";
 "Daily billing data finalizes at 07:00 UTC" = "يتم الانتهاء من بيانات الفوترة اليومية في الساعة 07:00 UTC";
 "%@ of %@ credits left" = "%@ من %@ اعتمادات متبقية";
+"of %@" = "من %@";
 "%@ of %@ bonus credits left" = "%@ من %@ رصيد إضافي متبقي";
 "%@ / %@ (%@ remaining)" = "%@ / %@ (%@ متبقية)";
 "%@/%@ left" = "%@/%@ متبقٍ";
@@ -960,6 +962,7 @@
 "Full in ~1 regen" = "تجدد كامل ~1";
 "Full in ~%.0f regens" = "جميع التحديثات ~%.0f";
 "Overage usage" = "الاستخدام الزائد";
+"Overage credits left" = "الرصيد الزائد المتبقي";
 "Overage cost" = "تكلفة التجاوز";
 "credits" = "الاعتمادات";
 "Zen balance" = "توازن الزن";
