@@ -18,12 +18,16 @@ jobs:
           CIRCLECI_API_TOKEN: ${{ secrets.CIRCLECI_API_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          CIRCLECI_ORG_ID="abf39f4e-76e2-4992-a38e-faa68f1f232c"
+          CIRCLECI_PROJECT_ID="625e45a1-5a14-45f5-b4f8-516cd065ff53"
+          CIRCLECI_PIPELINE_DEFINITION_ID="1818f88e-272d-43d0-b1a4-92a28f2e14ad"
+          CIRCLECI_PROJECT_SLUG="circleci/NEXu54nDSfmgyJzxZ94jPH/D9XGye15Fdwi1TbFiykFTY"
           echo "Triggering CircleCI pipeline for tag $TAG..."
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-            "https://circleci.com/api/v2/project/gh/nesszer/Win-CodexBar/pipeline" \
+            "https://circleci.com/api/v2/project/circleci/$CIRCLECI_ORG_ID/$CIRCLECI_PROJECT_ID/pipeline/run" \
             -H "Circle-Token: $CIRCLECI_API_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"tag\":\"$TAG\"}")
+            -d "{\"definition_id\":\"$CIRCLECI_PIPELINE_DEFINITION_ID\",\"config\":{\"tag\":\"$TAG\"},\"checkout\":{\"tag\":\"$TAG\"}}")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | head -n -1)
           echo "HTTP Status: $HTTP_CODE"
@@ -33,5 +37,5 @@ jobs:
             exit 1
           fi
           PIPELINE_ID=$(echo "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
-          echo "CircleCI pipeline triggered: https://app.circleci.com/pipelines/gh/nesszer/Win-CodexBar/$PIPELINE_ID"
+          echo "CircleCI pipeline triggered: https://app.circleci.com/pipelines/$CIRCLECI_PROJECT_SLUG/$PIPELINE_ID"
           echo "::notice::CircleCI pipeline triggered for $TAG"
