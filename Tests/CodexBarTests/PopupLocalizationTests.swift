@@ -127,6 +127,8 @@ struct PopupLocalizationTests {
                 now: now))
 
             #expect(model.metrics.first?.title == "額度")
+            // After 84a4ca725, generic providers localize section titles and row labels via L();
+            // values and chart point labels stay canonical.
             let apiKey = try #require(model.providerDetails.first { $0.title == "API 金鑰" })
             #expect(apiKey.rows.map(\.label) == [
                 "API key budget", "API key remaining", "API key used", "Reset window",
