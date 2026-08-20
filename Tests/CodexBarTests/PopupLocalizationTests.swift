@@ -88,10 +88,10 @@ struct PopupLocalizationTests {
                 now: now))
 
             #expect(model.metrics.first?.title == "額度")
-            let apiKey = try #require(model.providerDetails.first { $0.title == "API key" })
+            let apiKey = try #require(model.providerDetails.first { $0.title == "API 金鑰" })
             #expect(apiKey.rows.map(\.label) == [
                 "API key budget", "API key remaining", "API key used", "Reset window",
-                "Today", "This week", "This month", "Rate limit",
+                "今天", "本週", "本月", "Rate limit",
             ])
             #expect(apiKey.chart?.points.map(\.label) == ["Today", "This week", "This month"])
             #expect(apiKey.rows.last?.value == "100 requests / 10s")
