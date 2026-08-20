@@ -194,6 +194,7 @@ extension UsageMenuCardView.Model {
             presentation.resetText = regen.resetText
             Self.apply(regen.pace, to: &presentation)
         }
+        // Provider-specific by design: DeepSeek's balance description is provider-owned copy localized here.
         if input.provider == .deepseek, let detail = presentation.detailText {
             presentation.detailText = Self.localizedDeepSeekBalanceDescription(detail)
         }

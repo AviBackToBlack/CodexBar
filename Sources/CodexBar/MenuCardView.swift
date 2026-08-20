@@ -1398,6 +1398,7 @@ extension UsageMenuCardView.Model {
             Self.applyPrimaryPacePresentation(&presentation, input: input, primary: primary)
         }
         Self.applyPrimaryFinalOverrides(&presentation, input: input, primary: primary)
+        // Provider-specific by design: z.ai's textual 5-hour reset phrase is provider-owned copy localized here.
         if input.provider == .zai, let resetText = Self.localizedZaiPeriodicResetText(primary) {
             presentation.resetText = resetText
         }
