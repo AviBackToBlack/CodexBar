@@ -12,7 +12,6 @@
 - Spend dashboard: load provider baselines and Codex multi-account scans in parallel and memoize currency conversion and calendar buckets, cutting cold opens from multiple seconds to roughly the slowest single provider (#3105). Thanks @Yuxin-Qiao!
 
 - Fixed Codex profile-home account switches briefly showing another profile's token counts, costs, usage chart, top model, and cost history while the selected profile loads (#3125).
-- Codex: show Business/Enterprise individual monthly credit used vs cap on stacked multi-account cards instead of "Limits not available" (#3112). Thanks @sf-jin-ku!
 - Command Code: recognize the repriced Pro tier (`individual-pro-v1`, $80/mo in credits) instead of failing with an unknown-plan error (#3116). Thanks @sebastianmarines!
 - Alibaba: retry the Personal usage gateway's transient empty-Success responses instead of surfacing a parse error (#3128). Thanks @LeoLin990405!
 - Fixed the Codex CLI usage probe against Codex CLI 0.149.0: the removed `untrusted` approval value is replaced by `never` on both the app-server and isolated status launches, keeping the read-only sandbox (#3115, #3118). Thanks @kiranmagic7!
