@@ -13,13 +13,22 @@ vi.mock("../../../../../lib/tauri", async (importOriginal) => ({
   ...tauriMocks,
 }));
 
-function snapshot(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
+type ClaudeSettingsSnapshot = Pick<
+  SettingsSnapshot,
+  | "claudeAvoidKeychainPrompts"
+  | "claudeDailyRoutinesUsageVisible"
+  | "claudeAllowReadingClaudeCodeCredentials"
+>;
+
+function snapshot(
+  overrides: Partial<ClaudeSettingsSnapshot> = {},
+): ClaudeSettingsSnapshot {
   return {
     claudeAvoidKeychainPrompts: false,
     claudeDailyRoutinesUsageVisible: true,
     claudeAllowReadingClaudeCodeCredentials: false,
     ...overrides,
-  } as SettingsSnapshot;
+  };
 }
 
 describe("ClaudeCreds", () => {
@@ -32,10 +41,9 @@ describe("ClaudeCreds", () => {
 
     render(<ClaudeCreds t={(key) => key} />);
 
-    const checkbox = (await screen.findByText(
-      "ProviderClaudeAllowReadingClaudeCodeCredentials",
-    )).closest("label")?.querySelector("input[type='checkbox']");
-    expect(checkbox).not.toBeNull();
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "ProviderClaudeAllowReadingClaudeCodeCredentials ProviderClaudeAllowReadingClaudeCodeCredentialsHelp",
+    });
     expect(checkbox).not.toBeChecked();
     expect(
       screen.getByText("ProviderClaudeAllowReadingClaudeCodeCredentialsHelp"),
@@ -50,12 +58,9 @@ describe("ClaudeCreds", () => {
 
     render(<ClaudeCreds t={(key) => key} />);
 
-    const label = await screen.findByText(
-      "ProviderClaudeAllowReadingClaudeCodeCredentials",
-    );
-    const checkbox = label
-      .closest("label")
-      ?.querySelector("input[type='checkbox']") as HTMLInputElement;
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "ProviderClaudeAllowReadingClaudeCodeCredentials ProviderClaudeAllowReadingClaudeCodeCredentialsHelp",
+    });
 
     fireEvent.click(checkbox);
 
