@@ -307,6 +307,7 @@ extension UsageStore {
             self.lastKnownResetSnapshots[.codex] = hydratedSnapshot
             self.errors[.codex] = hydratedPrior.error
             self.lastSourceLabels[.codex] = hydratedPrior.sourceLabel
+            self.publishHydratedCodexCreditsIfNeeded(from: hydratedPrior.credits, accountKey: expectedGuard.accountKey)
             self.lastCodexUsagePublicationGuard = expectedGuard
             self.lastCodexAccountScopedRefreshGuard = expectedGuard
         }
@@ -947,7 +948,8 @@ extension UsageStore {
             account: account,
             snapshot: relabeled,
             error: nil,
-            sourceLabel: sourceLabel)]
+            sourceLabel: sourceLabel,
+            credits: self.credits)]
         self.codexAccountSnapshots = currentSnapshots
         self.codexAccountUsageSnapshotStore?.store(currentSnapshots)
     }
