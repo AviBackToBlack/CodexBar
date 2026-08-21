@@ -2,6 +2,10 @@
 
 ## 0.54.1 — Unreleased
 
+- Fixed menu bar layout editor drag-and-drop: chips are draggable views instead of Buttons (whose gesture recognizer swallowed the drag), so reordering and the trash zone work again — and the trash zone now also removes the selected token on click (#3121). Thanks @J2TeamNNL!
+- Cursor: show Grok Bot weekly included usage as a fourth card bar sourced from the dashboard's sand-usage endpoint, best-effort and hidden on accounts without a Bot allowance or on legacy request plans (#3127). Thanks @kvarga!
+- Codex: show Business/Enterprise individual monthly credit used vs cap on stacked multi-account cards instead of "Limits not available" (#3112). Thanks @sf-jin-ku!
+
 - Cursor: show Grok Bot weekly included usage as a fourth card bar from `get-sand-usage-status`, using the same session as Total / Cursor / Third Party.
 - Codex: persist the priority-turn scan cursor across relaunches, so the first refresh after a restart resumes incrementally instead of re-scanning the whole trace database (~2.5s CPU saved per relaunch, minutes on a cold page cache) (#3130). Thanks @olddonkey!
 
