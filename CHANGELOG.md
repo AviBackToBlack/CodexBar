@@ -2,6 +2,8 @@
 
 ## 0.54.1 — Unreleased
 
+- Fixed the Codex CLI usage probe against Codex CLI 0.149.0: the removed `untrusted` approval value is replaced by `never` on both the app-server and isolated status launches, keeping the read-only sandbox (#3115, #3118). Thanks @kiranmagic7!
+
 - Added conditional tokens to the menu bar layout editor: named, reusable if/then/else rules (1–4 AND/OR clauses over Session/Weekly/Scoped/Auto thresholds) that swap or hide tokens based on live usage, downgrade-safe and localized across all 23 catalogs (#3076). Thanks @wdmitchelluk!
 - Fixed inconsistent German localization of "About" ("Um" → "Über") (#3077). Thanks @dwt!
 - Localized provider usage details in Simplified Chinese: DeepSeek detailed usage/balance, z.ai/GLM quota details, token charts, and the 5-hour reset text (#3084). Thanks @haixing23!
