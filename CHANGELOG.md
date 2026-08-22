@@ -1,44 +1,37 @@
 # Changelog
 
-## 0.54.1 — Unreleased
+## 0.54.1 — 2026-08-21
 
+### Highlights
+- **Codex CLI 0.149.0 compatibility**: the usage probe works again after the CLI removed the `untrusted` approval value (#3115).
+- **Layout editor drag-and-drop fixed**: chip reordering and the trash drop zone are reachable again, and the trash zone doubles as a click target (#3121).
+- **Faster relaunches**: the Codex priority-turn scan cursor persists across restarts — no more re-scanning the whole trace database on every launch (#3130).
+- **Faster spend dashboard**: provider baselines and Codex multi-account scans load in parallel, cutting cold opens to roughly the slowest single provider (#3105).
+- **Grok Bot on the Cursor card**: weekly included Bot usage appears as a fourth bar next to Total / Cursor / Third Party (#3127).
+
+### Fixed
+- Fixed the Codex CLI usage probe against Codex CLI 0.149.0: the removed `untrusted` approval value is replaced by `never` on both the app-server and isolated status launches, keeping the read-only sandbox (#3115, #3118). Thanks @kiranmagic7!
 - Fixed menu bar layout editor drag-and-drop: chips are draggable views instead of Buttons (whose gesture recognizer swallowed the drag), so reordering and the trash zone work again — and the trash zone now also removes the selected token on click (#3121). Thanks @J2TeamNNL!
-- Cursor: show Grok Bot weekly included usage as a fourth card bar sourced from the dashboard's sand-usage endpoint, best-effort and hidden on accounts without a Bot allowance or on legacy request plans (#3127). Thanks @kvarga!
-- Codex: show Business/Enterprise individual monthly credit used vs cap on stacked multi-account cards instead of "Limits not available" (#3112). Thanks @sf-jin-ku!
+- Fixed Codex profile-home account switches briefly showing another profile's token counts, costs, usage chart, top model, and cost history while the selected profile loads (#3125).
+- Fixed the mainland Alibaba Personal/Solo Token Plan always reporting "login required": the console shell now serves its `sec_token` to CodexBar's fetch and the upper-case `SEC_TOKEN` shape is parsed (#2891, #3098). Thanks @LeoLin990405!
+- Alibaba: retry the Personal usage gateway's transient empty-Success responses instead of surfacing a parse error (#3128). Thanks @LeoLin990405!
+- Fixed long agent session names stretching the menu: session rows now truncate inside the menu's width with the full label in a tooltip (#3096). Thanks @KaranocaVe!
 
-- Cursor: show Grok Bot weekly included usage as a fourth card bar from `get-sand-usage-status`, using the same session as Total / Cursor / Third Party.
-- Codex: persist the priority-turn scan cursor across relaunches, so the first refresh after a restart resumes incrementally instead of re-scanning the whole trace database (~2.5s CPU saved per relaunch, minutes on a cold page cache) (#3130). Thanks @olddonkey!
-
+### Performance
+- Codex: persist the priority-turn trace-database scan cursor across relaunches so a restart resumes incrementally instead of re-scanning the whole `logs_2.sqlite` (minutes of full-core CPU on large trace databases); existing cost caches are adopted on upgrade, not rebuilt (#3130). Thanks @olddonkey!
 - Spend dashboard: load provider baselines and Codex multi-account scans in parallel and memoize currency conversion and calendar buckets, cutting cold opens from multiple seconds to roughly the slowest single provider (#3105). Thanks @Yuxin-Qiao!
 
-- Fixed Codex profile-home account switches briefly showing another profile's token counts, costs, usage chart, top model, and cost history while the selected profile loads (#3125).
-- Command Code: recognize the repriced Pro tier (`individual-pro-v1`, $80/mo in credits) instead of failing with an unknown-plan error (#3116). Thanks @sebastianmarines!
-- Alibaba: retry the Personal usage gateway's transient empty-Success responses instead of surfacing a parse error (#3128). Thanks @LeoLin990405!
-- Fixed the Codex CLI usage probe against Codex CLI 0.149.0: the removed `untrusted` approval value is replaced by `never` on both the app-server and isolated status launches, keeping the read-only sandbox (#3115, #3118). Thanks @kiranmagic7!
+### Providers
+- Cursor: show Grok Bot weekly included usage as a fourth card bar sourced from the dashboard's sand-usage endpoint, best-effort and hidden on accounts without a Bot allowance or on legacy request plans (#3127). Thanks @kvarga!
+- Codex: show Business/Enterprise individual monthly credit used vs cap on stacked multi-account cards instead of "Limits not available" (#3112). Thanks @sf-jin-ku!
 - Claude: migrate email-keyed claude-swap iCloud snapshots to their slot-keyed records and delete the leftover email-keyed predecessors, so other Macs stop showing duplicate fleet cards (#3111). Thanks @sf-jin-ku!
-
-- Added conditional tokens to the menu bar layout editor: named, reusable if/then/else rules (1–4 AND/OR clauses over Session/Weekly/Scoped/Auto thresholds) that swap or hide tokens based on live usage, downgrade-safe and localized across all 23 catalogs (#3076). Thanks @wdmitchelluk!
-- Fixed inconsistent German localization of "About" ("Um" → "Über") (#3077). Thanks @dwt!
-- Localized provider usage details in Simplified Chinese: DeepSeek detailed usage/balance, z.ai/GLM quota details, token charts, and the 5-hour reset text (#3084). Thanks @haixing23!
-- Localized remaining provider-detail edge cases in Simplified Chinese: DeepSeek zero-balance/unavailable-API text, z.ai one-sided quota values, credit-plan rates, peak/off-peak states, and countdown shapes (#3086). Thanks @haixing23!
-- Fireworks: auto-discover account slugs from API keys and report invalid or ambiguous accounts instead of silently showing no spend (#3068, #3074).
-- Fixed Codex cost catch-up getting stuck when recently touched session files contain only out-of-window usage — processed zero-row files now drain from the pending queue and existing stuck states self-heal (#3071, #3075).
-- Share one immutable spend-source catalog between Overview and Usage & Spend: multi-account Codex identities, per-source states, 365-day inputs, configured calendar/currency, and OpenCodex enrichment without double counting (#3067). Thanks @Chipagosfinest!
-- Fixed `codexbar cost` SIGSEGV on Linux: `Bundle.allBundles` crashes under swift-corelibs-foundation, so test detection now checks the main executable path instead (#3058, #3059). Thanks @Lucenx9!
-- Codex: added a personal-access-token usage source — `personal_access_token` in `auth.json` gets its own PAT strategy (whoami then `/wham/usage`), Auto prefers a usable PAT and falls back to OAuth/CLI, and ambient-home PATs are found when a managed profile would hide them (#3060). Thanks @oakimov!
-- Count every enabled provider in Overview spend instead of only the six displayed cards, and bucket Overview spend with the configured calendar so boundary days match the dashboard (#3063, #3064). Thanks @Chipagosfinest!
-- Hide untouched Antigravity model families in the `codexbar serve` web dashboard, matching the menu and widgets (#3061). Thanks @urda!
-- Documented the AI Usage Limits Stream Deck plugin in the README integrations list (#3066). Thanks @lenadweb!
-- OpenCode Go: use the public authenticated usage API when `OPENCODE_API_KEY` is configured, overlaying authoritative rolling/weekly/monthly windows on local history with cookie fallback (#2879, #3065). Thanks @akshayprabhu200!
-- Claude: keep 100% claude-swap usage bars when cswap defers polling at a limit, and name the exhausted window and reset instead of showing "Usage fetch failed." (#3081). Thanks @sf-jin-ku!
-- Kiro: show overage credits spent against their cap, plus accrued charges against the overage budget. The `kiro-cli` report states credits against the plan alone and omits the overage section entirely for organization accounts, so CodexBar now reads the plan and overage ceilings from the same `GetUsageLimits` service the CLI itself calls, falling back to the CLI report when it is unavailable. (#3083). Thanks @sf-jin-ku!
-- Kiro: show overage credits spent against their cap, plus accrued charges against the overage budget. The `kiro-cli` report states credits against the plan alone and omits the overage section entirely for organization accounts, so CodexBar now reads the plan and overage ceilings from the same `GetUsageLimits` service the CLI itself calls, falling back to the CLI report when it is unavailable.
 - Claude: distinguish claude-swap accounts that share an email with the workspace name or slot, and honor a user-chosen display alias (#3082). Thanks @sf-jin-ku!
+- Kiro: show overage credits spent against their cap, plus accrued charges against the overage budget — reading the plan and overage ceilings from the same `GetUsageLimits` service the CLI itself calls, with a CLI-report fallback (#3083). Thanks @sf-jin-ku!
+- Command Code: recognize the repriced Pro tier (`individual-pro-v1`, $80/mo in credits) instead of failing with an unknown-plan error (#3116). Thanks @sebastianmarines!
 - z.ai: show the BigModel CN pay-as-you-go account balance inside Quota details, best-effort and CN-only (#3109). Thanks @RunhuaHuang!
-- Fixed the mainland Alibaba Personal/Solo Token Plan always reporting "login required": the console shell now serves its `sec_token` to CodexBar's fetch and the upper-case `SEC_TOKEN` shape is parsed (#2891, #3098). Thanks @LeoLin990405!
-- Fixed long agent session names stretching the menu: session rows now truncate inside the menu's width with the full label in a tooltip (#3096). Thanks @KaranocaVe!
+
+### Localization
 - Simplified Chinese now labels quota windows by their actual duration ("5 小时" instead of a generic session label), keeping the generic wording for conversations (#3069, #3070). Thanks @YunyueLi!
-- Codex: persist the priority-turn trace-database scan cursor across relaunches so a restart resumes incrementally instead of re-scanning the whole `logs_2.sqlite` (minutes of full-core CPU on large trace databases); existing cost caches are adopted on upgrade, not rebuilt (#3130). Thanks @olddonkey!
 
 ## 0.54.0 — 2026-08-20
 
