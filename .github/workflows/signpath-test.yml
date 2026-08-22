@@ -133,6 +133,11 @@ jobs:
           RELEASE_SHA: ${{ steps.tag-sha.outputs.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $outputDir = Join-Path '.' 'release-output'
-          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/publish-github-release.ps1 -Tag $env:CIRCLE_TAG -AssetsDir $outputDir
-          if ($LASTEXITCODE -ne 0) { throw "publish-github-release failed: $LASTEXITCODE" }
+          $version = '${{ steps.version.outputs.version }}'
+          $outputDir = 'release-output'
+          $tag = '${{ inputs.tag }}'
+          $assets = Get-ChildItem "$outputDir\CodexBar-$version-*" |
+            Where-Object { $_.Name -notmatch '\.log$' } |
+            Select-Object -ExpandProperty FullName
+          gh release create $tag --repo nesszer/Win-CodexBar --draft --title "Win-CodexBar $version" --notes "Release $version" @assets
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed: $LASTEXITCODE" }
