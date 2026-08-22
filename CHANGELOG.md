@@ -1,5 +1,87 @@
 # Changelog
 
+## [Windows] 0.54.0 - 2026-08-22
+
+Windows port of upstream CodexBar **0.53.0 → 0.54.0**.
+
+### Added
+- Providers: Codex PAT (Personal Access Token) usage source with user-agent normalization and fallback narrowing (#353).
+- Providers: Grok local session token scanning — reads local session files for Grok usage data (#353).
+- Providers: OpenCode Go usage API — authenticated usage API with rolling/weekly/monthly windows, auto-fallback from local to API (#353).
+- Providers: OpenRouter Activity spend — 30-day spend tracking via management API key, with daily breakdown, dedup, and conflict detection (#353).
+- Providers: Antigravity idle-family filtering — idle window IDs filtered to family-level granularity for the dashboard (#353).
+- Cost: Historical GPT-5.6 Terra/Luna pricing — date-gated rates: requests before 2026-07-30 use pre-cut pricing, after uses current rates (#353).
+- Cost: OpenCodex spend routing — typed `RouteTarget` enum routes entries to the correct subscription (Codex, OpenCode Go, Kimi, DeepSeek) by model prefix first, then provider label (#353).
+- Cost: xAI daily spend breakdown added to xAI spend snapshot (#353).
+- Cost: Management API token — optional secondary management credential for providers that expose one (OpenRouter Activity) (#353).
+- Settings: `show_pace` toggle for pace visualizations and forecast text in provider menu cards (default: on) (#353).
+- Settings: OpenRouter management API key configuration in Settings → Providers (#353).
+
+### Fixed
+- Tray: Auto-fit ResizeObserver feedback loop fix — panel size adjusts correctly on content changes (#352).
+
+### Changed
+- Upstream 0.53.0 → 0.54.0 provider, cost, and CLI behavior ported onto the Windows tray/desktop shell (#353).
+
+---
+
+## [Windows] 0.53.0 - 2026-08-19
+
+Windows port of upstream CodexBar **0.48.0 → 0.53.0**.
+
+### Added
+- Providers: Fireworks provider with 30-day rated billing spend (#337).
+- Providers: Amp monthly renewals + 8PM NY free reset, LongCat token-packs summary, OpenCode pay-as-you-go billing fallback (#338).
+- Providers: Cursor app session preference — reads Cursor's read-only `state.vscdb` for automatic session detection before browser cookies (#339).
+- Providers: Kiro re-authenticate via `run_kiro_login()` wired into `trigger_provider_login` (#341).
+- Providers: Grok source picker — Auto / Grok CLI / SuperGrok OAuth / Browser cookies (#346).
+- Charts: Tokens/Cost chart switch with a **Tokens** tab in Settings, defaulting active for Codex; "Refreshing" marker for incomplete backfill (#339).
+- Charts: Centered x-axis date labels on bar/point centers (#341).
+- Cost: Explicit cost provenance and coverage — `SpendContract` with `CostProvenance` (ListPriceEstimate/VendorMetered/Mixed/Unknown) and `CostCoverageCounts`; partial totals show coverage, nothing unpriced masquerades as a bill (#346).
+- Cost: Token mix, hourly activity heatmap, and conversation totals in UsageSpendTab (#346).
+- Cost: All-time range (365 days) — `selectedDays: 0` maps to 365-day clamp (#346).
+- Cost: Exact-match custom pricing overlays from `custom-pricing.json` — custom rates authoritative over models.dev/built-in (#346).
+- Cost: Opt-in read-only OpenCodex import — reads `usage.jsonl`, deduplicates by `request_id`, aggregates into `ImportedSpendSource` with SQLite cache (#346).
+- Cost: Per-project spend and Projects panel in UsageSpendTab (#344, #346).
+- Cost: OpenCode Go local estimate source labeling (#344).
+- Cost: CLI `codexbar usage --format toon` — TOON v4.1 JSON payload emission (#346).
+- Cost: CLI `codexbar cost --json` aligned with spend provenance, token mix, coverage, and opt-in OpenCodex (#346).
+- Low Power Mode Off/On/Automatic — `LowPowerModePreference` enum; Automatic reads Windows Battery Saver via `SystemStatusFlag` (#346).
+- i18n: Turkish (tr-TR) locale support (#342).
+- Settings: Light theme toggle fix (#343).
+- Sessions: Cost CLI session grouping (#344).
+- Serve: `--identity` now optional; follows `hide_personal_info` setting when absent (#341).
+- z.ai: `CREDIT_LIMIT` coding plans now parse like `TOKENS_LIMIT` — 5-hour credit window drives primary % and reset (#337).
+- Kimi: Official lane names + duplicate suppression — membership pool renamed to "Total usage", duplicate `Code 7-day` row hidden on positive evidence (#337).
+- OpenRouter: Key-quota fast join on a 1-second deadline (was 3s) with explicit degraded-join logging (#337).
+- Proof: Seed provider usage snapshot for deterministic proof runs (#336).
+- FloatBar: Synced with menu bar metric preference (#335).
+- Tray: `OverviewSpendSummary` component showing 30-day total spend across all providers in the tray panel header (#346).
+
+### Fixed
+- Claude: Prefer `limits[]` session over stale `five_hour` after 5h rollover (#334).
+- Claude: Stop rescaling utilization below 1% to 100% (#274).
+- Antigravity: Detect `agy` CLI in Antigravity provider on Windows (#333).
+- Qwen Cloud: Promote weekly window to primary (#284).
+- DeepSeek: Show peak and off-peak pricing (#280).
+- Ollama: Cookie stripping — `strip_curl_cookie_wrapper`, `curl ` prefix + `Cookie:` label stripping in `normalize_cookie_header` (#341).
+- Ollama: Cookie-expiry recovery — invalidate + browser re-import + retry (#338).
+- Claude: Scope session-equivalent forecast history by account (#276).
+- Menu-card: Detail wrapping for long metric reset/pace details — two-line clamp instead of ellipsizing (#337).
+- Provider status: Last-success cache — transport failures never replace the last known status (#339).
+- Codex: Custom-backend guidance — missing `auth.json` + custom backend reports rate limits unavailable instead of telling user to `codex login` (#339).
+- Cursor: Rename locale keys — `weekly_label: "Auto"→"Cursor"`, `plan_period_label` → "Cursor and Third Party" (#341).
+- OpenCode Go: 5h/weekly pace via `pace_json()` in CLI JSON + text output (#341).
+
+### Changed
+- Upstream 0.49.0–0.53.0 provider, cost, and CLI behavior ported onto the Windows tray/desktop shell (#337, #338, #339, #341, #344, #346).
+- UsageSpendTab rebuilt with `SpendContractOverview` (provenance/coverage/conversations/token-mix metric cards), `ContractModelsPanel`, `ProjectsPanel`, and OpenCodex import toggle (#346).
+- GeneralTab: Low-power mode Select dropdown replacing Toggle; legacy `low_power_mode` boolean kept for settings.json migration (#346).
+- CI: GitHub Actions release workflow added as fallback to CircleCI, reusing existing release scripts (preflight, build, manifest, publish).
+- CI: Cargo registry, target, and pnpm store caching added to release pipeline (#329).
+
+---
+
 ## [Windows] 0.48.0 - 2026-08-09
 
 Windows port of upstream CodexBar **0.47.0 → 0.48.0**.
