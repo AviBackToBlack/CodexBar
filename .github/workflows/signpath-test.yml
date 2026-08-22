@@ -58,7 +58,9 @@ jobs:
       - name: Prepare version (strip v prefix)
         id: version
         shell: bash
-        run: echo "version=${{ inputs.tag }}" | sed 's/^v//' >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Upload unsigned artifacts for signing
         id: upload-unsigned
