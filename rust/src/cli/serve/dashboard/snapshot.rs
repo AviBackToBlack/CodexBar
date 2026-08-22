@@ -226,15 +226,16 @@ pub struct SnapshotInput {
 }
 
 /// Build the stable display-oriented snapshot (pure; no I/O).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "provider order is a short config list; index*10 fits u32"
+)]
 pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
     let mut sort_keys: HashMap<&str, u32> = HashMap::new();
     for (index, id) in input.order.iter().enumerate() {
         sort_keys
             .entry(id.as_str())
-            .or_insert(#[allow(
-                clippy::cast_possible_truncation,
-                reason = "provider order is a short config list; index*10 fits u32"
-            )] index as u32 * 10);
+            .or_insert_with(|| index as u32 * 10);
     }
 
     let known_ids: BTreeSet<&str> = crate::core::cli_name_map().keys().copied().collect();
@@ -255,10 +256,7 @@ pub fn build_snapshot(input: &SnapshotInput) -> SnapshotPayload {
             let sort_key = sort_keys
                 .get(envelope.id.as_str())
                 .copied()
-                .unwrap_or(#[allow(
-                    clippy::cast_possible_truncation,
-                    reason = "fallback key for a short provider list; index fits u32"
-                )] 10_000 + index as u32);
+                .unwrap_or(10_000 + index as u32);
             build_provider(envelope, &input.costs, input, &known_ids, sort_key, claude)
         })
         .collect();
