@@ -394,7 +394,7 @@ pub(super) fn throw_if_error_payload(value: &Value) -> Result<(), ProviderError>
             &["errorMsg", "message", "msg", "Message", "errorMessage"],
         )
         .or_else(|| code.clone())
-            .unwrap_or_else(|| "request failed".to_string());
+        .unwrap_or_else(|| "request failed".to_string());
         let lower = message.to_lowercase();
         if lower.contains("needlogin")
             || lower.contains("login")

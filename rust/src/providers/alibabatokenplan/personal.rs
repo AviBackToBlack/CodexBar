@@ -41,12 +41,8 @@ pub(super) async fn fetch_personal_usage(
         "commodityCode".into(),
         Value::String(region.product_code().to_string()),
     );
-    let subscription_body = post_personal_api_optional(
-        &context,
-        PERSONAL_SUBSCRIPTION_API,
-        subscription_params,
-    )
-    .await;
+    let subscription_body =
+        post_personal_api_optional(&context, PERSONAL_SUBSCRIPTION_API, subscription_params).await;
 
     let quota_config_body =
         post_personal_api_optional(&context, PERSONAL_QUOTA_CONFIG_API, Map::new()).await;
@@ -328,9 +324,11 @@ mod tests {
             AlibabaTokenPlanRegion::IntlPersonal,
             Some("personal-sec-token"),
         );
-        assert!(with_token.iter().any(|(key, value)| {
-            *key == "sec_token" && value == "personal-sec-token"
-        }));
+        assert!(
+            with_token
+                .iter()
+                .any(|(key, value)| { *key == "sec_token" && value == "personal-sec-token" })
+        );
 
         let without_token = build_personal_form(
             PERSONAL_USAGE_API,
@@ -373,7 +371,8 @@ mod tests {
             }
         });
 
-        let error = crate::providers::alibabatokenplan::throw_if_error_payload(&payload).unwrap_err();
+        let error =
+            crate::providers::alibabatokenplan::throw_if_error_payload(&payload).unwrap_err();
         assert!(matches!(
             error,
             ProviderError::Other(message)
@@ -394,7 +393,8 @@ mod tests {
             }
         });
 
-        let error = crate::providers::alibabatokenplan::throw_if_error_payload(&payload).unwrap_err();
+        let error =
+            crate::providers::alibabatokenplan::throw_if_error_payload(&payload).unwrap_err();
         assert!(matches!(
             error,
             ProviderError::Other(message) if message.contains("quota service unavailable")
