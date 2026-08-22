@@ -1,0 +1,136 @@
+name: SignPath Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.53.1)'
+        required: true
+        type: string
+
+jobs:
+  signpath-test:
+    name: Build, sign via SignPath, publish draft
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag }}
+
+      - name: Resolve tag commit SHA
+        id: tag-sha
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install release prerequisites
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/install-release-prerequisites.ps1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "install-release-prerequisites failed: $LASTEXITCODE" }
+
+      - name: Release preflight
+        shell: pwsh
+        env:
+          CIRCLE_TAG: ${{ inputs.tag }}
+          CIRCLE_SHA1: ${{ steps.tag-sha.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/release-preflight.ps1 -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "release-preflight failed: $LASTEXITCODE" }
+
+      - name: Build release artifacts
+        shell: pwsh
+        env:
+          CIRCLE_TAG: ${{ inputs.tag }}
+          CIRCLE_SHA1: ${{ steps.tag-sha.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/circleci-release-build.ps1 -Tag $env:CIRCLE_TAG -Sha $env:CIRCLE_SHA1 -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "circleci-release-build failed: $LASTEXITCODE" }
+
+      - name: Prepare version (strip v prefix)
+        id: version
+        shell: bash
+        run: echo "version=${{ inputs.tag }}" | sed 's/^v//' >> "$GITHUB_OUTPUT"
+
+      - name: Upload unsigned artifacts for signing
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexbar-unsigned-${{ inputs.tag }}
+          path: release-output/CodexBar-*.exe
+          if-no-files-found: error
+
+      - name: Submit to SignPath for code signing
+        id: signpath
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: codexbar-installer
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: release-signed
+          parameters: |
+            version: "${{ steps.version.outputs.version }}"
+
+      - name: Replace unsigned artifacts and recompute manifest
+        shell: pwsh
+        if: ${{ steps.signpath.conclusion == 'success' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.version.outputs.version }}'
+          $outputDir = 'release-output'
+          $signedDir = 'release-signed'
+          foreach ($name in @("CodexBar-$version-Setup.exe", "CodexBar-$version-portable.exe")) {
+            $signedPath = Join-Path $signedDir $name
+            $outputPath = Join-Path $outputDir $name
+            if (Test-Path $signedPath) {
+              Copy-Item $signedPath $outputPath -Force
+              $hash = (Get-FileHash -Algorithm SHA256 $outputPath).Hash.ToLower()
+              "$hash  $name" | Set-Content -Encoding ascii "$outputPath.sha256"
+              Write-Host "[ok] Signed: $name ($hash)"
+            } else {
+              Write-Host "[warn] Signed version not found, keeping unsigned: $name"
+            }
+          }
+          # Recompute release-manifest.json with signed hashes
+          $manifestPath = Join-Path $outputDir 'release-manifest.json'
+          if (Test-Path $manifestPath) {
+            $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+            foreach ($asset in $manifest.assets) {
+              $assetPath = Join-Path $outputDir $asset.name
+              if (Test-Path $assetPath) {
+                $asset.sha256 = (Get-FileHash -Algorithm SHA256 $assetPath).Hash.ToLower()
+                $asset.bytes = (Get-Item -LiteralPath $assetPath).Length
+                Write-Host "[ok] Updated manifest hash for $($asset.name)"
+              }
+            }
+            $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+            Write-Host "[ok] release-manifest.json recomputed with signed hashes"
+          }
+
+      - name: Publish draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CIRCLE_TAG: ${{ inputs.tag }}
+          CIRCLE_SHA1: ${{ steps.tag-sha.outputs.sha }}
+          RELEASE_SHA: ${{ steps.tag-sha.outputs.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outputDir = Join-Path '.' 'release-output'
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/publish-github-release.ps1 -Tag $env:CIRCLE_TAG -AssetsDir $outputDir
+          if ($LASTEXITCODE -ne 0) { throw "publish-github-release failed: $LASTEXITCODE" }
