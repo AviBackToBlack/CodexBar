@@ -12,23 +12,29 @@ use super::{
 };
 use crate::core::{FetchContext, ProviderError};
 
+struct PersonalApiContext<'a> {
+    client: &'a reqwest::Client,
+    cookie_header: &'a str,
+    region: AlibabaTokenPlanRegion,
+    sec_token: Option<&'a str>,
+    fetch_context: &'a FetchContext,
+}
+
 pub(super) async fn fetch_personal_usage(
     client: &reqwest::Client,
     cookie_header: &str,
     region: AlibabaTokenPlanRegion,
     sec_token: Option<&str>,
-    ctx: &FetchContext,
+    fetch_context: &FetchContext,
 ) -> Result<TokenPlanSnapshot, ProviderError> {
-    let usage_body = post_personal_api(
+    let context = PersonalApiContext {
         client,
-        PERSONAL_USAGE_API,
-        Map::new(),
         cookie_header,
         region,
         sec_token,
-        ctx,
-    )
-    .await?;
+        fetch_context,
+    };
+    let usage_body = post_personal_api(&context, PERSONAL_USAGE_API, Map::new()).await?;
 
     let mut subscription_params = Map::new();
     subscription_params.insert(
@@ -36,26 +42,14 @@ pub(super) async fn fetch_personal_usage(
         Value::String(region.product_code().to_string()),
     );
     let subscription_body = post_personal_api_optional(
-        client,
+        &context,
         PERSONAL_SUBSCRIPTION_API,
         subscription_params,
-        cookie_header,
-        region,
-        sec_token,
-        ctx,
     )
     .await;
 
-    let quota_config_body = post_personal_api_optional(
-        client,
-        PERSONAL_QUOTA_CONFIG_API,
-        Map::new(),
-        cookie_header,
-        region,
-        sec_token,
-        ctx,
-    )
-    .await;
+    let quota_config_body =
+        post_personal_api_optional(&context, PERSONAL_QUOTA_CONFIG_API, Map::new()).await;
 
     parse_personal_usage(
         &usage_body,
@@ -65,31 +59,36 @@ pub(super) async fn fetch_personal_usage(
 }
 
 async fn post_personal_api(
-    client: &reqwest::Client,
+    context: &PersonalApiContext<'_>,
     api: &str,
     data_parameters: Map<String, Value>,
-    cookie_header: &str,
-    region: AlibabaTokenPlanRegion,
-    sec_token: Option<&str>,
-    ctx: &FetchContext,
 ) -> Result<Vec<u8>, ProviderError> {
-    let url = personal_api_url(api, region);
-    let form = build_personal_form(api, data_parameters, cookie_header, region, sec_token);
+    let url = personal_api_url(api, context.region);
+    let form = build_personal_form(
+        api,
+        data_parameters,
+        context.cookie_header,
+        context.region,
+        context.sec_token,
+    );
 
-    let mut request = client
+    let mut request = context
+        .client
         .post(&url)
-        .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(1)))
-        .header("Cookie", cookie_header)
+        .timeout(std::time::Duration::from_secs(
+            context.fetch_context.web_timeout.max(1),
+        ))
+        .header("Cookie", context.cookie_header)
         .header("Accept", "application/json, text/plain, */*")
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .header("Origin", region.gateway_base_url())
-        .header("Referer", region.dashboard_url())
+        .header("Origin", context.region.gateway_base_url())
+        .header("Referer", context.region.dashboard_url())
         .header("User-Agent", USER_AGENT)
         .header("X-Requested-With", "XMLHttpRequest")
         .form(&form);
 
-    if let Some(csrf) = cookie_value("login_aliyunid_csrf", cookie_header)
-        .or_else(|| cookie_value("csrf", cookie_header))
+    if let Some(csrf) = cookie_value("login_aliyunid_csrf", context.cookie_header)
+        .or_else(|| cookie_value("csrf", context.cookie_header))
     {
         request = request
             .header("x-xsrf-token", csrf.clone())
@@ -111,25 +110,11 @@ async fn post_personal_api(
 }
 
 async fn post_personal_api_optional(
-    client: &reqwest::Client,
+    context: &PersonalApiContext<'_>,
     api: &str,
     data_parameters: Map<String, Value>,
-    cookie_header: &str,
-    region: AlibabaTokenPlanRegion,
-    sec_token: Option<&str>,
-    ctx: &FetchContext,
 ) -> Option<Vec<u8>> {
-    post_personal_api(
-        client,
-        api,
-        data_parameters,
-        cookie_header,
-        region,
-        sec_token,
-        ctx,
-    )
-        .await
-        .ok()
+    post_personal_api(context, api, data_parameters).await.ok()
 }
 
 fn build_personal_form(
