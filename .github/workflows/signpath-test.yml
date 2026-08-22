@@ -2,6 +2,11 @@ name: SignPath Test
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.53.1)'
+        required: true
+        type: string
 
 jobs:
   signpath-test:
@@ -27,7 +32,7 @@ jobs:
       - name: Release preflight
         shell: pwsh
         env:
-          CIRCLE_TAG: ${{ github.ref_name }}
+          CIRCLE_TAG: ${{ inputs.tag }}
           CIRCLE_SHA1: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -37,7 +42,7 @@ jobs:
       - name: Build release artifacts
         shell: pwsh
         env:
-          CIRCLE_TAG: ${{ github.ref_name }}
+          CIRCLE_TAG: ${{ inputs.tag }}
           CIRCLE_SHA1: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -47,13 +52,13 @@ jobs:
       - name: Prepare version (strip v prefix)
         id: version
         shell: bash
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${{ inputs.tag }}" | sed 's/^v//' >> "$GITHUB_OUTPUT"
 
       - name: Upload unsigned artifacts for signing
         id: upload-unsigned
         uses: actions/upload-artifact@v4
         with:
-          name: codexbar-unsigned-${{ github.ref_name }}
+          name: codexbar-unsigned-${{ inputs.tag }}
           path: release-output/CodexBar-*.exe
           if-no-files-found: error
 
@@ -115,7 +120,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CIRCLE_TAG: ${{ github.ref_name }}
+          CIRCLE_TAG: ${{ inputs.tag }}
           CIRCLE_SHA1: ${{ github.sha }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
