@@ -69,6 +69,13 @@ impl RateWindowSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CostDailyPointBridge {
+    pub day: String,
+    pub amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CostSnapshotBridge {
     pub used: f64,
     #[serde(default)]
@@ -93,6 +100,8 @@ pub struct CostSnapshotBridge {
     pub balance: Option<f64>,
     #[serde(default)]
     pub formatted_balance: Option<String>,
+    #[serde(default)]
+    pub daily: Vec<CostDailyPointBridge>,
 }
 
 fn default_currency() -> String {
@@ -357,6 +366,14 @@ impl ProviderUsageSnapshot {
                 formatted_limit: c.format_limit(),
                 balance: c.balance,
                 formatted_balance: c.format_balance(),
+                daily: c
+                    .daily
+                    .iter()
+                    .map(|point| CostDailyPointBridge {
+                        day: point.day.clone(),
+                        amount: point.amount,
+                    })
+                    .collect(),
             }),
             plan_name: usage.login_method.clone(),
             account_email: usage.account_email.clone(),
@@ -654,6 +671,7 @@ pub struct SettingsSnapshot {
     provider_usage_thresholds:
         std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>,
     predictive_pace_warning_enabled: bool,
+    show_pace: bool,
     tray_icon_mode: &'static str,
     switcher_shows_icons: bool,
     menu_bar_shows_highest_usage: bool,
@@ -766,6 +784,7 @@ impl From<Settings> for SettingsSnapshot {
             critical_usage_threshold: settings.critical_usage_threshold,
             provider_usage_thresholds: settings.provider_usage_thresholds,
             predictive_pace_warning_enabled: settings.predictive_pace_warning_enabled,
+            show_pace: settings.show_pace,
             tray_icon_mode: tray_icon_mode_label(settings.tray_icon_mode),
             switcher_shows_icons: settings.switcher_shows_icons,
             menu_bar_shows_highest_usage: settings.menu_bar_shows_highest_usage,
