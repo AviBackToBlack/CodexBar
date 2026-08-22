@@ -245,6 +245,13 @@ export interface SettingsSnapshot {
   promoteTrayIcon?: boolean;
   /** When true, show Claude Daily Routines quota row (default true). */
   claudeDailyRoutinesUsageVisible: boolean;
+  /**
+   * Explicit consent to read (and refresh) Claude Code's own OAuth
+   * credentials for the Claude provider. Default false — without consent
+   * OAuth stays closed and Auto falls back to labeled reduced-fidelity CLI
+   * usage (upstream #2634/#2745).
+   */
+  claudeAllowReadingClaudeCodeCredentials: boolean;
   /** Alibaba Token Plan region: cn | intl | cn-personal | intl-personal. */
   alibabaTokenPlanRegion: string;
   /** Optional work-week length [2,6] for session-equivalent weekly forecast. */
@@ -305,6 +312,7 @@ export interface SettingsUpdate {
   trayScalePercent?: number;
   powertoysStatusPipeEnabled?: boolean;
   claudeAvoidKeychainPrompts?: boolean;
+  claudeAllowReadingClaudeCodeCredentials?: boolean;
   codexSparkUsageVisible?: boolean;
   disableKeychainAccess?: boolean;
   /** Map of provider CLI name → metric preference label. */

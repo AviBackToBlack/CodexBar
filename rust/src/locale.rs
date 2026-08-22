@@ -517,6 +517,8 @@ locale_keys! {
     ProviderClaudeAvoidKeychainPromptsHelp,
     ProviderClaudeDailyRoutinesUsage,
     ProviderClaudeDailyRoutinesUsageHelp,
+    ProviderClaudeAllowReadingClaudeCodeCredentials,
+    ProviderClaudeAllowReadingClaudeCodeCredentialsHelp,
     ProviderCodexSparkUsage,
     ProviderCodexSparkUsageHelp,
     CodexAccountsTitle,

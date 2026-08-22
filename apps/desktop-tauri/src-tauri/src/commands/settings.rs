@@ -53,6 +53,7 @@ pub struct SettingsUpdate {
     pub tray_scale_percent: Option<u16>,
     pub powertoys_status_pipe_enabled: Option<bool>,
     pub claude_avoid_keychain_prompts: Option<bool>,
+    pub claude_allow_reading_claude_code_credentials: Option<bool>,
     pub codex_spark_usage_visible: Option<bool>,
     pub disable_keychain_access: Option<bool>,
     /// Map of provider CLI name → metric preference label.
@@ -80,6 +81,7 @@ impl SettingsUpdate {
     fn refreshes_provider_data(&self) -> bool {
         self.enabled_providers.is_some()
             || self.claude_daily_routines_usage_visible.is_some()
+            || self.claude_allow_reading_claude_code_credentials.is_some()
             || self.alibaba_token_plan_region.is_some()
             || self.weekly_progress_work_days.is_some()
     }
@@ -324,6 +326,9 @@ impl SettingsUpdate {
         if let Some(v) = self.claude_avoid_keychain_prompts {
             settings.set_claude_avoid_keychain_prompts(v);
         }
+        if let Some(v) = self.claude_allow_reading_claude_code_credentials {
+            settings.claude_allow_reading_claude_code_credentials = v;
+        }
         if let Some(v) = self.codex_spark_usage_visible {
             settings.set_codex_spark_usage_visible(v);
         }
@@ -517,6 +522,13 @@ mod tests {
             .refreshes_provider_data()
         );
         assert!(
+            SettingsUpdate {
+                claude_allow_reading_claude_code_credentials: Some(true),
+                ..Default::default()
+            }
+            .refreshes_provider_data()
+        );
+        assert!(
             !SettingsUpdate {
                 provider_metrics: Some(Default::default()),
                 tray_icon_mode: Some("single".to_string()),
@@ -524,6 +536,26 @@ mod tests {
             }
             .refreshes_provider_data()
         );
+    }
+
+    #[test]
+    fn apply_advanced_settings_sets_claude_code_credentials_consent() {
+        let mut settings = Settings::default();
+        assert!(!settings.claude_allow_reading_claude_code_credentials);
+
+        SettingsUpdate {
+            claude_allow_reading_claude_code_credentials: Some(true),
+            ..Default::default()
+        }
+        .apply_advanced_settings(&mut settings);
+        assert!(settings.claude_allow_reading_claude_code_credentials);
+
+        SettingsUpdate {
+            claude_allow_reading_claude_code_credentials: Some(false),
+            ..Default::default()
+        }
+        .apply_advanced_settings(&mut settings);
+        assert!(!settings.claude_allow_reading_claude_code_credentials);
     }
 
     #[test]
