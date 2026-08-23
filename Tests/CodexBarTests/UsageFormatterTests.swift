@@ -537,7 +537,9 @@ struct UsageFormatterTests {
         #expect(!CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "USD"))
         #expect(!CurrencyExchange.requiresLiveRates(preferredCurrencyCode: " usd "))
         #expect(!CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "auto"))
-        #expect(!CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "CHF"))
+        // Unsupported codes never trigger live-rate fetches.
+        #expect(!CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "XYZ"))
+        #expect(CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "CHF"))
         #expect(CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "GBP"))
         #expect(CurrencyExchange.requiresLiveRates(preferredCurrencyCode: " eur "))
         #expect(CurrencyExchange.requiresLiveRates(preferredCurrencyCode: "KRW"))
