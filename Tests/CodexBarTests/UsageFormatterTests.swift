@@ -523,12 +523,18 @@ struct UsageFormatterTests {
         #expect(explicitCZK.contains("CZK"))
         #expect(explicitCZK.contains("."))
 
-        #expect(exchange.convert(amount: 10.0, from: "CHF", to: "USD") == nil)
+        // CHF is supported: conversion through the USD pivot works both ways.
+        let chfRate = exchange.rate(for: "CHF") ?? 0.80
+        #expect(abs((exchange.convert(usdAmount: 10.0, to: "CHF") ?? 0) - 10.0 * chfRate) < epsilon)
+        #expect(abs((exchange.convert(amount: 10.0, from: "CHF", to: "USD") ?? 0) - 10.0 / chfRate) < epsilon)
+
+        // An unsupported provider currency stays unconverted and keeps its own code.
+        #expect(exchange.convert(amount: 10.0, from: "XYZ", to: "USD") == nil)
         let unavailable = UsageFormatter.convertedCostString(
             10.0,
             preferredCurrency: "USD",
-            providerCurrency: "CHF")
-        #expect(unavailable.contains("CHF"))
+            providerCurrency: "XYZ")
+        #expect(unavailable.contains("XYZ"))
         #expect(!unavailable.contains("$"))
     }
 
