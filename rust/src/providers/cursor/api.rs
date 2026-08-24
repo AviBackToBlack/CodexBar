@@ -2,7 +2,7 @@
 //!
 //! Uses browser cookies to authenticate with cursor.com API
 
-use crate::core::{CostSnapshot, ProviderError, RateWindow};
+use crate::core::{CostSnapshot, NamedRateWindow, ProviderError, RateWindow};
 use crate::providers::browser_cookie_header;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -10,14 +10,16 @@ use serde::Deserialize;
 const BASE_URL: &str = "https://cursor.com";
 const COOKIE_DOMAINS: [&str; 2] = ["cursor.com", "cursor.sh"];
 
-pub(super) type CursorUsageResult = (
-    RateWindow,
-    Option<RateWindow>,
-    Option<RateWindow>,
-    Option<CostSnapshot>,
-    Option<String>,
-    Option<String>,
-);
+#[derive(Debug)]
+pub struct CursorUsageResult {
+    pub(super) primary: RateWindow,
+    pub(super) secondary: Option<RateWindow>,
+    pub(super) model_specific: Option<RateWindow>,
+    pub(super) cost: Option<CostSnapshot>,
+    pub(super) email: Option<String>,
+    pub(super) plan_type: Option<String>,
+    pub(super) grok_bot: Option<NamedRateWindow>,
+}
 
 /// Cursor API client
 pub struct CursorApi {
@@ -36,7 +38,6 @@ impl CursorApi {
     }
 
     /// Fetch usage information from Cursor API
-    /// Returns (primary, secondary, model_specific, cost, email, plan_type)
     pub async fn fetch_usage(&self) -> Result<CursorUsageResult, ProviderError> {
         // Try to get cookies from browser
         let cookie_header = self.get_cookie_header()?;
@@ -49,15 +50,17 @@ impl CursorApi {
         cookie_header: &str,
     ) -> Result<CursorUsageResult, ProviderError> {
         // Fetch usage summary and user info in parallel
-        let (usage_result, user_result) = tokio::join!(
+        let (usage_result, user_result, sand_result) = tokio::join!(
             self.fetch_usage_summary(cookie_header),
-            self.fetch_user_info(cookie_header)
+            self.fetch_user_info(cookie_header),
+            self.fetch_sand_usage(cookie_header)
         );
 
         let usage_summary = usage_result?;
         let user_info = user_result.ok();
-
-        self.build_result(usage_summary, user_info)
+        let mut result = self.build_result(usage_summary, user_info)?;
+        result.grok_bot = sand_result.ok().flatten();
+        Ok(result)
     }
 
     fn get_cookie_header(&self) -> Result<String, ProviderError> {
@@ -102,6 +105,32 @@ impl CursorApi {
             );
             ProviderError::Parse(e.to_string())
         })
+    }
+
+    async fn fetch_sand_usage(
+        &self,
+        cookie_header: &str,
+    ) -> Result<Option<NamedRateWindow>, ProviderError> {
+        let url = format!("{}/api/dashboard/get-sand-usage-status", BASE_URL);
+        let response = self
+            .client
+            .post(&url)
+            .header("Cookie", cookie_header)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .header("Origin", BASE_URL)
+            .body("{}")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+        let status: SandUsageStatus = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(e.to_string()))?;
+        Ok(status.to_window())
     }
 
     async fn fetch_user_info(&self, cookie_header: &str) -> Result<UserInfo, ProviderError> {
@@ -222,14 +251,15 @@ impl CursorApi {
 
         let email = user_info.as_ref().and_then(|u| u.email.clone());
 
-        Ok((
+        Ok(CursorUsageResult {
             primary,
             secondary,
             model_specific,
-            cost_snapshot,
+            cost: cost_snapshot,
             email,
             plan_type,
-        ))
+            grok_bot: None,
+        })
     }
 
     fn on_demand_cost(
@@ -364,6 +394,41 @@ struct TeamUsage {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SandUsageStatus {
+    current_period_start: Option<String>,
+    next_reset_timestamp_utc: Option<String>,
+    usage_percent: Option<f64>,
+    has_non_zero_included_limit: Option<bool>,
+}
+
+impl SandUsageStatus {
+    fn to_window(&self) -> Option<NamedRateWindow> {
+        if self.has_non_zero_included_limit != Some(true) {
+            return None;
+        }
+        let used = clamp_percent(self.usage_percent?);
+        let start = self
+            .current_period_start
+            .as_deref()
+            .and_then(parse_iso_date);
+        let reset = self
+            .next_reset_timestamp_utc
+            .as_deref()
+            .and_then(parse_iso_date);
+        let minutes = start.zip(reset).and_then(|(start, reset)| {
+            let minutes = (reset - start).num_minutes();
+            (minutes > 0).then_some(minutes as u32)
+        });
+        Some(NamedRateWindow::new(
+            "cursor-grok-bot",
+            "Grok Bot",
+            RateWindow::with_details(used, minutes, reset, None),
+        ))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UserInfo {
     email: Option<String>,
     email_verified: Option<bool>,
@@ -411,6 +476,32 @@ mod tests {
     }
 
     #[test]
+    fn sand_usage_maps_to_weekly_extra_window() {
+        let status = SandUsageStatus {
+            current_period_start: Some("2026-08-18T00:00:00Z".into()),
+            next_reset_timestamp_utc: Some("2026-08-25T00:00:00Z".into()),
+            usage_percent: Some(37.5),
+            has_non_zero_included_limit: Some(true),
+        };
+        let row = status.to_window().expect("grok bot window");
+        assert_eq!(row.id, "cursor-grok-bot");
+        assert_eq!(row.title, "Grok Bot");
+        assert!((row.window.used_percent - 37.5).abs() < 0.001);
+        assert_eq!(row.window.window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn sand_usage_hides_accounts_without_included_allowance() {
+        let status = SandUsageStatus {
+            current_period_start: None,
+            next_reset_timestamp_utc: None,
+            usage_percent: Some(0.0),
+            has_non_zero_included_limit: Some(false),
+        };
+        assert!(status.to_window().is_none());
+    }
+
+    #[test]
     fn test_cursor_build_result_with_lanes() {
         let json = r#"{
             "billingCycleStart": "2026-03-01T00:00:00Z",
@@ -428,21 +519,22 @@ mod tests {
         }"#;
 
         let summary = parse_summary(json);
-        let (primary, secondary, model_specific, cost, _email, plan_type) =
-            api().build_result(summary, None).unwrap();
+        let result = api().build_result(summary, None).unwrap();
 
-        assert!((primary.used_percent - 30.0).abs() < 0.01);
+        assert!((result.primary.used_percent - 30.0).abs() < 0.01);
 
-        let sec = secondary.expect("secondary should be present");
+        let sec = result.secondary.expect("secondary should be present");
         assert!((sec.used_percent - 20.0).abs() < 0.01);
         assert!(sec.resets_at.is_some());
 
-        let ms = model_specific.expect("model_specific should be present");
+        let ms = result
+            .model_specific
+            .expect("model_specific should be present");
         assert!((ms.used_percent - 10.0).abs() < 0.01);
         assert!(ms.resets_at.is_some());
 
-        assert!(cost.is_some());
-        assert_eq!(plan_type.as_deref(), Some("Cursor Pro"));
+        assert!(result.cost.is_some());
+        assert_eq!(result.plan_type.as_deref(), Some("Cursor Pro"));
     }
 
     #[test]
@@ -461,11 +553,10 @@ mod tests {
             }
         }"#;
         let summary = parse_summary(json);
-        let (primary, secondary, model_specific, _, _, _) =
-            api().build_result(summary, None).unwrap();
-        assert!((primary.used_percent - 100.0).abs() < 0.01);
-        assert!((secondary.unwrap().used_percent - 100.0).abs() < 0.01);
-        assert!((model_specific.unwrap().used_percent - 100.0).abs() < 0.01);
+        let result = api().build_result(summary, None).unwrap();
+        assert!((result.primary.used_percent - 100.0).abs() < 0.01);
+        assert!((result.secondary.unwrap().used_percent - 100.0).abs() < 0.01);
+        assert!((result.model_specific.unwrap().used_percent - 100.0).abs() < 0.01);
     }
 
     #[test]
@@ -490,17 +581,18 @@ mod tests {
         }"#;
 
         let summary = parse_summary(json);
-        let (primary, secondary, model_specific, cost, _, plan_type) =
-            api().build_result(summary, None).unwrap();
+        let result = api().build_result(summary, None).unwrap();
 
-        assert!((primary.used_percent - 13.230769230769232).abs() < 0.01);
-        assert!((secondary.unwrap().used_percent - 17.2).abs() < 0.01);
-        assert!((model_specific.unwrap().used_percent - 0.0).abs() < 0.01);
+        assert!((result.primary.used_percent - 13.230769230769232).abs() < 0.01);
+        assert!((result.secondary.unwrap().used_percent - 17.2).abs() < 0.01);
+        assert!((result.model_specific.unwrap().used_percent - 0.0).abs() < 0.01);
 
-        let cost = cost.expect("plan usage should still produce cost snapshot");
+        let cost = result
+            .cost
+            .expect("plan usage should still produce cost snapshot");
         assert!((cost.used - 20.0).abs() < 0.01);
         assert_eq!(cost.limit, Some(20.0));
-        assert_eq!(plan_type.as_deref(), Some("Cursor Pro"));
+        assert_eq!(result.plan_type.as_deref(), Some("Cursor Pro"));
     }
 
     #[test]
@@ -517,13 +609,15 @@ mod tests {
         }"#;
 
         let summary = parse_summary(json);
-        let (primary, secondary, model_specific, cost, _, _) =
-            api().build_result(summary, None).unwrap();
+        let result = api().build_result(summary, None).unwrap();
 
-        assert!((primary.used_percent - 50.0).abs() < 0.01);
-        assert!(secondary.is_none(), "no autoPercentUsed in payload");
-        assert!(model_specific.is_none(), "no apiPercentUsed in payload");
-        assert!(cost.is_some());
+        assert!((result.primary.used_percent - 50.0).abs() < 0.01);
+        assert!(result.secondary.is_none(), "no autoPercentUsed in payload");
+        assert!(
+            result.model_specific.is_none(),
+            "no apiPercentUsed in payload"
+        );
+        assert!(result.cost.is_some());
     }
 
     #[test]
@@ -534,13 +628,12 @@ mod tests {
         }"#;
 
         let summary = parse_summary(json);
-        let (primary, secondary, model_specific, cost, _, _) =
-            api().build_result(summary, None).unwrap();
+        let result = api().build_result(summary, None).unwrap();
 
-        assert!((primary.used_percent).abs() < 0.01);
-        assert!(secondary.is_none());
-        assert!(model_specific.is_none());
-        assert!(cost.is_none());
+        assert!((result.primary.used_percent).abs() < 0.01);
+        assert!(result.secondary.is_none());
+        assert!(result.model_specific.is_none());
+        assert!(result.cost.is_none());
     }
 
     #[test]
@@ -563,10 +656,10 @@ mod tests {
         }"#;
 
         let summary = parse_summary(json);
-        let (primary, _, _, cost, _, _) = api().build_result(summary, None).unwrap();
+        let result = api().build_result(summary, None).unwrap();
 
-        assert!((primary.used_percent - 16.0).abs() < 0.01);
-        let cost = cost.expect("cost should exist from on-demand usage");
+        assert!((result.primary.used_percent - 16.0).abs() < 0.01);
+        let cost = result.cost.expect("cost should exist from on-demand usage");
         assert!((cost.used - 3.5).abs() < 0.01);
         assert_eq!(cost.limit, Some(10.0));
         assert_eq!(cost.period, "On-demand (billing cycle)");
@@ -586,8 +679,8 @@ mod tests {
             }
         }"#;
         let summary = parse_summary(json);
-        let (_, _, _, cost, _, _) = api().build_result(summary, None).unwrap();
-        let cost = cost.expect("plan cost");
+        let result = api().build_result(summary, None).unwrap();
+        let cost = result.cost.expect("plan cost");
         assert!((cost.used - 25.0).abs() < 0.01);
         assert_eq!(cost.limit, Some(50.0));
         assert_eq!(
@@ -600,16 +693,16 @@ mod tests {
     fn test_cursor_individual_overall_fallback() {
         let summary =
             parse_summary(r#"{"individualUsage":{"overall":{"used":2500,"limit":10000}}}"#);
-        let (primary, _, _, cost, _, _) = api().build_result(summary, None).unwrap();
-        assert!((primary.used_percent - 25.0).abs() < 0.01);
-        assert_eq!(cost.unwrap().limit, Some(100.0));
+        let result = api().build_result(summary, None).unwrap();
+        assert!((result.primary.used_percent - 25.0).abs() < 0.01);
+        assert_eq!(result.cost.unwrap().limit, Some(100.0));
     }
 
     #[test]
     fn test_cursor_team_pooled_fallback() {
         let summary = parse_summary(r#"{"teamUsage":{"pooled":{"used":5000,"limit":10000}}}"#);
-        let (primary, _, _, cost, _, _) = api().build_result(summary, None).unwrap();
-        assert!((primary.used_percent - 50.0).abs() < 0.01);
-        assert_eq!(cost.unwrap().used, 50.0);
+        let result = api().build_result(summary, None).unwrap();
+        assert!((result.primary.used_percent - 50.0).abs() < 0.01);
+        assert_eq!(result.cost.unwrap().used, 50.0);
     }
 }
