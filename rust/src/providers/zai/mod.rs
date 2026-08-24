@@ -3,6 +3,7 @@
 //! Fetches usage data from z.ai's quota API
 //! Uses API token stored in Windows Credential Manager
 
+mod balance;
 pub mod mcp_details;
 pub mod region;
 pub mod settings;
@@ -244,9 +245,10 @@ impl ZaiProvider {
 
         let team_context = Self::team_context(ctx)?;
         let request_url = Self::request_url(&env, region, team_context.as_ref())?;
+        let authorization = authorization_header(&api_token);
         let mut request = client
             .get(request_url)
-            .header("Authorization", authorization_header(&api_token))
+            .header("Authorization", authorization.as_str())
             .header("Accept", "application/json");
         if let Some(team) = &team_context {
             request = request
@@ -281,7 +283,15 @@ impl ZaiProvider {
         let quota: ZaiQuotaResponse =
             serde_json::from_slice(&resp_bytes).map_err(|e| ProviderError::Parse(e.to_string()))?;
 
-        self.parse_quota_response(&quota)
+        let mut usage = self.parse_quota_response(&quota)?;
+        if region == ZaiRegion::BigModelCn
+            && let Some(balance) = balance::fetch_cn_balance(&client, &authorization).await
+        {
+            let mut row = RateWindow::informational(format!("¥{balance:.2}"));
+            row.reset_description = Some(format!("¥{balance:.2} available"));
+            usage = usage.with_extra_rate_window("zai-account-balance", "Account balance", row);
+        }
+        Ok(usage)
     }
 
     fn parse_quota_response(
