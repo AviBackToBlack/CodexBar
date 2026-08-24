@@ -3,6 +3,8 @@
 //! Fetches usage data from Antigravity's local language server probe
 //! Uses Windows process detection to find CSRF token
 
+pub mod local_sessions;
+
 use async_trait::async_trait;
 use regex_lite::Regex;
 use serde::Deserialize;
@@ -381,6 +383,15 @@ impl AntigravityProvider {
 
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
+            if process_info.source == ProcessSource::Cli
+                && (status == reqwest::StatusCode::UNAUTHORIZED
+                    || status == reqwest::StatusCode::FORBIDDEN
+                    || text.to_ascii_lowercase().contains("not logged")
+                    || text.to_ascii_lowercase().contains("login method")
+                    || text.to_ascii_lowercase().contains("keyring"))
+            {
+                return Err(ProviderError::AuthRequired);
+            }
             return Err(ProviderError::Other(format!(
                 "API error {}: {}",
                 status, text
@@ -529,6 +540,19 @@ impl Provider for AntigravityProvider {
         match self.fetch_user_status().await {
             Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
             Err(e) => {
+                let count = local_sessions::offline_conversation_count();
+                if count > 0 {
+                    let noun = if count == 1 {
+                        "conversation"
+                    } else {
+                        "conversations"
+                    };
+                    let usage = UsageSnapshot::new(RateWindow::informational(format!(
+                        "Offline · {count} {noun}"
+                    )))
+                    .with_login_method("offline");
+                    return Ok(ProviderFetchResult::new(usage, "offline"));
+                }
                 tracing::warn!("Antigravity probe failed: {}", e);
                 Err(e)
             }
@@ -739,12 +763,28 @@ fn model_label(config: &ModelConfig) -> &str {
     }
 }
 
+fn canonical_model_id(raw: &str) -> &str {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "gemini-3.6-flash"
+        | "gemini-3.6-flash-low"
+        | "gemini-3.6-flash-medium"
+        | "gemini-3.6-flash-high"
+        | "gemini-3.5-flash-extra-low"
+        | "gemini-3.5-flash-low"
+        | "gemini-3.5-flash-mid"
+        | "gemini-3.5-flash-high"
+        | "gemini-3-flash-agent" => "gemini-3.7-flash",
+        _ => raw,
+    }
+}
+
 fn model_window_id(config: &ModelConfig) -> String {
     let raw = config
         .model_id
         .as_deref()
         .or(config.id.as_deref())
         .unwrap_or_else(|| model_label(config));
+    let raw = canonical_model_id(raw);
     let slug = raw
         .chars()
         .map(|ch| {
