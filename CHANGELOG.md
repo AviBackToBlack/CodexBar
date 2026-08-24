@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.55.1 — Unreleased
+
 ## 0.55.0 — 2026-08-24
 
 ### Highlights
