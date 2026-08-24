@@ -2,6 +2,7 @@
 
 ## 0.54.2 — Unreleased
 
+- Gemini: recognize Google's live consumer-tier shutdown — an HTTP 200 `loadCodeAssist` body whose `ineligibleTiers` carries `UNSUPPORTED_CLIENT` — instead of surfacing the follow-up quota call as a bare `HTTP 403`, so the Antigravity migration guidance and the **Enable Antigravity provider** action appear; the login action also stops deleting `~/.gemini/oauth_creds.json` to launch a sign-in Google rejects (#3139). Thanks @betive37!
 - OpenCodex: price each usage entry once with a pre-resolved models.dev catalog and custom-pricing overlay instead of re-resolving both per entry per accumulator, and memoize day keys and hour buckets (#3136). Thanks @olddonkey!
 
 ### Performance
