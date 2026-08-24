@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getSettingsSnapshot,
@@ -163,22 +164,46 @@ export default function UsageSpendTab(_props: TabProps) {
       });
   }, []);
 
-  const load = useCallback((forceRefresh = false) => {
-    setLoading(true);
-    setError(null);
-    void getUsageSpendSummary({ historyDays: selectedDays, forceRefresh })
-      .then((data) => {
-        setSummary(data);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : String(err));
-        setLoading(false);
-      });
-  }, [includeOpenCodex, selectedDays]);
+  const load = useCallback(async (forceRefresh = false, silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      const data = await getUsageSpendSummary({ historyDays: selectedDays, forceRefresh });
+      setSummary(data);
+    } catch (err: unknown) {
+      if (!silent) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [hideNativeCodex, includeOpenCodex, selectedDays]);
 
   useEffect(() => {
     load(false);
+  }, [load]);
+
+  // Upstream 0.55.0 #3106 parity: provider token/cost publications refresh
+  // Usage & Spend silently while the pane is open. Coalesce bursts so a
+  // multi-provider refresh does not trigger one dashboard rebuild per event.
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    void listen("provider-updated", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!cancelled) void load(false, true);
+      }, 200);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      unlisten?.();
+    };
   }, [load]);
 
   const onShare = useCallback(() => {
