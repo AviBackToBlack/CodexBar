@@ -671,16 +671,13 @@ fn selected_tray_percents(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     settings: &Settings,
 ) -> (f64, Option<f64>) {
-    let primary = crate::usage_metric::selected_usage_window(snapshot, settings).used_percent;
-
-    let secondary = snapshot
-        .secondary
-        .as_ref()
-        .map(|w| display_metric_percent(w.used_percent, settings.show_as_used));
-
+    let (selected, companion) =
+        crate::usage_metric::selected_usage_icon_windows(snapshot, settings);
     (
-        display_metric_percent(primary, settings.show_as_used),
-        secondary,
+        display_metric_percent(selected.used_percent, settings.show_as_used),
+        companion
+            .as_ref()
+            .map(|window| display_metric_percent(window.used_percent, settings.show_as_used)),
     )
 }
 
@@ -1384,6 +1381,43 @@ mod tests {
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
 
         assert_eq!(primary, 72.0);
+    }
+
+    #[test]
+    fn single_meaningful_secondary_quota_uses_full_single_meter() {
+        let settings = Settings::default();
+        let mut snapshot = fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), None, None);
+        snapshot.primary.is_informational = true;
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, None);
+    }
+
+    #[test]
+    fn selected_secondary_quota_is_not_duplicated_when_tertiary_is_meaningful() {
+        let settings = Settings::default();
+        let mut snapshot =
+            fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), Some(30.0), None);
+        snapshot.primary.is_informational = true;
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, Some(30.0));
+    }
+
+    #[test]
+    fn two_meaningful_quotas_keep_two_meter_layout() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::Session);
+        let snapshot = fake_snapshot_with("cursor", "Cursor", 15.0, Some(40.0), None, None);
+
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 15.0);
+        assert_eq!(secondary, Some(40.0));
     }
 
     #[test]
