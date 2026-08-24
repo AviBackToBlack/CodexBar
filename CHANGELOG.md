@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.54.2 — Unreleased
+## 0.55.0 — 2026-08-24
 
 ### Highlights
 - **Codex inside ChatGPT.app detected**: Adaptive (agent-aware) refresh recognizes the ChatGPT-bundled Codex and holds the 5-minute active cadence while it works (#3160, #3163).
