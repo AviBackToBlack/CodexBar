@@ -2,6 +2,9 @@
 
 ## 0.54.2 — Unreleased
 
+- Adaptive (agent-aware) refresh now detects ongoing Codex activity from the unified ChatGPT.app: the ChatGPT-bundled Codex is recognized at approved locations (signing-validated) and recent rollout writes hold the 5-minute active cadence (#3160, #3163).
+- Antigravity: menu-bar quota refresh reuses an already signed-in `agy` CLI without requiring the desktop app, and logged-out/keyring-timeout states show sign-in guidance instead of "Launch Antigravity" (#3146, #3161).
+
 - Codex: tokscale parity for local token counts — cached usage derives from the larger of `cached_input_tokens`/`cache_read_input_tokens`, out-of-order token_count events are detected field-level before watermark latching, and bare usage rows in non-event rollout lines parse (#3120). Thanks @Yuxin-Qiao!
 
 - Added CHF (Swiss Franc) to the display currency options (#3149).
