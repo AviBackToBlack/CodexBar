@@ -200,6 +200,11 @@ impl AlibabaTokenPlanProvider {
                 "Accept",
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
+            .header("Referer", dashboard_referer(region))
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             .header("User-Agent", USER_AGENT)
             .send()
             .await
@@ -462,12 +467,17 @@ pub(super) fn cookie_value(name: &str, cookie_header: &str) -> Option<String> {
     })
 }
 
+fn dashboard_referer(region: Region) -> String {
+    format!("{}/", region.gateway_base_url().trim_end_matches('/'))
+}
+
 fn extract_sec_token(html: &str) -> Option<String> {
     for pattern in [
         r#""secToken"\s*:\s*"([^"]+)""#,
         r#""sec_token"\s*:\s*"([^"]+)""#,
         r#"secToken['"]?\s*[:=]\s*['"]([^'"]+)['"]"#,
         r#"sec_token['"]?\s*[:=]\s*['"]([^'"]+)['"]"#,
+        r#"SEC_TOKEN['"]?\s*[:=]\s*['"]([^'"]+)['"]"#,
     ] {
         let Ok(regex) = Regex::new(pattern) else {
             continue;
@@ -1049,8 +1059,27 @@ mod tests {
             Some("abc123")
         );
         assert_eq!(
+            extract_sec_token(
+                r#"<script>window.ALIYUN_CONSOLE_CONFIG = { SEC_TOKEN: "upper123" };</script>"#
+            )
+            .as_deref(),
+            Some("upper123")
+        );
+        assert_eq!(
             cookie_value("sec_token", "foo=bar; sec_token=xyz"),
             Some("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn sec_token_shell_referer_uses_same_origin_root() {
+        assert_eq!(
+            dashboard_referer(Region::CnPersonal),
+            "https://bailian.console.aliyun.com/"
+        );
+        assert_eq!(
+            dashboard_referer(Region::IntlPersonal),
+            "https://modelstudio.console.alibabacloud.com/"
         );
     }
 
