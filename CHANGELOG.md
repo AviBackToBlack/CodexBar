@@ -19,6 +19,7 @@
 - Added AED (UAE dirham) to the display currency options (#3186). Thanks @samiashi!
 
 ### Localization
+- Settings: keep the keyboard shortcut recorder in the selected app language while recording and after editing (#3190). Thanks @endless7!
 - Turkish: improve translations throughout settings and provider views, including the previously untranslated iCloud sync section (#3178). Thanks @husodrn46!
 
 ## 0.55.0 — 2026-08-24
