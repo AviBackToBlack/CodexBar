@@ -13,6 +13,9 @@
 ### Performance
 - OpenCodex: parse only newly appended usage-log entries instead of rebuilding the entire cache on every refresh, cutting memory use while preserving compatibility with older app versions (#3140). Thanks @olddonkey!
 
+### Usage & Spend
+- Added AED (UAE dirham) to the display currency options (#3186). Thanks @samiashi!
+
 ### Localization
 - Turkish: improve translations throughout settings and provider views, including the previously untranslated iCloud sync section (#3178). Thanks @husodrn46!
 
