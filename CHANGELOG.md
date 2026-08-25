@@ -3,6 +3,7 @@
 ## 0.55.1 — Unreleased
 
 ### Fixed
+- Spend dashboard: finish the final local Codex history file promptly while the dashboard is visible, preserve explicit background and stop choices, and keep existing usage caches intact (#3114). Thanks @Yuxin-Qiao!
 - Fireworks: show real 30-day API billing spend even when local cost summaries are disabled (#3183, #3185). Thanks @dhalarewich!
 - OpenRouter: accept timestamp-shaped Activity API dates so exact 30-day spend history loads again (#3174).
 - Amp: parse bold Markdown usage labels from the latest CLI while preserving compatibility with older plain-text output (#3171).
