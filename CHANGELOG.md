@@ -2,6 +2,9 @@
 
 ## 0.55.1 — Unreleased
 
+### Fixed
+- Amp: parse bold Markdown usage labels from the latest CLI while preserving compatibility with older plain-text output (#3171).
+
 ## 0.55.0 — 2026-08-24
 
 ### Highlights
