@@ -218,6 +218,14 @@ enum CostUsageScanner {
         private let now: @Sendable () -> ContinuousClock.Instant
         private var recordedTimeDeferral = false
 
+        /// Extra budget (as a fraction of `maxBytesPerRefresh`) granted to the deferred-file
+        /// phase on top of whatever remains after the first pass. This guarantees partially-
+        /// scanned files make forward progress even when fresh files exhaust the first pass.
+        static let deferredBudgetBoostFraction: Double = 0.25
+
+        /// When true, the budget limit is extended by the deferred boost.
+        private(set) var isDeferredPhase = false
+
         init(
             maxFileBytes: Int64,
             maxBytesPerRefresh: Int64,
@@ -232,6 +240,19 @@ enum CostUsageScanner {
             } else {
                 self.deadline = nil
             }
+        }
+
+        func enterDeferredPhase() {
+            self.isDeferredPhase = true
+        }
+
+        private var effectiveRefreshLimit: Int64 {
+            guard self.maxBytesPerRefresh > 0 else { return Int64.max }
+            if self.isDeferredPhase {
+                let boost = Int64(Double(self.maxBytesPerRefresh) * Self.deferredBudgetBoostFraction)
+                return self.maxBytesPerRefresh + boost
+            }
+            return self.maxBytesPerRefresh
         }
 
         var hasTimeLimit: Bool {
@@ -249,8 +270,9 @@ enum CostUsageScanner {
                 self.deferredByBudgetFileCount += 1
                 return .deferBudget
             }
-            let refreshRemaining = self.maxBytesPerRefresh > 0
-                ? max(0, self.maxBytesPerRefresh - self.bytesConsumed - self.bytesReserved)
+            let limit = self.effectiveRefreshLimit
+            let refreshRemaining = limit > 0
+                ? max(0, limit - self.bytesConsumed - self.bytesReserved)
                 : Int64.max
             if work > 0, refreshRemaining == 0 {
                 self.deferredByBudgetFileCount += 1
@@ -6039,6 +6061,7 @@ enum CostUsageScanner {
         var scannedPaths = Set(files.map(\.path))
         var attemptedPaths: Set<String> = []
         var processedPaths: Set<String> = []
+        var deferredInFirstPass: [URL] = []
         for fileURL in files {
             if context.scanBudget?.shouldStopBeforeNextFile() == true {
                 break
@@ -6050,13 +6073,42 @@ enum CostUsageScanner {
                 context: context,
                 cache: &cache,
                 state: &scanState)
-            if case .processed = outcome {
+            switch outcome {
+            case .processed:
                 processedPaths.insert(fileURL.path)
+            case .deferred:
+                let cached = cache.files[fileURL.path]
+                if cached?.parsedBytes ?? 0 > 0, cached?.codexScanComplete != true {
+                    deferredInFirstPass.append(fileURL)
+                }
             }
             let usage = cache.files[fileURL.path]
             inheritedResolver.updateCachedUsage(fileURL: fileURL, usage: usage)
             if Self.shouldRetryBufferedCodexFork(usage) {
                 bufferedForkRetries.append(fileURL)
+            }
+        }
+
+        if !deferredInFirstPass.isEmpty, let budget = context.scanBudget {
+            budget.enterDeferredPhase()
+            var deferredState = CodexScanState()
+            for fileURL in deferredInFirstPass {
+                if budget.shouldStopBeforeNextFile() {
+                    break
+                }
+                let outcome = try Self.scanCodexFile(
+                    fileURL: fileURL,
+                    context: context,
+                    cache: &cache,
+                    state: &deferredState)
+                if case .processed = outcome {
+                    processedPaths.insert(fileURL.path)
+                }
+                let usage = cache.files[fileURL.path]
+                inheritedResolver.updateCachedUsage(fileURL: fileURL, usage: usage)
+                if Self.shouldRetryBufferedCodexFork(usage) {
+                    bufferedForkRetries.append(fileURL)
+                }
             }
         }
 
