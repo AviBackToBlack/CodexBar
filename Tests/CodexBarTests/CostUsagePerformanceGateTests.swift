@@ -1395,8 +1395,8 @@ struct CostUsagePerformanceGateTests {
                 ].joined(separator: "\n") + "\n")
         }
 
-        options.maxCodexScanBytesPerRefresh = slice * 5
-        options.maxCodexScanDurationPerRefresh = 0.001
+        options.maxCodexScanBytesPerRefresh = slice * 100
+        options.maxCodexScanDurationPerRefresh = 0.000_001
         _ = CostUsageScanner.loadDailyReport(
             provider: .codex,
             since: day,
