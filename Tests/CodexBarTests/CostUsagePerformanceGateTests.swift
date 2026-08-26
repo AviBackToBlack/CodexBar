@@ -1267,7 +1267,8 @@ struct CostUsagePerformanceGateTests {
             Issue.record("expected deferred phase to admit with boosted budget")
             return
         }
-        let expectedBoost = Int64(Double(100) * CostUsageScanner.CodexScanBudget.deferredBudgetBoostFraction)
+        let fractionalBoost = Int64(Double(100) * CostUsageScanner.CodexScanBudget.deferredBudgetBoostFraction)
+        let expectedBoost = max(fractionalBoost, Int64(200))
         #expect(deferred == expectedBoost)
         budget.consume(workBytes: deferred)
         #expect(budget.bytesConsumed == 100 + expectedBoost)
@@ -1340,6 +1341,72 @@ struct CostUsagePerformanceGateTests {
         let secondCache = CostUsageStoreAccess.read(cacheRoot: env.cacheRoot)
         let largeEntry = try #require(secondCache.files[largeFileURL.path])
         #expect((largeEntry.parsedBytes ?? 0) > firstParsed)
+    }
+
+    @Test
+    func `deferred phase rescues files skipped by time budget expiration`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+        CostUsageScanner.resetCodexDirectoryCursorsForTesting()
+        defer { CostUsageScanner.resetCodexDirectoryCursorsForTesting() }
+        let day = try env.makeLocalNoon(year: 2026, month: 5, day: 10)
+        let iso = env.isoString(for: day)
+
+        let largeFileContent = (0..<100).map { i in
+            #"{"type":"event_msg","timestamp":"\#(iso)","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":\#(i * 100),"cached_input_tokens":0,"output_tokens":\#(i * 10)},"model":"openai/gpt-5.2-codex"}}}"#
+        }.joined(separator: "\n") + "\n"
+        let largeFileURL = try env.writeCodexSessionFile(
+            day: day,
+            filename: "old-large-session.jsonl",
+            contents: [
+                #"{"type":"session_meta","timestamp":"\#(iso)","payload":{"session_id":"old-large"}}"#,
+                #"{"type":"turn_context","timestamp":"\#(iso)","payload":{"model":"openai/gpt-5.2-codex"}}"#,
+                largeFileContent,
+            ].joined(separator: "\n"))
+        let largeMetadata = CostUsageScanner.codexFileMetadata(fileURL: largeFileURL)
+        let slice = max(1, largeMetadata.size / 4)
+
+        var options = CostUsageScanner.Options(
+            codexSessionsRoot: env.codexSessionsRoot,
+            claudeProjectsRoots: nil,
+            cacheRoot: env.cacheRoot,
+            codexTraceDatabaseURL: env.root.appendingPathComponent("missing.sqlite"),
+            maxCodexSessionFileBytes: slice,
+            maxCodexScanBytesPerRefresh: slice)
+        options.refreshMinIntervalSeconds = 0
+
+        _ = CostUsageScanner.loadDailyReport(
+            provider: .codex, since: day, until: day, now: day, options: options)
+        let firstCache = CostUsageStoreAccess.read(cacheRoot: env.cacheRoot)
+        let firstFile = try #require(firstCache.files[largeFileURL.path])
+        let firstParsed = firstFile.parsedBytes ?? 0
+        #expect(firstParsed > 0)
+        #expect(firstParsed < largeMetadata.size)
+        #expect(firstFile.codexScanComplete == false)
+
+        for i in 0..<30 {
+            _ = try env.writeCodexSessionFile(
+                day: day,
+                filename: String(format: "new-%04d.jsonl", i),
+                contents: [
+                    #"{"type":"session_meta","timestamp":"\#(iso)","payload":{"session_id":"new-\#(i)"}}"#,
+                    #"{"type":"turn_context","timestamp":"\#(iso)","payload":{"model":"openai/gpt-5.2-codex"}}"#,
+                    #"{"type":"event_msg","timestamp":"\#(iso)","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":5},"model":"openai/gpt-5.2-codex"}}}"#,
+                ].joined(separator: "\n") + "\n")
+        }
+
+        options.maxCodexScanBytesPerRefresh = slice * 5
+        options.maxCodexScanDurationPerRefresh = 0.001
+        _ = CostUsageScanner.loadDailyReport(
+            provider: .codex,
+            since: day,
+            until: day,
+            now: day.addingTimeInterval(1),
+            options: options)
+        let secondCache = CostUsageStoreAccess.read(cacheRoot: env.cacheRoot)
+        let largeEntry = try #require(secondCache.files[largeFileURL.path])
+        let secondParsed = largeEntry.parsedBytes ?? 0
+        #expect(secondParsed > firstParsed, "deferred phase should advance partially scanned file even when time budget expired")
     }
 }
 

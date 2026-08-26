@@ -221,6 +221,8 @@ enum CostUsageScanner {
         /// Extra budget (as a fraction of `maxBytesPerRefresh`) granted to the deferred-file
         /// phase on top of whatever remains after the first pass. This guarantees partially-
         /// scanned files make forward progress even when fresh files exhaust the first pass.
+        /// The effective deferred budget is at least `maxFileBytes` to ensure each stuck file
+        /// can advance by a full slice per refresh even when the main budget is fully consumed.
         static let deferredBudgetBoostFraction: Double = 0.25
 
         /// When true, the budget limit is extended by the deferred boost.
@@ -246,10 +248,18 @@ enum CostUsageScanner {
             self.isDeferredPhase = true
         }
 
+        func shouldStopDeferredFile() -> Bool {
+            guard self.isDeferredPhase else { return self.shouldStopBeforeNextFile() }
+            let limit = self.effectiveRefreshLimit
+            guard limit < Int64.max else { return false }
+            return self.bytesConsumed + self.bytesReserved >= limit
+        }
+
         private var effectiveRefreshLimit: Int64 {
             guard self.maxBytesPerRefresh > 0 else { return Int64.max }
             if self.isDeferredPhase {
-                let boost = Int64(Double(self.maxBytesPerRefresh) * Self.deferredBudgetBoostFraction)
+                let fractionalBoost = Int64(Double(self.maxBytesPerRefresh) * Self.deferredBudgetBoostFraction)
+                let boost = max(fractionalBoost, self.maxFileBytes)
                 return self.maxBytesPerRefresh + boost
             }
             return self.maxBytesPerRefresh
@@ -6062,8 +6072,10 @@ enum CostUsageScanner {
         var attemptedPaths: Set<String> = []
         var processedPaths: Set<String> = []
         var deferredInFirstPass: [URL] = []
-        for fileURL in files {
+        var firstPassStoppedAtIndex = files.count
+        for (index, fileURL) in files.enumerated() {
             if context.scanBudget?.shouldStopBeforeNextFile() == true {
+                firstPassStoppedAtIndex = index
                 break
             }
             context.workRecorder?.recordCodexFileScanAttempt(path: Self.codexPathKey(fileURL))
@@ -6089,11 +6101,18 @@ enum CostUsageScanner {
             }
         }
 
+        for fileURL in files[firstPassStoppedAtIndex...] {
+            let cached = cache.files[fileURL.path]
+            if cached?.parsedBytes ?? 0 > 0, cached?.codexScanComplete != true {
+                deferredInFirstPass.append(fileURL)
+            }
+        }
+
         if !deferredInFirstPass.isEmpty, let budget = context.scanBudget {
             budget.enterDeferredPhase()
             var deferredState = CodexScanState()
             for fileURL in deferredInFirstPass {
-                if budget.shouldStopBeforeNextFile() {
+                if budget.shouldStopDeferredFile() {
                     break
                 }
                 let outcome = try Self.scanCodexFile(
