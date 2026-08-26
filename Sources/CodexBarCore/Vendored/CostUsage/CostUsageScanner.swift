@@ -6110,10 +6110,18 @@ enum CostUsageScanner {
 
         if !deferredInFirstPass.isEmpty, let budget = context.scanBudget {
             budget.enterDeferredPhase()
-            for fileURL in deferredInFirstPass {
+            let sortedDeferred = deferredInFirstPass.sorted { a, b in
+                let pa = cache.files[a.path]?.parsedBytes ?? 0
+                let pb = cache.files[b.path]?.parsedBytes ?? 0
+                let ra = (cache.files[a.path]?.size ?? 0) - pa
+                let rb = (cache.files[b.path]?.size ?? 0) - pb
+                return ra < rb
+            }
+            for fileURL in sortedDeferred {
                 if budget.shouldStopDeferredFile() {
                     break
                 }
+                context.workRecorder?.recordCodexFileScanAttempt(path: Self.codexPathKey(fileURL))
                 attemptedPaths.insert(fileURL.path)
                 let outcome = try Self.scanCodexFile(
                     fileURL: fileURL,
