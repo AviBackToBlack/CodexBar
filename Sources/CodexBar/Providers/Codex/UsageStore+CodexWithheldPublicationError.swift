@@ -16,6 +16,10 @@ extension UsageStore {
         expectedGuard: CodexAccountScopedRefreshGuard?)
     {
         guard case .success = outcome.result else { return }
+        // The streak counts fetch outcomes, not publications, and the ordinary publication path
+        // records this success. Leaving it standing would spend the next transient failure's
+        // first-failure suppression on an outage that already ended.
+        self.failureGates[.codex]?.recordSuccess()
         if let recorded = self.errors[.codex], Self.codexErrorDisprovedBySuccessfulFetch(recorded) {
             self.errors[.codex] = nil
         }
