@@ -1405,7 +1405,7 @@ extension UsageStore {
         }
     }
 
-    private static func shouldPreserveCodexAccountSnapshotOnFailure(_ message: String) -> Bool {
+    static func shouldPreserveCodexAccountSnapshotOnFailure(_ message: String) -> Bool {
         guard CodexAccountHealth.status(forError: message) == .unavailable else { return false }
         let normalized = message.lowercased()
         return normalized.contains("network") || normalized.contains("internet connection")

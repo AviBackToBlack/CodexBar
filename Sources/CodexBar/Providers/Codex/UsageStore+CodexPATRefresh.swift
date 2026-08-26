@@ -72,6 +72,11 @@ extension UsageStore {
                     expectedGuard: expectedGuard,
                     generation: resolution.generation)
             }
+            // Returning here skips the publication path that clears `errors`, so a recorded failure
+            // would outlive the successful fetch that was withheld.
+            self.clearCodexFetchErrorAfterWithheldPublication(
+                outcome: resolution.initialOutcome,
+                expectedGuard: resolution.expectedGuard)
             return nil
         }
         if case let .success(result) = admittedOutcome.result,
