@@ -6110,6 +6110,10 @@ enum CostUsageScanner {
 
         if !deferredInFirstPass.isEmpty, let budget = context.scanBudget {
             budget.enterDeferredPhase()
+            // Sort by remaining bytes ascending so near-complete files finish first and free
+            // pending queue slots. Actively-growing files cannot appear here: their changed
+            // mtime/size causes keepCachedCodexFileIfFresh to reject them, placing them into
+            // the first pass via newest-first ordering instead.
             let sortedDeferred = deferredInFirstPass.sorted { a, b in
                 let pa = cache.files[a.path]?.parsedBytes ?? 0
                 let pb = cache.files[b.path]?.parsedBytes ?? 0
