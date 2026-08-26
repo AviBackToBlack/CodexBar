@@ -100,7 +100,7 @@ CodexBar/
 ├── Sources/CodexBarWidget/    # WidgetKit support
 ├── WidgetExtension/           # Xcode wrapper for the packaged widget extension
 ├── Tests/CodexBarTests/       # macOS app/core test suite (XCTest + Swift Testing)
-├── TestsLinux/                # Linux-specific CLI/core test coverage
+├── TestsLinux/                # Portable and Linux-specific CLI/core tests (target exists on macOS too)
 └── Scripts/                   # Build and packaging scripts
 ```
 
@@ -131,6 +131,20 @@ See the canonical [provider authoring guide](provider.md#adding-a-new-provider) 
 ```bash
 make test
 ```
+
+### CI Aggregate Contract
+
+The `lint-build-test` check in `.github/workflows/ci.yml` keeps its existing name and requires successful lint,
+change detection, and the full `build-linux-cli` glibc matrix (x86_64 and ARM64 build, tests, and smoke checks).
+Glibc Linux has no path or draft skip: failure, cancellation, skipped, empty, missing, or unknown matrix results
+fail verification. macOS tests and the musl build may skip only when their path gates allow it; required macOS
+tests deferred for a draft still leave the aggregate incomplete. Whole-workflow cancellation retains the existing
+`always() && !cancelled()` condition, so the verifier does not run in that case.
+
+`Scripts/test_ci_path_gate.sh` checks these result combinations and the workflow's Linux dependency and eighth
+verifier argument. `CodexBarLinuxTests` includes the portable `AntigravityLocalhostSessionLifetimeTests` suite on
+both macOS and Linux. It checks session reuse and concurrent synthetic loopback failures without credentials;
+this coverage does not establish or fix the cause of Linux dispatch crashes.
 
 ### Format Code
 ```bash
