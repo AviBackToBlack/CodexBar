@@ -14,6 +14,63 @@ final class MenuLayoutScreenshotRenderTests: XCTestCase {
     private static let width: CGFloat = 320
     private static let now = Date(timeIntervalSince1970: 1_782_000_000)
 
+    func test_renderClaudeExtraUsageFillProof() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_CLAUDE_EXTRA_USAGE_SCREENSHOT_DIR"] else {
+            throw XCTSkip("Set CODEXBAR_CLAUDE_EXTRA_USAGE_SCREENSHOT_DIR to render the Claude Extra Usage proof.")
+        }
+
+        let metadata = try XCTUnwrap(ProviderDefaults.metadata[.claude])
+        let snapshot = UsageSnapshot(
+            primary: RateWindow(usedPercent: 25, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+            secondary: nil,
+            providerCost: ProviderCostSnapshot(
+                used: 25,
+                limit: 100,
+                currencyCode: "USD",
+                period: "Monthly",
+                updatedAt: Self.now),
+            updatedAt: Self.now)
+        let directory = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        for showUsed in [true, false] {
+            let model = UsageMenuCardView.Model.make(.init(
+                provider: .claude,
+                metadata: metadata,
+                snapshot: snapshot,
+                credits: nil,
+                creditsError: nil,
+                dashboard: nil,
+                dashboardError: nil,
+                tokenSnapshot: nil,
+                tokenError: nil,
+                account: AccountInfo(email: nil, plan: nil),
+                isRefreshing: false,
+                lastError: nil,
+                usageBarsShowUsed: showUsed,
+                resetTimeDisplayStyle: .countdown,
+                tokenCostUsageEnabled: false,
+                showOptionalCreditsAndExtraUsage: true,
+                hidePersonalInfo: true,
+                usesLiveSubtitle: false,
+                preferredCurrencyCode: "USD",
+                now: Self.now))
+            let view = AnyView(UsageMenuCardExtraUsageSectionView(
+                model: model,
+                topPadding: 12,
+                bottomPadding: 12,
+                width: Self.width)
+                .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+                .environment(\.colorScheme, .dark)
+                .background(Color(nsColor: .windowBackgroundColor)))
+            let mode = showUsed ? "used" : "remaining"
+            let png = try XCTUnwrap(Self.pngData(for: view), "Claude Extra Usage \(mode) render failed")
+            let url = directory.appendingPathComponent("claude-extra-usage-\(mode).png")
+            try png.write(to: url, options: .atomic)
+            print("Wrote \(url.path)")
+        }
+    }
+
     func test_renderAntigravitySemanticLayoutProof() throws {
         guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_ANTIGRAVITY_LAYOUT_SCREENSHOT_DIR"] else {
             throw XCTSkip("Set CODEXBAR_ANTIGRAVITY_LAYOUT_SCREENSHOT_DIR to render the Antigravity layout proof.")
