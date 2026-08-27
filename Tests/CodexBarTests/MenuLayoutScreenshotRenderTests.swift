@@ -1,8 +1,8 @@
 import AppKit
-import CodexBarCore
 import SwiftUI
 import XCTest
 @testable import CodexBar
+@testable import CodexBarCore
 
 /// Developer tool, skipped by default: renders the stacked (before) and compact
 /// (after) claude-swap multi-account menu layouts to PNGs for documentation.
@@ -13,6 +13,77 @@ import XCTest
 final class MenuLayoutScreenshotRenderTests: XCTestCase {
     private static let width: CGFloat = 320
     private static let now = Date(timeIntervalSince1970: 1_782_000_000)
+
+    func test_renderAntigravitySemanticLayoutProof() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_ANTIGRAVITY_LAYOUT_SCREENSHOT_DIR"] else {
+            throw XCTSkip("Set CODEXBAR_ANTIGRAVITY_LAYOUT_SCREENSHOT_DIR to render the Antigravity layout proof.")
+        }
+
+        let json = antigravityQuotaSummaryJSON(
+            geminiSession: 0.86,
+            geminiWeekly: 0.55,
+            claudeSession: 1,
+            claudeWeekly: 1)
+        let snapshot = try AntigravityStatusProbe.parseQuotaSummaryResponse(Data(json.utf8)).toUsageSnapshot()
+        let windows = MenuBarLayoutSemanticWindowResolver.windows(provider: .antigravity, snapshot: snapshot)
+        let data = MenuBarLayoutRenderData(
+            provider: .antigravity,
+            iconKey: "antigravity",
+            providerName: nil,
+            accountLabel: nil,
+            laneLabels: MenuBarLayoutLaneLabels(provider: .antigravity, snapshot: snapshot),
+            primary: MenuBarLayoutRenderWindow(snapshot.primary),
+            secondary: MenuBarLayoutRenderWindow(snapshot.secondary),
+            tertiary: MenuBarLayoutRenderWindow(snapshot.tertiary),
+            session: MenuBarLayoutRenderWindow(windows.session),
+            weekly: MenuBarLayoutRenderWindow(windows.weekly),
+            scopedWeekly: nil,
+            scopedWeeklyTitle: nil,
+            automatic: nil,
+            automaticText: nil,
+            sessionPace: nil,
+            weeklyPace: nil,
+            automaticPace: nil,
+            runsOut: nil,
+            balance: nil,
+            costToday: nil,
+            cost30d: nil,
+            metrics: .unavailable)
+        let rendered = MenuBarLayoutRenderer().render(
+            layout: MenuBarLayout(lines: [[.percent(window: .session), .separatorDot, .percent(window: .weekly)]]),
+            data: data,
+            icon: nil,
+            options: MenuBarLayoutRenderOptions(
+                size: .regular,
+                highContrast: false,
+                showUsed: false,
+                conditionals: [],
+                appearanceName: "antigravity-proof",
+                isDebugApp: false,
+                now: Self.now))
+        let view = AnyView(VStack(alignment: .leading, spacing: 12) {
+            Text("Antigravity · synthetic quota data")
+                .font(.headline)
+            Text("Remaining quota · session / weekly")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            MenuBarLayoutPreviewText(rendered: rendered)
+                .frame(height: 30)
+        }
+        .padding(16)
+        .frame(width: Self.width)
+        .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+        .environment(\.colorScheme, .dark)
+        .background(Color(nsColor: .windowBackgroundColor)))
+
+        let directory = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let png = try XCTUnwrap(Self.pngData(for: view), "Antigravity layout proof render failed")
+        let url = directory.appendingPathComponent("antigravity-semantic-layout.png")
+        try png.write(to: url, options: .atomic)
+        print("Rendered: \(rendered.attributedTitle.string); accessibility: \(rendered.accessibilityLabel)")
+        print("Wrote \(url.path)")
+    }
 
     func test_renderMultiAccountLayoutScreenshots() throws {
         guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_SCREENSHOT_DIR"] else {
