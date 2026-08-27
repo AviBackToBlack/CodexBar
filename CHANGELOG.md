@@ -3,6 +3,7 @@
 ## 0.55.2 — Unreleased
 
 ### Fixed
+- Usage & Spend: refresh outdated independent 365-day histories after regular token publications, preserving older rows and coalescing updates during scans (investigated alongside #3209, #3176). Thanks @vinschger!
 - Grok: keep OAuth usage, identity, and plan bound to the same credentials when a native login changes during billing, while keeping successful cookie usage separate from auth-file metadata.
 - Cursor: estimate omitted API-rate costs from cached or bundled pricing, preserve invalid-cost coverage and compatible history caches, and separate Overview history coverage from missing subscriptions (#3129). Thanks @Yuxin-Qiao!
 - OpenRouter: label the API key spending limit consistently and clarify that it is a cap, not the separate account balance (#3158). Thanks @vinschger!

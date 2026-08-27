@@ -19,6 +19,25 @@ struct TokenSnapshotPublication: Sendable, Equatable {
 }
 
 extension UsageStore {
+    func logTokenUsageSuccess(
+        provider: UsageProvider,
+        snapshot: CostUsageTokenSnapshot,
+        historyDays: Int,
+        startedAt: Date)
+    {
+        let durationText = String(format: "%.2f", Date().timeIntervalSince(startedAt))
+        let sessionCost = snapshot.sessionCostUSD
+            .map { UsageFormatter.currencyString($0, currencyCode: snapshot.currencyCode) } ?? "—"
+        let monthCost = snapshot.last30DaysCostUSD
+            .map { UsageFormatter.currencyString($0, currencyCode: snapshot.currencyCode) } ?? "—"
+        let message =
+            "cost usage success provider=\(provider.rawValue) " +
+            "duration=\(durationText)s " +
+            "today=\(sessionCost) " +
+            "historyDays=\(historyDays) windowCost=\(monthCost)"
+        self.tokenCostLogger.info(message)
+    }
+
     enum CursorCostCookiePreparation {
         case proceed(String?)
         case reject
@@ -167,6 +186,8 @@ extension UsageStore {
         self.tokenSnapshotPublications.removeAll()
         self.spendDashboardTokenPublications.removeAll()
         self.spendDashboardTokenPublicationRevisions.removeAll()
+        self.spendDashboardTokenIncorporatedTriggers.removeAll()
+        self.spendDashboardTokenFailedTriggers.removeAll()
     }
 
     func installProviderDerivedTokenSnapshot(from snapshot: UsageSnapshot, for provider: UsageProvider) {
