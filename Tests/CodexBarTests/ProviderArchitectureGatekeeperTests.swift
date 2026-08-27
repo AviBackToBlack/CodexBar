@@ -1923,7 +1923,15 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared renderer maps provider-owned presentation data into the generic UI model."),
         AllowedProviderConstruct(
             path: "Sources/CodexBar/MenuCardView+ProviderDetailLocalization.swift",
-            line: 92,
+            line: 53,
+            anchor: "guard provider == .openrouter,",
+            expectedProviderIDs: ["openrouter"],
+            expectedReferenceCount: 1,
+            expectedReferenceFingerprint: ["openrouter@0"],
+            reason: "Localizes only OpenRouter's static cap disclosure; arbitrary provider values remain canonical."),
+        AllowedProviderConstruct(
+            path: "Sources/CodexBar/MenuCardView+ProviderDetailLocalization.swift",
+            line: 104,
             anchor: "case .deepseek:",
             expectedProviderIDs: ["deepseek", "kiro", "zai"],
             expectedReferenceCount: 3,
