@@ -222,7 +222,7 @@ extension CodexAccountScopedRefreshTests {
         settings.codexCookieSource = .off
         settings.codexUsageDataSource = .oauth
         settings.multiAccountMenuLayout = stacked ? .stacked : .segmented
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = CodexCredentialFixtures.root.appendingPathComponent(UUID().uuidString)
         let targetHome = root.appendingPathComponent("target")
         let siblingHome = root.appendingPathComponent("sibling")
         let target = try self.makeManagedCodexWeeklyPublicationAccount(

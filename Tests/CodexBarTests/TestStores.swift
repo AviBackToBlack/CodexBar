@@ -178,7 +178,7 @@ func withStatusItemControllerForTesting<T>(
     let controller = StatusItemController(
         store: store,
         settings: settings,
-        account: account ?? fetcher.loadAccountInfo(),
+        account: account ?? AccountInfo(email: nil, plan: nil),
         updater: DisabledUpdaterController(),
         preferencesSelection: PreferencesSelection(),
         statusBar: statusBar)
@@ -199,7 +199,7 @@ func withStatusItemControllerForTesting<T>(
     let controller = StatusItemController(
         store: store,
         settings: settings,
-        account: account ?? fetcher.loadAccountInfo(),
+        account: account ?? AccountInfo(email: nil, plan: nil),
         updater: DisabledUpdaterController(),
         preferencesSelection: PreferencesSelection(),
         statusBar: statusBar)
