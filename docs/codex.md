@@ -39,6 +39,9 @@ Usage source picker:
 - The menu and provider settings list every still-available expiry, while the optional credits setting controls
   nearing-expiry notifications. CodexBar does not redeem or modify reset credits.
 - `rate_limit.primary_window` / `secondary_window` map to the session/weekly lanes.
+- Suspicious weekly resets keep the last trusted usage while confirmation is pending. A successful refresh for the
+  same account and workspace clears stale connectivity errors even when the reading is withheld; failed, cancelled,
+  or superseded refreshes do not clear them. Cached usage, credits, and other accounts remain unchanged.
 - `additional_rate_limits[]` (model-specific limits such as GPT-5.3-Codex-Spark) map to named
   `UsageSnapshot.extraRateWindows` entries. Spark uses stable `codex-spark` / `codex-spark-weekly` ids and
   `Codex Spark 5-hour` / `Codex Spark Weekly` titles. When the field is absent, the snapshot is unchanged.

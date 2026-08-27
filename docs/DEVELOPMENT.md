@@ -132,6 +132,39 @@ See the canonical [provider authoring guide](provider.md#adding-a-new-provider) 
 make test
 ```
 
+### Codex credential fixtures
+
+Ordinary tests deny Codex credential-file access at the Codex-owned I/O boundaries, before reads,
+existence probes, or writes. Detection uses the actual process name/environment, independently of
+the credential environment under test. `HOME`, `CODEX_HOME`, `XDG_DATA_HOME`, and
+`CODEXBAR_ALLOW_TEST_KEYCHAIN_ACCESS` do not authorize files. The disabled live-account test remains
+disabled; neither `LIVE_TEST` nor Keychain permission alone bypasses this boundary.
+
+Use `CodexCredentialFileAccess.withFixtureScope(.init(files: [...], roots: [...]))` for an explicitly
+owned fixture. Synchronous and asynchronous forms restore the previous scope on return or throw.
+Roots use path components, reject symlinks within the fixture, and never implicitly authorize all
+of `/tmp`. The `CodexCredentialFixtures` test trait creates and cleans up one owned root per test;
+credential/account fixtures allocate their homes under `CodexCredentialFixtures.root`. Promotion
+and scoped-refresh containers share that helper. The trait also binds the existing dashboard-cache
+URL override to its owned root, so cache reads, writes, and clears stay local to the test.
+`_loadForUsageForTesting` adds only its explicit
+home fixture to the current scope; configured external roots still need explicit authorization.
+Pure parsers and `fingerprint(data:)` need no scope. Default managed-account and workspace-cache
+stores use fresh temporary paths in tests; explicit file overrides retain their existing behavior.
+
+Task-local scopes inherit through structured tasks, but not detached work. Capture the immutable
+`fixtureScope` and explicitly re-enter it in a detached task when fixture access is required; lost
+context fails closed. Never authorize a path just because it appears in an environment dictionary.
+
+`Scripts/test.sh` exports `CODEXBAR_TEST_CODEX_FILE_ISOLATION=1` and removes inherited fixture grants.
+Direct test commands that launch children should export the same signal. A child needing files must
+receive `FixtureScope(files: ..., roots: ...).childEnvironment(base: ...)` naming only that child's
+fixtures; this replaces any inherited grants without changing global environment state. The signal,
+scope decoding, and denial are compiled in release builds too. `bash Scripts/test_codex_file_isolation_child.sh`
+compiles the actual policy and detector with optimization and without `DEBUG`, then checks denied,
+scoped-child, and non-test decisions against synthetic temporary files. It does not build or exercise
+the complete release CLI, refresh a real account, or establish isolation for other providers.
+
 ### CI Aggregate Contract
 
 The `lint-build-test` check in `.github/workflows/ci.yml` keeps its existing name and requires successful lint,
