@@ -15,9 +15,9 @@ private final class PiSessionParseCounter: @unchecked Sendable {
 }
 
 struct PiSessionCostCompatibilityTests {
-    @Test(arguments: [false, true])
-    func `scheduler hash adoption preserves pi and omp parsing but still invalidates pricing`(
-        catalogPresent: Bool) throws
+    @Test(arguments: [false, true], ["c6c46a376ba16304", "55f640e6bb0ccba4"])
+    func `reviewed hash adoption preserves pi and omp parsing but still invalidates pricing`(
+        catalogPresent: Bool, predecessorHash: String) throws
     {
         let env = try CostUsageTestEnvironment()
         defer { env.cleanup() }
@@ -60,7 +60,7 @@ struct PiSessionCostCompatibilityTests {
         predecessor.pricingKey = CostUsagePricingKey.codex(
             modelsDevArtifact: ModelsDevCache.load(now: day, cacheRoot: env.cacheRoot).artifact,
             formulaVersion: 2,
-            parserHash: "c6c46a376ba16304",
+            parserHash: predecessorHash,
             modelsDevProviderIDs: CostUsagePricing.codexModelsDevProviderIDs.union(
                 Set(CostUsagePricing.claudeFirstPartyModelsDevProviderIDs)),
             customPricingFingerprint: CostUsageCustomPricing.empty.fingerprint)
@@ -99,6 +99,28 @@ struct PiSessionCostCompatibilityTests {
             #expect(adopted.files.mapValues(\.entryUsages) == predecessor.files.mapValues(\.entryUsages))
             #expect(adopted.daysByProvider == predecessor.daysByProvider)
             #expect(adopted.files.mapValues(\.contributions) == predecessor.files.mapValues(\.contributions))
+            for (formula, fingerprint) in [(1, "none"), (2, "changed-custom-rates")] {
+                var changedPricing = predecessor
+                changedPricing.pricingKey = CostUsagePricingKey.codex(
+                    modelsDevArtifact: ModelsDevCache.load(now: day, cacheRoot: env.cacheRoot).artifact,
+                    formulaVersion: formula,
+                    parserHash: predecessorHash,
+                    modelsDevProviderIDs: CostUsagePricing.codexModelsDevProviderIDs.union(
+                        Set(CostUsagePricing.claudeFirstPartyModelsDevProviderIDs)),
+                    customPricingFingerprint: fingerprint)
+                PiSessionCostCacheIO.save(cache: changedPricing, cacheRoot: env.cacheRoot)
+                #expect(PiSessionCostScanner.loadCachedDailyReport(
+                    provider: .codex, since: day, until: day, now: day, cacheRoot: env.cacheRoot) == nil)
+                let parsesBefore = counter.value
+                _ = try PiSessionCostScanner.loadDailyReportCancellable(
+                    provider: .codex,
+                    since: day,
+                    until: day,
+                    now: day.addingTimeInterval(2),
+                    options: options,
+                    checkCancellation: nil)
+                #expect(counter.value == parsesBefore + 2)
+            }
             var unrelated = predecessor
             unrelated.pricingKey = CostUsagePricingKey.codex(
                 modelsDevArtifact: ModelsDevCache.load(now: day, cacheRoot: env.cacheRoot).artifact,
@@ -117,7 +139,7 @@ struct PiSessionCostCompatibilityTests {
                 now: day.addingTimeInterval(2),
                 options: options,
                 checkCancellation: nil)
-            #expect(counter.value == 2)
+            #expect(counter.value == 6)
             // Restore the old key before changing real rates: adoption must not mask a pricing change.
             PiSessionCostCacheIO.save(cache: predecessor, cacheRoot: env.cacheRoot)
             #expect(try ModelsDevCache.save(
@@ -137,7 +159,7 @@ struct PiSessionCostCompatibilityTests {
                 now: day.addingTimeInterval(3),
                 options: options,
                 checkCancellation: nil)
-            #expect(counter.value == 4)
+            #expect(counter.value == 8)
             #expect(PiSessionCostCacheIO.load(cacheRoot: env.cacheRoot).pricingKey != currentKey)
         }
     }

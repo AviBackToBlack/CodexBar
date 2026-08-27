@@ -66,11 +66,11 @@ enum PiSessionCostScanner {
         let catalog: ModelsDevCatalog?
         let cacheRoot: URL?
         let pricingKey: String
-        let compatiblePricingKey: String?
+        let compatiblePricingKeys: Set<String>
 
         func matches(_ key: String?) -> Bool {
             guard let key else { return false }
-            return key == self.pricingKey || key == self.compatiblePricingKey
+            return key == self.pricingKey || self.compatiblePricingKeys.contains(key)
         }
     }
 
@@ -267,16 +267,16 @@ enum PiSessionCostScanner {
                     Set(CostUsagePricing.claudeFirstPartyModelsDevProviderIDs)),
                 customPricingFingerprint: customPricingFingerprint)
         }
-        // Only the scheduler-only transition may reuse the predecessor's identical pricing inputs.
+        // Only the scheduler and optional report-field transitions have identical Pi pricing inputs.
         // A later parser change must invalidate normally unless separately reviewed for compatibility.
-        let compatiblePricingKey = CodexParserHash.value == "55f640e6bb0ccba4"
-            ? key(parserHash: "c6c46a376ba16304")
-            : nil
+        let compatiblePricingKeys: Set<String> = CodexParserHash.value == "21f10143afe00c55"
+            ? Set(["c6c46a376ba16304", "55f640e6bb0ccba4"].map { key(parserHash: $0) })
+            : []
         return ModelsDevPricingContext(
             catalog: modelsDevArtifact?.catalog,
             cacheRoot: cacheRoot,
             pricingKey: key(parserHash: CodexParserHash.value),
-            compatiblePricingKey: compatiblePricingKey)
+            compatiblePricingKeys: compatiblePricingKeys)
     }
 
     private static func requestedWindowExpandsCache(

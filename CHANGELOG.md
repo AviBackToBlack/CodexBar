@@ -3,6 +3,7 @@
 ## 0.55.2 — Unreleased
 
 ### Fixed
+- Cursor: estimate omitted API-rate costs from cached or bundled pricing, preserve invalid-cost coverage and compatible history caches, and separate Overview history coverage from missing subscriptions (#3129). Thanks @Yuxin-Qiao!
 - OpenRouter: label the API key spending limit consistently and clarify that it is a cap, not the separate account balance (#3158). Thanks @vinschger!
 - Codex: refresh local session cost estimates when global cost tracking is off, without repeatedly rejecting successful scans as stale. Thanks @vinschger!
 - Codex: fairly resume older partial session files during busy local cost scans without increasing scan limits or rebuilding compatible caches (#3207). Thanks @IchenDEV!

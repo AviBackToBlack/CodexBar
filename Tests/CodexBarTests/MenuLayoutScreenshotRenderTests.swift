@@ -14,6 +14,55 @@ final class MenuLayoutScreenshotRenderTests: XCTestCase {
     private static let width: CGFloat = 320
     private static let now = Date(timeIntervalSince1970: 1_782_000_000)
 
+    func test_renderCursorOverviewCoverageProof() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_CURSOR_OVERVIEW_SCREENSHOT_DIR"] else {
+            throw XCTSkip("Set CODEXBAR_CURSOR_OVERVIEW_SCREENSHOT_DIR to render the Cursor Overview proof.")
+        }
+        // This override changes assertions only; the fixture and production renderer are identical.
+        let expectedDays = ProcessInfo.processInfo.environment["CODEXBAR_CURSOR_OVERVIEW_EXPECTED_DAYS"] ?? "30"
+        let directory = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+            let fixture = try CursorOverviewProofFixture.make()
+            XCTAssertEqual(fixture.model.groups.count, 1)
+            XCTAssertEqual(fixture.model.groups.first?.coveredDayCount, 30)
+            XCTAssertEqual(fixture.model.groups.first?.totalCost, 12)
+            XCTAssertEqual(fixture.model.groups.first?.totalTokens, 1000)
+            XCTAssertEqual(fixture.counts.total, 2)
+            XCTAssertEqual(fixture.counts.cost, 1)
+            XCTAssertEqual(fixture.counts.tokens, 1)
+            XCTAssertTrue(fixture.summary.isPartial)
+            try CursorOverviewProofFixture.eventJSON.write(
+                to: directory.appendingPathComponent("input.json"), atomically: true, encoding: .utf8)
+            for dark in [false, true] {
+                let view = AnyView(OverviewSpendSummaryCardView(summary: fixture.summary, days: 30, width: 310)
+                    .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+                    .environment(\.colorScheme, dark ? .dark : .light)
+                    .environment(\.displayScale, 2)
+                    .environment(\.accessibilityEnabled, true)
+                    .background(Color(nsColor: .windowBackgroundColor)))
+                let hosting = NSHostingView(rootView: view)
+                hosting.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                let name = "cursor-overview-\(dark ? "dark" : "light")"
+                let png = try XCTUnwrap(Self.pngData(hosting: hosting))
+                XCTAssertEqual(hosting.frame.width, 310)
+                XCTAssertFalse(png.isEmpty)
+                try png.write(to: directory.appendingPathComponent("\(name).png"))
+                let accessibility = Self.accessibilityText(hosting)
+                try accessibility.write(
+                    to: directory.appendingPathComponent("\(name)-accessibility.txt"),
+                    atomically: true,
+                    encoding: .utf8)
+                for text in [
+                    "Coverage: \(expectedDays) / 30", "~$12.00", "1 of 2 subscriptions have spend", "~1K tokens",
+                    "Priced 1 · Unpriced 0 · Unmetered 0 · Estimated 0", "List-price equivalent",
+                ] {
+                    XCTAssertTrue(accessibility.contains(text), accessibility)
+                }
+            }
+        }
+    }
+
     func test_renderOpenRouterLimitClarityProof() async throws {
         guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_OPENROUTER_CLARITY_SCREENSHOT_DIR"] else {
             throw XCTSkip("Set CODEXBAR_OPENROUTER_CLARITY_SCREENSHOT_DIR to render the OpenRouter proof.")
