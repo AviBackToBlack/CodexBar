@@ -3,6 +3,7 @@
 ## 0.55.2 — Unreleased
 
 ### Fixed
+- Antigravity: read recognized local SQLite conversations as bounded token-only history, preserving unavailable coverage, session identity, and overflow-safe totals (#3212). Thanks @Yuxin-Qiao!
 - Usage & Spend: refresh outdated independent 365-day histories after regular token publications, preserving older rows and coalescing updates during scans (investigated alongside #3209, #3176). Thanks @vinschger!
 - Grok: keep OAuth usage, identity, and plan bound to the same credentials when a native login changes during billing, while keeping successful cookie usage separate from auth-file metadata.
 - Cursor: estimate omitted API-rate costs from cached or bundled pricing, preserve invalid-cost coverage and compatible history caches, and separate Overview history coverage from missing subscriptions (#3129). Thanks @Yuxin-Qiao!
