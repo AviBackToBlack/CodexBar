@@ -18,6 +18,10 @@ read_when:
 - Display → Menu Bar → Layout provides presets plus a token editor. Tokens can be clicked to append, dragged from the
   palette, reordered between one or two lines, dragged out, or removed with Delete. Layouts can be global or overridden
   per provider. Manual edits select the Custom preset.
+- All providers previews the default layout and lists enabled providers with saved overrides, even when an override
+  currently matches the default. Each “Use all-providers layout” action removes only that provider's override;
+  global edits preserve overrides, and disabled providers are left untouched. Before a default is first saved,
+  editing still starts from the representative provider's effective layout.
 - Small/Regular controls the token font scale. Tight/Regular controls status-item padding. Compact stacked uses two
   tightly spaced lines sized to fit the menu bar.
 

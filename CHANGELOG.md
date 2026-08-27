@@ -3,6 +3,7 @@
 ## 0.55.2 — Unreleased
 
 ### Fixed
+- Menu bar: label the All providers preview as the default and disclose enabled providers with saved overrides, with a targeted “Use all-providers layout” action (#3210). Thanks @Sedrak-Hovhannisyan!
 - Claude: respect the used/remaining fill preference for capped Extra Usage, so an exhausted cap is empty in remaining mode (#3213). Thanks @vinschger!
 - Codex: clear stale connectivity errors after an authorized successful fetch even when weekly usage is withheld, including persisted and stacked-account errors (#3214). Thanks @olddonkey!
 - Antigravity: select the most constrained known quota independently for session and weekly menu-bar layout tokens, so unused model families no longer mask consumed quota (#3206). Thanks @foobra!
