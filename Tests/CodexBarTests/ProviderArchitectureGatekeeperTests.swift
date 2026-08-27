@@ -289,6 +289,18 @@ struct ProviderArchitectureGatekeeperTests {
     }
 
     @Test
+    func `provider reference scanner preserves mixed quoted and executable occurrences`() {
+        let source = #"let values = [".claude", "escaped \".claude\"", "\(choose(.codex))", "# +
+            #".codex, .codex, UsageProvider.cursor, "gemini"]"#
+        let references = Self.providerReferences(in: source, providerIDs: ["claude", "codex", "cursor", "gemini"])
+
+        #expect(references == [ProviderReference(
+            line: 0,
+            providerOccurrences: ["claude", "codex", "codex", "codex", "cursor", "gemini"],
+            newlyRecognizedProviderOccurrences: ["codex", "cursor"])])
+    }
+
+    @Test
     func `provider reference scanner sees through inline block comments`() {
         let assignment = "let provider: UsageProvider = /* fallback */ .claude"
         let labeled = "choose(provider: /* fallback */ .claude)"
@@ -4070,12 +4082,17 @@ struct ProviderArchitectureGatekeeperTests {
         return lines.enumerated().flatMap { index, line -> [ProviderReference] in
             let code = self.codeBeforeLineComment(line)
             guard !code.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+            let quotedLiterals = self.quotedStringLiterals(in: code)
+            let plainStringRanges = quotedLiterals.compactMap { literal -> Range<String.Index>? in
+                code[literal.range].contains("\\(") ? nil : literal.range
+            }
             var matches: [String] = []
             var newlyRecognizedMatches: [String] = []
             for providerID in providerIDs {
                 for strength in self.dottedProviderReferenceStrengths(
                     providerID,
                     in: code,
+                    plainStringRanges: plainStringRanges,
                     statement: statementContexts[index])
                 {
                     matches.append(providerID)
@@ -4084,7 +4101,7 @@ struct ProviderArchitectureGatekeeperTests {
                     }
                 }
             }
-            for literal in self.quotedStringLiterals(in: code) {
+            for literal in quotedLiterals {
                 for providerID in providerIDs where self.isProviderIDLiteral(
                     providerID,
                     literal: literal.value,
@@ -4112,12 +4129,10 @@ struct ProviderArchitectureGatekeeperTests {
     private static func dottedProviderReferenceStrengths(
         _ rawValue: String,
         in line: String,
+        plainStringRanges: [Range<String.Index>],
         statement: StatementContext) -> [ProviderReferenceStrength]
     {
         let needle = ".\(rawValue)"
-        let plainStringRanges = self.quotedStringLiterals(in: line).compactMap { literal -> Range<String.Index>? in
-            line[literal.range].contains("\\(") ? nil : literal.range
-        }
         var searchStart = line.startIndex
         var found: [ProviderReferenceStrength] = []
         while let range = line.range(of: needle, range: searchStart..<line.endIndex) {
