@@ -238,6 +238,7 @@ extension UsageStore {
             allVisibleAccounts: projection.visibleAccounts,
             priorSnapshots: priorSnapshots,
             activeVisibleAccountID: originalVisibleAccountID)
+        // Provider-specific by design: Codex fan-out checks the refresh generation before updating account rows.
         guard !Task.isCancelled,
               self.isCurrentProviderRefreshGeneration(.codex, generation: generation)
         else { return }
