@@ -157,6 +157,7 @@ enum CostUsageScanner {
         var claudeProjectsRoots: [URL]?
         var cacheRoot: URL?
         var codexTraceDatabaseURL: URL?
+        var codexScanBudgetForTesting: CodexScanBudget?
         var calendar: Calendar
         var refreshMinIntervalSeconds: TimeInterval = 60
         var claudeLogProviderFilter: ClaudeLogProviderFilter = .all
@@ -218,16 +219,6 @@ enum CostUsageScanner {
         private let now: @Sendable () -> ContinuousClock.Instant
         private var recordedTimeDeferral = false
 
-        /// Extra budget (as a fraction of `maxBytesPerRefresh`) granted to the deferred-file
-        /// phase on top of whatever remains after the first pass. This guarantees partially-
-        /// scanned files make forward progress even when fresh files exhaust the first pass.
-        /// The effective deferred budget is at least `maxFileBytes` to ensure each stuck file
-        /// can advance by a full slice per refresh even when the main budget is fully consumed.
-        static let deferredBudgetBoostFraction: Double = 0.25
-
-        /// When true, the budget limit is extended by the deferred boost.
-        private(set) var isDeferredPhase = false
-
         init(
             maxFileBytes: Int64,
             maxBytesPerRefresh: Int64,
@@ -242,27 +233,6 @@ enum CostUsageScanner {
             } else {
                 self.deadline = nil
             }
-        }
-
-        func enterDeferredPhase() {
-            self.isDeferredPhase = true
-        }
-
-        func shouldStopDeferredFile() -> Bool {
-            guard self.isDeferredPhase else { return self.shouldStopBeforeNextFile() }
-            let limit = self.effectiveRefreshLimit
-            guard limit < Int64.max else { return false }
-            return self.bytesConsumed + self.bytesReserved >= limit
-        }
-
-        private var effectiveRefreshLimit: Int64 {
-            guard self.maxBytesPerRefresh > 0 else { return Int64.max }
-            if self.isDeferredPhase {
-                let fractionalBoost = Int64(Double(self.maxBytesPerRefresh) * Self.deferredBudgetBoostFraction)
-                let boost = max(fractionalBoost, self.maxFileBytes)
-                return self.maxBytesPerRefresh + boost
-            }
-            return self.maxBytesPerRefresh
         }
 
         var hasTimeLimit: Bool {
@@ -280,9 +250,8 @@ enum CostUsageScanner {
                 self.deferredByBudgetFileCount += 1
                 return .deferBudget
             }
-            let limit = self.effectiveRefreshLimit
-            let refreshRemaining = limit > 0
-                ? max(0, limit - self.bytesConsumed - self.bytesReserved)
+            let refreshRemaining = self.maxBytesPerRefresh > 0
+                ? max(0, self.maxBytesPerRefresh - self.bytesConsumed - self.bytesReserved)
                 : Int64.max
             if work > 0, refreshRemaining == 0 {
                 self.deferredByBudgetFileCount += 1
@@ -2836,9 +2805,10 @@ enum CostUsageScanner {
         }
 
         if !discoveredFilePaths.isEmpty {
-            var pendingFilePaths = Set(state.pendingFilePaths)
-            pendingFilePaths.formUnion(discoveredFilePaths)
-            state.pendingFilePaths = pendingFilePaths.sorted()
+            let discoveredFiles = discoveredFilePaths.map { URL(fileURLWithPath: $0) }
+            Self.appendCodexActiveLookbackPaths(
+                preferNewest ? Self.sortedCodexSessionFilesNewestFirst(discoveredFiles) : discoveredFiles,
+                state: &state)
         }
         state.completedCurrentWindowRootPaths = completedPartitionRoots.sorted()
         state.completedCurrentWindowFlatRootPaths = completedFlatRoots.sorted()
@@ -2926,9 +2896,10 @@ enum CostUsageScanner {
                 : path
         }
         if !discoveredFilePaths.isEmpty {
-            var pendingFilePaths = Set(state.pendingFilePaths)
-            pendingFilePaths.formUnion(discoveredFilePaths)
-            state.pendingFilePaths = pendingFilePaths.sorted()
+            let discoveredFiles = discoveredFilePaths.map { URL(fileURLWithPath: $0) }
+            Self.appendCodexActiveLookbackPaths(
+                preferNewest ? Self.sortedCodexSessionFilesNewestFirst(discoveredFiles) : discoveredFiles,
+                state: &state)
         }
         if page.isComplete {
             completedRootPaths.insert(rootPath)
@@ -2973,6 +2944,7 @@ enum CostUsageScanner {
         let previousDiscovery: CostUsageCodexSessionDiscovery?
         let shouldBoundCatchUp: Bool
         let shouldSeedBoundedQueue: Bool
+        let preferNewest: Bool
     }
 
     private static func seedOrExtendCodexActiveLookbackQueue(
@@ -2985,7 +2957,8 @@ enum CostUsageScanner {
                 self.reseedCodexActiveLookbackPathKeys(migrationSeedPathKeys, state: &state)
             } else {
                 self.appendCodexActiveLookbackPaths(
-                    context.seedFiles,
+                    context.preferNewest ? self.sortedCodexSessionFilesNewestFirst(context.seedFiles) : context
+                        .seedFiles,
                     normalizeExisting: true,
                     state: &state)
             }
@@ -2996,7 +2969,9 @@ enum CostUsageScanner {
             Self.codexResolvedPath(URL(fileURLWithPath: $0))
         })
         let newFiles = context.discoveredFiles.filter { !previousPaths.contains(Self.codexResolvedPath($0)) }
-        Self.appendCodexActiveLookbackPaths(newFiles, state: &state)
+        Self.appendCodexActiveLookbackPaths(
+            context.preferNewest ? self.sortedCodexSessionFilesNewestFirst(newFiles) : newFiles,
+            state: &state)
     }
 
     private static func reseedCodexActiveLookbackPathKeys(
@@ -3115,7 +3090,7 @@ enum CostUsageScanner {
             }
         }
         return CodexRefreshCandidateSelection(
-            files: context.preferNewest ? self.sortedCodexSessionFilesNewestFirst(candidates) : candidates,
+            files: candidates,
             exhaustedVisitBudget: activeLookbackState.pendingFilePaths.count > candidates.count)
     }
 
@@ -3123,6 +3098,7 @@ enum CostUsageScanner {
     private static func finalizedCodexActiveLookbackState(
         _ state: CostUsageCodexActiveLookbackState,
         completedFilePaths: Set<String>,
+        servicedFilePaths: Set<String>,
         completionCandidateCount: Int,
         requiresBoundedDiscoveryCompletion: Bool,
         retainCompletedStateForExactValidation: Bool,
@@ -3136,6 +3112,12 @@ enum CostUsageScanner {
                 == false
         }
         state.pendingFilePaths.replaceSubrange(0..<prefixCount, with: retainedPrefix)
+        // Finalize the selected prefix before moving its unfinished work behind every waiter,
+        // including paths beyond this pass's 512-candidate limit.
+        let servicedSurvivors = retainedPrefix.filter { servicedFilePaths.contains($0) }
+        let servicedPrefixPaths = Set(servicedSurvivors)
+        state.pendingFilePaths.removeAll { servicedPrefixPaths.contains($0) }
+        state.pendingFilePaths.append(contentsOf: servicedSurvivors)
         let boundedDiscoveryIsComplete = !requiresBoundedDiscoveryCompletion
             || (Set(state.completedCurrentWindowRootPaths ?? []) == Set(state.rootPaths)
                 && Set(state.completedCurrentWindowFlatRootPaths ?? []) == Set(state.rootPaths))
@@ -5491,7 +5473,7 @@ enum CostUsageScanner {
             let cachedUntilKey = cache.scanUntilKey
             let shouldRunColdCacheLookback = cache.files.isEmpty || plan.rootsChanged
             let coldCacheLookbackStart = Self.localStartOfDay(range.scanSinceKey, calendar: options.calendar)
-            let scanBudget = CodexScanBudget(
+            let scanBudget = options.codexScanBudgetForTesting ?? CodexScanBudget(
                 maxFileBytes: options.maxCodexSessionFileBytes,
                 maxBytesPerRefresh: options.maxCodexScanBytesPerRefresh,
                 maxDuration: options.maxCodexScanDurationPerRefresh)
@@ -5509,16 +5491,24 @@ enum CostUsageScanner {
                 && cache.codexActiveLookbackState != nil
                 && Self.codexBoundedDiscoveryIsComplete(activeLookbackState)
                 && !plan.requiresCacheWideFileReprocessing
-            let shouldBoundCatchUp = scanBudget.hasTimeLimit
-                && !options.forceRescan
-                && (cache.files.isEmpty
+            let shouldBoundCatchUp = !options.forceRescan
+                && (scanBudget.hasTimeLimit || scanBudget.maxFileBytes > 0 || scanBudget.maxBytesPerRefresh > 0)
+                && ((scanBudget.hasTimeLimit && cache.files.isEmpty)
                     || cache.codexScanCatchUpPending == true
                     || cache.files.values.contains {
                         $0.codexScanComplete == false || $0.hasBufferedCodexForkRetryLines
                     }
                     || cache.codexActiveLookbackState != nil
                     || plan.requiresCacheWideFileReprocessing)
-            let shouldPageDiscovery = shouldBoundCatchUp && !isExactInventoryProofPass
+            let shouldPageDiscovery = scanBudget.hasTimeLimit && shouldBoundCatchUp && !isExactInventoryProofPass
+            if shouldBoundCatchUp, !scanBudget.hasTimeLimit || activeLookbackStateWasReset {
+                Self.appendCodexActiveLookbackPaths(
+                    cache.files.keys.sorted().filter {
+                        cache.files[$0]?.codexScanComplete == false
+                            || cache.files[$0]?.hasBufferedCodexForkRetryLines == true
+                    }.map { URL(fileURLWithPath: $0) },
+                    state: &activeLookbackState)
+            }
             let migrationQueueOwnsCachedPaths = plan.requiresCacheWideFileReprocessing
                 || activeLookbackState.cacheWideMigrationQueueActive == true
             let discoveryExcludedPathKeys = migrationQueueOwnsCachedPaths
@@ -5602,6 +5592,8 @@ enum CostUsageScanner {
                 seenPaths: &seenPaths,
                 fileURLsByPathKey: &fileURLsByPathKey,
                 files: &files)
+            let hasUnmaterializedPendingPaths = activeLookbackState.pendingFilePaths
+                .count > materializedPendingPathCount
 
             if !shouldPageDiscovery {
                 for fileURL in Self.cachedCodexSessionFiles(
@@ -5622,6 +5614,21 @@ enum CostUsageScanner {
                 ? Set(cache.files.keys.map { Self.codexPathKey(URL(fileURLWithPath: $0)) })
                 .union(fileURLsByPathKey.keys)
                 : Set(fileURLsByPathKey.keys)
+            if shouldBoundCatchUp, !scanBudget.hasTimeLimit {
+                // Full byte-only discovery also sees appends to known completed files and
+                // files that were discovered but never admitted on an earlier pass.
+                let dirtyFiles = files.filter { fileURL in
+                    guard let usage = cache.files[fileURL.path], usage.codexScanComplete == true,
+                          !usage.hasBufferedCodexForkRetryLines else { return true }
+                    let metadata = Self.codexFileMetadata(fileURL: fileURL)
+                    return usage.size != metadata.size || usage.mtimeUnixMs != metadata.mtimeUnixMs
+                        || usage.codexScanFileId != metadata.fileId
+                }
+                Self.appendCodexActiveLookbackPaths(
+                    options.preferNewestCodexSessionsFirst
+                        ? Self.sortedCodexSessionFilesNewestFirst(dirtyFiles) : dirtyFiles,
+                    state: &activeLookbackState)
+            }
             let cacheWideMigrationNeedsQueueReseed = Self.cacheWideMigrationNeedsQueueReseed(
                 plan: plan,
                 inventoryPathKeys: inventoryPathKeys,
@@ -5650,9 +5657,12 @@ enum CostUsageScanner {
                     discoveredFiles: discoveredFiles,
                     previousDiscovery: cache.codexSessionDiscovery,
                     shouldBoundCatchUp: shouldBoundCatchUp,
-                    shouldSeedBoundedQueue: shouldSeedBoundedQueue),
+                    shouldSeedBoundedQueue: shouldSeedBoundedQueue,
+                    preferNewest: options.preferNewestCodexSessionsFirst),
                 state: &activeLookbackState)
-            let boundedQueuePathCount = shouldSeedBoundedQueue
+            let canExtendSelectedPrefix = shouldSeedBoundedQueue
+                || (!isExactInventoryProofPass && !hasUnmaterializedPendingPaths)
+            let boundedQueuePathCount = canExtendSelectedPrefix
                 ? min(Self.codexCatchUpScanCandidateLimit, activeLookbackState.pendingFilePaths.count)
                 : materializedPendingPathCount
             let refreshSelection = Self.codexFilesScheduledForRefresh(
@@ -5731,9 +5741,10 @@ enum CostUsageScanner {
             cache.codexActiveLookbackState = Self.finalizedCodexActiveLookbackState(
                 activeLookbackState,
                 completedFilePaths: completedScheduledPaths,
+                servicedFilePaths: scanResult.processedPaths,
                 completionCandidateCount: pendingLookbackPathCount,
                 requiresBoundedDiscoveryCompletion: shouldPageDiscovery,
-                retainCompletedStateForExactValidation: shouldBoundCatchUp && pendingLookbackPathCount > 0,
+                retainCompletedStateForExactValidation: scanBudget.hasTimeLimit && pendingLookbackPathCount > 0,
                 workRecorder: options.codexScanWorkRecorderForTesting)
             if scanBudget.resumedPartialFileCount > 0
                 || scanBudget.deferredByBudgetFileCount > 0
@@ -6071,11 +6082,8 @@ enum CostUsageScanner {
         var scannedPaths = Set(files.map(\.path))
         var attemptedPaths: Set<String> = []
         var processedPaths: Set<String> = []
-        var deferredInFirstPass: [URL] = []
-        var firstPassStoppedAtIndex = files.count
-        for (index, fileURL) in files.enumerated() {
+        for fileURL in files {
             if context.scanBudget?.shouldStopBeforeNextFile() == true {
-                firstPassStoppedAtIndex = index
                 break
             }
             context.workRecorder?.recordCodexFileScanAttempt(path: Self.codexPathKey(fileURL))
@@ -6085,61 +6093,13 @@ enum CostUsageScanner {
                 context: context,
                 cache: &cache,
                 state: &scanState)
-            switch outcome {
-            case .processed:
+            if case .processed = outcome {
                 processedPaths.insert(fileURL.path)
-            case .deferred:
-                let cached = cache.files[fileURL.path]
-                if cached?.parsedBytes ?? 0 > 0, cached?.codexScanComplete != true {
-                    deferredInFirstPass.append(fileURL)
-                }
             }
             let usage = cache.files[fileURL.path]
             inheritedResolver.updateCachedUsage(fileURL: fileURL, usage: usage)
             if Self.shouldRetryBufferedCodexFork(usage) {
                 bufferedForkRetries.append(fileURL)
-            }
-        }
-
-        for fileURL in files[firstPassStoppedAtIndex...] {
-            let cached = cache.files[fileURL.path]
-            if cached?.parsedBytes ?? 0 > 0, cached?.codexScanComplete != true {
-                deferredInFirstPass.append(fileURL)
-            }
-        }
-
-        if !deferredInFirstPass.isEmpty, let budget = context.scanBudget {
-            budget.enterDeferredPhase()
-            // Sort by remaining bytes ascending so near-complete files finish first and free
-            // pending queue slots. Actively-growing files cannot appear here: their changed
-            // mtime/size causes keepCachedCodexFileIfFresh to reject them, placing them into
-            // the first pass via newest-first ordering instead.
-            let sortedDeferred = deferredInFirstPass.sorted { a, b in
-                let pa = cache.files[a.path]?.parsedBytes ?? 0
-                let pb = cache.files[b.path]?.parsedBytes ?? 0
-                let ra = (cache.files[a.path]?.size ?? 0) - pa
-                let rb = (cache.files[b.path]?.size ?? 0) - pb
-                return ra < rb
-            }
-            for fileURL in sortedDeferred {
-                if budget.shouldStopDeferredFile() {
-                    break
-                }
-                context.workRecorder?.recordCodexFileScanAttempt(path: Self.codexPathKey(fileURL))
-                attemptedPaths.insert(fileURL.path)
-                let outcome = try Self.scanCodexFile(
-                    fileURL: fileURL,
-                    context: context,
-                    cache: &cache,
-                    state: &scanState)
-                if case .processed = outcome {
-                    processedPaths.insert(fileURL.path)
-                }
-                let usage = cache.files[fileURL.path]
-                inheritedResolver.updateCachedUsage(fileURL: fileURL, usage: usage)
-                if Self.shouldRetryBufferedCodexFork(usage) {
-                    bufferedForkRetries.append(fileURL)
-                }
             }
         }
 

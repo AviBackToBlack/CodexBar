@@ -2,6 +2,16 @@
 
 ## 0.55.2 — Unreleased
 
+### Fixed
+- Codex: fairly resume older partial session files during busy local cost scans without increasing scan limits or rebuilding compatible caches (#3207). Thanks @IchenDEV!
+- Menu bar: label the All providers preview as the default and disclose enabled providers with saved overrides, with a targeted “Use all-providers layout” action (#3210). Thanks @Sedrak-Hovhannisyan!
+- Claude: respect the used/remaining fill preference for capped Extra Usage, so an exhausted cap is empty in remaining mode (#3213). Thanks @vinschger!
+- Codex: clear stale connectivity errors after an authorized successful fetch even when weekly usage is withheld, including persisted and stacked-account errors (#3214). Thanks @olddonkey!
+- Antigravity: select the most constrained known quota independently for session and weekly menu-bar layout tokens, so unused model families no longer mask consumed quota (#3206). Thanks @foobra!
+- Codex: honor native access-token JWT expiry before the eight-day refresh age so valid OAuth usage keeps model-specific limits, while preserving CLI-owned refresh and external-source behavior (#3221, #3222). Thanks @anagnorisis2peripeteia!
+- OpenCode Go: preserve API percentage units so 1% usage no longer appears as 100%, including local-history overlays (#3216). Thanks @rodrigoalma!
+- CLI install: block inherited shell functions and startup hooks before helper validation and failure handling, and use absolute tools and a clean administrator-command environment while retaining approval and both existing symlink destinations (#3205, #3217).
+
 ## 0.55.1 — 2026-08-25
 
 ### Highlights

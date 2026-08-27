@@ -1,8 +1,8 @@
 import AppKit
-import CodexBarCore
 import SwiftUI
 import XCTest
 @testable import CodexBar
+@testable import CodexBarCore
 
 /// Developer tool, skipped by default: renders the stacked (before) and compact
 /// (after) claude-swap multi-account menu layouts to PNGs for documentation.
@@ -13,6 +13,203 @@ import XCTest
 final class MenuLayoutScreenshotRenderTests: XCTestCase {
     private static let width: CGFloat = 320
     private static let now = Date(timeIntervalSince1970: 1_782_000_000)
+
+    func test_renderLayoutOverrideDisclosureProof() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_LAYOUT_OVERRIDE_SCREENSHOT_DIR"] else {
+            throw XCTSkip("Set CODEXBAR_LAYOUT_OVERRIDE_SCREENSHOT_DIR to render the layout override proof.")
+        }
+        XCTAssertTrue(SettingsStore.isRunningTests)
+        guard SettingsStore.isRunningTests else { return }
+        XCTAssertTrue(CodexCredentialFileAccess.isTestContext)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("layout-override-proof-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // This XCTest needs no credential files; keep authorization empty and the dashboard cache temporary.
+        try CodexCredentialFileAccess.withFixtureScope(.init()) {
+            try OpenAIDashboardCacheStore.$cacheURLOverride.withValue(root.appendingPathComponent("dashboard.json")) {
+                try CodexBarLocalizationOverride.$appLanguage.withValue("en") {
+                    let order: [UsageProvider] = [.claude, .cursor]
+                    let config =
+                        CodexBarConfig(providers: (order + UsageProvider.allCases.filter { !order.contains($0) })
+                            .map { ProviderConfig(id: $0.instanceID, enabled: order.contains($0)) })
+                    let settings = testSettingsStore(
+                        suiteName: "MenuLayoutScreenshotRenderTests-overrides",
+                        config: config,
+                        prepareDefaults: { defaults in
+                            defaults.set(AppGroupSupport.migrationVersion, forKey: AppGroupSupport.migrationVersionKey)
+                            defaults.set(true, forKey: "debugDisableKeychainAccess")
+                        })
+                    settings.menuBarIconStyle = .iconAndPercent
+                    let global = MenuBarLayout(lines: [[.providerName, .space, .percent(window: .session)]])
+                    let override = MenuBarLayout(lines: [[.percent(window: .weekly)]])
+                    settings.setMenuBarLayout(global, for: nil)
+                    settings.setMenuBarLayout(override, for: .claude)
+                    let browserDetection = BrowserDetection(
+                        homeDirectory: root.path,
+                        fileExists: { _ in false },
+                        directoryContents: { _ in nil })
+                    let store = UsageStore(
+                        fetcher: UsageFetcher(environment: [:]),
+                        browserDetection: browserDetection,
+                        settings: settings,
+                        historicalUsageHistoryStore: HistoricalUsageHistoryStore(
+                            fileURL: root.appendingPathComponent("history.json")),
+                        planUtilizationHistoryStore: PlanUtilizationHistoryStore(
+                            directoryURL: root.appendingPathComponent("plan-history")),
+                        startupBehavior: .testing,
+                        environmentBase: [:],
+                        widgetSnapshotURL: root.appendingPathComponent("widget.json"))
+                    XCTAssertEqual(store.enabledFirstPartyProvidersForDisplay(), order)
+                    XCTAssertTrue(store.snapshots.isEmpty)
+                    XCTAssertEqual(settings.menuBarLayoutForGlobalEditing(representativeProvider: .claude), global)
+                    XCTAssertEqual(settings.menuBarLayout(for: .claude), override)
+
+                    let view = AnyView(MenuBarLayoutEditor(settings: settings, store: store)
+                        .frame(width: 560)
+                        .padding(16)
+                        .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+                        .environment(\.colorScheme, .dark)
+                        .background(Color(nsColor: .windowBackgroundColor)))
+                    let data = try XCTUnwrap(Self.pngData(for: view))
+                    let directory = URL(fileURLWithPath: dir, isDirectory: true)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try data.write(to: directory.appendingPathComponent("layout-override.png"))
+                    XCTAssertEqual(settings.menuBarLayoutOverrides, [.claude: override])
+                    XCTAssertEqual(settings.menuBarLayout, global)
+                }
+            }
+        }
+    }
+
+    func test_renderClaudeExtraUsageFillProof() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_CLAUDE_EXTRA_USAGE_SCREENSHOT_DIR"] else {
+            throw XCTSkip("Set CODEXBAR_CLAUDE_EXTRA_USAGE_SCREENSHOT_DIR to render the Claude Extra Usage proof.")
+        }
+
+        let metadata = try XCTUnwrap(ProviderDefaults.metadata[.claude])
+        let snapshot = UsageSnapshot(
+            primary: RateWindow(usedPercent: 25, windowMinutes: nil, resetsAt: nil, resetDescription: nil),
+            secondary: nil,
+            providerCost: ProviderCostSnapshot(
+                used: 25,
+                limit: 100,
+                currencyCode: "USD",
+                period: "Monthly",
+                updatedAt: Self.now),
+            updatedAt: Self.now)
+        let directory = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        for showUsed in [true, false] {
+            let model = UsageMenuCardView.Model.make(.init(
+                provider: .claude,
+                metadata: metadata,
+                snapshot: snapshot,
+                credits: nil,
+                creditsError: nil,
+                dashboard: nil,
+                dashboardError: nil,
+                tokenSnapshot: nil,
+                tokenError: nil,
+                account: AccountInfo(email: nil, plan: nil),
+                isRefreshing: false,
+                lastError: nil,
+                usageBarsShowUsed: showUsed,
+                resetTimeDisplayStyle: .countdown,
+                tokenCostUsageEnabled: false,
+                showOptionalCreditsAndExtraUsage: true,
+                hidePersonalInfo: true,
+                usesLiveSubtitle: false,
+                preferredCurrencyCode: "USD",
+                now: Self.now))
+            let view = AnyView(UsageMenuCardExtraUsageSectionView(
+                model: model,
+                topPadding: 12,
+                bottomPadding: 12,
+                width: Self.width)
+                .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+                .environment(\.colorScheme, .dark)
+                .background(Color(nsColor: .windowBackgroundColor)))
+            let mode = showUsed ? "used" : "remaining"
+            let png = try XCTUnwrap(Self.pngData(for: view), "Claude Extra Usage \(mode) render failed")
+            let url = directory.appendingPathComponent("claude-extra-usage-\(mode).png")
+            try png.write(to: url, options: .atomic)
+            print("Wrote \(url.path)")
+        }
+    }
+
+    func test_renderAntigravitySemanticLayoutProof() throws {
+        guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_ANTIGRAVITY_LAYOUT_SCREENSHOT_DIR"] else {
+            throw XCTSkip("Set CODEXBAR_ANTIGRAVITY_LAYOUT_SCREENSHOT_DIR to render the Antigravity layout proof.")
+        }
+
+        let json = antigravityQuotaSummaryJSON(
+            geminiSession: 0.86,
+            geminiWeekly: 0.55,
+            claudeSession: 1,
+            claudeWeekly: 1)
+        let snapshot = try AntigravityStatusProbe.parseQuotaSummaryResponse(Data(json.utf8)).toUsageSnapshot()
+        let windows = MenuBarLayoutSemanticWindowResolver.windows(provider: .antigravity, snapshot: snapshot)
+        let data = MenuBarLayoutRenderData(
+            provider: .antigravity,
+            iconKey: "antigravity",
+            providerName: nil,
+            accountLabel: nil,
+            laneLabels: MenuBarLayoutLaneLabels(provider: .antigravity, snapshot: snapshot),
+            primary: MenuBarLayoutRenderWindow(snapshot.primary),
+            secondary: MenuBarLayoutRenderWindow(snapshot.secondary),
+            tertiary: MenuBarLayoutRenderWindow(snapshot.tertiary),
+            session: MenuBarLayoutRenderWindow(windows.session),
+            weekly: MenuBarLayoutRenderWindow(windows.weekly),
+            scopedWeekly: nil,
+            scopedWeeklyTitle: nil,
+            automatic: nil,
+            automaticText: nil,
+            sessionPace: nil,
+            weeklyPace: nil,
+            automaticPace: nil,
+            runsOut: nil,
+            balance: nil,
+            costToday: nil,
+            cost30d: nil,
+            metrics: .unavailable)
+        let rendered = MenuBarLayoutRenderer().render(
+            layout: MenuBarLayout(lines: [[.percent(window: .session), .separatorDot, .percent(window: .weekly)]]),
+            data: data,
+            icon: nil,
+            options: MenuBarLayoutRenderOptions(
+                size: .regular,
+                highContrast: false,
+                showUsed: false,
+                conditionals: [],
+                appearanceName: "antigravity-proof",
+                isDebugApp: false,
+                now: Self.now))
+        let view = AnyView(VStack(alignment: .leading, spacing: 12) {
+            Text("Antigravity · synthetic quota data")
+                .font(.headline)
+            Text("Remaining quota · session / weekly")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            MenuBarLayoutPreviewText(rendered: rendered)
+                .frame(height: 30)
+        }
+        .padding(16)
+        .frame(width: Self.width)
+        .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+        .environment(\.colorScheme, .dark)
+        .background(Color(nsColor: .windowBackgroundColor)))
+
+        let directory = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let png = try XCTUnwrap(Self.pngData(for: view), "Antigravity layout proof render failed")
+        let url = directory.appendingPathComponent("antigravity-semantic-layout.png")
+        try png.write(to: url, options: .atomic)
+        print("Rendered: \(rendered.attributedTitle.string); accessibility: \(rendered.accessibilityLabel)")
+        print("Wrote \(url.path)")
+    }
 
     func test_renderMultiAccountLayoutScreenshots() throws {
         guard let dir = ProcessInfo.processInfo.environment["CODEXBAR_SCREENSHOT_DIR"] else {
