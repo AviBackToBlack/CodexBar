@@ -165,6 +165,8 @@ Example:
   - By default, a selected managed account keeps its own `CODEX_HOME` session history.
   - **Local session cost estimates** is a Codex-only opt-in that instead scans this Mac's ambient `$CODEX_HOME`
     (or `~/.codex`) independently of quota, OAuth, web-dashboard, and administrator access.
+  - Regular menu cost refreshes publish local session estimates even when global cost tracking is off. This does not
+    enable other providers' cost scans; results still require the same provider configuration and history/account scope.
   - The local-only mode never makes a network request or uploads session content. It uses an existing local models.dev
     cache when available, then the bundled `CostUsagePricing` rates.
 - Source files:
