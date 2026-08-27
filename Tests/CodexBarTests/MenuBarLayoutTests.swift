@@ -1050,6 +1050,77 @@ struct MenuBarLayoutTests {
 
     @Test
     @MainActor
+    func `global editor edits preserve saved overrides and targeted reset persists without unrelated changes`() throws {
+        try #require(SettingsStore.isRunningTests)
+        let settings = testSettingsStore(
+            suiteName: "MenuBarLayoutTests-global-override-edit",
+            config: CodexBarConfig(providers: UsageProvider.allCases.map {
+                ProviderConfig(id: $0.instanceID, enabled: $0 == .claude || $0 == .cursor)
+            }),
+            prepareDefaults: { defaults in
+                defaults.set(AppGroupSupport.migrationVersion, forKey: AppGroupSupport.migrationVersionKey)
+                defaults.set(true, forKey: "debugDisableKeychainAccess")
+            })
+        let global = MenuBarLayout(lines: [[.providerName]])
+        let edited = MenuBarLayout(lines: [[.providerName, .percent(window: .session)]])
+        let override = MenuBarLayout(lines: [[.percent(window: .weekly)]])
+        settings.setMenuBarLayout(global, for: nil)
+        settings.setMenuBarLayout(override, for: .claude)
+        settings.setMenuBarLayout(global, for: .cursor)
+        settings.setMenuBarLayout(override, for: .kimi)
+        settings.hidePersonalInfo = true
+        settings.menuBarLayoutSize = .small
+        settings.menuBarLayoutGap = .tight
+        settings.resetTimesShowAbsolute = true
+        let configBefore = try Data(contentsOf: settings.configStore.fileURL)
+
+        MenuBarLayoutEditorPersistence.activate(edited, for: nil, settings: settings)
+        #expect(settings.menuBarLayoutOverrides == [.claude: override, .cursor: global, .kimi: override])
+        #expect(settings.menuBarLayoutForGlobalEditing(representativeProvider: .claude) == edited)
+        #expect(settings.menuBarLayout(for: .claude) == override)
+        let reloaded = Self.reloadSettingsStore(settings)
+        #expect(reloaded.menuBarLayoutOverrides == settings.menuBarLayoutOverrides)
+
+        MenuBarLayoutEditorPersistence.useAllProvidersLayout(for: .claude, settings: reloaded)
+        let afterReset = Self.reloadSettingsStore(reloaded)
+        #expect(afterReset.menuBarLayout == edited)
+        #expect(afterReset.menuBarLayout(for: .claude) == edited)
+        #expect(afterReset.menuBarLayoutOverrides == [.cursor: global, .kimi: override])
+        #expect(afterReset.providerEnablement == settings.providerEnablement)
+        #expect(afterReset.providerOrder == settings.providerOrder)
+        #expect(afterReset.hidePersonalInfo)
+        #expect(afterReset.menuBarLayoutSize == .small)
+        #expect(afterReset.menuBarLayoutGap == .tight)
+        #expect(afterReset.resetTimeDisplayStyle == .absolute)
+        #expect(try Data(contentsOf: afterReset.configStore.fileURL) == configBefore)
+    }
+
+    @Test
+    @MainActor
+    func `first global edit still starts from the representative saved override`() throws {
+        try #require(SettingsStore.isRunningTests)
+        let settings = testSettingsStore(
+            suiteName: "MenuBarLayoutTests-global-editor-override-fallback",
+            prepareDefaults: { defaults in
+                defaults.set(AppGroupSupport.migrationVersion, forKey: AppGroupSupport.migrationVersionKey)
+                defaults.set(true, forKey: "debugDisableKeychainAccess")
+            })
+        let override = MenuBarLayout(lines: [[.percent(window: .weekly)]])
+        settings.setMenuBarLayout(override, for: .claude)
+
+        #expect(!settings.hasStoredMenuBarLayout)
+        let initial = settings.menuBarLayoutForGlobalEditing(representativeProvider: .claude)
+        #expect(initial == override)
+        let edited = MenuBarLayoutEditorMutations.append(.providerName, to: initial)
+        MenuBarLayoutEditorPersistence.activate(edited, for: nil, settings: settings)
+
+        #expect(settings.menuBarLayoutForGlobalEditing(representativeProvider: .claude) == edited)
+        #expect(settings.menuBarLayout(for: .claude) == override)
+        #expect(settings.menuBarLayoutOverrides == [.claude: override])
+    }
+
+    @Test
+    @MainActor
     func `global editing seeds the representative provider legacy layout`() throws {
         let settings = testSettingsStore(suiteName: "MenuBarLayoutTests-global-editor-migration")
         settings.setMenuBarMetricPreference(.primary, for: .kimi)
