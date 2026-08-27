@@ -4,6 +4,7 @@
 
 ### Fixed
 - Antigravity: select the most constrained known quota independently for session and weekly menu-bar layout tokens, so unused model families no longer mask consumed quota (#3206). Thanks @foobra!
+- Codex: honor access-token JWT expiry before the legacy eight-day refresh age so valid OAuth usage does not fall back to the CLI and lose model-specific limits.
 - OpenCode Go: preserve API percentage units so 1% usage no longer appears as 100%, including local-history overlays (#3216). Thanks @rodrigoalma!
 - CLI install: block inherited shell functions and startup hooks before helper validation and failure handling, and use absolute tools and a clean administrator-command environment while retaining approval and both existing symlink destinations (#3205, #3217).
 

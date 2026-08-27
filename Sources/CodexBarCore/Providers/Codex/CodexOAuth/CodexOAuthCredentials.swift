@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 #if canImport(Darwin)
@@ -53,7 +54,8 @@ public struct CodexOAuthCredentials: Equatable, Sendable {
             return false
         }
         if let expiresAt {
-            return expiresAt.timeIntervalSinceNow <= 60
+            let refreshWindow: TimeInterval = self.source == .codexHome ? 5 * 60 : 60
+            return expiresAt.timeIntervalSinceNow <= refreshWindow
         }
         guard let lastRefresh else { return true }
         let eightDays: TimeInterval = 8 * 24 * 60 * 60
@@ -90,6 +92,10 @@ public enum CodexOAuthCredentialsError: LocalizedError, Sendable {
 }
 
 public enum CodexOAuthCredentialsStore {
+    /// Chrono 0.4 accepts UTC timestamps from year -262143 through year 262142.
+    private static let codexJWTExpirationRange: ClosedRange<Int64> =
+        -8_334_601_228_800...8_210_266_876_799
+
     private static func authFilePath(
         env: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
@@ -283,6 +289,7 @@ public enum CodexOAuthCredentialsStore {
                 Self.stringValue(in: tokens, snakeCaseKey: "account_id", camelCaseKey: "accountId"))
             ?? Self.accountIDFromJWT(idToken: idToken, accessToken: accessToken)
         let lastRefresh = Self.parseLastRefresh(from: json["last_refresh"])
+        let expiresAt = Self.expirationFromJWT(accessToken: accessToken)
 
         return CodexOAuthCredentials(
             accessToken: accessToken,
@@ -290,6 +297,7 @@ public enum CodexOAuthCredentialsStore {
             idToken: idToken,
             accountId: accountId,
             lastRefresh: lastRefresh,
+            expiresAt: expiresAt,
             source: source)
     }
 
@@ -478,15 +486,7 @@ public enum CodexOAuthCredentialsStore {
     /// treating a malformed or opaque token as a credential-read failure.
     private static func accountIDFromJWT(idToken: String?, accessToken: String?) -> String? {
         for token in [idToken, accessToken].compactMap(\.self) {
-            let parts = token.split(separator: ".", omittingEmptySubsequences: false)
-            guard parts.count == 3 else { continue }
-            var encoded = String(parts[1])
-                .replacingOccurrences(of: "-", with: "+")
-                .replacingOccurrences(of: "_", with: "/")
-            encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
-            guard let payloadData = Data(base64Encoded: encoded),
-                  let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
-            else { continue }
+            guard let payload = jwtPayload(token) else { continue }
 
             if let accountID = Self.nonEmpty(payload["chatgpt_account_id"] as? String) {
                 return accountID
@@ -506,6 +506,37 @@ public enum CodexOAuthCredentialsStore {
             }
         }
         return nil
+    }
+
+    /// Native Codex treats the access-token JWT expiry as authoritative and uses `last_refresh`
+    /// only when the claim is unavailable. Preserve that precedence without rejecting opaque tokens.
+    private static func expirationFromJWT(accessToken: String) -> Date? {
+        guard let expiration = exactInt64JSONNumber(jwtPayload(accessToken)?["exp"]) else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(expiration))
+    }
+
+    private static func exactInt64JSONNumber(_ value: Any?) -> Int64? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              !CFNumberIsFloatType(number)
+        else { return nil }
+
+        let integer = number.int64Value
+        guard number.compare(NSNumber(value: integer)) == .orderedSame,
+              Self.codexJWTExpirationRange.contains(integer)
+        else { return nil }
+        return integer
+    }
+
+    private static func jwtPayload(_ token: String) -> [String: Any]? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
+        var encoded = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
+        guard let payloadData = Data(base64Encoded: encoded) else { return nil }
+        return try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
     }
 }
 
