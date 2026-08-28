@@ -1378,19 +1378,19 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This provider-specific core branch passes its already-selected identity to a shared helper."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 837,
+            line: 800,
             anchor: "provider: .codex,",
             expectedProviderIDs: ["codex"],
             reason: "This provider-specific core branch passes its already-selected identity to a shared helper."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 917,
+            line: 876,
             anchor: "provider: .codex,",
             expectedProviderIDs: ["codex"],
             reason: "This provider-specific core branch passes its already-selected identity to a shared helper."),
         SuppressedProviderReference(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 1008,
+            line: 961,
             anchor: "provider: .codex,",
             expectedProviderIDs: ["codex"],
             reason: "This provider-specific core branch passes its already-selected identity to a shared helper."),
@@ -3522,7 +3522,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact shared construct dispatches a provider-owned capability at the generic integration boundary."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 642,
+            line: 609,
             anchor: "if provider == .codex {",
             expectedProviderIDs: ["codex"],
             expectedReferenceCount: 1,
@@ -3530,7 +3530,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact cost scanner dispatch selects a provider-owned transcript, cache, or pricing format."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 670,
+            line: 633,
             anchor: "provider == .claude || (provider == .codex && options.shouldMergePiUsage)",
             expectedProviderIDs: ["claude", "codex"],
             expectedReferenceCount: 5,
@@ -3538,7 +3538,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact cost scanner dispatch selects a provider-owned transcript, cache, or pricing format."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 717,
+            line: 680,
             anchor: "options.provider == .codex || options.provider == .claude",
             expectedProviderIDs: ["claude", "codex"],
             expectedReferenceCount: 2,
@@ -3546,7 +3546,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact cost scanner dispatch selects a provider-owned transcript, cache, or pricing format."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 748,
+            line: 711,
             anchor: "guard provider == .codex || provider == .claude else { return nil }",
             expectedProviderIDs: ["claude", "codex"],
             expectedReferenceCount: 3,
@@ -3554,7 +3554,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact cost scanner dispatch selects a provider-owned transcript, cache, or pricing format."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 1412,
+            line: 1365,
             anchor: "if provider == .vertexai {",
             expectedProviderIDs: ["claude", "vertexai"],
             expectedReferenceCount: 2,
@@ -3562,7 +3562,7 @@ struct ProviderArchitectureGatekeeperTests {
             reason: "This exact cost scanner dispatch selects a provider-owned transcript, cache, or pricing format."),
         AllowedProviderConstruct(
             path: "Sources/CodexBarCore/CostUsageFetcher.swift",
-            line: 1768,
+            line: 1721,
             anchor: "if provider == .cursor {",
             expectedProviderIDs: ["cursor"],
             expectedReferenceCount: 1,
