@@ -4,6 +4,10 @@
 //! under the app logs directory when that directory is writable. Any
 //! filesystem error degrades to stderr-only logging; startup must never fail
 //! because logs cannot be written.
+//!
+//! The CLI and the desktop shell write distinct per-process log files
+//! (`codexbar-cli.log` / `codexbar-desktop.log`) so a cached handle in one
+//! process never blocks the other process's rotation on Windows.
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -15,24 +19,42 @@ pub fn safe_error_message(err: impl std::fmt::Display) -> String {
     crate::core::SecretRedactor::redact(&err.to_string())
 }
 
-/// Settings directory that hosts the app settings file (also the log root).
-///
-/// Mirrors 's  base without
-/// importing the settings module (keeps logging self-contained).
-pub fn settings_dir() -> Option<PathBuf> {
+/// Canonical application config root that hosts the settings file and logs.
+pub fn config_root() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("CodexBar"))
 }
 
-/// Path of the current in-app log file, if a settings dir is resolvable.
-pub fn log_file_path() -> Option<PathBuf> {
-    settings_dir().map(|p| p.join("logs").join("codexbar.log"))
+/// Settings directory that hosts the app settings file (also the log root).
+pub fn settings_dir() -> Option<PathBuf> {
+    config_root()
 }
 
 /// Maximum size of the current log file before rotation to the single backup file.
 pub const LOG_MAX_BYTES: u64 = 1024 * 1024;
 
+/// Log file name stems. The CLI and the desktop shell must differ so their
+/// cached handles never fight over the same file on Windows.
+pub const LOG_FILE_STEM_CLI: &str = "codexbar-cli";
+pub const LOG_FILE_STEM_DESKTOP: &str = "codexbar-desktop";
+
+static LOG_FILE_STEM: LazyLock<&'static str> = LazyLock::new(|| {
+    // The Tauri shell sets CODEXBAR_PROCESS=desktop before logging::init;
+    // everything else (the `codexbar` binary, tests) gets the CLI name.
+    if std::env::var_os("CODEXBAR_PROCESS").is_some_and(|v| v == "desktop") {
+        LOG_FILE_STEM_DESKTOP
+    } else {
+        LOG_FILE_STEM_CLI
+    }
+});
+
 /// Lines returned by the log-tail helper.
 pub const LOG_TAIL_LINES: usize = 200;
+
+/// Path of the current in-app log file for this process, if a settings dir
+/// is resolvable.
+pub fn log_file_path() -> Option<PathBuf> {
+    settings_dir().map(|p| p.join("logs").join(format!("{}.log", *LOG_FILE_STEM)))
+}
 
 // -- Size-capped file writer -------------------------------------------------
 
@@ -121,7 +143,7 @@ fn file_writer() -> Option<&'static CappedFileWriter> {
     WRITER.as_ref()
 }
 
-/// Initialize the logging system
+/// Initialize the logging system for this process (default: CLI file name).
 pub fn init(verbose: bool, json: bool) -> anyhow::Result<()> {
     let filter = if verbose {
         EnvFilter::new("debug")
@@ -151,13 +173,33 @@ pub fn init(verbose: bool, json: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Render one panic record from its parts and append it to the given writer
+/// (no-op without one). Split out from the hook so the fallible path is
+/// directly testable; the hook wraps it in catch_unwind and chains to the
+/// previous hook.
+fn write_panic_record(
+    writer: Option<&CappedFileWriter>,
+    payload: &str,
+    location: &str,
+    backtrace: &str,
+) {
+    if let Some(writer) = writer {
+        writer.append(
+            safe_error_message(format!(
+                "panic at {location}: {payload}\nbacktrace:\n{backtrace}\n"
+            ))
+            .as_bytes(),
+        );
+    }
+}
+
 /// Install a panic hook that best-effort logs panics to the app log file and
 /// then chains to the previous default hook. The hook itself never panics.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let hook_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let message = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
                 (*s).to_string()
             } else if let Some(s) = info.payload().downcast_ref::<String>() {
                 s.clone()
@@ -169,27 +211,29 @@ pub fn install_panic_hook() {
                 None => "unknown location".to_string(),
             };
             let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-            if let Some(writer) = file_writer() {
-                writer.append(
-                    safe_error_message(format!(
-                        "panic at {location}: {message}\nbacktrace:\n{backtrace}\n"
-                    ))
-                    .as_bytes(),
-                );
-            }
+            write_panic_record(file_writer(), &payload, &location, &backtrace);
         }));
         let _ignored_hook = hook_result;
         previous(info);
     }));
 }
 
+/// Last LOG_TAIL_LINES lines of `content`, fully redacted: secrets via
+/// SecretRedactor and email addresses unconditionally (tail output is pasted
+/// into public bug reports regardless of the privacy setting).
+pub fn log_tail_from(content: &str) -> String {
+    let tail: Vec<&str> = content.lines().rev().take(LOG_TAIL_LINES).collect();
+    let tail: Vec<&str> = tail.into_iter().rev().collect();
+    let redacted = crate::core::SecretRedactor::redact(&tail.join("\n"));
+    crate::core::PersonalInfoRedactor::redact_emails_in_text(Some(&redacted), true)
+        .unwrap_or(redacted)
+}
+
 /// Read the last LOG_TAIL_LINES lines of the current log file, redacted.
 pub fn read_log_tail() -> Option<String> {
     let path = log_file_path()?;
     let content = std::fs::read_to_string(path).ok()?;
-    let tail: Vec<&str> = content.lines().rev().take(LOG_TAIL_LINES).collect();
-    let tail: Vec<&str> = tail.into_iter().rev().collect();
-    Some(crate::core::SecretRedactor::redact(&tail.join("\n")))
+    Some(log_tail_from(&content))
 }
 
 #[cfg(test)]
@@ -254,38 +298,58 @@ mod tests {
     }
 
     #[test]
-    fn read_log_tail_returns_up_to_max_lines() {
+    fn log_tail_from_returns_up_to_max_lines_with_full_redaction() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("logs").join("codexbar.log");
+        let path = dir.path().join("logs").join("codexbar-cli.log");
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        let body: String = (0..(LOG_TAIL_LINES + 50))
-            .map(|i| format!("line {i}\n"))
-            .collect();
+        let total = LOG_TAIL_LINES + 50;
+        let body: String = (0..total).map(|i| format!("line {i}\n")).collect();
         std::fs::write(&path, body).expect("seed file");
-        let writer = CappedFileWriter::new(path, LOG_MAX_BYTES).expect("writer");
-        // read_log_tail reads from log_file_path(); simulate by reading from
-        // the temp dir file directly through the same line-count logic.
-        let content = std::fs::read_to_string(writer.path.clone()).expect("read");
-        let tail: Vec<&str> = content.lines().rev().take(LOG_TAIL_LINES).collect();
-        assert_eq!(tail.len(), LOG_TAIL_LINES);
+        let content = std::fs::read_to_string(&path).expect("read");
+        let tail = log_tail_from(&content);
+        let lines: Vec<&str> = tail.lines().collect();
+        assert_eq!(lines.len(), LOG_TAIL_LINES);
+        assert_eq!(lines[0], format!("line {}", total - LOG_TAIL_LINES));
+        assert_eq!(lines[lines.len() - 1], format!("line {}", total - 1));
+        // Tail output is pasted into public bug reports, so email addresses
+        // are redacted regardless of the privacy setting.
+        let with_email = format!(
+            "line 0\ncontact me at user@example.com\n{}",
+            "x".repeat(2048)
+        );
+        let redacted = log_tail_from(&with_email);
+        assert!(
+            !redacted.contains("user@example.com"),
+            "emails must be redacted: {redacted}"
+        );
+        assert!(
+            redacted.contains("Hidden"),
+            "email placeholder expected: {redacted}"
+        );
     }
 
     #[test]
-    fn panic_hook_returns_cleanly_when_log_path_unwritable() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        // Seed a regular file where a directory would need to be created.
-        let blocker = dir.path().join("blocker");
-        std::fs::write(&blocker, "not a directory").expect("write blocker");
-        let bad_path = blocker.join("logs").join("codexbar.log");
-        // CappedFileWriter::new fails because create_dir_all cannot succeed.
-        assert!(CappedFileWriter::new(bad_path, LOG_MAX_BYTES).is_none());
+    fn write_panic_record_is_noop_without_writer() {
         // The hook body must never panic even with no writer available.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // Simulate the hook's fallible path with file_writer() == None.
-            if let Some(writer) = file_writer() {
-                writer.append(b"should not happen\n");
-            }
+            write_panic_record(None, "boom", "src/main.rs:1:1", "frame 0");
         }));
         assert!(result.is_ok());
+    }
+    #[test]
+    fn write_panic_record_appends_to_real_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("logs").join("codexbar-cli.log");
+        let writer = CappedFileWriter::new(path.clone(), LOG_MAX_BYTES).expect("writer");
+        write_panic_record(Some(&writer), "boom payload", "src/lib.rs:7:3", "frame 0");
+        let recorded = std::fs::read_to_string(&path).expect("read recorded");
+        assert!(
+            recorded.contains("panic at src/lib.rs:7:3: boom payload"),
+            "panic record expected: {recorded}"
+        );
+        assert!(
+            recorded.contains("frame 0"),
+            "backtrace expected: {recorded}"
+        );
     }
 }

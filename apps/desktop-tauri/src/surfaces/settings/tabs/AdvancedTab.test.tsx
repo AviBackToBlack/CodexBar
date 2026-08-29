@@ -93,10 +93,10 @@ describe("AdvancedTab", () => {
 
     render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);
 
-    const copyButtons = screen.getAllByRole("button", {
-      name: "DiagnosticsCopyButton",
-    });
-    fireEvent.click(copyButtons[copyButtons.length - 1]);
+    screen.getByRole("heading", { name: "DiagnosticsSectionHeading" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "DiagnosticsCopyButton" }),
+    );
 
     await waitFor(() => {
       expect(tauriMocks.getSafeDiagnostics).toHaveBeenCalled();
@@ -111,14 +111,12 @@ describe("AdvancedTab", () => {
 
   it("shows an error when copying diagnostics fails", async () => {
     tauriMocks.getSafeDiagnostics.mockRejectedValue(new Error("invoke failed"));
-
     render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);
 
-    const copyButtons = screen.getAllByRole("button", {
-      name: "DiagnosticsCopyButton",
-    });
-    fireEvent.click(copyButtons[copyButtons.length - 1]);
-
+    screen.getByRole("heading", { name: "DiagnosticsSectionHeading" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "DiagnosticsCopyButton" }),
+    );
     await waitFor(() => {
       expect(
         screen.getAllByText(/DiagnosticsCopyFailed/).length,

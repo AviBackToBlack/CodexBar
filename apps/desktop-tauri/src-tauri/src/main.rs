@@ -110,6 +110,10 @@ fn should_suppress_blur_dismiss(launch: LaunchBehavior, proof_mode: bool) -> boo
 }
 
 fn main() {
+    // Per-process log file names: the shell writes codexbar-desktop.log so
+    // its cached handle never blocks the CLI's rotation on Windows.
+    // SAFETY: runs before any thread spawns; no concurrent env access exists.
+    unsafe { std::env::set_var("CODEXBAR_PROCESS", "desktop") };
     codexbar::logging::install_panic_hook();
     codexbar::logging::init(false, false).expect("failed to initialize logging");
 

@@ -725,6 +725,7 @@ AboutCopyrightAfter = by steipete. MIT License.
 AboutLinkGitHub = GitHub
 AboutLinkWebsite = Website
 AboutLinkOriginalProject = Original Project
+DiagnosticsSectionHeading = Diagnostics
 DiagnosticsCopyButton = Copy diagnostics
 DiagnosticsCopied = Diagnostics copied to clipboard
 DiagnosticsCopyFailed = Could not copy diagnostics

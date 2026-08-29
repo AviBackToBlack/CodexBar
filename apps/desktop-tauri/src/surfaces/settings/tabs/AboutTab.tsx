@@ -8,13 +8,7 @@ import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
 import codexbarIcon from "../../../assets/codexbar-icon.png";
 
-const REPO_URL = [
-  "https:",
-  "",
-  "github.com",
-  "nesszer",
-  "Win-CodexBar",
-].join("/");
+const REPO_URL = "https://github.com/nesszer/Win-CodexBar";
 const SUBMIT_ISSUE_URL = `${REPO_URL}/issues/new?labels=bug&template=bug_report.yml`;
 
 const ABOUT_LINKS: ReadonlyArray<{ labelKey: LocaleKey; url: string }> = [

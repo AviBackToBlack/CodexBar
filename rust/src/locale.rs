@@ -1044,6 +1044,7 @@ locale_keys! {
     AboutLinkGitHub,
     AboutLinkWebsite,
     AboutLinkOriginalProject,
+    DiagnosticsSectionHeading,
     DiagnosticsCopyButton,
     DiagnosticsCopied,
     DiagnosticsCopyFailed,
