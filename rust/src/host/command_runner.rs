@@ -646,7 +646,11 @@ mod tests {
         let result = runner.run("powershell.exe", None, &options).unwrap();
 
         assert_eq!(result.exit_code, Some(1));
-        assert!(result.text.contains("stdout line"), "stdout: {}", result.text);
+        assert!(
+            result.text.contains("stdout line"),
+            "stdout: {}",
+            result.text
+        );
         assert!(
             result.stderr.contains("boom diagnostics"),
             "stderr: {}",
