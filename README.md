@@ -33,7 +33,7 @@ Install with Windows Package Manager:
 winget install Finesssee.Win-CodexBar
 ```
 
-Or download the latest installer/portable build from [GitHub Releases](https://github.com/Finesssee/Win-CodexBar/releases).
+Or download the latest installer/portable build from [GitHub Releases](https://github.com/nesszer/Win-CodexBar/releases).
 
 - Installer: `CodexBar-<version>-Setup.exe`
 - Portable: `CodexBar-<version>-portable.exe`
@@ -135,7 +135,7 @@ The UI and contributor reporting currently support:
 
 ```powershell
 # Prerequisites: Node.js + pnpm. Rust and MinGW are installed by the script when needed.
-git clone https://github.com/Finesssee/Win-CodexBar.git
+git clone https://github.com/nesszer/Win-CodexBar.git
 cd Win-CodexBar
 .\scripts\dev.ps1
 ```

@@ -566,7 +566,7 @@ impl Default for Settings {
 impl Settings {
     /// Get the settings file path
     pub fn settings_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join("settings.json"))
+        crate::logging::config_root().map(|p| p.join("settings.json"))
     }
 
     /// Load settings from disk
@@ -597,7 +597,7 @@ impl Settings {
 
     /// Marker written after the one-shot "pin tray by default" migration (issue #237).
     fn promote_tray_default_marker_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join(".tray-pin-default-v1"))
+        crate::logging::config_root().map(|p| p.join(".tray-pin-default-v1"))
     }
 
     /// Old builds defaulted `promote_tray_icon` to false and persisted that on any

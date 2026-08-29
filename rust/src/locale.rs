@@ -1044,6 +1044,10 @@ locale_keys! {
     AboutLinkGitHub,
     AboutLinkWebsite,
     AboutLinkOriginalProject,
+    DiagnosticsSectionHeading,
+    DiagnosticsCopyButton,
+    DiagnosticsCopied,
+    DiagnosticsCopyFailed,
 
     // Tauri desktop shell — Cookies tab hints / placeholder
     SavedCookiesHint,

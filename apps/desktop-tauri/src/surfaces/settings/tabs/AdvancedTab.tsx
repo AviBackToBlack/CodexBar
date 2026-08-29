@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import {
+  getSafeDiagnostics,
   registerGlobalShortcut,
   unregisterGlobalShortcut,
 } from "../../../lib/tauri";
@@ -26,12 +27,29 @@ function parseSshHosts(value: string): string[] {
 export default function AdvancedTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
   const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<string | null>(
+    null,
+  );
   const [codexDirsDraft, setCodexDirsDraft] = useState(() =>
     formatCodexSessionsDirs(settings.codexCustomSessionsDirs),
   );
   const [sshHostsDraft, setSshHostsDraft] = useState(() =>
     (settings.agentSessionSshHosts ?? []).join(", "),
   );
+
+  const copyDiagnostics = useCallback(async () => {
+    try {
+      const text = await getSafeDiagnostics();
+      await navigator.clipboard.writeText(text);
+      setDiagnosticsStatus(t("DiagnosticsCopied"));
+    } catch (error) {
+      setDiagnosticsStatus(`${t("DiagnosticsCopyFailed")} ${String(error)}`);
+    }
+  }, [t]);
+
+  const commitCodexDirs = useCallback(() => {
+    set({ codexCustomSessionsDirs: parseCodexSessionsDirs(codexDirsDraft) });
+  }, [codexDirsDraft, set]);
 
   useEffect(() => {
     if (!saving) {
@@ -66,9 +84,6 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
     }
   }, [set]);
 
-  const commitCodexDirs = useCallback(() => {
-    set({ codexCustomSessionsDirs: parseCodexSessionsDirs(codexDirsDraft) });
-  }, [codexDirsDraft, set]);
 
   return (
     <>
@@ -312,6 +327,25 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
               onChange={(v) => set({ claudeAvoidKeychainPrompts: v })}
             />
           </Field>
+        </div>
+      </section>
+
+      {/* ── Diagnostics ──────────────────────────────────────────── */}
+      <section className="settings-section">
+        <h3 className="settings-section__title settings-section__title--bold">
+          {t("DiagnosticsSectionHeading")}
+        </h3>
+        <div className="settings-section__group">
+          <button
+            type="button"
+            className="credential-btn"
+            onClick={() => void copyDiagnostics()}
+          >
+            {t("DiagnosticsCopyButton")}
+          </button>
+          {diagnosticsStatus && (
+            <p className="settings-section__hint">{diagnosticsStatus}</p>
+          )}
         </div>
       </section>
     </>

@@ -764,6 +764,10 @@ export const ALL_LOCALE_KEYS = [
   "AboutLinkGitHub",
   "AboutLinkWebsite",
   "AboutLinkOriginalProject",
+  "DiagnosticsSectionHeading",
+  "DiagnosticsCopyButton",
+  "DiagnosticsCopied",
+  "DiagnosticsCopyFailed",
 
   // Tauri desktop shell — Cookies tab hints / placeholder
   "SavedCookiesHint",

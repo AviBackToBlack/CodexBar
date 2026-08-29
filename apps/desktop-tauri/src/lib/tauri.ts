@@ -528,3 +528,7 @@ export function codexAccountRestartDesktop(
 export function getCodexAccountsState(): Promise<CodexAccountsStateBridge> {
   return invoke<CodexAccountsStateBridge>("get_codex_accounts_state");
 }
+
+export function getSafeDiagnostics(): Promise<string> {
+  return invoke<string>("get_safe_diagnostics");
+}

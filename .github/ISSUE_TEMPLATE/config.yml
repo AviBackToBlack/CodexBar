@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Questions & Answers
+    url: https://github.com/nesszer/Win-CodexBar/discussions
+    about: Ask usage questions, share tips, and discuss Win-CodexBar with other users.
+  - name: Configuration docs
+    url: https://github.com/nesszer/Win-CodexBar/blob/main/docs/CONFIGURATION.md
+    about: Configuration questions are best answered by the docs first.
+  - name: Cookies and browser docs
+    url: https://github.com/nesszer/Win-CodexBar/blob/main/docs/COOKIES.md
+    about: Browser cookie import questions are covered in the cookies docs.
