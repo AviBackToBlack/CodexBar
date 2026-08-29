@@ -24,10 +24,12 @@ gets the restricted `GH_TOKEN` context.
 3. The build invokes `scripts/release-doctor.ps1 -SkipGitHub`, then
    `scripts/windows-release-build.ps1 -Ref <full-SHA> -SmokeInstall` with a
    fresh temporary `WorkRoot`. It never receives `GH_TOKEN` and never uploads.
-4. The job emits exactly these four publishable assets:
+4. The job emits exactly these six publishable assets:
    `CodexBar-X.Y.Z-Setup.exe`, its `.sha256` sidecar,
-   `CodexBar-X.Y.Z-portable.exe`, and its `.sha256` sidecar. It also emits
-   `release-manifest.json` (tag, commit, version, sizes, and hashes) and logs,
+   `CodexBar-X.Y.Z-portable.exe`, its `.sha256` sidecar,
+   `CodexBarCLI-vX.Y.Z-windows-x64.zip`, and its `.sha256` sidecar. It also
+   emits `release-manifest.json` (tag, commit, version, sizes, and hashes)
+   and logs,
    then persists/stores the bundle as CircleCI workspace/artifacts.
 5. A human must approve the `release-approval` job after reviewing the
    manifest and artifact logs.
@@ -40,6 +42,12 @@ gets the restricted `GH_TOKEN` context.
 7. A maintainer publishes the draft manually in GitHub after any final release
    notes/review. Winget follows only after the immutable installer URL and
    digest are stable.
+
+## Signing status
+
+The `CodexBarCLI-vX.Y.Z-windows-x64.zip` asset is currently **unsigned**. The
+SignPath workflow's upload glob (`CodexBar-*.exe`) does not include it.
+Revisit when SignPath wiring for the CLI zip lands.
 
 ## Local checks
 
