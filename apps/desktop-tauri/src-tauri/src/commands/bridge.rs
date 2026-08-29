@@ -194,6 +194,8 @@ pub struct ProviderUsageSnapshot {
     pub updated_at: String,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default = "default_error_state")]
+    pub error_state: codexbar::core::ProviderStateKind,
     #[serde(default)]
     pub pace: Option<PaceSnapshot>,
     #[serde(default)]
@@ -214,6 +216,10 @@ fn default_display_name() -> String {
 
 fn default_source_label() -> String {
     "seed".to_string()
+}
+
+fn default_error_state() -> codexbar::core::ProviderStateKind {
+    codexbar::core::ProviderStateKind::Unknown
 }
 
 /// Provider payload after applying settings-driven cross-surface presentation.
@@ -380,6 +386,7 @@ impl ProviderUsageSnapshot {
             source_label: result.source_label.clone(),
             updated_at: usage.updated_at.to_rfc3339(),
             error: None,
+            error_state: codexbar::core::ProviderStateKind::Ready,
             pace,
             account_organization: usage.account_organization.clone(),
             tray_status_label: None,
@@ -389,7 +396,12 @@ impl ProviderUsageSnapshot {
         }
     }
 
-    pub(super) fn from_error(id: ProviderId, metadata: &ProviderMetadata, error: String) -> Self {
+    pub(super) fn from_error(
+        id: ProviderId,
+        metadata: &ProviderMetadata,
+        error: String,
+        state_kind: codexbar::core::ProviderStateKind,
+    ) -> Self {
         let error = friendly_provider_error(id, &error);
         Self {
             provider_id: id.cli_name().to_string(),
@@ -420,6 +432,7 @@ impl ProviderUsageSnapshot {
             source_label: String::new(),
             updated_at: chrono::Utc::now().to_rfc3339(),
             error: Some(error),
+            error_state: state_kind,
             pace: None,
             account_organization: None,
             tray_status_label: None,

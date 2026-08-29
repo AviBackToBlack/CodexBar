@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use super::ProviderFetchResult;
+use super::provider_state::ProviderStateKind;
 
 /// Unique identifier for a provider
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -555,6 +556,9 @@ pub enum ProviderError {
     #[error("OAuth error: {0}")]
     OAuth(String),
 
+    #[error("OAuth session expired: {0}")]
+    OAuthExpired(String),
+
     #[error("OAuth token revoked: {0}")]
     OAuthRevoked(String),
 
@@ -672,6 +676,18 @@ pub trait Provider: Send + Sync {
     /// Detect the version of the CLI tool (if applicable)
     fn detect_version(&self) -> Option<String> {
         None
+    }
+
+    /// Presentation-safe availability state for a refresh error. The default
+    /// maps `ProviderError` variants, treating `NotInstalled` as a missing
+    /// credential (most providers raise it for a missing API key or auth
+    /// file). Override only when a variant carries provider-specific meaning
+    /// that differs — e.g. a local language-server probe or CLI/binary
+    /// presence check whose "not installed" means the runtime is simply
+    /// not running; prefer a message-contains guard when the provider also
+    /// raises credential-flavored `NotInstalled` errors.
+    fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
+        error.state_kind()
     }
 }
 
