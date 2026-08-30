@@ -2,6 +2,9 @@
 
 ## 0.56.2 — Unreleased
 
+### Fixed
+- OpenCode Go: omit misleading pace and run-out advice for locally estimated quotas while preserving percentages, resets, and cost history (partial fix for #3286). Thanks @Akagilnc!
+
 ## 0.56.1 — 2026-08-30
 
 ### Performance
