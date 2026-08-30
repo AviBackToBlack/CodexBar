@@ -6,6 +6,7 @@
 - Codex: load saved cost totals in one pass per file instead of rescanning history for every day and model, preserving costs and token totals (follow-up to #3247). Thanks @robertoecf!
 
 ### Fixed
+- Menu bar: preserve measured card heights across cached provider tabs, preventing plugin cards from clipping on the first tab switch after launch.
 - Privacy: honor “Hide personal information” for project/source names and paths in cost history and project names in Usage & Spend, preserving costs, tokens, and stored data (#3262). Thanks @vinschger!
 - Codex: show completed cost catch-up without starting another scan, preserve scan timestamps, and retain prior totals when native or Pi/OMP history is unavailable (partial follow-up to #3243). Thanks @zhulijin1991!
 - Codex: preserve calendar spacing in inline cost charts, keep unscanned and unpriced days unknown, honor the selected time zone, and fit year-long histories within the menu (#3232). Thanks @findwangdi!
