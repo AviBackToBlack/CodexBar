@@ -3,6 +3,7 @@
 ## 0.56.1 — Unreleased
 
 ### Fixed
+- Cursor: correctly decode BOM-less ASCII UTF-16LE app-token database values without changing other decoding or cached-account fallback rules (extracted from #2398). Thanks @markmay!
 - Tests: isolate Cursor, Augment, Factory, and Notion saved sessions from user files, including test child processes, while preserving production storage and owner-only permissions.
 - Codex: publish completed cost catch-up from validated caches without starting another scan, preserve actual scan timestamps, and retain prior totals when native or Pi/OMP history is unavailable (partial follow-up to #3243). Thanks @zhulijin1991!
 - Antigravity: reuse a running `agy` by its verified executable path even when its command line uses a bare name, and preserve CLI sign-in guidance when an IDE fallback has no CSRF token (follow-up to #3146). Thanks @haixing23!
