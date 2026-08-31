@@ -6,6 +6,7 @@
 - Claude and Vertex AI: reuse model normalization and pricing lookups within each local scan, including unknown models, while preserving per-request dated and context-tier pricing.
 
 ### Fixed
+- Menu bar: keep status components and website links scoped to their provider when switching cached tabs, preventing Claude status from appearing under Grok or Codex (#3320). Thanks @gianpaj!
 - Usage & Spend: keep stalled or failed Codex catch-up paused until explicit Refresh, preventing background synchronization from restarting CPU-heavy scans (partial fix for #3316). Thanks @heyajulia!
 - Xiaomi MiMo: prevent overlapping local usage tracker updates from colliding on a shared temporary cache file, preserving atomic publication (#3321). Thanks @Lucenx9!
 - Claude: avoid duplicated “Resets Reset” labels when CLI usage supplies a singular reset description (#3317). Thanks @Aternus!
