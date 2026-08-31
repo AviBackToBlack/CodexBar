@@ -2,15 +2,42 @@
 
 ## Responsibilities
 
-**Blacksmith GitHub Actions** (`.github/workflows/pr-check.yml`) remains the
-primary PR/push validation path. It runs the existing format, clippy, Rust
-test, frontend test, and frontend build checks on hosted Blacksmith Windows.
+**CircleCI** (`.circleci/config.yml`) is now the hosted PR/push validation
+path and the hosted release path. The `pr-check` workflow (added 2026-08) runs
+the format, clippy, Rust test, frontend test, and frontend build checks on
+hosted CircleCI Windows. It mirrors the GitHub workflow's trigger contract:
+pull requests and pushes to `main`/`master` run the checks (delegated to
+`scripts/local-check.ps1 -Slice ci`); every `main`/`master` push runs the
+full checks — the docs-only skip never applies to them. Docs-only PRs
+(`docs/**`, `**/*.md`, `CONTEXT.md`, `.github/CI.md`) and other branch
+pushes skip via early gates that log their reason and then call
+`circleci-agent step halt`, stopping the job before any cache or toolchain
+spend (docs-only detection fails open when the base revision cannot be
+determined). The release-tag pattern (`vX.Y.Z`) is
+ignored so it never double-runs with the release workflow. The former
+Blacksmith GitHub Actions gate (`.github/workflows/pr-check.yml`) is retired
+for this repo — the Blacksmith pool is exhausted — and the workflow is now a
+manual-dispatch-only fallback (`on: workflow_dispatch` only; no automatic
+push/PR scheduling) kept for Blacksmith diagnostics.
 
-**CircleCI** (`.circleci/config.yml`) is release-only. The workflow is filtered
-to the canonical `nesszer/Win-CodexBar` project and exact protected tags
-`vX.Y.Z`; branch and pull-request pipelines cannot enter it. The CircleCI
-Windows build is credential-free. Only its explicit approval-gated publisher
-gets the restricted `GH_TOKEN` context.
+**Fork-PR coverage note:** CircleCI does not build pull requests from forks
+by default (unlike GitHub Actions). The GitHub App integration does not build
+fork-PR pipelines, and there is no Advanced setting that can enable them;
+external fork PRs are therefore **not covered** by the CircleCI gate. The
+manual fallback for forks is needed: an external contributor's changes must
+be pulled onto a same-repo branch (or the fork changes committed to a
+maintainer branch) so a CircleCI branch pipeline runs the checks. When those
+pipelines run, CircleCI withholds project environment variables from
+untrusted builds by default (so `CI_BUDGET_MODE` arrives unset → `normal` →
+checks run), which is the same withholding the `CI_BUDGET_MODE` note in
+`CONTEXT.md` relies on. Tradeoff: bounded OSS credit spend, but external
+contributors get no direct hosted Windows validation of their own PRs.
+
+The `release` workflow remains filtered to the canonical
+`nesszer/Win-CodexBar` project and exact protected tags `vX.Y.Z`; branch and
+pull-request pipelines cannot enter it. The CircleCI Windows release build is
+credential-free. Only its explicit approval-gated publisher gets the
+restricted `GH_TOKEN` context.
 
 ## CircleCI release flow
 
@@ -76,8 +103,12 @@ for `nesszer/Win-CodexBar`, enable `.circleci/config.yml`, and create a
 project-restricted context named `github-release-publisher`. Store `GH_TOKEN`
 there only, using a fine-grained GitHub token scoped to this repository with
 Contents read/write for release APIs. Do not grant Workflows permission.
+Add `CI_BUDGET_MODE` as a CircleCI project environment variable (Project
+Settings → Environment Variables) so the `pr-check` budget guard can read it;
+unset/empty is treated as `normal`.
 
-Protect `main`, require the existing Blacksmith checks, and protect the `v*`
+Protect `main`, require the hosted CircleCI `pr-check` for branch/PR
+validation, and protect the `v*`
 tag namespace so only authorized maintainers can create canonical `vX.Y.Z` tags.
 Configure CircleCI credit/spend alerts and notifications as appropriate for
 the organization. These project, context, token, ruleset, and billing changes
@@ -85,10 +116,18 @@ are intentionally manual.
 
 ## Cost, retry, and rollback
 
-Blacksmith billing remains the recurring PR cost. CircleCI Windows credits are
-incurred only for a protected release tag and its short approval/publish path;
-there is no CircleCI branch or PR build. Windows executor rates depend on the
-CircleCI plan, so set an organization credit alert before enabling releases.
+The hosted PR check now runs on CircleCI Windows: its thin-slice Windows
+credits recur on PRs and `main`/`master` pushes — every `main`/`master` push
+runs the full checks, while other branch pushes and docs-only PRs skip
+before spending — alongside the protected release tag
+path. The repository is public, so the PR check spends the Free Plan
+open-source allowance (open-source builds are not subject to the Free Plan's
+30,000-credit personal block). Fork PRs remain uncovered — the GitHub App does
+not build fork-PR pipelines and a manual same-repo branch fallback is needed
+(see the fork-PR coverage note above). Blacksmith is retired for
+this repo and no longer bills recurring PR cost. Windows executor rates
+depend on the CircleCI plan, so set an organization credit alert before
+enabling the PR check or releases.
 
 Rerunning a failed build creates a new temporary WorkRoot and remains pinned to
 the tag's full SHA. If a publish job partially uploads, rerun it after approval:
