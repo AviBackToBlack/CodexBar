@@ -305,21 +305,25 @@ extension CostUsageStore {
         var turnKeys: [String: String]?
         var turnIDsByDay: [String: [String]]?
         var turnsCursor: CostUsageScanner.CodexPriorityTurnsPersistedCursor?
+        var resolvedTurns: [String: CostUsageScanner.CodexPriorityTurnMetadata]?
 
         enum CodingKeys: String, CodingKey {
             case turnKeys
             case turnIDsByDay
             case turnsCursor
+            case resolvedTurns
         }
 
         init(
             turnKeys: [String: String]?,
             turnIDsByDay: [String: [String]]?,
-            turnsCursor: CostUsageScanner.CodexPriorityTurnsPersistedCursor?)
+            turnsCursor: CostUsageScanner.CodexPriorityTurnsPersistedCursor?,
+            resolvedTurns: [String: CostUsageScanner.CodexPriorityTurnMetadata]?)
         {
             self.turnKeys = turnKeys
             self.turnIDsByDay = turnIDsByDay
             self.turnsCursor = turnsCursor
+            self.resolvedTurns = resolvedTurns
         }
 
         /// Cursor decode is best-effort so a malformed `turnsCursor` cannot drop load-bearing
@@ -328,6 +332,10 @@ extension CostUsageStore {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.turnKeys = try container.decodeIfPresent([String: String].self, forKey: .turnKeys)
             self.turnIDsByDay = try container.decodeIfPresent([String: [String]].self, forKey: .turnIDsByDay)
+            // Invalid optional evidence falls back to row pricing and hash-validated cursor days.
+            self.resolvedTurns = try? container.decodeIfPresent(
+                [String: CostUsageScanner.CodexPriorityTurnMetadata].self,
+                forKey: .resolvedTurns)
             self.turnsCursor = try? container.decodeIfPresent(
                 CostUsageScanner.CodexPriorityTurnsPersistedCursor.self,
                 forKey: .turnsCursor)
@@ -398,6 +406,7 @@ extension CostUsageStore {
             cache.codexPriorityTurnKeys = priority.turnKeys
             cache.codexPriorityTurnIDsByDay = priority.turnIDsByDay
             cache.codexPriorityTurnsCursor = priority.turnsCursor
+            cache.codexResolvedPriorityTurns = priority.resolvedTurns
         }
         cache.codexSessionDiscovery = snapshot.discoveryState.flatMap(Self.discovery(from:))
         cache.codexActiveLookbackState = snapshot.lookbackState.map(Self.lookback(from:))
@@ -974,7 +983,8 @@ extension CostUsageStore {
         try? JSONEncoder().encode(StoredPriorityState(
             turnKeys: cache.codexPriorityTurnKeys,
             turnIDsByDay: cache.codexPriorityTurnIDsByDay,
-            turnsCursor: cache.codexPriorityTurnsCursor))
+            turnsCursor: cache.codexPriorityTurnsCursor,
+            resolvedTurns: cache.codexResolvedPriorityTurns))
     }
 
     private static func previousReport(

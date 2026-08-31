@@ -213,6 +213,11 @@ Example:
     time; a concurrent database change requests a rescan. Fresh database opens retain integrity validation.
   - Saved day/model aggregates group each file's usage rows in one pass per aggregate build. Packed token totals,
     authoritative costs (including zero), and standard/priority estimation buckets retain their existing meanings.
+  - Priority trace scans resume after ordinary log pruning when enough distributed content anchors still match;
+    changed source rows, replaced databases, or insufficient matching anchors require a fresh scan. Temporary
+    trace-database failures retain the last validated report pricing and leave scan freshness unchanged for retry.
+    Successful historical queries update their own pricing window independently of the live scan cursor, including
+    results with no priority turns; validated pricing outside that window remains intact.
 - Window: configurable 1-365 day rolling history.
 - App cadence: regular timer-driven local-history refreshes have a 15-minute minimum (30 minutes in Low Power Mode).
   Manual disables the recurring refresh timer, not all scan activity: startup refreshes and pending Codex catch-up can
