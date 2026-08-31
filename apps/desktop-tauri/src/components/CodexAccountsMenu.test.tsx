@@ -40,14 +40,17 @@ function account(id: string, extra: Partial<CodexAccount> = {}): CodexAccount {
   };
 }
 
-function snapshot(usedPercent: number): CodexAccountUsageSnapshot {
+function snapshot(
+  usedPercent: number,
+  resetAt: string | null = null,
+): CodexAccountUsageSnapshot {
   return {
     email: "user@example.com",
     providerAccountId: null,
     plan: "free",
     allowed: true,
     limitReached: false,
-    primaryWindow: { usedPercent, resetAt: null, limitWindowSeconds: 3600 },
+    primaryWindow: { usedPercent, resetAt, limitWindowSeconds: 18_000 },
     secondaryWindow: null,
     credits: null,
     updatedAt: "2024-01-01T00:00:00Z",
@@ -57,12 +60,19 @@ function snapshot(usedPercent: number): CodexAccountUsageSnapshot {
 // Wrap the component so the `t` from useLocale is a stable identity that just
 // returns the key (the component uses `t(key)` for locale strings and a badge
 // label; returning the key is enough to assert rendering).
-function renderMenu(hideEmail: boolean, state: CodexAccountsStateBridge) {
+function renderMenu(
+  hideEmail: boolean,
+  state: CodexAccountsStateBridge,
+  resetTimeRelative = true,
+) {
   tauriMocks.getCodexAccountsState.mockResolvedValue(state);
   tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({}));
   return render(
     <LocaleProvider>
-      <CodexAccountsMenu hideEmail={hideEmail} />
+      <CodexAccountsMenu
+        hideEmail={hideEmail}
+        resetTimeRelative={resetTimeRelative}
+      />
     </LocaleProvider>,
   );
 }
@@ -141,6 +151,30 @@ describe("CodexAccountsMenu", () => {
     expect((fills[0] as HTMLElement).style.width).toBe("42%");
   });
 
+  it("shows the five-hour usage and local reset time for each account", async () => {
+    const resetAt = "2030-01-02T03:04:00Z";
+    const expectedReset = new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(resetAt));
+
+    renderMenu(
+      false,
+      {
+        accounts: [account("1", { source: "ambient" }), account("2")],
+        snapshots: { "1": snapshot(30, resetAt), "2": snapshot(70, resetAt) },
+      },
+      false,
+    );
+
+    await screen.findByText("user-1@example.com");
+    expect(screen.getAllByText("5h")).toHaveLength(2);
+    expect(screen.getByText("30% PanelUsedSuffix")).toBeDefined();
+    expect(screen.getAllByText(`MetricResetsIn ${expectedReset}`)).toHaveLength(2);
+  });
+
   it("switches an account and kicks a provider refresh", async () => {
     renderMenu(false, {
       accounts: [account("1", { source: "ambient" }), account("2")],
@@ -162,4 +196,34 @@ describe("CodexAccountsMenu", () => {
     expect(tauriMocks.codexAccountSwitch).toHaveBeenCalledWith("2");
     expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
   });
+  it("keeps the email tooltip masked while hideEmail is on and raw when off", async () => {
+    const { container: hidden } = renderMenu(true, {
+      accounts: [account("1", { source: "ambient" }), account("2")],
+      snapshots: {},
+    });
+    await waitFor(() => {
+      expect(
+        hidden.querySelectorAll(".codex-menu-accounts__email").length,
+      ).toBe(2);
+    });
+    const hiddenEmail = hidden.querySelectorAll(
+      ".codex-menu-accounts__email",
+    )[1] as HTMLElement;
+    expect(hiddenEmail.getAttribute("title")).toBe(hiddenEmail.textContent);
+
+    const { container: visible } = renderMenu(false, {
+      accounts: [account("1", { source: "ambient" }), account("2")],
+      snapshots: {},
+    });
+    await waitFor(() => {
+      expect(
+        visible.querySelectorAll(".codex-menu-accounts__email").length,
+      ).toBe(2);
+    });
+    const rawEmail = visible.querySelectorAll(
+      ".codex-menu-accounts__email",
+    )[1] as HTMLElement;
+    expect(rawEmail.getAttribute("title")).toBe("user-2@example.com");
+  });
 });
+
