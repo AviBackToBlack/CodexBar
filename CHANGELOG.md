@@ -5,6 +5,7 @@
 ### Performance
 - Local costs: reduce background CPU spent parsing native session timestamps and validating appended Codex history, preserving timestamp precision, daily totals, and fork accounting.
 - Codex: reuse one decoded SQLite baseline per native cost scan, avoiding repeated unchanged-save decoding while rechecking database changes and filesystem state.
+- Claude and Vertex AI: reduce CPU spent classifying local transcript metadata, preserving provider detection, Unicode handling, and token/cost totals.
 
 ### Fixed
 - Local costs: preserve token breakdowns, reasoning, request counts, and pricing coverage when combining reports or reopening cached history. Thanks @Pjhhhhh!
