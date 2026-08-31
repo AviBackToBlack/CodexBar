@@ -3,6 +3,7 @@
 ## 0.56.2 — Unreleased
 
 ### Fixed
+- Codex: preserve pending weekly-reset evidence through credits-only refreshes so eligible low-usage confirmations survive relaunch (partial fix for #3248). Thanks @kcharlan!
 - Agent sessions: stop Codex metadata enrichment and Pi/OMP path resolution when the scan budget expires, and honor the same deadline during Claude Desktop root discovery.
 - Codex: recover cost-history catch-up when removed fork files leave abandoned parent discovery in an existing cache, preserving stored totals and unresolved-fork accounting (partial fix for #2815). Thanks @xiehaibin18!
 - OpenCode Go: omit misleading pace and run-out advice for locally estimated quotas while preserving percentages, resets, and cost history (partial fix for #3286). Thanks @Akagilnc!
