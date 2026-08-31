@@ -3,6 +3,7 @@
 ## 0.56.3 — Unreleased
 
 ### Performance
+- Claude and Vertex AI: reuse decoded metadata containers and remove unused per-file daily aggregation, preserving Unicode-key handling, provider classification, and persisted token/cost totals.
 - Claude and Vertex AI: reuse model normalization and pricing lookups within each local scan, including unknown models, while preserving per-request dated and context-tier pricing.
 
 ### Fixed

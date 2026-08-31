@@ -3,11 +3,13 @@ import Testing
 @testable import CodexBarCore
 
 extension CostUsageClaudeResolverTests {
-    @Test
-    func `parser preserves complete rows days and decoded model bytes against scalar pricing`() throws {
+    @Test(arguments: [false, true])
+    func `parser preserves complete rows days and decoded model bytes against scalar pricing`(vertex: Bool) throws {
         let env = try CostUsageTestEnvironment()
         defer { env.cleanup() }
         let catalog = try Self.catalog()
+        let provider: UsageProvider = vertex ? .vertexai : .claude
+        let filter: CostUsageScanner.ClaudeLogProviderFilter = vertex ? .vertexAIOnly : .excludeVertexAI
         let day = try env.makeLocalNoon(year: 2026, month: 7, day: 1)
         let range = CostUsageScanner.CostUsageDayRange(since: day, until: day, calendar: .current)
         let dayKey = CostUsageScanner.CostUsageDayRange.dayKey(from: day, calendar: .current)
@@ -50,12 +52,13 @@ extension CostUsageClaudeResolverTests {
                 output: output,
                 costNanos: nanos,
                 costPriced: cost != nil))
-            let packedKey = CostUsagePricing.normalizeClaudeModel(stored)
+            let packedKey = stored
             let components = [input, 3, 4, output, nanos, 1, cost == nil ? 0 : 1, 2]
             let previous = expectedDays[dayKey]?[packedKey] ?? Array(repeating: 0, count: 8)
             expectedDays[dayKey, default: [:]][packedKey] = zip(previous, components).map(+)
             events.append([
                 "type": "assistant", "timestamp": env.isoString(for: timestamp),
+                "metadata": ["provider": vertex ? "vertex" : "anthropic"],
                 "message": ["model": model, "usage": [
                     "input_tokens": input, "output_tokens": output, "cache_read_input_tokens": 3,
                     "cache_creation_input_tokens": 4,
@@ -67,12 +70,24 @@ extension CostUsageClaudeResolverTests {
             of: "claude-test-known", with: #"claude-\u0074est-known"#)
         let file = try env.writeClaudeProjectFile(relativePath: "project/session.jsonl", contents: content)
         let parsed = CostUsageScanner.parseClaudeFile(
-            fileURL: file, range: range, providerFilter: .all, modelsDevCatalog: catalog)
+            fileURL: file, range: range, providerFilter: filter, modelsDevCatalog: catalog)
         #expect(parsed.parsedBytes == Int64(content.utf8.count))
         #expect(parsed.rows == expectedRows)
         #expect(parsed.rows.map { Array($0.model.utf8) } == expectedRows.map { Array($0.model.utf8) })
-        #expect(parsed.days == expectedDays)
-        #expect(parsed.days[dayKey]?["example"] != nil)
+        #expect(ModelsDevCache.save(catalog: catalog, fetchedAt: day, cacheRoot: env.cacheRoot))
+        let options = CostUsageScanner.Options(claudeProjectsRoots: [env.claudeProjectsRoot], cacheRoot: env.cacheRoot)
+        let report = CostUsageScanner.loadDailyReport(
+            provider: provider, since: day, until: day, now: day, options: options)
+        let cache = CostUsageClaudeCacheIO.load(provider: provider, cacheRoot: env.cacheRoot)
+        #expect(cache.days == expectedDays)
+        #expect(cache.days[dayKey]?["anthropic.example"] != nil)
+        #expect(cache.files.values.flatMap { $0.claudeRows ?? [] } == expectedRows)
+        #expect(report.summary?.totalTokens == expectedRows.reduce(0) {
+            $0 + $1.input + $1.cacheRead + $1.cacheCreate + $1.output
+        })
+        let breakdowns = try #require(report.data.first?.modelBreakdowns)
+        #expect(try #require(breakdowns.first { $0.modelName == "claude-test-zero" }).costUSD == 0)
+        #expect(try #require(breakdowns.first { $0.modelName == "claude-test-unknown" }).costUSD == nil)
         #expect(parsed.rows.contains { $0.model == "anthropic.example" })
     }
 

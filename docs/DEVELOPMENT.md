@@ -225,12 +225,31 @@ refresh cadence, scan budgets, timestamp parsing and incremental-order validatio
 Claude/Vertex metadata classification searches decoded ASCII strings with case-folded bytes, keeping
 the original Foundation lowercase/substring predicate for non-ASCII or noncontiguous strings. Check
 the whole string for ASCII before matching; combining characters after a marker can affect the old
-predicate. The recursive dictionary/array walk still visits the same content, but no longer repeats
-root/message metadata subtrees already visited through the root. `CostUsageClaudeVertexClassifierTests`
-compares with the frozen old predicate and checks complete filtered rows, daily tokens/costs, and reports,
-including decoded JSON escapes, Unicode boundaries, nested arrays, and false/numeric metadata flags.
-Claude-only source files are excluded from the Codex parser hash, so this optimization does not
-invalidate native Codex caches or change predecessor adoption.
+predicate. The recursive dictionary/array walk visits dictionaries inside arrays without recursing into nested arrays.
+`CostUsageClaudeVertexClassifierTests` compares with the frozen old predicate and checks complete filtered
+rows, persisted daily tokens/costs, and reports, including decoded JSON escapes, Unicode boundaries,
+nested arrays, and false/numeric metadata flags.
+
+`ClaudeJSONObject` shares a shallow decoded-container view between field extraction and classification;
+the parser reuses its message view for primary detection and usage extraction. On Darwin, ASCII-keyed
+objects retain immutable Foundation containers and use scoped CF bulk access and type dispatch. Only
+JSONSerialization results and their decoded descendants enter that path; arbitrary objects and coerced
+entries use Swift casts. CF bridging is Darwin-only, and retained owners outlive all borrowed pointers
+and temporary allocations.
+Empty containers require no pointer arithmetic. Unicode-keyed objects use the actual conditional
+`[String: Any]` coercion at each object boundary, preserving canonical-key collapse and whole-object
+mixed-key rejection. The walker visits only the resolved entries. Independent coercions can choose
+different collision winners, so tests assert resolved-entry behavior rather than a deterministic winner.
+Linux uses the same view and walker with portable Swift coercions, with no CF bridging or separate
+pricing path. `ClaudeJSONObjectTests` also belongs to the portable CLI/core test target.
+
+Claude parsing returns only rows and parsed bytes. The scan owns reconciliation across streaming chunks,
+parent files and subagents, then builds persisted days from the stored row model; there is no discarded
+parser-day aggregation or second normalization. Daily tests exercise the real cache/report boundary.
+Removing the unused field in the shared scanner changes the generated native parser hash, while Codex
+semantics remain unchanged. Published `494eee446bb2e5f9` is a tested compatible predecessor; existing
+predecessors and store receipt logic remain intact. Pi/OMP pricing keys include this hash and therefore
+reparse once under the existing invalidation contract, also tested with and without a catalog.
 
 A second optimized synthetic check against main `354191af9` used three fresh-cache scans per provider
 with 32–128 KiB text bodies. Median CPU decreased by 3–18% across Claude/Vertex cases (the 3% case is
@@ -240,7 +259,7 @@ matched, including the existing unset public request counts. Fixture generation 
 wall time was recorded separately under host load. These results do not measure idle-app CPU.
 
 Claude and Vertex scans share one synchronous invocation-owned pricing resolver across full/append file
-parsing, row/day normalization, and report repricing. It lazily snapshots the catalog, including an empty
+parsing, row normalization, and report repricing. It lazily snapshots the catalog, including an empty
 sentinel for unavailable artifacts, at the existing changed-file and nonempty-report preparation points.
 An exact report memo hit and an empty inventory with no rows do not load it. The internal standalone
 parser now owns one snapshot per parse, optionally supplied explicitly; the cancellable parser takes
