@@ -465,7 +465,7 @@ public enum GrokWebBillingFetcher {
 
         while index < bytes.count {
             let fieldStart = index
-            guard let key = Self.readVarint(bytes, index: &index), key != 0 else {
+            guard let key = Self.readVarint(bytes, index: &index), key >> 3 > 0, key >> 3 <= 536_870_911 else {
                 scan.isComplete = false
                 index = fieldStart + 1
                 continue
@@ -498,7 +498,7 @@ public enum GrokWebBillingFetcher {
                 }
                 let start = index
                 let end = index + Int(length)
-                if depth < 4 {
+                if depth < 4, Self.isKnownBillingMessage(path: fieldPath) {
                     let nested = Self.scanProtobuf(
                         Data(bytes[start..<end]),
                         depth: depth + 1,
@@ -534,12 +534,26 @@ public enum GrokWebBillingFetcher {
         return (scan, nextOrder)
     }
 
+    private static func isKnownBillingMessage(path: [UInt64]) -> Bool {
+        // The billing descriptor declares these messages; other length-delimited fields may be opaque bytes.
+        switch path {
+        case [1],
+             [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 12],
+             [1, 6, 1], [1, 6, 2], [1, 6, 3], [1, 8, 2], [1, 8, 3],
+             [1, 6, 3, 2], [1, 6, 3, 3]:
+            true
+        default:
+            false
+        }
+    }
+
     private static func readVarint(_ bytes: [UInt8], index: inout Int) -> UInt64? {
         var value: UInt64 = 0
         var shift: UInt64 = 0
         while index < bytes.count, shift < 64 {
             let byte = bytes[index]
             index += 1
+            if shift == 63, byte > 1 { return nil }
             value |= UInt64(byte & 0x7F) << shift
             if byte & 0x80 == 0 {
                 return value

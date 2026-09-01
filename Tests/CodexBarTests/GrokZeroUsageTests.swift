@@ -45,17 +45,59 @@ struct GrokZeroUsageTests {
         #expect(try await Self.resolve(parsed).snapshot.usedPercent == 0)
     }
 
-    @Test(arguments: [
-        Data([0x00]), // Invalid field key.
-        Data([0x0D, 0x00]), // Truncated percentage.
-        Data([0x72, 0x04, 0x08]), // Truncated nested message.
-        Data([0x70, 0x80]), // Truncated varint.
-    ])
+    @Test(arguments: Self.malformedSuffixes)
     func `malformed frames cannot turn unknown usage into zero`(suffix: Data) async throws {
         let parsed = try GrokWebBillingFetcher.parseGRPCWebResponse(Self.payload(suffix: suffix), now: Self.now)
 
         #expect(!parsed.usedPercentIsImplicitZero)
         #expect(try await Self.resolve(parsed).snapshot.usedPercent == nil)
+    }
+
+    @Test(arguments: [
+        Self.fixed64Field(tag: [0xF9, 0xFF, 0xFF, 0xFF, 0x0F]), // Highest valid field number.
+        Data([0x70]) + Self.varint(.max), // A valid UInt64.max scalar.
+    ])
+    func `valid unknown fields preserve implicit zero`(suffix: Data) async throws {
+        let parsed = try GrokWebBillingFetcher.parseGRPCWebResponse(Self.payload(suffix: suffix), now: Self.now)
+
+        #expect(parsed.usedPercentIsImplicitZero)
+        #expect(try await Self.resolve(parsed).snapshot.usedPercent == 0)
+    }
+
+    @Test(arguments: [false, true], Self.opaquePayloads)
+    func `unknown byte fields cannot invalidate or invent billing values`(
+        atRoot: Bool, bytes: Data) async throws
+    {
+        let opaqueField = Self.message(path: [14], contents: bytes)
+        let payload = atRoot ? Self.payload() + opaqueField : Self.payload(suffix: opaqueField)
+        let parsed = try GrokWebBillingFetcher.parseGRPCWebResponse(payload, now: Self.now)
+
+        #expect(parsed.usedPercent == 0)
+        #expect(parsed.usedPercentIsImplicitZero)
+        #expect(!parsed.usedPercentIsWirePublished)
+        #expect(parsed.resetsAt == Date(timeIntervalSince1970: 1_789_000_000))
+        #expect(try await Self.resolve(parsed).snapshot.usedPercent == 0)
+    }
+
+    @Test(arguments: Self.billingMessagePaths)
+    func `malformed known messages still prevent implicit zero`(path: [UInt64]) async throws {
+        let malformedMessage = Self.message(path: path, contents: Self.fixed64Field(tag: [0x01]))
+        let parsed = try GrokWebBillingFetcher.parseGRPCWebResponse(
+            Self.payload() + malformedMessage, now: Self.now)
+
+        #expect(!parsed.usedPercentIsImplicitZero)
+        #expect(try await Self.resolve(parsed).snapshot.usedPercent == nil)
+    }
+
+    @Test
+    func `historical period timestamps remain readable without becoming current usage`() throws {
+        let timestamp = Data([0x08]) + Self.varint(1_789_000_000)
+        let payload = Self.message(path: [1, 6, 3, 3], contents: timestamp)
+        let parsed = try GrokWebBillingFetcher.parseGRPCWebResponse(payload, now: Self.now)
+
+        #expect(parsed.resetsAt == Date(timeIntervalSince1970: 1_789_000_000))
+        #expect(!parsed.usedPercentIsImplicitZero)
+        #expect(!parsed.usedPercentIsWirePublished)
     }
 
     @Test(arguments: [0, 3])
@@ -79,6 +121,41 @@ struct GrokZeroUsageTests {
         #expect(throws: GrokWebBillingError.self) {
             try GrokWebBillingFetcher.parseGRPCWebResponse(Self.payload(), now: Self.proxyReset)
         }
+    }
+
+    private static let malformedSuffixes: [Data] = [
+        Data([0x00]), // Invalid field key.
+        Self.fixed64Field(tag: [0x01]), // Invalid field zero with a complete fixed64 value.
+        Data([0x02, 0x00]), // Invalid field zero with an empty length-delimited value.
+        Self.fixed64Field(tag: [0x81, 0x80, 0x80, 0x80, 0x10]), // Field number exceeds 29 bits.
+        // Overflowing varint must not truncate to a valid fixed64 tag.
+        Self.fixed64Field(tag: [0x89, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]),
+        Data([0x0D, 0x00]), // Truncated percentage.
+        Data([0x72, 0x04, 0x08]), // Truncated unknown length-delimited field.
+        Data([0x70, 0x80]), // Truncated varint.
+    ]
+
+    private static let opaquePayloads: [Data] = [
+        Self.fixed64Field(tag: [0x01]), // Valid opaque bytes, not a valid protobuf message.
+        Data([0x0D, 0x00, 0x00, 0x14, 0x42]), // Looks like a published 37% usage field.
+        Data([0x08]) + Self.varint(1_788_500_000), // Looks like an earlier future reset.
+    ]
+
+    private static let billingMessagePaths: [[UInt64]] = [
+        [1],
+        [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8], [1, 12],
+        [1, 6, 1], [1, 6, 2], [1, 6, 3], [1, 8, 2], [1, 8, 3],
+        [1, 6, 3, 2], [1, 6, 3, 3],
+    ]
+
+    private static func message(path: [UInt64], contents: Data) -> Data {
+        path.reversed().reduce(contents) { payload, field in
+            Self.varint((field << 3) | 2) + Self.varint(UInt64(payload.count)) + payload
+        }
+    }
+
+    private static func fixed64Field(tag: [UInt8]) -> Data {
+        Data(tag + [UInt8](repeating: 0, count: 8))
     }
 
     private static let now = Date(timeIntervalSince1970: 1_788_000_000)
