@@ -28,6 +28,11 @@ A user-initiated import or acknowledged Claude repair may attempt interactive au
 chosen to continue. Denials temporarily suppress repeated Chromium-family attempts so one browser cannot lead to a
 prompt storm across the others.
 
+Scheduled Chromium imports can recover during that denial cooldown when the current no-UI Safe Storage preflight
+explicitly confirms access. Interaction-required, missing, or failed preflights still suppress the import, and the
+actual read remains non-interactive. This recovery does not clear the user-initiated denial cooldown or override
+disabled Keychain access.
+
 Provider-owned child processes are a separate boundary. CodexBar may intentionally launch a provider CLI such as
 Claude for usage. That executable owns its credential behavior, which CodexBar cannot constrain or fully inspect.
 
