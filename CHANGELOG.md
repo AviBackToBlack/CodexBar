@@ -1,16 +1,15 @@
 # Changelog
 
-## 0.56.3 — Unreleased
+## 0.56.3 — 2026-09-01
 
 ### Performance
-- Claude and Vertex AI: reuse decoded metadata containers and remove unused per-file daily aggregation, preserving Unicode-key handling, provider classification, and persisted token/cost totals.
-- Claude and Vertex AI: reuse model normalization and pricing lookups within each local scan, including unknown models, while preserving per-request dated and context-tier pricing.
+- Claude and Vertex AI: reduce background CPU spent reading transcript metadata and looking up model prices during local cost scans, preserving provider detection and token/cost totals (#3319, #3328).
+- Local costs: skip unnecessary parsing work for discarded oversized log records, preserving complete-record validation and cost totals (#3342).
 - Codex: avoid repeated full scans after trace-log pruning, while retaining the latest validated cost history through temporary trace-database failures (#3318). Thanks @brzvsk!
 
 ### Fixed
 - Keychain: limit repeated cache ACL validation and memory growth while preserving recovery after temporary failures or external repairs (#3300, #3301). Thanks @IgorKhramtsov!
-- Grok: restore 0% usage for a validated active billing period with an omitted usage scalar, preserving unknown usage for incomplete responses (#3261, #3325). Thanks @sf-jin-ku and @olddonkey!
-- Grok: keep malformed billing responses from turning unknown usage into 0%, while safely ignoring unknown byte fields (#3357).
+- Grok: restore 0% usage for a validated active billing period with an omitted usage scalar, while keeping incomplete or malformed billing responses unknown (#3261, #3325, #3357). Thanks @sf-jin-ku and @olddonkey!
 - Ollama: restore usage bars for monthly included credits and show matching history tabs while preserving legacy quota parsing and saved history (#3346). Thanks @haixing23!
 - Menu bar: keep status components and website links scoped to their provider when switching cached tabs, preventing Claude status from appearing under Grok or Codex (#3320). Thanks @gianpaj!
 - Menu bar: attach minor and maintenance status badges to single-quota meters instead of leaving them floating below the meter (#3354). Thanks @dechaosong!
