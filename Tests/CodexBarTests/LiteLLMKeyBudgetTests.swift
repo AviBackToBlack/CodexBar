@@ -234,7 +234,11 @@ struct LiteLLMKeyBudgetTests {
             primary: usage.primary,
             secondary: RateWindow(usedPercent: 30, windowMinutes: nil, resetsAt: nil, resetDescription: "Localized"),
             providerCost: ProviderCostSnapshot(
-                used: 10, limit: 100, currencyCode: "USD", period: "Localized", resetsAt: nil,
+                used: 10,
+                limit: 100,
+                currencyCode: "USD",
+                period: "Localized",
+                resetsAt: nil,
                 updatedAt: usage.updatedAt),
             litellmBudget: usage.litellmBudget,
             updatedAt: usage.updatedAt)
@@ -247,6 +251,30 @@ struct LiteLLMKeyBudgetTests {
         #expect(renamed.litellmBudget?.source == .key)
     }
 
+    @Test(arguments: [0, 1, 2])
+    func `automatic key budget metric selects the most used semantic window`(mostUsed: Int) {
+        let windows = (0..<3).map { index in
+            RateWindow(
+                usedPercent: index == mostUsed ? 90 : 10,
+                windowMinutes: nil,
+                resetsAt: nil,
+                resetDescription: "Localized")
+        }
+        let snapshot = UsageSnapshot(
+            primary: windows[0],
+            secondary: windows[1],
+            tertiary: windows[2],
+            litellmBudget: LiteLLMBudgetContext(source: .key, primary: .key, secondary: .personal, tertiary: .team),
+            updatedAt: Date(timeIntervalSince1970: 1))
+        let selected = MenuBarMetricWindowResolver.rateWindow(
+            preference: .automatic,
+            provider: .litellm,
+            snapshot: snapshot,
+            supportsAverage: false)
+        #expect(selected == windows[mostUsed])
+        #expect(selected?.usedPercent == 90)
+    }
+
     private static func snapshot(key: Bool, personal: Bool, team: Bool) throws -> UsageSnapshot {
         let json = """
         {
@@ -257,7 +285,11 @@ struct LiteLLMKeyBudgetTests {
         return try LiteLLMUsageFetcher._parseUserInfoForTesting(
             Data(json.utf8),
             keyInfo: LiteLLMKeyInfoSnapshot(
-                userID: "user-test", teamID: "team-test", keyName: nil, spendUSD: 10, expiresAt: nil,
+                userID: "user-test",
+                teamID: "team-test",
+                keyName: nil,
+                spendUSD: 10,
+                expiresAt: nil,
                 budgetUSD: key ? 100 : nil),
             updatedAt: Date(timeIntervalSince1970: 1)).toUsageSnapshot()
     }
