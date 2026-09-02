@@ -692,6 +692,13 @@ struct MenuDescriptor {
         metadata: ProviderMetadata,
         snapshot: UsageSnapshot) -> (primary: String, secondary: String, tertiary: String, showsTertiary: Bool)
     {
+        if provider == .litellm {
+            let labels = ProviderDescriptorRegistry.descriptor(for: provider)
+                .presentation
+                .rateWindowLabels(metadata: metadata, snapshot: snapshot)
+            return (L(labels.primary), L(labels.secondary), L(labels.tertiary), labels.showsTertiary)
+        }
+
         if provider == .factory, snapshot.tertiary != nil {
             return (L("5-hour"), L("Weekly"), L("Monthly"), true)
         }
