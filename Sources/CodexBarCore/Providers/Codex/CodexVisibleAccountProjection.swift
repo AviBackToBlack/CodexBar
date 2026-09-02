@@ -165,7 +165,9 @@ extension CodexVisibleAccountProjection {
             drafts.append(VisibleAccountDraft(
                 email: normalizedEmail,
                 workspaceLabel: Self.normalizeWorkspaceLabel(storedAccount.workspaceLabel),
-                workspaceAccountID: storedAccount.workspaceAccountID ?? runtimeWorkspaceAccountID,
+                workspaceAccountID: storedAccount.workspaceAccountID
+                    ?? storedAccount.providerAccountID
+                    ?? runtimeWorkspaceAccountID,
                 authFingerprint: storedAccount.authFingerprint,
                 storedAccountID: storedAccount.id,
                 selectionSource: .managedAccount(id: storedAccount.id),
