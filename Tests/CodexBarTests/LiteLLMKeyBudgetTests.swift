@@ -93,6 +93,7 @@ struct LiteLLMKeyBudgetTests {
                 period: "Key budget",
                 resetsAt: reset,
                 updatedAt: now),
+            litellmBudget: LiteLLMBudgetContext(source: .key, primary: .key, secondary: nil, tertiary: nil),
             updatedAt: now)
         let metadata = try #require(ProviderDefaults.metadata[.litellm])
 
@@ -185,5 +186,79 @@ struct LiteLLMKeyBudgetTests {
 
         let requests = await transport.requests()
         #expect(requests.count == 2)
+    }
+
+    @Test
+    @MainActor
+    func `budget layouts preserve semantic labels and source through serialization`() throws {
+        let metadata = try #require(ProviderDefaults.metadata[.litellm])
+        for hasKey in [true, false] {
+            for hasPersonal in [true, false] {
+                for hasTeam in [true, false] {
+                    let usage = try Self.snapshot(key: hasKey, personal: hasPersonal, team: hasTeam)
+                    let encoded = try JSONEncoder().encode(usage)
+                    let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+                    let budgetJSON = try #require(json["litellmBudget"] as? [String: Any])
+                    #expect(budgetJSON["litellm.budget.source"] as? String == (hasKey ? "key" : "spend"))
+                    let restored = try JSONDecoder().decode(UsageSnapshot.self, from: encoded)
+                        .withSubscriptionMetadata(expiresAt: nil, renewsAt: nil)
+                    #expect(restored.litellmBudget == usage.litellmBudget)
+                    #expect(restored.primary?.usedPercent == (hasKey ? 10 : (hasPersonal ? 20 : nil)))
+                    #expect(restored.secondary?.usedPercent ==
+                        (hasKey && hasPersonal ? 20 : (hasTeam ? 30 : nil)))
+                    #expect(restored.tertiary?.usedPercent == (hasKey && hasPersonal && hasTeam ? 30 : nil))
+                    #expect(restored.providerCost?.used == (hasKey ? 10 : 20))
+                    #expect(restored.providerCost?.limit == (hasKey || hasPersonal ? 100 : 0))
+
+                    // This is the label-routing seam used by the native app menu.
+                    let labels = MenuDescriptor.rateWindowLabels(
+                        provider: .litellm, metadata: metadata, snapshot: restored)
+                    #expect(labels.primary == (hasKey ? "Key budget" : "Personal budget"))
+                    if restored.secondary != nil {
+                        #expect(labels.secondary == (hasKey && hasPersonal ? "Personal budget" : "Team budget"))
+                    }
+                    if restored.tertiary != nil {
+                        #expect(labels.tertiary == "Team budget")
+                        #expect(labels.showsTertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    @MainActor
+    func `budget labels do not depend on display descriptions`() throws {
+        let usage = try Self.snapshot(key: true, personal: false, team: true)
+        let renamed = UsageSnapshot(
+            primary: usage.primary,
+            secondary: RateWindow(usedPercent: 30, windowMinutes: nil, resetsAt: nil, resetDescription: "Localized"),
+            providerCost: ProviderCostSnapshot(
+                used: 10, limit: 100, currencyCode: "USD", period: "Localized", resetsAt: nil,
+                updatedAt: usage.updatedAt),
+            litellmBudget: usage.litellmBudget,
+            updatedAt: usage.updatedAt)
+        let labels = try MenuDescriptor.rateWindowLabels(
+            provider: .litellm,
+            metadata: #require(ProviderDefaults.metadata[.litellm]),
+            snapshot: renamed)
+        #expect(labels.primary == "Key budget")
+        #expect(labels.secondary == "Team budget")
+        #expect(renamed.litellmBudget?.source == .key)
+    }
+
+    private static func snapshot(key: Bool, personal: Bool, team: Bool) throws -> UsageSnapshot {
+        let json = """
+        {
+          "user_info": {"user_id": "user-test", "spend": 20, "max_budget": \(personal ? "100" : "null")},
+          "teams": [{"team_id": "team-test", "spend": 30, "max_budget": \(team ? "100" : "null")}]
+        }
+        """
+        return try LiteLLMUsageFetcher._parseUserInfoForTesting(
+            Data(json.utf8),
+            keyInfo: LiteLLMKeyInfoSnapshot(
+                userID: "user-test", teamID: "team-test", keyName: nil, spendUSD: 10, expiresAt: nil,
+                budgetUSD: key ? 100 : nil),
+            updatedAt: Date(timeIntervalSince1970: 1)).toUsageSnapshot()
     }
 }

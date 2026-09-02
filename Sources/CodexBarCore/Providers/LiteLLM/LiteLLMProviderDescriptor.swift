@@ -51,7 +51,7 @@ public enum LiteLLMProviderDescriptor {
                 noDataMessage: { "LiteLLM spend is reported by the provider API." }),
             presentation: ProviderUsagePresentation(
                 rateWindowLabeler: { metadata, snapshot, _ in
-                    guard snapshot.providerCost?.period == "Key budget" else {
+                    guard let budget = snapshot.litellmBudget else {
                         return ProviderRateWindowLabels(
                             primary: metadata.sessionLabel,
                             secondary: metadata.weeklyLabel,
@@ -59,11 +59,10 @@ public enum LiteLLMProviderDescriptor {
                             showsTertiary: metadata.supportsOpus)
                     }
 
-                    let secondaryIsTeam = snapshot.secondary?.resetDescription?.hasPrefix("Team") == true
                     return ProviderRateWindowLabels(
-                        primary: "Key budget",
-                        secondary: secondaryIsTeam ? "Team budget" : "Personal budget",
-                        tertiary: "Team budget",
+                        primary: budget.primary?.title ?? metadata.sessionLabel,
+                        secondary: budget.secondary?.title ?? metadata.weeklyLabel,
+                        tertiary: budget.tertiary?.title ?? "Team budget",
                         showsTertiary: snapshot.tertiary != nil)
                 },
                 costPresenter: { snapshot in
@@ -74,12 +73,12 @@ public enum LiteLLMProviderDescriptor {
                 },
                 menuBarWindowResolver: { context in
                     guard context.metric == .automatic else { return .unhandled }
-                    if context.snapshot.providerCost?.period == "Key budget" {
+                    if context.snapshot.litellmBudget?.source == .key {
                         let windows = [
                             context.snapshot.primary,
                             context.snapshot.secondary,
                             context.snapshot.tertiary,
-                        ].compactMap { $0 }
+                        ].compactMap(\.self)
                         return .resolved(windows.max(by: { $0.usedPercent < $1.usedPercent }))
                     }
                     return .resolved(

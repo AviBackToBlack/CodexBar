@@ -541,6 +541,7 @@ extension UsageMenuCardView.Model {
         input: Input,
         snapshot: UsageSnapshot) -> (primary: String, secondary: String, tertiary: String, showsTertiary: Bool)
     {
+        // Provider-specific by design: LiteLLM uses structured budget roles; other providers retain their menu labels.
         if input.provider == .litellm {
             let labels = ProviderDescriptorRegistry.descriptor(for: input.provider)
                 .presentation

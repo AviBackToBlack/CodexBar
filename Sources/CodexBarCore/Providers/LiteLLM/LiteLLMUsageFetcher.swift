@@ -132,6 +132,11 @@ public struct LiteLLMUsageSnapshot: Codable, Sendable, Equatable {
             secondary: secondary,
             tertiary: tertiary,
             providerCost: providerCost,
+            litellmBudget: LiteLLMBudgetContext(
+                source: key != nil ? .key : .spend,
+                primary: key != nil ? .key : (personal != nil ? .personal : nil),
+                secondary: key != nil && personal != nil ? .personal : (team != nil ? .team : nil),
+                tertiary: key != nil && personal != nil && team != nil ? .team : nil),
             subscriptionExpiresAt: self.keyExpiresAt,
             updatedAt: self.updatedAt,
             identity: ProviderIdentitySnapshot(
