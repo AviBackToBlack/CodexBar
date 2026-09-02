@@ -59,7 +59,7 @@ public enum LiteLLMProviderDescriptor {
                             showsTertiary: metadata.supportsOpus)
                     }
 
-                    let secondaryIsTeam = snapshot.secondary?.resetDescription?.hasPrefix("Team ") == true
+                    let secondaryIsTeam = snapshot.secondary?.resetDescription?.hasPrefix("Team") == true
                     return ProviderRateWindowLabels(
                         primary: "Key budget",
                         secondary: secondaryIsTeam ? "Team budget" : "Personal budget",
