@@ -39,19 +39,38 @@ public struct LiteLLMKeyInfoSnapshot: Codable, Sendable, Equatable {
     public let keyName: String?
     public let spendUSD: Double
     public let expiresAt: Date?
+    public let budgetUSD: Double?
+    public let budgetResetAt: Date?
+    public let budgetDuration: String?
 
-    public init(userID: String?, teamID: String?, keyName: String?, spendUSD: Double, expiresAt: Date?) {
+    public init(
+        userID: String?,
+        teamID: String?,
+        keyName: String?,
+        spendUSD: Double,
+        expiresAt: Date?,
+        budgetUSD: Double? = nil,
+        budgetResetAt: Date? = nil,
+        budgetDuration: String? = nil)
+    {
         self.userID = userID
         self.teamID = teamID
         self.keyName = keyName
         self.spendUSD = spendUSD
         self.expiresAt = expiresAt
+        self.budgetUSD = budgetUSD
+        self.budgetResetAt = budgetResetAt
+        self.budgetDuration = budgetDuration
     }
 }
 
 public struct LiteLLMUsageSnapshot: Codable, Sendable, Equatable {
     public let userID: String?
     public let accountEmail: String?
+    public let keySpendUSD: Double?
+    public let keyBudgetUSD: Double?
+    public let keyResetAt: Date?
+    public let keyBudgetDuration: String?
     public let personalSpendUSD: Double
     public let personalBudgetUSD: Double?
     public let personalResetAt: Date?
@@ -70,13 +89,17 @@ public struct LiteLLMUsageSnapshot: Codable, Sendable, Equatable {
     }
 
     public func toUsageSnapshot() -> UsageSnapshot {
-        let primary = Self.rateWindow(
+        let key = Self.rateWindow(
+            spend: self.keySpendUSD ?? 0,
+            budget: self.keyBudgetUSD,
+            resetAt: self.keyResetAt,
+            description: Self.budgetDescription(spend: self.keySpendUSD ?? 0, budget: self.keyBudgetUSD))
+        let personal = Self.rateWindow(
             spend: self.personalSpendUSD,
             budget: self.personalBudgetUSD,
             resetAt: self.personalResetAt,
             description: Self.budgetDescription(spend: self.personalSpendUSD, budget: self.personalBudgetUSD))
-
-        let secondary = self.teamUsage.flatMap { team in
+        let team = self.teamUsage.flatMap { team in
             Self.rateWindow(
                 spend: team.spendUSD,
                 budget: team.budgetUSD,
@@ -84,12 +107,30 @@ public struct LiteLLMUsageSnapshot: Codable, Sendable, Equatable {
                 description: Self.teamDescription(team))
         }
 
+        let primary: RateWindow?
+        let secondary: RateWindow?
+        let tertiary: RateWindow?
+        if let key {
+            primary = key
+            if let personal {
+                secondary = personal
+                tertiary = team
+            } else {
+                secondary = team
+                tertiary = nil
+            }
+        } else {
+            primary = personal
+            secondary = team
+            tertiary = nil
+        }
+
         let providerCost = self.providerCostSnapshot()
 
         return UsageSnapshot(
             primary: primary,
             secondary: secondary,
-            tertiary: nil,
+            tertiary: tertiary,
             providerCost: providerCost,
             subscriptionExpiresAt: self.keyExpiresAt,
             updatedAt: self.updatedAt,
@@ -133,7 +174,12 @@ public struct LiteLLMUsageSnapshot: Codable, Sendable, Equatable {
         let period: String
         let resetsAt: Date?
 
-        if self.userID == nil, let team = self.teamUsage {
+        if let keyBudget = self.keyBudgetUSD, keyBudget > 0 {
+            spend = self.keySpendUSD ?? 0
+            budget = keyBudget
+            period = "Key budget"
+            resetsAt = self.keyResetAt
+        } else if self.userID == nil, let team = self.teamUsage {
             spend = team.spendUSD
             budget = team.budgetUSD
             period = (team.budgetUSD ?? 0) > 0 ? "Team budget" : "Team spend"
@@ -163,6 +209,9 @@ private struct LiteLLMKeyInfoResponse: Decodable {
         let expires: String?
         let userID: String?
         let teamID: String?
+        let maxBudget: Double?
+        let budgetResetAt: String?
+        let budgetDuration: String?
 
         private enum CodingKeys: String, CodingKey {
             case keyName = "key_name"
@@ -170,6 +219,9 @@ private struct LiteLLMKeyInfoResponse: Decodable {
             case expires
             case userID = "user_id"
             case teamID = "team_id"
+            case maxBudget = "max_budget"
+            case budgetResetAt = "budget_reset_at"
+            case budgetDuration = "budget_duration"
         }
     }
 
@@ -441,7 +493,10 @@ public struct LiteLLMUsageFetcher: Sendable {
                 teamID: teamID,
                 keyName: decoded.info.keyName,
                 spendUSD: decoded.info.spend ?? 0,
-                expiresAt: self.parseDate(decoded.info.expires))
+                expiresAt: self.parseDate(decoded.info.expires),
+                budgetUSD: decoded.info.maxBudget,
+                budgetResetAt: self.parseDate(decoded.info.budgetResetAt),
+                budgetDuration: decoded.info.budgetDuration)
         } catch let error as LiteLLMUsageError {
             throw error
         } catch {
@@ -474,6 +529,10 @@ public struct LiteLLMUsageFetcher: Sendable {
             return LiteLLMUsageSnapshot(
                 userID: expectedUserID,
                 accountEmail: accountEmail,
+                keySpendUSD: keyInfo.spendUSD,
+                keyBudgetUSD: keyInfo.budgetUSD,
+                keyResetAt: keyInfo.budgetResetAt,
+                keyBudgetDuration: keyInfo.budgetDuration,
                 personalSpendUSD: decoded.userInfo.spend ?? 0,
                 personalBudgetUSD: decoded.userInfo.maxBudget,
                 personalResetAt: self.parseDate(decoded.userInfo.budgetResetAt),
@@ -516,6 +575,10 @@ public struct LiteLLMUsageFetcher: Sendable {
             return LiteLLMUsageSnapshot(
                 userID: nil,
                 accountEmail: nil,
+                keySpendUSD: keyInfo.spendUSD,
+                keyBudgetUSD: keyInfo.budgetUSD,
+                keyResetAt: keyInfo.budgetResetAt,
+                keyBudgetDuration: keyInfo.budgetDuration,
                 personalSpendUSD: 0,
                 personalBudgetUSD: nil,
                 personalResetAt: nil,
