@@ -67,6 +67,8 @@ model-generic token label while the rendered menu-bar prefix and accessibility l
   tertiary, and extra windows render when the provider snapshot has data for them.
 - Manual refresh updates the open card subtitle and persistent Refresh-row spinner in place. Repeated clicks share the
   active request, and the existing row geometry remains fixed through success or failure.
+- Live pace and metric detail text use the full row width. Updates that exceed the space reserved when the menu opened
+  show a trailing ellipsis; reopening the menu measures the updated text again.
 - Codex credits can add a separate “Buy Credits…” menu action.
 - Claude capped Extra Usage follows the used/remaining fill preference; spending amounts and “% used” copy stay unchanged.
 - Codex OpenAI web extras: code review remaining and usage breakdown render when dashboard data is attached.
