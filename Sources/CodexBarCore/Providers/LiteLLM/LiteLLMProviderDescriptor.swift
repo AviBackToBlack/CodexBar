@@ -50,6 +50,22 @@ public enum LiteLLMProviderDescriptor {
                 supportsTokenCost: false,
                 noDataMessage: { "LiteLLM spend is reported by the provider API." }),
             presentation: ProviderUsagePresentation(
+                rateWindowLabeler: { metadata, snapshot, _ in
+                    guard snapshot.providerCost?.period == "Key budget" else {
+                        return ProviderRateWindowLabels(
+                            primary: metadata.sessionLabel,
+                            secondary: metadata.weeklyLabel,
+                            tertiary: metadata.opusLabel ?? "Sonnet",
+                            showsTertiary: metadata.supportsOpus)
+                    }
+
+                    let secondaryIsTeam = snapshot.secondary?.resetDescription?.hasPrefix("Team ") == true
+                    return ProviderRateWindowLabels(
+                        primary: "Key budget",
+                        secondary: secondaryIsTeam ? "Team budget" : "Personal budget",
+                        tertiary: "Team budget",
+                        showsTertiary: snapshot.tertiary != nil)
+                },
                 costPresenter: { snapshot in
                     let style: ProviderCostMenuCardStyle = (snapshot.providerCost?.limit ?? 1) <= 0
                         ? .apiSpend
@@ -58,6 +74,14 @@ public enum LiteLLMProviderDescriptor {
                 },
                 menuBarWindowResolver: { context in
                     guard context.metric == .automatic else { return .unhandled }
+                    if context.snapshot.providerCost?.period == "Key budget" {
+                        let windows = [
+                            context.snapshot.primary,
+                            context.snapshot.secondary,
+                            context.snapshot.tertiary,
+                        ].compactMap { $0 }
+                        return .resolved(windows.max(by: { $0.usedPercent < $1.usedPercent }))
+                    }
                     return .resolved(
                         ProviderUsagePresentation.exhausted(context.snapshot.primary, context.snapshot.secondary)
                             ?? context.snapshot.secondary
