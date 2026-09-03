@@ -1,0 +1,77 @@
+name: PR macOS DMG
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-dmg-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  macos-dmg:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "$candidate/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
+
+      - name: Package universal app with ad-hoc signing
+        env:
+          ARCHES: arm64 x86_64
+          CODEXBAR_SIGNING: adhoc
+          CODEXBAR_WIDGET_EXTENSION_TIMEOUT_SECONDS: "1800"
+        run: ./Scripts/package_app.sh release
+
+      - name: Create and verify DMG
+        id: dmg
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          name="CodexBar-PR${PR_NUMBER}-${HEAD_SHA:0:12}"
+          stage="$(mktemp -d)"
+          mount="$(mktemp -d)"
+          codesign --verify --deep --strict --verbose=2 CodexBar.app
+          lipo CodexBar.app/Contents/MacOS/CodexBar -verify_arch arm64 x86_64
+          ditto CodexBar.app "$stage/CodexBar.app"
+          ln -s /Applications "$stage/Applications"
+          mkdir -p artifacts
+          hdiutil create -volname CodexBar -srcfolder "$stage" -ov -format UDZO "artifacts/$name.dmg"
+          hdiutil verify "artifacts/$name.dmg"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "artifacts/$name.dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          test -x "$mount/CodexBar.app/Contents/MacOS/CodexBar"
+          codesign --verify --deep --strict --verbose=2 "$mount/CodexBar.app"
+          shasum -a 256 "artifacts/$name.dmg" | tee "artifacts/$name.sha256"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          {
+            echo "DMG: $name.dmg"
+            echo "Source: $HEAD_SHA"
+            echo "Universal arm64/x86_64; ad-hoc signed, not notarized."
+            echo "Verified disk image and mounted app signature."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14

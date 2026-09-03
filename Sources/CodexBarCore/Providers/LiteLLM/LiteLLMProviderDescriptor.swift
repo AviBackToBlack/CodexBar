@@ -50,6 +50,21 @@ public enum LiteLLMProviderDescriptor {
                 supportsTokenCost: false,
                 noDataMessage: { "LiteLLM spend is reported by the provider API." }),
             presentation: ProviderUsagePresentation(
+                rateWindowLabeler: { metadata, snapshot, _ in
+                    guard let budget = snapshot.litellmBudget else {
+                        return ProviderRateWindowLabels(
+                            primary: metadata.sessionLabel,
+                            secondary: metadata.weeklyLabel,
+                            tertiary: metadata.opusLabel ?? "Sonnet",
+                            showsTertiary: metadata.supportsOpus)
+                    }
+
+                    return ProviderRateWindowLabels(
+                        primary: budget.primary?.title ?? metadata.sessionLabel,
+                        secondary: budget.secondary?.title ?? metadata.weeklyLabel,
+                        tertiary: budget.tertiary?.title ?? "Team budget",
+                        showsTertiary: snapshot.tertiary != nil)
+                },
                 costPresenter: { snapshot in
                     let style: ProviderCostMenuCardStyle = (snapshot.providerCost?.limit ?? 1) <= 0
                         ? .apiSpend
@@ -58,6 +73,14 @@ public enum LiteLLMProviderDescriptor {
                 },
                 menuBarWindowResolver: { context in
                     guard context.metric == .automatic else { return .unhandled }
+                    if context.snapshot.litellmBudget?.source == .key {
+                        let windows = [
+                            context.snapshot.primary,
+                            context.snapshot.secondary,
+                            context.snapshot.tertiary,
+                        ].compactMap(\.self)
+                        return .resolved(windows.max(by: { $0.usedPercent < $1.usedPercent }))
+                    }
                     return .resolved(
                         ProviderUsagePresentation.exhausted(context.snapshot.primary, context.snapshot.secondary)
                             ?? context.snapshot.secondary

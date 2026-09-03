@@ -228,9 +228,11 @@ extension UsageMenuCardView.Model {
 
     static func redactedMetricDetail(_ detail: String?, provider: UsageProvider, metricID: String) -> String? {
         guard let detail else { return nil }
+        let isTeamMetric = metricID == "secondary" || metricID == "tertiary"
+        let isTeamDetail = detail.hasPrefix("Team ") || detail.hasPrefix("Team:")
         guard provider == .litellm,
-              metricID == "secondary",
-              detail.hasPrefix("Team "),
+              isTeamMetric,
+              isTeamDetail,
               let separator = detail.range(of: ": ", options: .backwards)
         else {
             return PersonalInfoRedactor.redactEmails(in: detail, isEnabled: true)
@@ -539,6 +541,14 @@ extension UsageMenuCardView.Model {
         input: Input,
         snapshot: UsageSnapshot) -> (primary: String, secondary: String, tertiary: String, showsTertiary: Bool)
     {
+        // Provider-specific by design: LiteLLM uses structured budget roles; other providers retain their menu labels.
+        if input.provider == .litellm {
+            let labels = ProviderDescriptorRegistry.descriptor(for: input.provider)
+                .presentation
+                .rateWindowLabels(metadata: input.metadata, snapshot: snapshot, now: input.now)
+            return (L(labels.primary), L(labels.secondary), L(labels.tertiary), labels.showsTertiary)
+        }
+
         if input.provider == .factory, snapshot.tertiary != nil {
             return (L("5-hour"), L("Weekly"), L("Monthly"), true)
         }
