@@ -14,7 +14,7 @@ concurrency:
 jobs:
   macos-dmg:
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -36,6 +36,7 @@ jobs:
         env:
           ARCHES: arm64 x86_64
           CODEXBAR_SIGNING: adhoc
+          CODEXBAR_WIDGET_EXTENSION_TIMEOUT_SECONDS: "1800"
         run: ./Scripts/package_app.sh release
 
       - name: Create and verify DMG
