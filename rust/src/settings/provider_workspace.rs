@@ -20,16 +20,13 @@ pub fn validate_provider_workspace_value(
         ProviderId::OpenCodeGo => validate_id(trimmed, "OpenCode Go workspace ID", |value| {
             value.starts_with("wrk_") && has_safe_id_chars(value)
         }),
-        ProviderId::Devin => validate_id(trimmed, "Devin organization", |value| {
-            let Some((prefix, org)) = value.split_once('/') else {
-                return false;
-            };
-            prefix == "org"
-                && (2..=80).contains(&org.len())
-                && org
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        }),
+        ProviderId::Devin => {
+            if crate::providers::devin::normalize_organization(trimmed).is_some() {
+                Ok(trimmed.to_string())
+            } else {
+                Err("Devin organization is invalid".to_string())
+            }
+        }
         ProviderId::Zed => validate_zed_url(trimmed),
         ProviderId::Xai => {
             if trimmed.contains('/') || trimmed == "." || trimmed == ".." {
@@ -166,6 +163,28 @@ mod tests {
             validate_provider_workspace_value(ProviderId::Devin, "org/acme_123").unwrap(),
             "org/acme_123"
         );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Devin, "org-abc123").unwrap(),
+            "org-abc123"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Devin, "org_abc123").unwrap(),
+            "org_abc123"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Devin, "organizations/org-abc123")
+                .unwrap(),
+            "organizations/org-abc123"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(
+                ProviderId::Devin,
+                "https://app.devin.ai/api/org-abc123/billing/quota/usage"
+            )
+            .unwrap(),
+            "https://app.devin.ai/api/org-abc123/billing/quota/usage"
+        );
+        assert!(validate_provider_workspace_value(ProviderId::Devin, "organizations/foo").is_err());
         assert_eq!(
             validate_provider_workspace_value(ProviderId::OpenCodeGo, " wrk_abc-123 ").unwrap(),
             "wrk_abc-123"
