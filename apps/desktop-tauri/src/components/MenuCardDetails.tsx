@@ -66,6 +66,16 @@ function isBalanceOnlyCost(
   return cost.balance != null && cost.limit == null && cost.used <= 0;
 }
 
+function isSpendAndBalanceCost(
+  cost: Pick<CostSnapshotBridge, "balance" | "limit" | "used">,
+): boolean {
+  return cost.balance != null && cost.limit == null && cost.used > 0;
+}
+
+function formatCostPeriodLabel(period: string): string {
+  return period.replace(/\s+cycle$/i, "").trim();
+}
+
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
 const compactCountFormat0 = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -510,7 +520,14 @@ export default function MenuCardDetails({
   const localCostHistory = chartData?.costHistory ?? [];
   const costStyle = display.costSummaryDisplayStyle ?? "detailed";
   const balanceOnlyCost = provider.cost ? isBalanceOnlyCost(provider.cost) : false;
+  const spendAndBalanceCost = provider.cost ? isSpendAndBalanceCost(provider.cost) : false;
   const costBalance = provider.cost?.balance ?? null;
+  const costResetText =
+    formattedCostReset && display.resetTimeRelative
+      ? formattedCostReset
+      : formattedCostReset
+        ? `${t("DetailCostResets")}: ${formattedCostReset}`
+        : null;
 
   const {
     hasMetrics,
@@ -556,9 +573,6 @@ export default function MenuCardDetails({
       {hasCost && provider.cost && (
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
-            {hasCost && provider.cost && (
-        <section className="menu-card__group menu-card__cost">
-          <div className="menu-card__group-title">
             {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
               ? t("ApiSpendTitle")
               : balanceOnlyCost
@@ -568,8 +582,38 @@ export default function MenuCardDetails({
           {balanceOnlyCost ? (
             <div className="menu-card__cost-line">
               {provider.cost.formattedBalance ||
-                formatCurrency(costBalance!, provider.cost.currencyCode)}
+                formatCurrency(
+                  provider.cost.balance,
+                  provider.cost.currencyCode,
+                )}
             </div>
+          ) : (
+            <>
+              <div className="menu-card__local-grid menu-card__cost-grid">
+                <div>
+                  <span className="menu-card__local-label">{t("DetailCostUsed")}</span>
+                  <strong>
+                    {provider.cost.formattedUsed ||
+                      formatCurrency(
+                        provider.cost.used,
+                        provider.cost.currencyCode,
+                      )}
+                  </strong>
+                </div>
+                <div>
+                  <span className="menu-card__local-label">{t("DetailCostBalance")}</span>
+                  <strong>
+                    {provider.cost.formattedBalance ||
+                      formatCurrency(costBalance!, provider.cost.currencyCode)}
+                  </strong>
+                </div>
+              </div>
+              {costResetText && (
+                <div className="menu-card__cost-line menu-card__cost-line--muted">
+                  {costResetText}
+                </div>
+              )}
+            </>
           ) : (
             <>
               <div className="menu-card__cost-line">
@@ -590,7 +634,7 @@ export default function MenuCardDetails({
                   </>
                 )}
               </div>
-              {costBalance != null && (
+              {costStyle === "detailed" && costBalance != null && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
                   {t("DetailCostBalance")}:{" "}
                   {provider.cost.formattedBalance ||
@@ -609,9 +653,9 @@ export default function MenuCardDetails({
                   )}
                 </div>
               )}
-              {costStyle === "detailed" && formattedCostReset && (
+              {costStyle === "detailed" && costResetText && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
-                  {t("DetailCostResets")}: {formattedCostReset}
+                  {costResetText}
                 </div>
               )}
             </>
