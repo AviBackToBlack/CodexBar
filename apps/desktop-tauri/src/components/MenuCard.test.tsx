@@ -105,6 +105,7 @@ function renderCard(
     showPace?: boolean;
     onLayoutChange?: () => void;
     costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+    resetTimeRelative?: boolean;
   } = {},
 ) {
   return render(
@@ -113,7 +114,7 @@ function renderCard(
         provider={snapshot}
         display={{
           hideEmail: false,
-          resetTimeRelative: true,
+          resetTimeRelative: opts.resetTimeRelative ?? true,
           showAsUsed: opts.showAsUsed,
           showResetWhenExhausted: opts.showResetWhenExhausted,
           showPace: opts.showPace,
@@ -570,9 +571,9 @@ describe("MenuCard", () => {
       buildBundle({
         DetailCostTitle: "Cost",
         DetailCostUsed: "Used",
-      DetailCostBalance: "Balance",
-      DetailCostRemaining: "Remaining",
-      DetailCostResets: "Resets",
+        DetailCostBalance: "Balance",
+        DetailCostRemaining: "Remaining",
+        DetailCostResets: "Resets",
       }),
     );
     const snapshot = provider(null, 20);
@@ -587,12 +588,13 @@ describe("MenuCard", () => {
       resetsAt: new Date("2026-09-05T12:00:00Z").toISOString(),
     });
 
-    renderCard(snapshot);
+    renderCard(snapshot, { resetTimeRelative: false });
 
     expect(await screen.findByText(/Cost — Extra usage/)).toBeInTheDocument();
     expect(screen.getByText(/Used:\s*\$12\.50\s*\/\s*\$100\.00/)).toBeInTheDocument();
     expect(screen.getByText(/Balance:\s*\$25\.50/)).toBeInTheDocument();
-    expect(screen.getByText(/Resets:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Resets:/)).toBeInTheDocument();
+    expect(screen.queryByText(/Resets in/)).not.toBeInTheDocument();
   });
 
   it("renders balance-only cost as credits-style value", async () => {
@@ -619,9 +621,10 @@ describe("MenuCard", () => {
   it("renders known spend and balance together in compact cost summary mode", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
-        DetailCostTitle: "Cost",
         DetailCostUsed: "Used",
         DetailCostBalance: "Balance",
+        DetailCostResets: "Resets",
+        ResetsInDaysHours: "Resets in {}d {}h",
       }),
     );
     const snapshot = provider(null, 20);
@@ -631,13 +634,19 @@ describe("MenuCard", () => {
       formattedUsed: "$38.08",
       formattedBalance: "$8.88",
       period: "On-demand billing cycle",
+      resetsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000 + 18 * 60 * 60 * 1000).toISOString(),
     });
 
     renderCard(snapshot, { costSummaryDisplayStyle: "compact" });
 
-    expect(await screen.findByText(/Cost — On-demand billing cycle/)).toBeInTheDocument();
-    expect(screen.getByText(/Used:\s*\$38\.08/)).toBeInTheDocument();
-    expect(screen.getByText(/Balance:\s*\$8\.88/)).toBeInTheDocument();
+    expect(await screen.findByText("On-demand billing")).toBeInTheDocument();
+    expect(screen.queryByText(/Cost — On-demand billing cycle/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Used$/)).toBeInTheDocument();
+    expect(screen.getByText(/^\$38\.08$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Balance$/)).toBeInTheDocument();
+    expect(screen.getByText(/^\$8\.88$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Resets in 7d \d+h$/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Resets:/)).not.toBeInTheDocument();
   });
 
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {
