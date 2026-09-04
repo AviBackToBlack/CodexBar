@@ -510,6 +510,7 @@ export default function MenuCardDetails({
   const localCostHistory = chartData?.costHistory ?? [];
   const costStyle = display.costSummaryDisplayStyle ?? "detailed";
   const balanceOnlyCost = provider.cost ? isBalanceOnlyCost(provider.cost) : false;
+  const costBalance = provider.cost?.balance ?? null;
 
   const {
     hasMetrics,
@@ -592,12 +593,12 @@ export default function MenuCardDetails({
                   </>
                 )}
               </div>
-              {provider.cost.balance != null && (
+              {costBalance != null && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
                   {t("DetailCostBalance")}:{" "}
                   {provider.cost.formattedBalance ||
                     formatCurrency(
-                      provider.cost.balance,
+                      costBalance,
                       provider.cost.currencyCode,
                     )}
                 </div>
