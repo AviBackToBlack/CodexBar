@@ -559,10 +559,7 @@ export default function MenuCardDetails({
           {balanceOnlyCost ? (
             <div className="menu-card__cost-line">
               {provider.cost.formattedBalance ||
-                formatCurrency(
-                  provider.cost.balance,
-                  provider.cost.currencyCode,
-                )}
+                formatCurrency(costBalance, provider.cost.currencyCode)}
             </div>
           ) : (
             <>
