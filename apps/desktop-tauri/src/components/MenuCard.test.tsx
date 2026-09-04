@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
-import type { ProviderUsageSnapshot } from "../types/bridge";
+import type { CostSummaryDisplayStyle, ProviderUsageSnapshot } from "../types/bridge";
 import MenuCard from "./MenuCard";
 
 function rateWindow(
@@ -79,6 +79,24 @@ function provider(
   };
 }
 
+function costSnapshot(
+  overrides: Partial<NonNullable<ProviderUsageSnapshot["cost"]>>,
+): NonNullable<ProviderUsageSnapshot["cost"]> {
+  return {
+    used: 0,
+    limit: null,
+    remaining: null,
+    currencyCode: "USD",
+    period: "Extra usage",
+    resetsAt: null,
+    formattedUsed: "$0.00",
+    formattedLimit: null,
+    balance: null,
+    formattedBalance: null,
+    ...overrides,
+  };
+}
+
 function renderCard(
   snapshot: ProviderUsageSnapshot,
   opts: {
@@ -86,6 +104,7 @@ function renderCard(
     showResetWhenExhausted?: boolean;
     showPace?: boolean;
     onLayoutChange?: () => void;
+    costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   } = {},
 ) {
   return render(
@@ -98,6 +117,7 @@ function renderCard(
           showAsUsed: opts.showAsUsed,
           showResetWhenExhausted: opts.showResetWhenExhausted,
           showPace: opts.showPace,
+          costSummaryDisplayStyle: opts.costSummaryDisplayStyle,
         }}
         onLayoutChange={opts.onLayoutChange}
       />
@@ -550,29 +570,29 @@ describe("MenuCard", () => {
       buildBundle({
         DetailCostTitle: "Cost",
         DetailCostUsed: "Used",
-        DetailCostBalance: "Balance",
-        DetailCostRemaining: "Remaining",
+      DetailCostBalance: "Balance",
+      DetailCostRemaining: "Remaining",
+      DetailCostResets: "Resets",
       }),
     );
     const snapshot = provider(null, 20);
-    snapshot.cost = {
+    snapshot.cost = costSnapshot({
       used: 12.5,
       limit: 100,
       remaining: 87.5,
-      currencyCode: "USD",
-      period: "Extra usage",
-      resetsAt: null,
       formattedUsed: "$12.50",
       formattedLimit: "$100.00",
       balance: 25.5,
       formattedBalance: "$25.50",
-    };
+      resetsAt: new Date("2026-09-05T12:00:00Z").toISOString(),
+    });
 
     renderCard(snapshot);
 
     expect(await screen.findByText(/Cost — Extra usage/)).toBeInTheDocument();
     expect(screen.getByText(/Used:\s*\$12\.50\s*\/\s*\$100\.00/)).toBeInTheDocument();
     expect(screen.getByText(/Balance:\s*\$25\.50/)).toBeInTheDocument();
+    expect(screen.getByText(/Resets:/)).toBeInTheDocument();
   });
 
   it("renders balance-only cost as credits-style value", async () => {
@@ -584,24 +604,40 @@ describe("MenuCard", () => {
       }),
     );
     const snapshot = provider(null, 20);
-    snapshot.cost = {
-      used: 0,
-      limit: null,
-      remaining: null,
-      currencyCode: "USD",
-      period: "Extra usage",
-      resetsAt: null,
-      formattedUsed: "$0.00",
-      formattedLimit: null,
+    snapshot.cost = costSnapshot({
       balance: 25.5,
       formattedBalance: "$25.50",
-    };
+    });
 
-    renderCard(snapshot);
+    renderCard(snapshot, { costSummaryDisplayStyle: "compact" });
 
     expect(await screen.findByText("Extra usage")).toBeInTheDocument();
     expect(screen.getByText("$25.50")).toBeInTheDocument();
     expect(screen.queryByText(/Used:/)).not.toBeInTheDocument();
+  });
+
+  it("renders known spend and balance together in compact cost summary mode", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(
+      buildBundle({
+        DetailCostTitle: "Cost",
+        DetailCostUsed: "Used",
+        DetailCostBalance: "Balance",
+      }),
+    );
+    const snapshot = provider(null, 20);
+    snapshot.cost = costSnapshot({
+      used: 38.08,
+      balance: 8.88,
+      formattedUsed: "$38.08",
+      formattedBalance: "$8.88",
+      period: "On-demand billing cycle",
+    });
+
+    renderCard(snapshot, { costSummaryDisplayStyle: "compact" });
+
+    expect(await screen.findByText(/Cost — On-demand billing cycle/)).toBeInTheDocument();
+    expect(screen.getByText(/Used:\s*\$38\.08/)).toBeInTheDocument();
+    expect(screen.getByText(/Balance:\s*\$8\.88/)).toBeInTheDocument();
   });
 
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {
