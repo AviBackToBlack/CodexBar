@@ -246,6 +246,7 @@ fn parses_daily_and_weekly_resets_from_rfc3339() {
     );
 
     assert_eq!(snapshot.primary.used_percent, 25.0);
+    assert_eq!(snapshot.primary.window_minutes, Some(1440));
     assert_eq!(
         snapshot.primary.resets_at,
         Some(
@@ -256,6 +257,7 @@ fn parses_daily_and_weekly_resets_from_rfc3339() {
     );
     let weekly = snapshot.secondary.unwrap();
     assert_eq!(weekly.used_percent, 50.0);
+    assert_eq!(weekly.window_minutes, Some(10080));
     assert_eq!(
         weekly.resets_at,
         Some(

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type {
+  CostSnapshotBridge,
   CostSummaryDisplayStyle,
   DailyCostPoint,
   PaceSnapshot,
@@ -57,6 +58,12 @@ function formatSessionEquivalentEstimate(
   const unit =
     rounded > 0 && rounded <= 1 ? "session quota" : "session quotas";
   return `Estimated: ${display} ${unit} left`;
+}
+
+function isBalanceOnlyCost(
+  cost: Pick<CostSnapshotBridge, "balance" | "limit" | "used">,
+): boolean {
+  return cost.balance != null && cost.limit == null && cost.used <= 0;
 }
 
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
@@ -502,6 +509,7 @@ export default function MenuCardDetails({
   );
   const localCostHistory = chartData?.costHistory ?? [];
   const costStyle = display.costSummaryDisplayStyle ?? "detailed";
+  const balanceOnlyCost = provider.cost ? isBalanceOnlyCost(provider.cost) : false;
 
   const {
     hasMetrics,
@@ -547,13 +555,16 @@ export default function MenuCardDetails({
       {hasCost && provider.cost && (
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
+            {hasCost && provider.cost && (
+        <section className="menu-card__group menu-card__cost">
+          <div className="menu-card__group-title">
             {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
               ? t("ApiSpendTitle")
-              : provider.cost.balance != null && provider.cost.limit == null
+              : balanceOnlyCost
                 ? provider.cost.period || t("CreditsLabel")
-              : `${t("DetailCostTitle")} — ${provider.cost.period}`}
+                : `${t("DetailCostTitle")} — ${provider.cost.period}`}
           </div>
-          {provider.cost.balance != null && provider.cost.limit == null ? (
+          {balanceOnlyCost ? (
             <div className="menu-card__cost-line">
               {provider.cost.formattedBalance ||
                 formatCurrency(
@@ -581,7 +592,7 @@ export default function MenuCardDetails({
                   </>
                 )}
               </div>
-              {costStyle === "detailed" && provider.cost.balance != null && (
+              {provider.cost.balance != null && (
                 <div className="menu-card__cost-line menu-card__cost-line--muted">
                   {t("DetailCostBalance")}:{" "}
                   {provider.cost.formattedBalance ||

@@ -441,14 +441,18 @@ fn snapshot_from_quota(value: &Value, org: &str) -> UsageSnapshot {
     let daily_reset_at = timestamp(value, &["daily_reset_at", "dailyResetAt"]);
     let weekly_reset_at = timestamp(value, &["weekly_reset_at", "weeklyResetAt"]);
 
-    let mut snapshot =
-        UsageSnapshot::new(RateWindow::with_details(daily, None, daily_reset_at, None))
-            .with_organization(org.to_string());
+    let mut snapshot = UsageSnapshot::new(RateWindow::with_details(
+        daily,
+        Some(1440),
+        daily_reset_at,
+        None,
+    ))
+    .with_organization(org.to_string());
 
     if let Some(weekly) = percent(value, &["weekly_percentage", "weeklyPercentage"]) {
         snapshot = snapshot.with_secondary(RateWindow::with_details(
             weekly,
-            None,
+            Some(10080),
             weekly_reset_at,
             None,
         ));
