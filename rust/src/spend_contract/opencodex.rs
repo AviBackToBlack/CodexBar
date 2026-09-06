@@ -8,8 +8,8 @@ use serde_json::Value;
 use crate::core::CostUsagePricing;
 
 use super::{
-    CostCoverageCounts, CustomPricing, ImportedSpendSource, SpendActivityCell, SpendDailyPoint,
-    SpendModelRow, SpendTokenMix,
+    CostCoverageCounts, CostProvenance, CustomPricing, CustomRates, ImportedSpendSource,
+    SpendActivityCell, SpendDailyPoint, SpendModelRow, SpendTokenMix,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +141,9 @@ fn aggregate(
     let mut daily: BTreeMap<String, DailyAccumulator> = BTreeMap::new();
     let mut known_cost = 0.0;
     let mut saw_known_cost = false;
+    let mut saw_vendor_provenance = false;
+    let mut saw_list_provenance = false;
+    let mut saw_metered_cost = false;
     // Upstream 0.55.0 #3136: resolve the dynamic pricing catalog once per
     // aggregate instead of re-checking its cache metadata for every usage row.
     let pricing_snapshot = crate::core::pricing_snapshot();
@@ -160,6 +163,11 @@ fn aggregate(
 
         let cost = entry_cost(entry, custom, &pricing_snapshot);
         match entry.usage_status.as_str() {
+            "reported" => saw_vendor_provenance = true,
+            "estimated" => saw_list_provenance = true,
+            _ => {}
+        }
+        match entry.usage_status.as_str() {
             "reported" if cost.is_some() => coverage.priced = coverage.priced.saturating_add(1),
             "estimated" if cost.is_some() => {
                 coverage.estimated = coverage.estimated.saturating_add(1)
@@ -170,6 +178,9 @@ fn aggregate(
         if let Some(cost) = cost {
             known_cost += cost;
             saw_known_cost = true;
+            if entry.usage_status == "reported" {
+                saw_metered_cost = true;
+            }
         }
 
         let local = entry.timestamp.with_timezone(&Local);
@@ -257,12 +268,18 @@ fn aggregate(
     )]
     let conversation_count = conversations.len().min(u32::MAX as usize) as u32;
 
+    let snapshot_provenance =
+        CostProvenance::from_source_kinds(saw_vendor_provenance, saw_list_provenance);
+    let provenance =
+        CostProvenance::for_window(snapshot_provenance, saw_known_cost, saw_metered_cost);
+
     Some(ImportedSpendSource {
         source_id: "opencodex".to_string(),
         display_name: "OpenCodex".to_string(),
         request_count,
         conversation_count,
         known_cost_usd: saw_known_cost.then_some(known_cost),
+        provenance,
         token_mix,
         coverage,
         models: model_rows,
@@ -526,6 +543,61 @@ mod tests {
         assert_eq!(source.token_mix.input_tokens, Some(20));
         assert_eq!(source.coverage.priced, 1);
         assert!(source.known_cost_usd.is_some());
+        assert_eq!(source.provenance, CostProvenance::VendorMetered);
+    }
+
+    #[test]
+    fn aggregate_preserves_list_and_mixed_provenance() {
+        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut estimated = entry("openai", "gpt-5");
+        estimated.request_id = "estimated".to_string();
+        estimated.usage_status = "estimated".to_string();
+        let list_only = aggregate(vec![estimated.clone()], now, 30, &CustomPricing::default())
+            .expect("list-price source");
+        assert_eq!(list_only.provenance, CostProvenance::ListPriceEstimate);
+
+        let mut reported = entry("openai", "gpt-5");
+        reported.request_id = "reported".to_string();
+        let mixed = aggregate(
+            vec![reported, estimated],
+            now,
+            30,
+            &CustomPricing::default(),
+        )
+        .expect("mixed source");
+        assert_eq!(mixed.provenance, CostProvenance::Mixed);
+    }
+
+    #[test]
+    fn aggregate_preserves_zero_cost_authoritative_provenance() {
+        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let custom = CustomPricing {
+            entries: std::collections::HashMap::from([(
+                "openai/gpt-5".to_string(),
+                CustomRates {
+                    input: Some(0.0),
+                    output: Some(0.0),
+                    cache_read: Some(0.0),
+                    cache_write: Some(0.0),
+                },
+            )]),
+        };
+
+        let reported = aggregate(vec![entry("openai", "gpt-5")], now, 30, &custom)
+            .expect("zero-cost vendor source");
+        assert_eq!(reported.known_cost_usd, Some(0.0));
+        assert_eq!(reported.provenance, CostProvenance::VendorMetered);
+
+        let mut estimated_entry = entry("openai", "gpt-5");
+        estimated_entry.usage_status = "estimated".to_string();
+        let estimated =
+            aggregate(vec![estimated_entry], now, 30, &custom).expect("zero-cost list source");
+        assert_eq!(estimated.known_cost_usd, Some(0.0));
+        assert_eq!(estimated.provenance, CostProvenance::ListPriceEstimate);
     }
 
     fn entry(provider: &str, model: &str) -> OpenCodexEntry {

@@ -24,6 +24,52 @@ pub enum CostProvenance {
     Unknown,
 }
 
+impl CostProvenance {
+    /// Narrow snapshot provenance to the costs actually present in a window.
+    ///
+    /// This mirrors upstream 0.56.2 `CostProvenance.forWindow`: a vendor source
+    /// remains vendor-metered when it has window costs, while a mixed source is
+    /// mixed only when both its list-price and metered sides are present.
+    pub(crate) fn for_window(
+        snapshot: Self,
+        has_window_costs: bool,
+        includes_metered: bool,
+    ) -> Self {
+        match snapshot {
+            Self::VendorMetered => {
+                if includes_metered || has_window_costs {
+                    Self::VendorMetered
+                } else {
+                    Self::Unknown
+                }
+            }
+            Self::Mixed => match (includes_metered, has_window_costs) {
+                (true, true) => Self::Mixed,
+                (true, false) => Self::VendorMetered,
+                (false, true) => Self::ListPriceEstimate,
+                (false, false) => Self::Unknown,
+            },
+            Self::ListPriceEstimate => {
+                if has_window_costs {
+                    Self::ListPriceEstimate
+                } else {
+                    Self::Unknown
+                }
+            }
+            Self::Unknown => Self::Unknown,
+        }
+    }
+
+    fn from_source_kinds(includes_vendor: bool, includes_list: bool) -> Self {
+        match (includes_vendor, includes_list) {
+            (true, true) => Self::Mixed,
+            (true, false) => Self::VendorMetered,
+            (false, true) => Self::ListPriceEstimate,
+            (false, false) => Self::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CostCoverageCounts {
@@ -105,6 +151,7 @@ pub struct ImportedSpendSource {
     pub request_count: u32,
     pub conversation_count: u32,
     pub known_cost_usd: Option<f64>,
+    pub provenance: CostProvenance,
     pub token_mix: SpendTokenMix,
     pub coverage: CostCoverageCounts,
     pub models: Vec<SpendModelRow>,
@@ -122,6 +169,7 @@ struct NativeSpendData {
 
 struct ResolvedSpendData {
     known_cost_usd: Option<f64>,
+    provenance: CostProvenance,
     price_coverage: CostCoverageCounts,
     price_coverage_exact: bool,
     token_mix: SpendTokenMix,
@@ -286,6 +334,12 @@ pub fn build_local_spend_contract_from_summary(
     let native_models = model_rows(provider_id, &summary, &custom);
     let native_coverage = coverage_for_models(&native_models);
     let native_cost = known_subtotal(&native_models, &summary);
+    let native_has_window_costs = native_models.iter().any(|model| model.cost_usd.is_some());
+    let native_provenance = CostProvenance::for_window(
+        CostProvenance::ListPriceEstimate,
+        native_has_window_costs,
+        false,
+    );
     let native_token_mix = SpendTokenMix {
         input_tokens: Some(summary.input_tokens),
         output_tokens: Some(summary.output_tokens),
@@ -308,6 +362,8 @@ pub fn build_local_spend_contract_from_summary(
         provider_id == "codex" && hide_native_codex_when_opencodex_present && imported.is_some();
     let resolved = resolve_spend(
         native_cost,
+        native_provenance,
+        native_has_window_costs,
         native_coverage,
         native_token_mix,
         native_models,
@@ -346,11 +402,7 @@ pub fn build_local_spend_contract_from_summary(
         history_days,
         known_cost_usd: resolved.known_cost_usd,
         known_zero,
-        provenance: if resolved.known_cost_usd.is_some() {
-            CostProvenance::ListPriceEstimate
-        } else {
-            CostProvenance::Unknown
-        },
+        provenance: resolved.provenance,
         price_coverage_ratio: if resolved.price_coverage_exact {
             resolved.price_coverage.coverage_ratio()
         } else {
@@ -424,6 +476,8 @@ fn load_native_spend(
 )]
 fn resolve_spend(
     native_cost: Option<f64>,
+    native_provenance: CostProvenance,
+    native_has_window_costs: bool,
     native_coverage: CostCoverageCounts,
     native_token_mix: SpendTokenMix,
     native_models: Vec<SpendModelRow>,
@@ -435,6 +489,7 @@ fn resolve_spend(
     match imported {
         Some(imported) if replace_native => ResolvedSpendData {
             known_cost_usd: imported.known_cost_usd,
+            provenance: imported.provenance,
             price_coverage: imported.coverage.clone(),
             price_coverage_exact: imported.coverage.checked_total().is_some(),
             token_mix: imported.token_mix.clone(),
@@ -447,6 +502,12 @@ fn resolve_spend(
                 merge_coverage(native_coverage, &imported.coverage);
             ResolvedSpendData {
                 known_cost_usd: sum_optional_cost(native_cost, imported.known_cost_usd),
+                provenance: merge_provenance(
+                    native_provenance,
+                    native_has_window_costs,
+                    imported.provenance,
+                    imported.known_cost_usd.is_some(),
+                ),
                 price_coverage,
                 price_coverage_exact,
                 token_mix: merge_token_mix(native_token_mix, &imported.token_mix),
@@ -457,6 +518,7 @@ fn resolve_spend(
         }
         None => ResolvedSpendData {
             known_cost_usd: native_cost,
+            provenance: native_provenance,
             price_coverage_exact: native_coverage.checked_total().is_some(),
             price_coverage: native_coverage,
             token_mix: native_token_mix,
@@ -464,6 +526,45 @@ fn resolve_spend(
             daily: native_daily,
             hourly_activity: native_activity,
         },
+    }
+}
+
+fn merge_provenance(
+    left: CostProvenance,
+    left_has_window_costs: bool,
+    right: CostProvenance,
+    right_has_window_costs: bool,
+) -> CostProvenance {
+    let mut merged = None;
+    for (provenance, has_window_costs) in [
+        (left, left_has_window_costs),
+        (right, right_has_window_costs),
+    ] {
+        if !has_window_costs {
+            continue;
+        }
+        merged = Some(match merged {
+            None => provenance,
+            Some(existing) => combine_provenance(existing, provenance),
+        });
+    }
+    merged.unwrap_or(CostProvenance::Unknown)
+}
+
+fn combine_provenance(left: CostProvenance, right: CostProvenance) -> CostProvenance {
+    match (left, right) {
+        (CostProvenance::Unknown, _) | (_, CostProvenance::Unknown) => CostProvenance::Unknown,
+        (CostProvenance::Mixed, _) | (_, CostProvenance::Mixed) => CostProvenance::Mixed,
+        (CostProvenance::ListPriceEstimate, CostProvenance::ListPriceEstimate) => {
+            CostProvenance::ListPriceEstimate
+        }
+        (CostProvenance::VendorMetered, CostProvenance::VendorMetered) => {
+            CostProvenance::VendorMetered
+        }
+        (CostProvenance::ListPriceEstimate, CostProvenance::VendorMetered)
+        | (CostProvenance::VendorMetered, CostProvenance::ListPriceEstimate) => {
+            CostProvenance::Mixed
+        }
     }
 }
 
@@ -955,6 +1056,7 @@ mod tests {
             request_count: 2,
             conversation_count: 1,
             known_cost_usd: Some(2.0),
+            provenance: CostProvenance::VendorMetered,
             token_mix: SpendTokenMix {
                 input_tokens: Some(5),
                 cache_read_tokens: Some(4),
@@ -997,6 +1099,8 @@ mod tests {
 
         let resolved = resolve_spend(
             Some(1.0),
+            CostProvenance::ListPriceEstimate,
+            true,
             CostCoverageCounts {
                 priced: 1,
                 unpriced: 0,
@@ -1024,6 +1128,7 @@ mod tests {
         );
 
         assert_eq!(resolved.known_cost_usd, Some(3.0));
+        assert_eq!(resolved.provenance, CostProvenance::Mixed);
         assert_eq!(resolved.token_mix.input_tokens, Some(15));
         assert_eq!(resolved.token_mix.output_tokens, Some(2));
         assert_eq!(resolved.token_mix.cache_read_tokens, Some(4));
@@ -1044,6 +1149,168 @@ mod tests {
         assert_eq!(resolved.daily[1].cost_usd, None);
         assert_eq!(resolved.daily[1].total_tokens, None);
         assert_eq!(resolved.hourly_activity[0].conversations, 7);
+    }
+
+    #[test]
+    fn cost_provenance_for_window_matches_upstream_truth_table() {
+        let cases = [
+            (
+                CostProvenance::ListPriceEstimate,
+                false,
+                false,
+                CostProvenance::Unknown,
+            ),
+            (
+                CostProvenance::ListPriceEstimate,
+                true,
+                false,
+                CostProvenance::ListPriceEstimate,
+            ),
+            (
+                CostProvenance::VendorMetered,
+                false,
+                false,
+                CostProvenance::Unknown,
+            ),
+            (
+                CostProvenance::VendorMetered,
+                true,
+                false,
+                CostProvenance::VendorMetered,
+            ),
+            (
+                CostProvenance::VendorMetered,
+                false,
+                true,
+                CostProvenance::VendorMetered,
+            ),
+            (CostProvenance::Mixed, false, false, CostProvenance::Unknown),
+            (
+                CostProvenance::Mixed,
+                true,
+                false,
+                CostProvenance::ListPriceEstimate,
+            ),
+            (
+                CostProvenance::Mixed,
+                false,
+                true,
+                CostProvenance::VendorMetered,
+            ),
+            (CostProvenance::Mixed, true, true, CostProvenance::Mixed),
+            (CostProvenance::Unknown, true, true, CostProvenance::Unknown),
+        ];
+
+        for (snapshot, has_window_costs, includes_metered, expected) in cases {
+            assert_eq!(
+                CostProvenance::for_window(snapshot, has_window_costs, includes_metered),
+                expected,
+                "snapshot={snapshot:?}, has_window_costs={has_window_costs}, includes_metered={includes_metered}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_cost_authoritative_sources_use_presence_not_positive_value() {
+        assert_eq!(
+            CostProvenance::for_window(CostProvenance::ListPriceEstimate, true, false),
+            CostProvenance::ListPriceEstimate
+        );
+        assert_eq!(
+            CostProvenance::for_window(CostProvenance::VendorMetered, true, false),
+            CostProvenance::VendorMetered
+        );
+
+        let resolved = resolve_spend(
+            Some(0.0),
+            CostProvenance::ListPriceEstimate,
+            true,
+            CostCoverageCounts::default(),
+            SpendTokenMix::default(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            false,
+        );
+        assert_eq!(resolved.known_cost_usd, Some(0.0));
+        assert_eq!(resolved.provenance, CostProvenance::ListPriceEstimate);
+    }
+
+    #[test]
+    fn provenance_merge_keeps_unknown_conservative_and_mixes_vendor_with_list() {
+        assert_eq!(
+            merge_provenance(
+                CostProvenance::ListPriceEstimate,
+                true,
+                CostProvenance::VendorMetered,
+                true,
+            ),
+            CostProvenance::Mixed
+        );
+        assert_eq!(
+            merge_provenance(
+                CostProvenance::ListPriceEstimate,
+                true,
+                CostProvenance::ListPriceEstimate,
+                true,
+            ),
+            CostProvenance::ListPriceEstimate
+        );
+        assert_eq!(
+            merge_provenance(
+                CostProvenance::VendorMetered,
+                true,
+                CostProvenance::VendorMetered,
+                true,
+            ),
+            CostProvenance::VendorMetered
+        );
+        assert_eq!(
+            merge_provenance(
+                CostProvenance::Unknown,
+                true,
+                CostProvenance::ListPriceEstimate,
+                true,
+            ),
+            CostProvenance::Unknown
+        );
+        assert_eq!(
+            merge_provenance(
+                CostProvenance::Unknown,
+                false,
+                CostProvenance::ListPriceEstimate,
+                true,
+            ),
+            CostProvenance::ListPriceEstimate
+        );
+    }
+
+    #[test]
+    fn spend_contract_serializes_provenance_for_tauri_and_cli() {
+        let contract = SpendContract {
+            provider_id: "codex".to_string(),
+            history_days: 30,
+            known_cost_usd: Some(0.0),
+            known_zero: false,
+            provenance: CostProvenance::VendorMetered,
+            price_coverage: CostCoverageCounts::default(),
+            price_coverage_ratio: None,
+            history_coverage_established: true,
+            token_mix: SpendTokenMix::default(),
+            conversation_count: 0,
+            models: Vec::new(),
+            projects: Vec::new(),
+            conversations: Vec::new(),
+            daily: Vec::new(),
+            hourly_activity: Vec::new(),
+            project_source_status: None,
+            custom_pricing_active: false,
+            imports: Vec::new(),
+        };
+
+        let json = serde_json::to_value(contract).expect("spend contract serializes");
+        assert_eq!(json["provenance"], "vendorMetered");
     }
 
     #[test]
