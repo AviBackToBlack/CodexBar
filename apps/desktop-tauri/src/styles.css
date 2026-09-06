@@ -815,6 +815,10 @@ html {
 }
 
 .credential-card__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   font-size: 0.78rem;
   color: var(--text-eyebrow);
   text-decoration: none;
