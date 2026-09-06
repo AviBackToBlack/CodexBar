@@ -167,8 +167,46 @@ fn rebuild_cache_days(cache: &mut CostUsageCache) {
                 if dest.len() < 3 {
                     dest.resize(3, 0);
                 }
-                for (i, value) in packed.iter().take(3).enumerate() {
-                    dest[i] = dest[i].saturating_add(*value);
+
+                let had_core_tokens = dest[0] != 0 || dest[1] != 0 || dest[2] != 0;
+                let source_input = packed.first().copied().unwrap_or(0);
+                let source_cached = packed.get(1).copied().unwrap_or(0);
+                let source_output = packed.get(2).copied().unwrap_or(0);
+                let source_has_tokens =
+                    source_input != 0 || source_cached != 0 || source_output != 0;
+                let source_reasoning = packed
+                    .get(3)
+                    .copied()
+                    .map(|reasoning| reasoning.max(0).min(source_output.max(0)));
+
+                dest[0] = dest[0].saturating_add(source_input);
+                dest[1] = dest[1].saturating_add(source_cached);
+                dest[2] = dest[2].saturating_add(source_output);
+
+                if !source_has_tokens {
+                    continue;
+                }
+
+                if !had_core_tokens {
+                    match source_reasoning {
+                        Some(reasoning) => {
+                            if dest.len() >= 4 {
+                                dest[3] = reasoning.min(dest[2].max(0));
+                            } else {
+                                dest.push(reasoning.min(dest[2].max(0)));
+                            }
+                        }
+                        None => dest.truncate(3),
+                    }
+                    continue;
+                }
+
+                match (dest.get(3).copied(), source_reasoning) {
+                    (Some(previous), Some(reasoning)) => {
+                        let merged = previous.saturating_add(reasoning).min(dest[2].max(0));
+                        dest[3] = merged;
+                    }
+                    _ => dest.truncate(3),
                 }
             }
         }
@@ -2289,6 +2327,190 @@ mod tests {
         let path = day_dir.join(name);
         std::fs::write(&path, body).unwrap();
         path
+    }
+
+    fn cached_usage_with_packed(day: &str, model: &str, packed: Vec<i32>) -> CostUsageFileUsage {
+        CostUsageFileUsage {
+            mtime_unix_ms: 0,
+            size: 1,
+            days: HashMap::from([(
+                day.to_string(),
+                HashMap::from([(model.to_string(), packed)]),
+            )]),
+            parsed_bytes: Some(1),
+            last_model: None,
+            last_totals: None,
+            codex_token_timestamps_monotonic: None,
+            codex_last_token_timestamp: None,
+            codex_session_id: None,
+            codex_forked_from_id: None,
+            codex_fork_timestamp: None,
+            codex_unresolved_fork_parent: false,
+        }
+    }
+
+    #[test]
+    fn rebuild_cache_days_preserves_known_reasoning() {
+        let day = Local::now().format("%Y-%m-%d").to_string();
+        let mut cache = CostUsageCache::default();
+        cache.files = HashMap::from([
+            (
+                "a".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![10, 0, 4, 3]),
+            ),
+            (
+                "b".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![5, 0, 2, 1]),
+            ),
+        ]);
+
+        rebuild_cache_days(&mut cache);
+
+        assert_eq!(cache.days[&day]["gpt-5"], vec![15, 0, 6, 4]);
+    }
+
+    #[test]
+    fn rebuild_cache_days_reasoning_unknown_is_order_independent() {
+        let run = |first: Vec<i32>, second: Vec<i32>| {
+            let day = Local::now().format("%Y-%m-%d").to_string();
+            let mut cache = CostUsageCache::default();
+            cache.files = HashMap::from([
+                (
+                    "a".to_string(),
+                    cached_usage_with_packed(&day, "gpt-5", first),
+                ),
+                (
+                    "b".to_string(),
+                    cached_usage_with_packed(&day, "gpt-5", second),
+                ),
+            ]);
+
+            rebuild_cache_days(&mut cache);
+            cache.days[&day]["gpt-5"].clone()
+        };
+
+        assert_eq!(run(vec![10, 0, 4, 3], vec![5, 0, 2]), vec![15, 0, 6]);
+        assert_eq!(run(vec![5, 0, 2], vec![10, 0, 4, 3]), vec![15, 0, 6]);
+    }
+
+    #[test]
+    fn rebuild_cache_days_zero_row_does_not_poison_reasoning() {
+        let day = Local::now().format("%Y-%m-%d").to_string();
+        let mut cache = CostUsageCache::default();
+        cache.files = HashMap::from([
+            (
+                "a".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![10, 0, 4, 3]),
+            ),
+            (
+                "b".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![0, 0, 0]),
+            ),
+        ]);
+
+        rebuild_cache_days(&mut cache);
+
+        assert_eq!(cache.days[&day]["gpt-5"], vec![10, 0, 4, 3]);
+    }
+
+    #[test]
+    fn reasoning_survives_scan_rebuild_and_cache_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let today = Local::now().date_naive();
+        let day = today.format("%Y-%m-%d").to_string();
+        let day_dir = sessions
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let timestamp = (Utc::now() - Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        let reasoning_line = serde_json::json!({
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "model": "gpt-5",
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 20,
+                        "reasoning_output_tokens": 7
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            day_dir.join("reasoning.jsonl"),
+            format!("{reasoning_line}\n"),
+        )
+        .unwrap();
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+        assert_eq!(summary.output_tokens, 20);
+        assert_eq!(summary.reasoning_tokens, Some(7));
+        let row = &cache.days[&day]["gpt-5"];
+        assert!(row.len() >= 4);
+        assert_eq!(row[3], 7);
+
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        let loaded_row = &loaded.days[&day]["gpt-5"];
+        assert!(loaded_row.len() >= 4);
+        assert_eq!(loaded_row[3], 7);
+        assert_eq!(
+            JsonlScanner::cached_cost_report_from_days(&loaded).reasoning_tokens,
+            Some(7)
+        );
+
+        let legacy_root = tempfile::tempdir().unwrap();
+        let legacy_sessions = legacy_root.path().join("sessions");
+        let legacy_cache_root = legacy_root.path().join("cache");
+        let legacy_day_dir = legacy_sessions
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&legacy_day_dir).unwrap();
+        let legacy_line = serde_json::json!({
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "model": "gpt-5",
+                    "total_token_usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 20
+                    }
+                }
+            }
+        });
+        std::fs::write(
+            legacy_day_dir.join("legacy.jsonl"),
+            format!("{legacy_line}\n"),
+        )
+        .unwrap();
+
+        let legacy_scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&legacy_cache_root)
+            .with_sessions_dirs(vec![legacy_sessions]);
+        let (legacy_summary, _, legacy_cache) = legacy_scanner.scan_codex_detailed_with_cache(None);
+        assert_eq!(legacy_summary.output_tokens, 20);
+        assert_eq!(legacy_summary.reasoning_tokens, None);
+        assert_eq!(legacy_cache.days[&day]["gpt-5"], vec![100, 0, 20]);
+        assert!(
+            (summary.total_cost_usd - legacy_summary.total_cost_usd).abs() < 1e-12,
+            "reasoning metadata must not change cost"
+        );
     }
 
     fn write_codex_fork_session_fixture(
