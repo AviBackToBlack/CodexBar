@@ -14,6 +14,7 @@ pub(super) struct ParsedTurn {
     pub timestamp_ms: Option<i64>,
     pub model: Option<String>,
     pub label: Option<String>,
+    pub step_uuid: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -113,6 +114,25 @@ fn text(field: Field<'_>) -> Option<Option<String>> {
     Some((!value.is_empty()).then(|| value.to_string()))
 }
 
+fn identity_text(field: Field<'_>) -> Option<Option<String>> {
+    let value = std::str::from_utf8(message(field)?).ok()?;
+    Some((!value.trim().is_empty()).then(|| value.to_string()))
+}
+
+fn timestamp_millis(seconds: Option<u64>, nanos: u64) -> Option<Option<i64>> {
+    let Some(seconds) = seconds else {
+        return Some(None);
+    };
+    if seconds == 0 || seconds > 253_402_300_799 || nanos > 999_999_999 {
+        return None;
+    }
+    let seconds = i64::try_from(seconds).ok()?;
+    let nanos = i64::try_from(nanos).ok()?;
+    Some(Some(
+        seconds.checked_mul(1000)?.checked_add(nanos / 1_000_000)?,
+    ))
+}
+
 pub(super) fn parse_turn(root: &[u8]) -> Option<ParsedTurn> {
     let mut turn = ParsedTurn::default();
     let mut seconds = None;
@@ -120,6 +140,9 @@ pub(super) fn parse_turn(root: &[u8]) -> Option<ParsedTurn> {
     let mut found_chat = false;
     fields(root, |field| {
         if field.number != 1 {
+            if field.number == 4 {
+                turn.step_uuid = identity_text(field)?;
+            }
             return Some(());
         }
         found_chat = true;
@@ -128,16 +151,37 @@ pub(super) fn parse_turn(root: &[u8]) -> Option<ParsedTurn> {
     if !found_chat {
         return None;
     }
-    turn.timestamp_ms = match seconds {
-        Some(value) if value > 0 && value <= 253_402_300_799 && nanos <= 999_999_999 => {
-            let seconds = i64::try_from(value).ok()?;
-            let nanos = i64::try_from(nanos).ok()?;
-            seconds.checked_mul(1000)?.checked_add(nanos / 1_000_000)
-        }
-        Some(_) => return None,
-        None => None,
-    };
+    turn.timestamp_ms = timestamp_millis(seconds, nanos)?;
     Some(turn)
+}
+
+pub(super) fn parse_step_metadata(root: &[u8]) -> Option<(Option<String>, Option<i64>)> {
+    let mut step_uuid = None;
+    let mut seconds = None;
+    let mut nanos = 0_u64;
+    let mut timestamp_is_valid = true;
+    fields(root, |field| {
+        match field.number {
+            1 => {
+                let Some(timestamp) = message(field) else {
+                    timestamp_is_valid = false;
+                    return Some(());
+                };
+                if parse_timestamp_field(timestamp, &mut seconds, &mut nanos).is_none() {
+                    timestamp_is_valid = false;
+                }
+            }
+            12 => step_uuid = identity_text(field)?,
+            _ => {}
+        }
+        Some(())
+    })?;
+    let timestamp_ms = if timestamp_is_valid {
+        timestamp_millis(seconds, nanos)?
+    } else {
+        None
+    };
+    Some((step_uuid, timestamp_ms))
 }
 
 fn parse_chat(
@@ -180,26 +224,30 @@ fn parse_generation(bytes: &[u8], seconds: &mut Option<u64>, nanos: &mut u64) ->
         if field.number != 4 {
             return Some(());
         }
-        fields(message(field)?, |stamp| {
-            match stamp.number {
-                1 => {
-                    let value = integer(stamp)?;
-                    if value == 0 || value > 253_402_300_799 {
-                        return None;
-                    }
-                    *seconds = Some(value);
+        parse_timestamp_field(message(field)?, seconds, nanos)
+    })
+}
+
+fn parse_timestamp_field(bytes: &[u8], seconds: &mut Option<u64>, nanos: &mut u64) -> Option<()> {
+    fields(bytes, |stamp| {
+        match stamp.number {
+            1 => {
+                let value = integer(stamp)?;
+                if value == 0 || value > 253_402_300_799 {
+                    return None;
                 }
-                2 => {
-                    let value = integer(stamp)?;
-                    if value > 999_999_999 {
-                        return None;
-                    }
-                    *nanos = value;
-                }
-                _ => {}
+                *seconds = Some(value);
             }
-            Some(())
-        })
+            2 => {
+                let value = integer(stamp)?;
+                if value > 999_999_999 {
+                    return None;
+                }
+                *nanos = value;
+            }
+            _ => {}
+        }
+        Some(())
     })
 }
 
@@ -263,5 +311,48 @@ mod tests {
     #[test]
     fn rejects_malformed_varint() {
         assert!(parse_turn(&[0x0a, 0x80]).is_none());
+    }
+
+    #[test]
+    fn decodes_new_root_envelope_step_uuid_and_step_metadata() {
+        let step_uuid = "step-uuid-1";
+        let mut usage = Vec::new();
+        usage.extend(field_varint(1, 10));
+        usage.extend(field_varint(2, 20));
+        usage.extend(field_varint(9, 40));
+        let chat = field_bytes(4, &usage);
+        let mut root = field_bytes(2, &[1, 2]);
+        root.extend(field_bytes(4, step_uuid.as_bytes()));
+        root.extend(field_bytes(1, &chat));
+
+        let turn = parse_turn(&root).unwrap();
+        assert_eq!(turn.step_uuid.as_deref(), Some(step_uuid));
+        assert_eq!(turn.timestamp_ms, None);
+
+        let timestamp = field_varint(1, 1_787_572_800);
+        let metadata = field_bytes(
+            1,
+            &timestamp
+                .into_iter()
+                .chain(field_varint(2, 123_000_000))
+                .collect::<Vec<_>>(),
+        );
+        let mut metadata = metadata;
+        metadata.extend(field_bytes(12, step_uuid.as_bytes()));
+        assert_eq!(
+            parse_step_metadata(&metadata),
+            Some((Some(step_uuid.to_string()), Some(1_787_572_800_123)))
+        );
+    }
+
+    #[test]
+    fn invalid_step_timestamp_is_evidence_without_a_timestamp() {
+        let mut metadata = field_bytes(1, &field_varint(2, 1_000_000_000));
+        metadata.extend(field_bytes(12, b"step-uuid-1"));
+
+        assert_eq!(
+            parse_step_metadata(&metadata),
+            Some((Some("step-uuid-1".to_string()), None))
+        );
     }
 }

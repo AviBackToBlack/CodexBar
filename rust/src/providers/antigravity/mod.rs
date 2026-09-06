@@ -6,6 +6,7 @@
 mod local_proto;
 pub mod local_sessions;
 mod local_sqlite;
+mod local_step_resolver;
 mod quota_summary;
 
 use async_trait::async_trait;

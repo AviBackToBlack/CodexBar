@@ -6,8 +6,9 @@ use std::time::{Duration as StdDuration, Instant};
 use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
 
-use super::local_proto::{ParsedTurn, parse_turn};
+use super::local_proto::{ParsedTurn, parse_step_metadata, parse_turn};
 use super::local_sessions::{LocalHistoryCoverage, LocalSessionSummary};
+use super::local_step_resolver::{StepOccurrence, StepTimestamp, resolve_step_timestamps};
 
 const MAX_DATABASES: usize = 500;
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
@@ -71,6 +72,29 @@ struct Event {
     row: i64,
     turn: ParsedTurn,
     total: u64,
+}
+
+#[derive(Debug)]
+struct PendingTimestampRow {
+    row: i64,
+    step_uuid: String,
+    turn: ParsedTurn,
+    total: u64,
+}
+
+#[derive(Debug)]
+struct ParsedRows {
+    events: Vec<Event>,
+    pending: Vec<PendingTimestampRow>,
+    occurrences: HashMap<String, Vec<StepOccurrence>>,
+    database_bytes: usize,
+    complete: bool,
+}
+
+#[derive(Debug)]
+struct StepTimestampScan {
+    timestamps: HashMap<String, Vec<StepTimestamp>>,
+    complete: bool,
 }
 
 pub(super) fn database_roots(gemini_base: &Path) -> [PathBuf; 3] {
@@ -281,7 +305,68 @@ fn read_database(path: &Path, budget: &mut Budget) -> rusqlite::Result<(Vec<Even
         .and_then(|value| value.to_str())
         .unwrap_or("unknown")
         .to_string();
-    let mut statement = tx.prepare(
+    let mut rows = read_generation_rows(&tx, &session, budget)?;
+    if rows.pending.is_empty() {
+        return Ok((rows.events, rows.complete));
+    }
+
+    // Never realign step timestamps after a malformed or truncated primary scan.
+    if !rows.complete {
+        return Ok((rows.events, false));
+    }
+
+    let has_steps = match supported_steps_schema(&tx, budget) {
+        Ok(value) => value,
+        Err(_) => false,
+    };
+    if !has_steps {
+        return Ok((rows.events, false));
+    }
+
+    let needed_occurrences = rows
+        .pending
+        .iter()
+        .map(|pending| pending.step_uuid.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(|step_uuid| {
+            let occurrences = rows
+                .occurrences
+                .get(&step_uuid)
+                .cloned()
+                .unwrap_or_default();
+            (step_uuid, occurrences)
+        })
+        .collect::<HashMap<_, _>>();
+    let step_scan =
+        match read_step_timestamps(&tx, &needed_occurrences, budget, &mut rows.database_bytes) {
+            Ok(scan) => scan,
+            Err(_) => return Ok((rows.events, false)),
+        };
+    if !step_scan.complete {
+        return Ok((rows.events, false));
+    }
+
+    let resolved = resolve_step_timestamps(&step_scan.timestamps, &needed_occurrences);
+    let recovered = append_recovered_events(
+        &mut rows.events,
+        &session,
+        &rows.pending,
+        &resolved,
+        &rows.occurrences,
+    );
+    if recovered < rows.pending.len() {
+        rows.complete = false;
+    }
+    Ok((rows.events, rows.complete))
+}
+
+fn read_generation_rows(
+    conn: &Connection,
+    session: &str,
+    budget: &mut Budget,
+) -> rusqlite::Result<ParsedRows> {
+    let mut statement = conn.prepare(
         "SELECT idx, CASE WHEN typeof(data) = 'blob' THEN length(data) END, CASE WHEN typeof(data) = 'blob' AND length(data) <= ?2 THEN data END FROM main.gen_metadata NOT INDEXED LIMIT ?1",
     )?;
     let row_limit = i64::try_from(MAX_ROWS_PER_DATABASE + 1).unwrap_or(i64::MAX);
@@ -291,6 +376,8 @@ fn read_database(path: &Path, budget: &mut Budget) -> rusqlite::Result<(Vec<Even
     let mut database_rows = 0usize;
     let mut complete = true;
     let mut events = Vec::new();
+    let mut pending = Vec::new();
+    let mut occurrences = HashMap::new();
 
     while let Some(row) = query.next()? {
         if !budget.check() {
@@ -350,31 +437,198 @@ fn read_database(path: &Path, budget: &mut Budget) -> rusqlite::Result<(Vec<Even
             complete = false;
             continue;
         };
-        if turn.timestamp_ms.is_none() {
+        let Some(total) = token_total(usage) else {
             complete = false;
             continue;
+        };
+        let step_uuid = turn.step_uuid.clone();
+        if let Some(step_uuid) = step_uuid.as_deref() {
+            occurrences
+                .entry(step_uuid.to_string())
+                .or_insert_with(Vec::new)
+                .push(StepOccurrence {
+                    row: idx,
+                    timestamp_ms: turn.timestamp_ms,
+                });
         }
-        let Some(input) = usage.system_prompt.checked_add(usage.new_input) else {
-            complete = false;
-            continue;
-        };
-        let Some(total) = input
-            .checked_add(usage.output)
-            .and_then(|value| value.checked_add(usage.cache_read))
-            .and_then(|value| value.checked_add(usage.reasoning))
-        else {
-            complete = false;
-            continue;
-        };
-        events.push(Event {
-            session: session.clone(),
-            row: idx,
-            turn,
-            total,
-        });
+        match (turn.timestamp_ms, step_uuid) {
+            (Some(_), _) => events.push(Event {
+                session: session.to_string(),
+                row: idx,
+                turn,
+                total,
+            }),
+            (None, Some(step_uuid)) => pending.push(PendingTimestampRow {
+                row: idx,
+                step_uuid,
+                turn,
+                total,
+            }),
+            (None, None) => complete = false,
+        }
     }
 
-    Ok((events, complete))
+    Ok(ParsedRows {
+        events,
+        pending,
+        occurrences,
+        database_bytes,
+        complete,
+    })
+}
+
+fn token_total(usage: &super::local_proto::ParsedUsage) -> Option<u64> {
+    usage
+        .system_prompt
+        .checked_add(usage.new_input)
+        .and_then(|value| value.checked_add(usage.output))
+        .and_then(|value| value.checked_add(usage.cache_read))
+        .and_then(|value| value.checked_add(usage.reasoning))
+}
+
+fn read_step_timestamps(
+    conn: &Connection,
+    needed_occurrences: &HashMap<String, Vec<StepOccurrence>>,
+    budget: &mut Budget,
+    database_bytes: &mut usize,
+) -> rusqlite::Result<StepTimestampScan> {
+    let mut statement = conn.prepare(
+        "SELECT idx, CASE WHEN typeof(metadata) = 'blob' THEN length(metadata) END, CASE WHEN typeof(metadata) = 'blob' AND length(metadata) <= ?1 THEN metadata END FROM main.steps NOT INDEXED",
+    )?;
+    let blob_limit = i64::try_from(MAX_BLOB_BYTES).unwrap_or(i64::MAX);
+    let mut query = statement.query([blob_limit])?;
+    let mut timestamps = HashMap::<String, Vec<StepTimestamp>>::new();
+    let mut complete = true;
+    let mut rows_are_valid = true;
+
+    while let Some(row) = query.next()? {
+        if !budget.check() {
+            complete = false;
+            break;
+        }
+        budget.rows += 1;
+        if budget.rows > MAX_ROWS {
+            complete = false;
+            break;
+        }
+
+        let idx: i64 = match row.get(0) {
+            Ok(value) if value >= 0 => value,
+            _ => {
+                rows_are_valid = false;
+                continue;
+            }
+        };
+        let declared: Option<i64> = row.get(1).ok();
+        let Some(declared) = declared.and_then(|value| usize::try_from(value).ok()) else {
+            rows_are_valid = false;
+            continue;
+        };
+        *database_bytes = match (*database_bytes).checked_add(declared) {
+            Some(value) if value <= MAX_DATABASE_BYTES => value,
+            _ => {
+                complete = false;
+                break;
+            }
+        };
+        budget.bytes = match budget.bytes.checked_add(declared) {
+            Some(value) if value <= MAX_TOTAL_BYTES => value,
+            _ => {
+                complete = false;
+                break;
+            }
+        };
+        if declared == 0 || declared > MAX_BLOB_BYTES {
+            rows_are_valid = false;
+            continue;
+        }
+
+        let blob = match row.get_ref(2)? {
+            ValueRef::Blob(bytes) if bytes.len() == declared => bytes,
+            _ => {
+                rows_are_valid = false;
+                continue;
+            }
+        };
+        let Some((step_uuid, timestamp_ms)) = parse_step_metadata(blob) else {
+            rows_are_valid = false;
+            continue;
+        };
+        let Some(step_uuid) = step_uuid.filter(|value| !value.is_empty()) else {
+            rows_are_valid = false;
+            continue;
+        };
+        if needed_occurrences.contains_key(&step_uuid) {
+            timestamps
+                .entry(step_uuid)
+                .or_insert_with(Vec::new)
+                .push(StepTimestamp {
+                    row: idx,
+                    timestamp_ms,
+                });
+        }
+    }
+
+    Ok(StepTimestampScan {
+        timestamps,
+        complete: complete && rows_are_valid,
+    })
+}
+
+fn append_recovered_events(
+    events: &mut Vec<Event>,
+    session: &str,
+    pending: &[PendingTimestampRow],
+    resolved: &HashMap<String, Vec<i64>>,
+    occurrences: &HashMap<String, Vec<StepOccurrence>>,
+) -> usize {
+    let mut occurrence_offsets = HashMap::<String, HashMap<i64, usize>>::new();
+    for (step_uuid, occurrences) in occurrences {
+        let mut rows = occurrences
+            .iter()
+            .map(|occurrence| occurrence.row)
+            .collect::<Vec<_>>();
+        rows.sort_unstable();
+        if rows.windows(2).any(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        occurrence_offsets.insert(
+            step_uuid.clone(),
+            rows.into_iter()
+                .enumerate()
+                .map(|(offset, row)| (row, offset))
+                .collect(),
+        );
+    }
+
+    let mut recovered = 0;
+    let mut pending_rows = pending.iter().collect::<Vec<_>>();
+    pending_rows.sort_by_key(|pending| pending.row);
+    for pending in pending_rows {
+        let Some(timestamps) = resolved.get(&pending.step_uuid) else {
+            continue;
+        };
+        let Some(offset) = occurrence_offsets
+            .get(&pending.step_uuid)
+            .and_then(|rows| rows.get(&pending.row))
+        else {
+            continue;
+        };
+        let Some(timestamp_ms) = timestamps.get(*offset) else {
+            continue;
+        };
+        let mut turn = pending.turn.clone();
+        turn.timestamp_ms = Some(*timestamp_ms);
+        events.push(Event {
+            session: session.to_string(),
+            row: pending.row,
+            turn,
+            total: pending.total,
+        });
+        recovered += 1;
+    }
+    events.sort_by_key(|event| event.row);
+    recovered
 }
 
 fn supported_schema(conn: &Connection, budget: &mut Budget) -> rusqlite::Result<bool> {
@@ -409,9 +663,59 @@ fn supported_schema(conn: &Connection, budget: &mut Budget) -> rusqlite::Result<
         return Ok(false);
     }
 
+    has_stored_columns(conn, "gen_metadata", &["idx", "data"], budget)
+}
+
+fn supported_steps_schema(conn: &Connection, budget: &mut Budget) -> rusqlite::Result<bool> {
+    let mut statement =
+        conn.prepare("SELECT name, type, rootpage FROM main.sqlite_master LIMIT ?1")?;
+    let mut rows = statement.query([i64::try_from(MAX_SCHEMA_ENTRIES + 1).unwrap_or(i64::MAX)])?;
+    let mut found = false;
+    let mut schema_entries = 0usize;
+    while let Some(row) = rows.next()? {
+        if !budget.check() {
+            return Ok(false);
+        }
+        schema_entries += 1;
+        if schema_entries > MAX_SCHEMA_ENTRIES {
+            return Ok(false);
+        }
+        let name: String = row.get(0)?;
+        let kind: String = row.get(1)?;
+        if !budget.charge_schema_text(&name) || !budget.charge_schema_text(&kind) {
+            return Ok(false);
+        }
+        if !name.eq_ignore_ascii_case("steps") {
+            continue;
+        }
+        let rootpage: i64 = row.get(2)?;
+        if kind != "table" || rootpage <= 0 || found {
+            return Ok(false);
+        }
+        found = true;
+    }
+    if !found {
+        return Ok(false);
+    }
+
+    has_stored_columns(conn, "steps", &["idx", "metadata"], budget)
+}
+
+fn has_stored_columns(
+    conn: &Connection,
+    table: &str,
+    required: &[&str],
+    budget: &mut Budget,
+) -> rusqlite::Result<bool> {
+    let table = match table {
+        "gen_metadata" | "steps" => table,
+        _ => return Ok(false),
+    };
+
     let mut columns = HashSet::new();
     let mut schema_columns = 0usize;
-    let mut info = conn.prepare("PRAGMA main.table_xinfo('gen_metadata')")?;
+    let query = format!("PRAGMA main.table_xinfo('{table}')");
+    let mut info = conn.prepare(&query)?;
     let mut rows = info.query([])?;
     while let Some(row) = rows.next()? {
         if !budget.check() {
@@ -438,8 +742,12 @@ fn supported_schema(conn: &Connection, budget: &mut Budget) -> rusqlite::Result<
         }
         columns.insert(name.to_ascii_lowercase());
     }
-    Ok(columns.contains("idx") && columns.contains("data"))
+    Ok(required.iter().all(|column| columns.contains(*column)))
 }
+
+#[cfg(test)]
+#[path = "local_sqlite_synthetic_tests.rs"]
+mod synthetic_tests;
 
 #[cfg(test)]
 mod tests {
