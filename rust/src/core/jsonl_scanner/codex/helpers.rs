@@ -144,12 +144,20 @@ pub(super) fn cumulative_reasoning_delta(
     )
 }
 
+/// A bounded physical JSONL line.
+///
+/// Keeping the discarded case separate prevents callers from accidentally
+/// treating an oversized prefix as a parseable empty line.
+pub(super) enum BoundedJsonlLine {
+    Retained { bytes: Vec<u8>, consumed: usize },
+    Discarded { consumed: usize },
+}
+
 /// Read one JSONL line, discarding content when it exceeds `max_bytes`.
-/// Returns `(line_without_newline, bytes_consumed_including_newline)`.
 pub(super) fn read_bounded_jsonl_line<R: BufRead>(
     reader: &mut R,
     max_bytes: usize,
-) -> std::io::Result<Option<(Vec<u8>, usize)>> {
+) -> std::io::Result<Option<BoundedJsonlLine>> {
     let mut line = Vec::new();
     let mut saw_bytes = false;
     let mut discarding = false;
@@ -158,9 +166,16 @@ pub(super) fn read_bounded_jsonl_line<R: BufRead>(
     loop {
         let chunk = reader.fill_buf()?;
         if chunk.is_empty() {
-            return Ok(
-                saw_bytes.then_some((if discarding { Vec::new() } else { line }, consumed_total))
-            );
+            return Ok(saw_bytes.then_some(if discarding {
+                BoundedJsonlLine::Discarded {
+                    consumed: consumed_total,
+                }
+            } else {
+                BoundedJsonlLine::Retained {
+                    bytes: line,
+                    consumed: consumed_total,
+                }
+            }));
         }
         let newline = chunk.iter().position(|byte| *byte == b'\n');
         let segment_end = newline.unwrap_or(chunk.len());
@@ -181,10 +196,16 @@ pub(super) fn read_bounded_jsonl_line<R: BufRead>(
         reader.consume(consumed);
         consumed_total += consumed;
         if newline.is_some() {
-            return Ok(Some((
-                if discarding { Vec::new() } else { line },
-                consumed_total,
-            )));
+            return Ok(Some(if discarding {
+                BoundedJsonlLine::Discarded {
+                    consumed: consumed_total,
+                }
+            } else {
+                BoundedJsonlLine::Retained {
+                    bytes: line,
+                    consumed: consumed_total,
+                }
+            }));
         }
     }
 }

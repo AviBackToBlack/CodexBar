@@ -542,18 +542,115 @@ fn codex_parser_discards_oversized_line_and_recovers_next_record() {
 }
 
 #[test]
+fn codex_parser_validates_a_record_at_the_line_limit() {
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    let prefix = r#"{"timestamp":"2026-05-31T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":9,"cached_input_tokens":2,"output_tokens":1}}},"padding":""}"#;
+    let padding_len = CODEX_JSONL_MAX_LINE_BYTES - prefix.len();
+    let line = format!(
+        "{}{}\"}}",
+        &prefix[..prefix.len() - 2],
+        "x".repeat(padding_len)
+    );
+    assert_eq!(line.len(), CODEX_JSONL_MAX_LINE_BYTES);
+    writeln!(file, "{line}").unwrap();
+
+    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+    let parsed = JsonlScanner::parse_codex_file(
+        file.path(),
+        &CostUsageDayRange::new(day, day),
+        0,
+        None,
+        None,
+    )
+    .expect("parse");
+
+    assert_eq!(parsed.records.len(), 1);
+    assert_eq!(
+        (
+            parsed.records[0].input,
+            parsed.records[0].cached,
+            parsed.records[0].output
+        ),
+        (9, 2, 1)
+    );
+}
+
+#[test]
+fn codex_parser_discards_a_line_at_limit_plus_one_and_keeps_following_record() {
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    let prefix = r#"{"padding":""}"#;
+    let padding_len = CODEX_JSONL_MAX_LINE_BYTES + 1 - prefix.len();
+    let oversized = format!(
+        "{}{}\"}}",
+        &prefix[..prefix.len() - 2],
+        "x".repeat(padding_len)
+    );
+    assert_eq!(oversized.len(), CODEX_JSONL_MAX_LINE_BYTES + 1);
+    writeln!(file, "{oversized}").unwrap();
+    writeln!(
+        file,
+        r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":9,"cached_input_tokens":2,"output_tokens":1}}}}"#
+    )
+    .unwrap();
+
+    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+    let parsed = JsonlScanner::parse_codex_file(
+        file.path(),
+        &CostUsageDayRange::new(day, day),
+        0,
+        None,
+        None,
+    )
+    .expect("parse");
+
+    assert_eq!(parsed.records.len(), 1);
+    assert_eq!(parsed.records[0].input, 9);
+}
+
+#[test]
+fn codex_parser_discards_huge_malformed_lines_before_and_after_valid_records() {
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    let valid = r#"{"timestamp":"2026-05-31T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":9,"cached_input_tokens":2,"output_tokens":1}}}}"#;
+    let malformed = format!("{{{}", "x".repeat(CODEX_JSONL_MAX_LINE_BYTES * 4));
+    writeln!(file, "{malformed}").unwrap();
+    writeln!(file, "{valid}").unwrap();
+    writeln!(file, "{malformed}").unwrap();
+
+    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+    let parsed = JsonlScanner::parse_codex_file(
+        file.path(),
+        &CostUsageDayRange::new(day, day),
+        0,
+        None,
+        None,
+    )
+    .expect("parse");
+
+    assert_eq!(parsed.records.len(), 1);
+    assert_eq!(parsed.records[0].input, 9);
+}
+
+#[test]
 fn bounded_jsonl_reader_accepts_exact_limit_without_retaining_larger_input() {
     let mut input = vec![b'x'; CODEX_JSONL_MAX_LINE_BYTES];
     input.push(b'\n');
     input.extend_from_slice(b"{\"type\":\"event_msg\"}\n");
     let mut reader = BufReader::with_capacity(64 * 1024, std::io::Cursor::new(input));
 
-    let (exact, _) = read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)
+    let exact = match read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)
         .expect("read")
-        .expect("line");
-    let (later, _) = read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)
+        .expect("line")
+    {
+        BoundedJsonlLine::Retained { bytes, .. } => bytes,
+        BoundedJsonlLine::Discarded { .. } => panic!("exact-limit line was discarded"),
+    };
+    let later = match read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)
         .expect("read")
-        .expect("line");
+        .expect("line")
+    {
+        BoundedJsonlLine::Retained { bytes, .. } => bytes,
+        BoundedJsonlLine::Discarded { .. } => panic!("following line was discarded"),
+    };
 
     assert_eq!(exact.len(), CODEX_JSONL_MAX_LINE_BYTES);
     assert_eq!(later, br#"{"type":"event_msg"}"#);
