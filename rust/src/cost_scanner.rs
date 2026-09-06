@@ -248,7 +248,59 @@ fn cached_codex_file_is_complete_for_range(
             usage.mtime_unix_ms == system_time_to_unix_ms(metadata.modified().ok())
                 && usage.size == size
                 && usage.parsed_bytes.unwrap_or(0) >= size
+                && !usage.codex_unresolved_fork_parent
+                && codex_fork_parent_is_safe(cache, usage)
         })
+}
+
+fn codex_fork_parent_is_safe(cache: &CostUsageCache, usage: &CostUsageFileUsage) -> bool {
+    usage.codex_forked_from_id.as_deref().is_none()
+        || codex_parent_baseline(
+            cache,
+            usage.codex_forked_from_id.as_deref().unwrap_or_default(),
+            usage.codex_fork_timestamp.as_deref(),
+        )
+        .is_some()
+}
+
+/// Return a parent cumulative baseline only when exactly one cached session
+/// identity is current, complete, timestamp-ordered, and safe to trust.
+fn codex_parent_baseline(
+    cache: &CostUsageCache,
+    parent_session_id: &str,
+    child_fork_timestamp: Option<&str>,
+) -> Option<crate::core::CodexTotals> {
+    let mut baseline = None;
+    for (path_key, usage) in &cache.files {
+        if usage.codex_session_id.as_deref() != Some(parent_session_id) {
+            continue;
+        }
+        if usage.codex_unresolved_fork_parent
+            || usage.codex_token_timestamps_monotonic != Some(true)
+        {
+            return None;
+        }
+        let metadata = fs::metadata(path_key).ok()?;
+        #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
+        let size = metadata.len().min(i64::MAX as u64) as i64;
+        if usage.mtime_unix_ms != system_time_to_unix_ms(metadata.modified().ok())
+            || usage.size != size
+            || usage.parsed_bytes.unwrap_or(0) < size
+        {
+            return None;
+        }
+        let last_totals = usage.last_totals.clone()?;
+        let last_token_timestamp = usage.codex_last_token_timestamp.as_deref()?;
+        let child_fork_timestamp = child_fork_timestamp?;
+        if !JsonlScanner::codex_timestamp_at_or_before(last_token_timestamp, child_fork_timestamp) {
+            return None;
+        }
+        if baseline.replace(last_totals).is_some() {
+            // Duplicate identities make the dependency ambiguous.
+            return None;
+        }
+    }
+    baseline
 }
 
 fn is_codex_path_in_scan_window(
@@ -1034,15 +1086,9 @@ impl CostScanner {
                     let Ok(metadata) = entry.metadata() else {
                         continue;
                     };
-                    #[allow(clippy::cast_possible_wrap, reason = "session file sizes fit i64")]
-                    let size = metadata.len().min(i64::MAX as u64) as i64;
                     let mtime_unix_ms = system_time_to_unix_ms(metadata.modified().ok());
-                    let unchanged_complete = JsonlScanner::cache_covers_range(cache, range)
-                        && cache.files.get(&path_key).is_some_and(|usage| {
-                            usage.mtime_unix_ms == mtime_unix_ms
-                                && usage.size == size
-                                && usage.parsed_bytes.unwrap_or(0) >= size
-                        });
+                    let unchanged_complete =
+                        cached_codex_file_is_complete_for_range(cache, &path_key, range);
                     if unchanged_complete {
                         stats.files_seen = stats.files_seen.saturating_add(1);
                         stats.files_skipped = stats.files_skipped.saturating_add(1);
@@ -1155,9 +1201,58 @@ impl CostScanner {
         let path_key = path.to_string_lossy().to_string();
         let cached = cache.files.get(&path_key).cloned();
         let cache_covers_range = JsonlScanner::cache_covers_range(cache, range);
+        let session_metadata = JsonlScanner::read_codex_session_metadata(path).unwrap_or_default();
+        let cached_identity_matches = cached
+            .as_ref()
+            .is_some_and(|entry| entry.mtime_unix_ms == mtime_ms && entry.size == size);
+        let codex_session_id = session_metadata.session_id.clone().or_else(|| {
+            cached_identity_matches
+                .then(|| cached.as_ref()?.codex_session_id.clone())
+                .flatten()
+        });
+        let codex_forked_from_id = session_metadata.forked_from_id.clone().or_else(|| {
+            cached_identity_matches
+                .then(|| cached.as_ref()?.codex_forked_from_id.clone())
+                .flatten()
+        });
+        let codex_fork_timestamp = session_metadata.fork_timestamp.clone().or_else(|| {
+            cached_identity_matches
+                .then(|| cached.as_ref()?.codex_fork_timestamp.clone())
+                .flatten()
+        });
+        let is_fork = codex_forked_from_id.is_some();
+        let fork_baseline = codex_forked_from_id.as_deref().and_then(|parent_id| {
+            codex_parent_baseline(cache, parent_id, codex_fork_timestamp.as_deref())
+        });
+
+        if is_fork && fork_baseline.is_none() {
+            cache.files.insert(
+                path_key,
+                CostUsageFileUsage {
+                    mtime_unix_ms: mtime_ms,
+                    size,
+                    days: HashMap::new(),
+                    parsed_bytes: Some(0),
+                    last_model: None,
+                    last_totals: None,
+                    codex_token_timestamps_monotonic: None,
+                    codex_last_token_timestamp: None,
+                    codex_session_id,
+                    codex_forked_from_id,
+                    codex_fork_timestamp,
+                    codex_unresolved_fork_parent: true,
+                },
+            );
+            stats.files_parsed = stats.files_parsed.saturating_add(1);
+            return CodexFileScanOutcome {
+                bytes_read: 0,
+                is_complete: false,
+            };
+        }
 
         if let Some(entry) = &cached
             && cache_covers_range
+            && !entry.codex_unresolved_fork_parent
             && entry.mtime_unix_ms == mtime_ms
             && entry.size == size
             && entry.parsed_bytes.unwrap_or(0) >= size
@@ -1175,7 +1270,7 @@ impl CostScanner {
             };
         }
 
-        if let Some(entry) = &cached {
+        if !is_fork && let Some(entry) = &cached {
             let start_offset = entry.parsed_bytes.unwrap_or(0);
             let same_partial =
                 size == entry.size && mtime_ms == entry.mtime_unix_ms && start_offset < size;
@@ -1234,6 +1329,10 @@ impl CostScanner {
                         codex_last_token_timestamp: parse_result
                             .last_token_timestamp
                             .or_else(|| entry.codex_last_token_timestamp.clone()),
+                        codex_session_id: codex_session_id.clone(),
+                        codex_forked_from_id: codex_forked_from_id.clone(),
+                        codex_fork_timestamp: codex_fork_timestamp.clone(),
+                        codex_unresolved_fork_parent: false,
                     },
                 );
                 stats.files_resumed = stats.files_resumed.saturating_add(1);
@@ -1241,23 +1340,57 @@ impl CostScanner {
             }
         }
 
-        let parse_result = match JsonlScanner::parse_codex_file_with_state_bounded(
-            path,
-            range,
-            0,
-            None,
-            None,
-            None,
-            None,
-            cancel,
-            max_bytes_to_read,
-        ) {
+        let parse_result = match if let Some(baseline) = fork_baseline.clone() {
+            JsonlScanner::parse_codex_file_with_state_bounded_fork(
+                path,
+                range,
+                baseline,
+                cancel,
+                max_bytes_to_read,
+            )
+        } else {
+            JsonlScanner::parse_codex_file_with_state_bounded(
+                path,
+                range,
+                0,
+                None,
+                None,
+                None,
+                None,
+                cancel,
+                max_bytes_to_read,
+            )
+        } {
             Ok(result) => result,
             Err(_) => return CodexFileScanOutcome::default(),
         };
         stats.token_timestamp_comparisons = stats
             .token_timestamp_comparisons
             .saturating_add(parse_result.token_timestamp_comparisons);
+        if parse_result.fork_baseline_ambiguous {
+            cache.files.insert(
+                path_key,
+                CostUsageFileUsage {
+                    mtime_unix_ms: mtime_ms,
+                    size,
+                    days: HashMap::new(),
+                    parsed_bytes: Some(0),
+                    last_model: None,
+                    last_totals: None,
+                    codex_token_timestamps_monotonic: None,
+                    codex_last_token_timestamp: None,
+                    codex_session_id,
+                    codex_forked_from_id,
+                    codex_fork_timestamp,
+                    codex_unresolved_fork_parent: true,
+                },
+            );
+            stats.files_parsed = stats.files_parsed.saturating_add(1);
+            return CodexFileScanOutcome {
+                bytes_read: parse_result.bytes_read,
+                is_complete: false,
+            };
+        }
         let mut days = HashMap::new();
         merge_codex_records_into_days(&mut days, &parse_result.records);
         let (session_cost, has_tokens) =
@@ -1281,6 +1414,10 @@ impl CostScanner {
                 last_totals: parse_result.last_totals,
                 codex_token_timestamps_monotonic: parse_result.token_timestamps_monotonic,
                 codex_last_token_timestamp: parse_result.last_token_timestamp,
+                codex_session_id,
+                codex_forked_from_id,
+                codex_fork_timestamp,
+                codex_unresolved_fork_parent: false,
             },
         );
         stats.files_parsed = stats.files_parsed.saturating_add(1);
@@ -2148,6 +2285,435 @@ mod tests {
         path
     }
 
+    fn write_codex_fork_session_fixture(
+        sessions_root: &Path,
+        name: &str,
+        session_id: &str,
+        parent_id: Option<&str>,
+        fork_timestamp: DateTime<Utc>,
+        token_start: DateTime<Utc>,
+        totals: &[i64],
+    ) -> PathBuf {
+        let today = Local::now().date_naive();
+        let day_dir = sessions_root
+            .join(today.format("%Y").to_string())
+            .join(today.format("%m").to_string())
+            .join(today.format("%d").to_string());
+        std::fs::create_dir_all(&day_dir).unwrap();
+
+        let mut body = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"{}\",\"payload\":{{\"session_id\":\"{}\"",
+            fork_timestamp.to_rfc3339(),
+            session_id
+        );
+        if let Some(parent_id) = parent_id {
+            body.push_str(&format!(",\"forked_from_id\":\"{parent_id}\""));
+        }
+        body.push_str("}}\n");
+
+        for (index, total) in totals.iter().enumerate() {
+            let timestamp = (token_start + Duration::seconds(index as i64)).to_rfc3339();
+            let line = serde_json::json!({
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model": "gpt-5",
+                        "total_token_usage": {
+                            "input_tokens": total,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 5
+                        }
+                    }
+                }
+            });
+            body.push_str(&line.to_string());
+            body.push('\n');
+        }
+
+        let path = day_dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn cached_input_total(usage: &CostUsageFileUsage) -> i32 {
+        usage
+            .days
+            .values()
+            .flat_map(|models| models.values())
+            .map(|tokens| tokens.first().copied().unwrap_or_default())
+            .sum()
+    }
+
+    #[test]
+    fn ordinary_non_fork_session_keeps_cumulative_accounting() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let path =
+            write_codex_session_fixture_with_inputs(&sessions, "ordinary.jsonl", &[100, 140]);
+
+        let mut options = CostScanOptions::app_driven();
+        options.prefer_newest_codex_sessions_first = false;
+        let scanner = CostScanner::new(7)
+            .with_options(options)
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+        assert_eq!(summary.input_tokens, 140);
+        let usage = cache
+            .files
+            .get(&path.to_string_lossy().to_string())
+            .unwrap();
+        assert_eq!(cached_input_total(usage), 140);
+        assert_eq!(usage.codex_forked_from_id, None);
+        assert!(!usage.codex_unresolved_fork_parent);
+    }
+
+    #[test]
+    fn fork_child_counts_only_growth_above_parent_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let fork = base + Duration::seconds(2);
+        let parent = write_codex_fork_session_fixture(
+            &sessions,
+            "parent.jsonl",
+            "parent-id",
+            None,
+            base,
+            base,
+            &[1_000_000],
+        );
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("parent-id"),
+            fork,
+            base + Duration::seconds(3),
+            &[1_000_000, 1_000_140],
+        );
+
+        let mut options = CostScanOptions::app_driven();
+        options.prefer_newest_codex_sessions_first = false;
+        let scanner = CostScanner::new(7)
+            .with_options(options)
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+        assert_eq!(summary.input_tokens, 1_000_140);
+        assert_eq!(summary.sessions_count, 2);
+        let child_usage = cache
+            .files
+            .get(&child.to_string_lossy().to_string())
+            .unwrap();
+        assert_eq!(cached_input_total(child_usage), 140);
+        assert!(!child_usage.codex_unresolved_fork_parent);
+        assert!(cache.codex_pending_paths.is_empty());
+        assert!(
+            cache
+                .files
+                .contains_key(&parent.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn replaced_fork_child_does_not_reuse_cached_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let fork = base + Duration::seconds(2);
+        let _parent = write_codex_fork_session_fixture(
+            &sessions,
+            "parent.jsonl",
+            "parent-id",
+            None,
+            base,
+            base,
+            &[1_000_000],
+        );
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("parent-id"),
+            fork,
+            base + Duration::seconds(3),
+            &[1_000_000, 1_000_140],
+        );
+
+        let scanner = CostScanner::new(7)
+            .with_options({
+                let mut options = CostScanOptions::app_driven();
+                options.prefer_newest_codex_sessions_first = false;
+                options
+            })
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let child_key = child.to_string_lossy().to_string();
+        let (_, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+        let first_child = first_cache.files.get(&child_key).unwrap();
+        assert_eq!(first_child.codex_session_id.as_deref(), Some("child-id"));
+        assert_eq!(
+            first_child.codex_forked_from_id.as_deref(),
+            Some("parent-id")
+        );
+
+        let old_size = std::fs::metadata(&child).unwrap().len();
+        write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "replacement-id",
+            None,
+            base + Duration::seconds(4),
+            base + Duration::seconds(5),
+            &[77],
+        );
+        let new_size = std::fs::metadata(&child).unwrap().len();
+        assert_ne!(old_size, new_size);
+
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+        let child_usage = cache.files.get(&child_key).unwrap();
+        assert_eq!(
+            child_usage.codex_session_id.as_deref(),
+            Some("replacement-id")
+        );
+        assert_eq!(child_usage.codex_forked_from_id, None);
+        assert!(!child_usage.codex_unresolved_fork_parent);
+        assert_eq!(cached_input_total(child_usage), 77);
+        assert_eq!(summary.input_tokens, 1_000_077);
+    }
+
+    #[test]
+    fn missing_fork_parent_fails_closed_and_persists_pending() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("missing-parent"),
+            base + Duration::seconds(1),
+            base + Duration::seconds(2),
+            &[1_000_000, 1_000_140],
+        );
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+        let child_key = child.to_string_lossy().to_string();
+        let child_usage = cache.files.get(&child_key).unwrap();
+        assert_eq!(summary.input_tokens, 0);
+        assert_eq!(summary.sessions_count, 0);
+        assert!(child_usage.days.is_empty());
+        assert!(child_usage.codex_unresolved_fork_parent);
+        assert!(cache.codex_pending_paths.contains(&child_key));
+        assert!(!summary.history_coverage_established);
+        assert!(!summary.known_zero);
+    }
+
+    #[test]
+    fn fork_child_resolves_after_parent_is_cached() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let fork = base + Duration::seconds(2);
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("late-parent"),
+            fork,
+            base + Duration::seconds(3),
+            &[1_000_000, 1_000_140],
+        );
+        let scanner = CostScanner::new(7)
+            .with_options({
+                let mut options = CostScanOptions::app_driven();
+                options.prefer_newest_codex_sessions_first = false;
+                options
+            })
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+
+        let (first, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+        assert_eq!(first.input_tokens, 0);
+        assert!(
+            first_cache
+                .codex_pending_paths
+                .contains(&child.to_string_lossy().to_string())
+        );
+
+        let _parent = write_codex_fork_session_fixture(
+            &sessions,
+            "parent.jsonl",
+            "late-parent",
+            None,
+            base,
+            base,
+            &[1_000_000],
+        );
+
+        let mut resolved = None;
+        for _ in 0..3 {
+            let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+            if !cache.codex_scan_incomplete {
+                resolved = Some((summary, cache));
+                break;
+            }
+        }
+        let (summary, cache) = resolved.expect("later bounded pass resolves the child");
+        let child_usage = cache
+            .files
+            .get(&child.to_string_lossy().to_string())
+            .unwrap();
+        assert_eq!(summary.input_tokens, 1_000_140);
+        assert_eq!(cached_input_total(child_usage), 140);
+        assert!(!child_usage.codex_unresolved_fork_parent);
+        assert!(cache.codex_pending_paths.is_empty());
+    }
+
+    #[test]
+    fn parent_last_token_after_fork_keeps_child_unresolved() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let parent = write_codex_fork_session_fixture(
+            &sessions,
+            "parent.jsonl",
+            "parent-id",
+            None,
+            base + Duration::seconds(10),
+            base + Duration::seconds(10),
+            &[1_000_000],
+        );
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("parent-id"),
+            base + Duration::seconds(1),
+            base + Duration::seconds(2),
+            &[1_000_000, 1_000_140],
+        );
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+        let child_usage = cache
+            .files
+            .get(&child.to_string_lossy().to_string())
+            .unwrap();
+        assert_eq!(summary.input_tokens, 1_000_000);
+        assert_eq!(cached_input_total(child_usage), 0);
+        assert!(child_usage.codex_unresolved_fork_parent);
+        assert!(
+            cache
+                .codex_pending_paths
+                .contains(&child.to_string_lossy().to_string())
+        );
+        assert!(
+            cache
+                .files
+                .contains_key(&parent.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn deleted_unresolved_child_is_pruned_without_resurrection() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("missing-parent"),
+            base + Duration::seconds(1),
+            base + Duration::seconds(2),
+            &[1_000_000, 1_000_140],
+        );
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (_, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+        assert!(
+            first_cache
+                .codex_pending_paths
+                .contains(&child.to_string_lossy().to_string())
+        );
+
+        std::fs::remove_file(&child).unwrap();
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+        assert!(summary.history_coverage_established);
+        assert!(summary.known_zero);
+        assert!(cache.codex_pending_paths.is_empty());
+        assert!(
+            !cache
+                .files
+                .contains_key(&child.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn fork_baseline_reset_fails_closed_instead_of_billing_fresh_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let base = Utc::now() - Duration::hours(1);
+        let _parent = write_codex_fork_session_fixture(
+            &sessions,
+            "parent.jsonl",
+            "parent-id",
+            None,
+            base,
+            base,
+            &[1_000_000],
+        );
+        let child = write_codex_fork_session_fixture(
+            &sessions,
+            "child.jsonl",
+            "child-id",
+            Some("parent-id"),
+            base + Duration::seconds(1),
+            base + Duration::seconds(2),
+            &[1_000_000, 999_900, 1_000_140],
+        );
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+        let child_usage = cache
+            .files
+            .get(&child.to_string_lossy().to_string())
+            .unwrap();
+
+        assert_eq!(summary.input_tokens, 1_000_000);
+        assert_eq!(cached_input_total(child_usage), 0);
+        assert!(child_usage.codex_unresolved_fork_parent);
+        assert!(!summary.history_coverage_established);
+    }
+
     #[test]
     fn cost_scan_second_pass_skips_unchanged_files_via_cache() {
         let root = tempfile::tempdir().unwrap();
@@ -2222,6 +2788,10 @@ mod tests {
                     last_totals: None,
                     codex_token_timestamps_monotonic: Some(true),
                     codex_last_token_timestamp: None,
+                    codex_session_id: None,
+                    codex_forked_from_id: None,
+                    codex_fork_timestamp: None,
+                    codex_unresolved_fork_parent: false,
                 },
             )]),
             days: usage,

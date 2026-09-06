@@ -327,6 +327,10 @@ mod tests {
             last_totals: None,
             codex_token_timestamps_monotonic: None,
             codex_last_token_timestamp: None,
+            codex_session_id: None,
+            codex_forked_from_id: None,
+            codex_fork_timestamp: None,
+            codex_unresolved_fork_parent: false,
         }
     }
 

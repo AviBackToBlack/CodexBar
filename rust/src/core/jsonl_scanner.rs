@@ -214,6 +214,27 @@ pub struct CostUsageFileUsage {
     /// suffix without replaying the cached prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_last_token_timestamp: Option<String>,
+    /// Native Codex session identity from the first authoritative session_meta row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_session_id: Option<String>,
+    /// Native Codex parent session identity for forked rollouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_forked_from_id: Option<String>,
+    /// Native Codex fork timestamp used for safe parent-baseline validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_fork_timestamp: Option<String>,
+    /// True when a fork cannot be billed safely until its parent is available.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub codex_unresolved_fork_parent: bool,
+}
+
+/// Lightweight identity metadata read from the first authoritative Codex
+/// `session_meta` row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CodexSessionMetadata {
+    pub session_id: Option<String>,
+    pub forked_from_id: Option<String>,
+    pub fork_timestamp: Option<String>,
 }
 
 /// Running totals for Codex token counting
@@ -268,6 +289,9 @@ pub struct CodexParseResult {
     pub bytes_read: i64,
     /// Whether this pass reached the file's current EOF without cancellation/budget deferral.
     pub is_complete: bool,
+    /// A fork-baseline parse observed a cumulative component below the inherited
+    /// parent baseline. The child must be discarded rather than billed as fresh.
+    pub fork_baseline_ambiguous: bool,
 }
 
 /// A billable Codex token-count delta.
@@ -330,6 +354,8 @@ struct CodexParserState {
     previous_token_timestamp_parsed: Option<DateTime<chrono::FixedOffset>>,
     token_timestamps_monotonic: Option<bool>,
     token_timestamp_comparisons: u64,
+    fork_baseline: Option<CodexTotals>,
+    fork_baseline_ambiguous: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -411,9 +437,26 @@ impl CodexParserState {
         previous_token_timestamp: Option<String>,
         token_timestamps_monotonic: Option<bool>,
     ) -> Self {
+        Self::with_timestamp_state_and_fork_mode(
+            initial_model,
+            initial_totals,
+            previous_token_timestamp,
+            token_timestamps_monotonic,
+            false,
+        )
+    }
+
+    fn with_timestamp_state_and_fork_mode(
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+        fork_baseline_mode: bool,
+    ) -> Self {
         let previous_token_timestamp_parsed = previous_token_timestamp
             .as_deref()
             .and_then(parse_rfc3339_timestamp);
+        let fork_baseline = fork_baseline_mode.then(|| initial_totals.clone()).flatten();
         Self {
             current_model: initial_model,
             previous_totals: initial_totals.clone(),
@@ -426,6 +469,8 @@ impl CodexParserState {
             // input marker for the legacy-cache path, not an output state.
             token_timestamps_monotonic: Some(token_timestamps_monotonic.unwrap_or(true)),
             token_timestamp_comparisons: 0,
+            fork_baseline,
+            fork_baseline_ambiguous: false,
         }
     }
 
@@ -747,6 +792,13 @@ impl CodexParserState {
     }
 
     fn latch_if_below_watermark(&mut self, totals: &CodexTotals) {
+        if let Some(baseline) = self.fork_baseline.as_ref()
+            && (totals.input < baseline.input
+                || totals.cached < baseline.cached
+                || totals.output < baseline.output)
+        {
+            self.fork_baseline_ambiguous = true;
+        }
         let Some(water) = self.totals_watermark.as_ref() else {
             return;
         };
@@ -942,6 +994,26 @@ fn parse_codex_timestamp(timestamp: &str) -> Option<ParsedCodexTimestamp> {
 
 fn parse_rfc3339_timestamp(timestamp: &str) -> Option<DateTime<FixedOffset>> {
     parse_native_rfc3339(timestamp).or_else(|| DateTime::parse_from_rfc3339(timestamp).ok())
+}
+
+fn nonempty_json_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn session_meta_field(root: &Value, payload: Option<&Value>, keys: &[&str]) -> Option<String> {
+    payload
+        .and_then(|payload| {
+            keys.iter()
+                .find_map(|key| nonempty_json_string(payload.get(*key)))
+        })
+        .or_else(|| {
+            keys.iter()
+                .find_map(|key| nonempty_json_string(root.get(*key)))
+        })
 }
 
 /// Fast path for the RFC3339 spelling emitted by native Codex logs. Historical
@@ -1263,6 +1335,71 @@ impl JsonlScanner {
         files
     }
 
+    /// Read only a bounded prefix until the first authoritative `session_meta`
+    /// row is found. Fork decisions must not require parsing the child usage
+    /// stream before a safe parent baseline is selected.
+    pub(crate) fn read_codex_session_metadata(
+        file_path: &Path,
+    ) -> std::io::Result<CodexSessionMetadata> {
+        let file = File::open(file_path)?;
+        let mut reader = BufReader::new(file);
+        let mut bytes_examined = 0_usize;
+
+        while bytes_examined < CODEX_JSONL_MAX_LINE_BYTES {
+            let Some((line_bytes, consumed)) =
+                read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
+            else {
+                break;
+            };
+            bytes_examined = bytes_examined.saturating_add(consumed);
+            if line_bytes.is_empty() {
+                continue;
+            }
+            let Ok(line) = std::str::from_utf8(&line_bytes) else {
+                continue;
+            };
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let Ok(obj) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if obj.get("type").and_then(Value::as_str) != Some("session_meta") {
+                continue;
+            }
+
+            let payload = obj.get("payload").filter(|value| value.is_object());
+            return Ok(CodexSessionMetadata {
+                session_id: session_meta_field(&obj, payload, &["id", "session_id", "sessionId"]),
+                forked_from_id: session_meta_field(
+                    &obj,
+                    payload,
+                    &[
+                        "forked_from_id",
+                        "forkedFromId",
+                        "parent_session_id",
+                        "parentSessionId",
+                    ],
+                ),
+                fork_timestamp: nonempty_json_string(obj.get("timestamp")).or_else(|| {
+                    payload.and_then(|value| nonempty_json_string(value.get("timestamp")))
+                }),
+            });
+        }
+
+        Ok(CodexSessionMetadata::default())
+    }
+
+    /// Compare RFC3339 timestamps using parsed instants. Malformed timestamps
+    /// are unsafe for fork-baseline reconciliation and therefore fail closed.
+    pub(crate) fn codex_timestamp_at_or_before(earlier: &str, later: &str) -> bool {
+        match (
+            parse_rfc3339_timestamp(earlier),
+            parse_rfc3339_timestamp(later),
+        ) {
+            (Some(earlier), Some(later)) => earlier <= later,
+            _ => false,
+        }
+    }
+
     /// Parse a Codex JSONL file
     pub fn parse_codex_file(
         file_path: &Path,
@@ -1327,6 +1464,64 @@ impl JsonlScanner {
         cancel: Option<&AtomicBool>,
         max_bytes_to_read: Option<i64>,
     ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded_internal(
+            file_path,
+            range,
+            start_offset,
+            initial_model,
+            initial_totals,
+            previous_token_timestamp,
+            token_timestamps_monotonic,
+            cancel,
+            false,
+            max_bytes_to_read,
+        )
+    }
+
+    /// Parse a forked Codex child from byte zero with a parent cumulative
+    /// baseline. This is intentionally separate from ordinary append-resume
+    /// parsing so existing non-fork semantics remain unchanged.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "fork parse state mirrors the persisted parser cache"
+    )]
+    pub(crate) fn parse_codex_file_with_state_bounded_fork(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        initial_totals: CodexTotals,
+        cancel: Option<&AtomicBool>,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded_internal(
+            file_path,
+            range,
+            0,
+            None,
+            Some(initial_totals),
+            None,
+            None,
+            cancel,
+            true,
+            max_bytes_to_read,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "resume state mirrors the persisted parser cache"
+    )]
+    fn parse_codex_file_with_state_bounded_internal(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        start_offset: i64,
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+        cancel: Option<&AtomicBool>,
+        fork_baseline_mode: bool,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
         let file = File::open(file_path)?;
         // Session JSONL files are bounded by the cache budget; sizes fit i64.
         #[allow(
@@ -1340,11 +1535,12 @@ impl JsonlScanner {
             reader.seek(SeekFrom::Start(start_offset as u64))?;
         }
 
-        let mut parser = CodexParserState::with_timestamp_state(
+        let mut parser = CodexParserState::with_timestamp_state_and_fork_mode(
             initial_model,
             initial_totals,
             previous_token_timestamp,
             token_timestamps_monotonic,
+            fork_baseline_mode,
         );
         let mut parsed_bytes = start_offset;
         let mut cancelled = false;
@@ -1404,6 +1600,7 @@ impl JsonlScanner {
             token_timestamp_comparisons: parser.token_timestamp_comparisons,
             bytes_read,
             is_complete,
+            fork_baseline_ambiguous: parser.fork_baseline_ambiguous,
         })
     }
 
@@ -2402,6 +2599,57 @@ mod tests {
     }
 
     #[test]
+    fn session_meta_pre_read_accepts_snake_and_camel_fork_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let snake = root.path().join("snake.jsonl");
+        std::fs::write(
+            &snake,
+            concat!(
+                r#"{"type":"session_meta","timestamp":"2026-05-31T10:00:00Z","payload":{"session_id":"child-snake","forked_from_id":"parent-snake"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            JsonlScanner::read_codex_session_metadata(&snake).unwrap(),
+            CodexSessionMetadata {
+                session_id: Some("child-snake".to_string()),
+                forked_from_id: Some("parent-snake".to_string()),
+                fork_timestamp: Some("2026-05-31T10:00:00Z".to_string()),
+            }
+        );
+
+        let camel = root.path().join("camel.jsonl");
+        std::fs::write(
+            &camel,
+            concat!(
+                r#"{"type":"session_meta","payload":{"sessionId":"child-camel","forkedFromId":"parent-camel","timestamp":"2026-05-31T10:00:01Z"}}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let metadata = JsonlScanner::read_codex_session_metadata(&camel).unwrap();
+        assert_eq!(metadata.session_id.as_deref(), Some("child-camel"));
+        assert_eq!(metadata.forked_from_id.as_deref(), Some("parent-camel"));
+        assert_eq!(
+            metadata.fork_timestamp.as_deref(),
+            Some("2026-05-31T10:00:01Z")
+        );
+    }
+
+    #[test]
+    fn legacy_file_usage_json_defaults_fork_metadata() {
+        let usage: CostUsageFileUsage = serde_json::from_str(
+            r#"{"mtime_unix_ms":0,"size":0,"days":{},"parsed_bytes":null,"last_model":null,"last_totals":null}"#,
+        )
+        .unwrap();
+        assert_eq!(usage.codex_session_id, None);
+        assert_eq!(usage.codex_forked_from_id, None);
+        assert_eq!(usage.codex_fork_timestamp, None);
+        assert!(!usage.codex_unresolved_fork_parent);
+    }
+
+    #[test]
     fn is_line_boundary_offset_zero_returns_true() {
         // F2: offset 0 is always a valid boundary (start of file).
         let root = tempfile::tempdir().unwrap();
@@ -2476,6 +2724,10 @@ line2
                 last_totals: None,
                 codex_token_timestamps_monotonic: Some(true),
                 codex_last_token_timestamp: None,
+                codex_session_id: None,
+                codex_forked_from_id: None,
+                codex_fork_timestamp: None,
+                codex_unresolved_fork_parent: false,
             },
         );
         cache.files.insert(
@@ -2489,6 +2741,10 @@ line2
                 last_totals: None,
                 codex_token_timestamps_monotonic: None,
                 codex_last_token_timestamp: None,
+                codex_session_id: None,
+                codex_forked_from_id: None,
+                codex_fork_timestamp: None,
+                codex_unresolved_fork_parent: false,
             },
         );
         cache.days.insert(
@@ -2539,6 +2795,10 @@ line2
                     last_totals: None,
                     codex_token_timestamps_monotonic: None,
                     codex_last_token_timestamp: None,
+                    codex_session_id: None,
+                    codex_forked_from_id: None,
+                    codex_fork_timestamp: None,
+                    codex_unresolved_fork_parent: false,
                 },
             )]),
             ..Default::default()
@@ -2601,6 +2861,10 @@ line2
                 last_totals: None,
                 codex_token_timestamps_monotonic: None,
                 codex_last_token_timestamp: None,
+                codex_session_id: None,
+                codex_forked_from_id: None,
+                codex_fork_timestamp: None,
+                codex_unresolved_fork_parent: false,
             },
         );
 
@@ -2632,6 +2896,10 @@ line2
                 last_totals: None,
                 codex_token_timestamps_monotonic: None,
                 codex_last_token_timestamp: None,
+                codex_session_id: None,
+                codex_forked_from_id: None,
+                codex_fork_timestamp: None,
+                codex_unresolved_fork_parent: false,
             },
         );
 
