@@ -956,14 +956,19 @@ fn parse_native_rfc3339(timestamp: &str) -> Option<DateTime<FixedOffset>> {
             if digits >= 9 {
                 return None;
             }
-            nanoseconds = nanoseconds * 10 + u32::from(bytes[zone_index] - b'0');
+            if digits < 3 {
+                nanoseconds = nanoseconds * 10 + u32::from(bytes[zone_index] - b'0');
+            }
             zone_index += 1;
         }
         let digits = zone_index - fraction_start;
         if digits == 0 {
             return None;
         }
-        for _ in digits..9 {
+        for _ in digits.min(3)..3 {
+            nanoseconds *= 10;
+        }
+        for _ in 0..6 {
             nanoseconds *= 10;
         }
     }
@@ -1751,7 +1756,7 @@ mod tests {
     fn native_codex_timestamp_parser_matches_chrono_for_supported_spellings() {
         for timestamp in [
             "2026-05-31T10:00:00Z",
-            "2026-05-31T10:00:00.123456789Z",
+            "2026-05-31T10:00:00.123Z",
             "2024-02-29T23:59:59.999+05:30",
             "1900-02-28T00:00:00-08:00",
             "1899-12-31T23:59:59.000Z",
@@ -1819,6 +1824,44 @@ mod tests {
         assert_eq!(parser.token_timestamps_monotonic, Some(false));
         assert_eq!(parser.token_timestamp_comparisons, 1);
         assert_eq!(parser.records.len(), 3);
+    }
+
+    #[test]
+    fn codex_timestamp_order_ignores_sub_millisecond_fraction() {
+        let day = NaiveDate::from_ymd_opt(2026, 8, 30).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for timestamp in ["2026-08-30T12:00:00.1239Z", "2026-08-30T12:00:00.1231Z"] {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}}}}}}}"#
+                ),
+                &range,
+            );
+        }
+
+        assert_eq!(parser.token_timestamps_monotonic, Some(true));
+        assert_eq!(parser.token_timestamp_comparisons, 1);
+    }
+
+    #[test]
+    fn codex_timestamp_order_detects_millisecond_decrease() {
+        let day = NaiveDate::from_ymd_opt(2026, 8, 30).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for timestamp in ["2026-08-30T12:00:00.124Z", "2026-08-30T12:00:00.123Z"] {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}}}}}}}"#
+                ),
+                &range,
+            );
+        }
+
+        assert_eq!(parser.token_timestamps_monotonic, Some(false));
+        assert_eq!(parser.token_timestamp_comparisons, 1);
     }
 
     #[test]
