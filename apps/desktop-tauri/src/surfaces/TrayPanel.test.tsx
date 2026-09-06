@@ -250,6 +250,8 @@ describe("TrayPanel provider grid", () => {
         MenuAbout: "About CodexBar",
         MenuQuit: "Quit",
         MenuSettings: "Settings...",
+        ActionUsageDashboard: "Usage Dashboard",
+        ActionStatusPage: "Status Page",
         PanelAllProviders: "All providers",
         PanelAllProvidersShort: "All",
         PanelLeftSuffix: "left",
@@ -335,6 +337,29 @@ describe("TrayPanel provider grid", () => {
     await waitFor(() => {
       expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("scopes the status-page action to the selected provider", async () => {
+    const { container } = renderTrayPanel([
+      provider("claude", "Claude", 35),
+      provider("codex", "Codex", 45),
+    ]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Claude$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Usage Dashboard$/ }));
+    expect(tauriMocks.openProviderDashboard).toHaveBeenLastCalledWith("claude");
+    fireEvent.click(await screen.findByRole("button", { name: /^Status Page$/ }));
+    expect(tauriMocks.openProviderStatusPage).toHaveBeenLastCalledWith("claude");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Codex$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Usage Dashboard$/ }));
+    expect(tauriMocks.openProviderDashboard).toHaveBeenLastCalledWith("codex");
+    fireEvent.click(await screen.findByRole("button", { name: /^Status Page$/ }));
+    expect(tauriMocks.openProviderStatusPage).toHaveBeenLastCalledWith("codex");
   });
 
   it("localizes static tray panel labels in Japanese", async () => {
