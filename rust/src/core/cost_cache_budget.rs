@@ -323,6 +323,7 @@ mod tests {
             size,
             days: day_map,
             parsed_bytes: parsed,
+            codex_scan_target_size: None,
             last_model: None,
             last_totals: None,
             codex_token_timestamps_monotonic: None,

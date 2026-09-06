@@ -5,7 +5,7 @@ mod parser;
 
 use helpers::{
     BoundedJsonlLine, CODEX_JSONL_MAX_LINE_BYTES, nonempty_json_string, parse_rfc3339_timestamp,
-    read_bounded_jsonl_line, session_meta_field,
+    read_bounded_jsonl_line, read_bounded_jsonl_line_until, session_meta_field,
 };
 use parser::CodexParserState;
 
@@ -109,8 +109,10 @@ impl JsonlScanner {
                 break;
             };
             let (line_bytes, consumed) = match line {
-                BoundedJsonlLine::Retained { bytes, consumed } => (bytes, consumed),
-                BoundedJsonlLine::Discarded { consumed } => {
+                BoundedJsonlLine::Retained {
+                    bytes, consumed, ..
+                } => (bytes, consumed),
+                BoundedJsonlLine::Discarded { consumed, .. } => {
                     bytes_examined = bytes_examined.saturating_add(consumed);
                     continue;
                 }
@@ -242,6 +244,41 @@ impl JsonlScanner {
             token_timestamps_monotonic,
             cancel,
             false,
+            None,
+            max_bytes_to_read,
+        )
+    }
+
+    /// Parse a Codex file against a caller-owned frozen target. The target is
+    /// intentionally separate from the current physical EOF so an active
+    /// rollout cannot make a bounded catch-up pass chase its own growth.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "resume state mirrors the persisted parser cache"
+    )]
+    pub(crate) fn parse_codex_file_with_state_bounded_target(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        start_offset: i64,
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+        cancel: Option<&AtomicBool>,
+        scan_target_size: Option<i64>,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded_internal(
+            file_path,
+            range,
+            start_offset,
+            initial_model,
+            initial_totals,
+            previous_token_timestamp,
+            token_timestamps_monotonic,
+            cancel,
+            false,
+            scan_target_size,
             max_bytes_to_read,
         )
     }
@@ -270,6 +307,35 @@ impl JsonlScanner {
             None,
             cancel,
             true,
+            None,
+            max_bytes_to_read,
+        )
+    }
+
+    /// Fork equivalent of [`Self::parse_codex_file_with_state_bounded_target`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "fork parse state mirrors the persisted parser cache"
+    )]
+    pub(crate) fn parse_codex_file_with_state_bounded_fork_target(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        initial_totals: CodexTotals,
+        cancel: Option<&AtomicBool>,
+        scan_target_size: Option<i64>,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded_internal(
+            file_path,
+            range,
+            0,
+            None,
+            Some(initial_totals),
+            None,
+            None,
+            cancel,
+            true,
+            scan_target_size,
             max_bytes_to_read,
         )
     }
@@ -288,6 +354,7 @@ impl JsonlScanner {
         token_timestamps_monotonic: Option<bool>,
         cancel: Option<&AtomicBool>,
         fork_baseline_mode: bool,
+        scan_target_size: Option<i64>,
         max_bytes_to_read: Option<i64>,
     ) -> std::io::Result<CodexParseResult> {
         let file = File::open(file_path)?;
@@ -298,9 +365,15 @@ impl JsonlScanner {
         )]
         let file_size = file.metadata()?.len() as i64;
 
+        let safe_start_offset = start_offset.clamp(0, file_size);
+        let requested_target_size = scan_target_size
+            .unwrap_or(file_size)
+            .max(safe_start_offset)
+            .min(file_size);
+
         let mut reader = BufReader::new(file);
-        if start_offset > 0 {
-            reader.seek(SeekFrom::Start(start_offset as u64))?;
+        if safe_start_offset > 0 {
+            reader.seek(SeekFrom::Start(safe_start_offset as u64))?;
         }
 
         let mut parser = CodexParserState::with_timestamp_state_and_fork_mode(
@@ -310,14 +383,16 @@ impl JsonlScanner {
             token_timestamps_monotonic,
             fork_baseline_mode,
         );
-        let mut parsed_bytes = start_offset;
+        let mut parsed_bytes = safe_start_offset;
+        let mut committed_bytes = safe_start_offset;
         let mut cancelled = false;
         let mut budget_exhausted = false;
+        let mut incomplete_tail = false;
 
         loop {
             if max_bytes_to_read.is_some_and(|limit| {
-                parsed_bytes.saturating_sub(start_offset) >= limit.max(0)
-                    && parsed_bytes < file_size
+                parsed_bytes.saturating_sub(safe_start_offset) >= limit.max(0)
+                    && parsed_bytes < requested_target_size
             }) {
                 budget_exhausted = true;
                 break;
@@ -326,7 +401,16 @@ impl JsonlScanner {
                 cancelled = true;
                 break;
             }
-            let Some(line) = read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
+            let remaining_to_target = requested_target_size.saturating_sub(parsed_bytes);
+            if remaining_to_target == 0 {
+                break;
+            }
+            let max_total_bytes = usize::try_from(remaining_to_target).ok();
+            let Some(line) = read_bounded_jsonl_line_until(
+                &mut reader,
+                CODEX_JSONL_MAX_LINE_BYTES,
+                max_total_bytes,
+            )?
             else {
                 break;
             };
@@ -334,33 +418,66 @@ impl JsonlScanner {
                 cancelled = true;
                 break;
             }
-            let (line_bytes, consumed) = match line {
-                BoundedJsonlLine::Retained { bytes, consumed } => (Some(bytes), consumed),
-                BoundedJsonlLine::Discarded { consumed } => (None, consumed),
+            let (line_bytes, consumed, terminated_by_newline) = match line {
+                BoundedJsonlLine::Retained {
+                    bytes,
+                    consumed,
+                    terminated_by_newline,
+                } => (Some(bytes), consumed, terminated_by_newline),
+                BoundedJsonlLine::Discarded {
+                    consumed,
+                    terminated_by_newline,
+                } => (None, consumed, terminated_by_newline),
             };
             let consumed_i64 = i64::try_from(consumed).unwrap_or(i64::MAX);
             parsed_bytes = parsed_bytes.saturating_add(consumed_i64);
             let Some(line_bytes) = line_bytes else {
+                if terminated_by_newline {
+                    committed_bytes = parsed_bytes;
+                } else {
+                    incomplete_tail = true;
+                    parsed_bytes = committed_bytes;
+                    break;
+                }
                 continue;
             };
             if line_bytes.is_empty() {
+                committed_bytes = parsed_bytes;
                 continue;
             }
             let Ok(line) = std::str::from_utf8(&line_bytes) else {
-                continue;
+                if terminated_by_newline {
+                    committed_bytes = parsed_bytes;
+                    continue;
+                }
+                incomplete_tail = true;
+                parsed_bytes = committed_bytes;
+                break;
             };
             let line = line.strip_suffix('\r').unwrap_or(line);
+            if !terminated_by_newline && serde_json::from_str::<Value>(line).is_err() {
+                incomplete_tail = true;
+                parsed_bytes = committed_bytes;
+                break;
+            }
             parser.process_line(line, range);
+            committed_bytes = parsed_bytes;
         }
 
-        let bytes_read = parsed_bytes.saturating_sub(start_offset).max(0);
-        let is_complete = !cancelled && !budget_exhausted && parsed_bytes >= file_size;
+        let effective_target_size = if incomplete_tail && !cancelled && !budget_exhausted {
+            committed_bytes
+        } else {
+            requested_target_size
+        };
+        let is_complete = !cancelled && !budget_exhausted && parsed_bytes >= effective_target_size;
+        let bytes_read = parsed_bytes.saturating_sub(safe_start_offset).max(0);
         Ok(CodexParseResult {
             records: parser.records,
-            parsed_bytes: if is_complete {
-                file_size.max(parsed_bytes)
+            parsed_bytes,
+            scan_target_size: if is_complete {
+                effective_target_size
             } else {
-                parsed_bytes
+                requested_target_size
             },
             last_model: parser.current_model,
             last_totals: parser.previous_totals,

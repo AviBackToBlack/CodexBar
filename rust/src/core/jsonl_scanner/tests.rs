@@ -502,6 +502,50 @@ fn codex_append_timestamp_state_is_output_equivalent_and_boundary_only() {
 }
 
 #[test]
+fn codex_parse_publishes_only_the_committed_prefix_before_an_incomplete_tail() {
+    let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+    let range = CostUsageDayRange::new(day, day);
+    let committed_line = r#"{"timestamp":"2026-05-31T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}}}}"#;
+    writeln!(file, "{committed_line}").unwrap();
+    let committed_bytes = (committed_line.len() + 1) as i64;
+
+    let complete_tail = r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":20,"cached_input_tokens":0,"output_tokens":2}}}}"#;
+    let split = complete_tail.len() / 2;
+    write!(file, "{}", &complete_tail[..split]).unwrap();
+    file.flush().unwrap();
+
+    let partial = JsonlScanner::parse_codex_file(file.path(), &range, 0, None, None)
+        .expect("parse committed prefix");
+    assert_eq!(partial.records.len(), 1);
+    assert_eq!(partial.records[0].input, 10);
+    assert_eq!(partial.parsed_bytes, committed_bytes);
+    assert_eq!(partial.scan_target_size, committed_bytes);
+    assert!(partial.is_complete, "the logical prefix is complete");
+
+    writeln!(file, "{}", &complete_tail[split..]).unwrap();
+    let resumed = JsonlScanner::parse_codex_file_with_state(
+        file.path(),
+        &range,
+        partial.parsed_bytes,
+        partial.last_model,
+        partial.last_totals,
+        partial.last_token_timestamp,
+        partial.token_timestamps_monotonic,
+        None,
+    )
+    .expect("resume completed tail");
+    assert_eq!(resumed.records.len(), 1);
+    assert_eq!(resumed.records[0].input, 10);
+    assert_eq!(
+        resumed.parsed_bytes,
+        std::fs::metadata(file.path()).unwrap().len() as i64
+    );
+    assert_eq!(resumed.scan_target_size, resumed.parsed_bytes);
+    assert!(resumed.is_complete);
+}
+
+#[test]
 fn codex_parser_discards_oversized_line_and_recovers_next_record() {
     let mut file = tempfile::NamedTempFile::new().expect("temp file");
     let padding = "x".repeat(CODEX_JSONL_MAX_LINE_BYTES);
@@ -1006,6 +1050,7 @@ fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
                 HashMap::from([("gpt-5.6-sol".to_string(), vec![1_000, 250, 100])]),
             )]),
             parsed_bytes: Some(100),
+            codex_scan_target_size: None,
             last_model: Some("gpt-5.6-sol".to_string()),
             last_totals: None,
             codex_token_timestamps_monotonic: Some(true),
@@ -1023,6 +1068,7 @@ fn catch_up_snapshot_preserves_established_codex_cost_and_tokens() {
             size: 10,
             days: HashMap::new(),
             parsed_bytes: Some(10),
+            codex_scan_target_size: None,
             last_model: None,
             last_totals: None,
             codex_token_timestamps_monotonic: None,
@@ -1077,6 +1123,7 @@ fn save_cache_persists_small_codex_artifact() {
                     HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
                 )]),
                 parsed_bytes: None,
+                codex_scan_target_size: None,
                 last_model: None,
                 last_totals: None,
                 codex_token_timestamps_monotonic: None,
@@ -1143,6 +1190,7 @@ fn save_cache_refuses_non_bounded_provider_oversize() {
             size: 100,
             days: HashMap::new(),
             parsed_bytes: None,
+            codex_scan_target_size: None,
             last_model: None,
             last_totals: None,
             codex_token_timestamps_monotonic: None,
@@ -1178,6 +1226,7 @@ fn save_cache_refusal_removes_preexisting_destination_artifact() {
                 HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 0, 1])]),
             )]),
             parsed_bytes: None,
+            codex_scan_target_size: None,
             last_model: None,
             last_totals: None,
             codex_token_timestamps_monotonic: None,

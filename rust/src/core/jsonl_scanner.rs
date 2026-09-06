@@ -224,6 +224,11 @@ pub struct CostUsageFileUsage {
     pub days: HashMap<String, HashMap<String, Vec<i32>>>,
     /// Bytes parsed so far (for incremental parsing)
     pub parsed_bytes: Option<i64>,
+    /// Frozen logical end of the scan target. A growing rollout may have a
+    /// physical tail beyond this boundary; that tail remains queued until a
+    /// later pass can consume complete records from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_scan_target_size: Option<i64>,
     /// Last model seen (for delta calculations)
     pub last_model: Option<String>,
     /// Last token totals (for delta calculations)
@@ -305,6 +310,9 @@ pub struct CodexParseResult {
     pub records: Vec<CodexUsageRecord>,
     /// Bytes parsed
     pub parsed_bytes: i64,
+    /// Stable logical target reached by this parse. This may be behind the
+    /// physical EOF when the tail ended inside an incomplete JSONL record.
+    pub scan_target_size: i64,
     /// Last model seen
     pub last_model: Option<String>,
     /// Last totals seen

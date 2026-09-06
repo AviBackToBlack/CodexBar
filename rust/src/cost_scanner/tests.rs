@@ -517,6 +517,7 @@ fn cached_usage_with_packed(day: &str, model: &str, packed: Vec<i32>) -> CostUsa
             HashMap::from([(model.to_string(), packed)]),
         )]),
         parsed_bytes: Some(1),
+        codex_scan_target_size: None,
         last_model: None,
         last_totals: None,
         codex_token_timestamps_monotonic: None,
@@ -1212,6 +1213,7 @@ fn cancelled_fresh_cache_hit_is_not_authoritative() {
                 size: 100,
                 days: usage.clone(),
                 parsed_bytes: Some(100),
+                codex_scan_target_size: None,
                 last_model: Some("gpt-5.6-sol".to_string()),
                 last_totals: None,
                 codex_token_timestamps_monotonic: Some(true),
@@ -1423,6 +1425,139 @@ fn cost_scan_resumes_appended_bytes() {
         .expect("resumed file cache entry");
     assert_eq!(cached_file.codex_token_timestamps_monotonic, Some(true));
     assert!(cached_file.codex_last_token_timestamp.is_some());
+}
+
+#[test]
+fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path =
+        write_codex_session_fixture_with_inputs(&sessions, "growing.jsonl", &[100, 200, 300]);
+    let initial_size = std::fs::metadata(&path).unwrap().len() as i64;
+    let first_line_bytes = std::fs::read(&path)
+        .unwrap()
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap()
+        .len() as i64
+        + 1;
+
+    let mut options = CostScanOptions::app_driven();
+    options.codex_max_session_file_bytes = first_line_bytes;
+    options.codex_max_scan_bytes_per_refresh = first_line_bytes;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+
+    let (first, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(first.input_tokens, 100);
+    let first_usage = first_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(first_usage.codex_scan_target_size, Some(initial_size));
+    assert_eq!(first_usage.parsed_bytes, Some(first_line_bytes));
+    assert!(first_cache.codex_scan_incomplete);
+
+    let timestamp = (Utc::now() - Duration::minutes(10))
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    let append_line = |total: u64| {
+        format!(
+            r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":{}}}}}}}}}}
+"#,
+            total / 10
+        )
+    };
+    let mut next_total = 400_u64;
+    let mut bounded_summary = first;
+    let mut bounded_cache = first_cache;
+    for _ in 0..8 {
+        let line = append_line(next_total);
+        next_total += 100;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(line.as_bytes()).unwrap();
+        drop(file);
+
+        (bounded_summary, _, bounded_cache) = scanner.scan_codex_detailed_with_cache(None);
+        let usage = bounded_cache
+            .files
+            .get(&path.to_string_lossy().to_string())
+            .unwrap();
+        assert_eq!(usage.codex_scan_target_size, Some(initial_size));
+        assert!(usage.parsed_bytes.unwrap_or_default() <= initial_size);
+        if usage.parsed_bytes == Some(initial_size) {
+            break;
+        }
+    }
+
+    assert_eq!(bounded_summary.input_tokens, 300);
+    let bounded_usage = bounded_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(bounded_usage.parsed_bytes, Some(initial_size));
+    assert_eq!(bounded_usage.codex_scan_target_size, Some(initial_size));
+    assert!(
+        bounded_cache.codex_scan_incomplete,
+        "the appended tail stays queued"
+    );
+
+    for _ in 0..32 {
+        if !bounded_cache.codex_scan_incomplete {
+            break;
+        }
+        (bounded_summary, _, bounded_cache) = scanner.scan_codex_detailed_with_cache(None);
+    }
+    assert!(!bounded_cache.codex_scan_incomplete);
+    let stable_summary = bounded_summary.clone();
+    let stable_size = std::fs::metadata(&path).unwrap().len() as i64;
+
+    let partial_line = append_line(next_total);
+    let split = partial_line.len() / 2;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(partial_line[..split].as_bytes()).unwrap();
+    drop(file);
+    let (partial_summary, _, partial_cache) = scanner.scan_codex_detailed_with_cache(None);
+    let partial_usage = partial_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(partial_summary.input_tokens, stable_summary.input_tokens);
+    assert_eq!(partial_usage.parsed_bytes, Some(stable_size));
+    assert_eq!(partial_usage.codex_scan_target_size, Some(stable_size));
+    assert!(partial_cache.codex_scan_incomplete);
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(partial_line[split..].as_bytes()).unwrap();
+    drop(file);
+    next_total += 100;
+    let (resumed_summary, _, resumed_cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert!(!resumed_cache.codex_scan_incomplete);
+    assert_eq!(resumed_summary.input_tokens, next_total - 100);
+    let resumed_usage = resumed_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(
+        resumed_usage.parsed_bytes,
+        Some(std::fs::metadata(&path).unwrap().len() as i64)
+    );
+    assert_eq!(
+        resumed_usage.codex_scan_target_size,
+        resumed_usage.parsed_bytes
+    );
 }
 
 #[test]
