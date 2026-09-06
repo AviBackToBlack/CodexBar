@@ -67,6 +67,8 @@ pub struct CostSummary {
     pub output_tokens: u64,
     /// Total cached input tokens
     pub cached_tokens: u64,
+    /// Total reasoning tokens when every contributing row reports them
+    pub reasoning_tokens: Option<u64>,
     /// Number of sessions/conversations scanned
     pub sessions_count: u32,
     /// Cost breakdown by model
@@ -104,6 +106,7 @@ pub struct ModelTokenCounts {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_tokens: u64,
+    pub reasoning_tokens: Option<u64>,
 }
 
 impl ModelTokenCounts {
@@ -182,6 +185,9 @@ fn summary_from_cached_report(
         input_tokens: u64::try_from(report.input_tokens.max(0)).unwrap_or(0),
         cached_tokens: u64::try_from(report.cached_tokens.max(0)).unwrap_or(0),
         output_tokens: u64::try_from(report.output_tokens.max(0)).unwrap_or(0),
+        reasoning_tokens: report
+            .reasoning_tokens
+            .map(|reasoning| u64::try_from(reasoning.max(0)).unwrap_or(0)),
         sessions_count: u32::try_from(report.sessions_count.max(0)).unwrap_or(0),
         // The persisted report has no model-level breakdown. A catch-up
         // summary must not claim that its newly rebuilt partial breakdown is
@@ -3257,7 +3263,7 @@ mod tests {
             input_tokens: 11,
             cached_tokens: 2,
             output_tokens: 3,
-            reasoning_tokens: None,
+            reasoning_tokens: Some(7),
             sessions_count: 7,
             updated_at: Some("2026-09-06T00:00:00Z".to_string()),
             partial: false,
@@ -3278,6 +3284,7 @@ mod tests {
         assert_eq!(summary.input_tokens, report.input_tokens as u64);
         assert_eq!(summary.cached_tokens, report.cached_tokens as u64);
         assert_eq!(summary.output_tokens, report.output_tokens as u64);
+        assert_eq!(summary.reasoning_tokens, Some(7));
         assert_eq!(summary.sessions_count, report.sessions_count as u32);
         assert!(!summary.history_coverage_established);
         assert!(!summary.known_zero);

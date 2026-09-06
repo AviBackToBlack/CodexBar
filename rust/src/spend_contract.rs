@@ -345,7 +345,7 @@ pub fn build_local_spend_contract_from_summary(
         output_tokens: Some(summary.output_tokens),
         cache_read_tokens: Some(summary.cached_tokens),
         cache_creation_tokens: None,
-        reasoning_tokens: None,
+        reasoning_tokens: summary.reasoning_tokens,
         ..SpendTokenMix::default()
     };
 
@@ -908,6 +908,7 @@ mod tests {
             input_tokens: 1_000_000,
             output_tokens: 0,
             cached_tokens: 0,
+            reasoning_tokens: None,
         };
         let free = CustomRates {
             input: Some(0.0),
@@ -916,6 +917,36 @@ mod tests {
         let missing = CustomRates::default();
         assert_eq!(free.cost(&counts), Some(0.0));
         assert_eq!(missing.cost(&counts), None);
+    }
+
+    #[test]
+    fn local_spend_contract_exposes_reasoning_tokens_and_preserves_unknown() {
+        let mut known_summary = CostSummary::default();
+        known_summary.reasoning_tokens = Some(7);
+        let known = build_local_spend_contract_from_summary(
+            "unknown-provider",
+            30,
+            false,
+            false,
+            false,
+            known_summary,
+        );
+        assert_eq!(known.token_mix.reasoning_tokens, Some(7));
+        let known_json = serde_json::to_value(&known).expect("known spend contract serializes");
+        assert_eq!(known_json["tokenMix"]["reasoningTokens"], 7);
+
+        let unknown = build_local_spend_contract_from_summary(
+            "unknown-provider",
+            30,
+            false,
+            false,
+            false,
+            CostSummary::default(),
+        );
+        assert_eq!(unknown.token_mix.reasoning_tokens, None);
+        let unknown_json =
+            serde_json::to_value(&unknown).expect("unknown spend contract serializes");
+        assert!(unknown_json["tokenMix"]["reasoningTokens"].is_null());
     }
 
     #[test]
