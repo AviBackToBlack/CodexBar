@@ -786,6 +786,65 @@ fn pace_stage_serializes_to_snake_case_string() {
 }
 
 #[test]
+fn local_opencodego_estimates_keep_quota_windows_but_drop_derived_pace() {
+    let now = chrono::Utc::now();
+    let usage = codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::with_details(
+        12.0,
+        Some(300),
+        Some(now + chrono::Duration::hours(2)),
+        None,
+    ))
+    .with_secondary(codexbar::core::RateWindow::with_details(
+        23.0,
+        Some(10080),
+        Some(now + chrono::Duration::days(3)),
+        None,
+    ))
+    .with_tertiary(codexbar::core::RateWindow::with_details(
+        34.0,
+        Some(43200),
+        Some(now + chrono::Duration::days(10)),
+        None,
+    ));
+    let result = ProviderFetchResult::new(
+        usage,
+        codexbar::providers::opencodego::LOCAL_ESTIMATE_SOURCE_LABEL,
+    );
+    let metadata = instantiate_provider(ProviderId::OpenCodeGo)
+        .metadata()
+        .clone();
+    let snapshot =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::OpenCodeGo, &metadata, &result, None);
+
+    assert_eq!(snapshot.source_label, "local estimate");
+    assert_eq!(snapshot.primary.used_percent, 12.0);
+    assert_eq!(snapshot.secondary.as_ref().unwrap().used_percent, 23.0);
+    assert_eq!(snapshot.tertiary.as_ref().unwrap().used_percent, 34.0);
+    assert!(snapshot.primary.resets_at.is_some());
+    assert!(snapshot.secondary.as_ref().unwrap().resets_at.is_some());
+    assert!(snapshot.tertiary.as_ref().unwrap().resets_at.is_some());
+    assert!(snapshot.pace.is_none());
+    assert!(
+        snapshot
+            .secondary
+            .as_ref()
+            .unwrap()
+            .reserve_percent
+            .is_none()
+    );
+}
+
+#[test]
+fn authoritative_opencodego_sources_still_allow_derived_pace() {
+    assert!(super::provider_allows_pace(ProviderId::OpenCodeGo, "api"));
+    assert!(super::provider_allows_pace(ProviderId::OpenCodeGo, "web"));
+    assert!(!super::provider_allows_pace(
+        ProviderId::OpenCodeGo,
+        " LOCAL ESTIMATE "
+    ));
+}
+
+#[test]
 fn provider_cache_is_fresh_inside_stale_window() {
     assert!(super::is_provider_cache_fresh(
         Some(std::time::Instant::now()),

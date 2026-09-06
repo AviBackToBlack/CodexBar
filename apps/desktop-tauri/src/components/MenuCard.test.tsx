@@ -483,6 +483,41 @@ describe("MenuCard", () => {
     expect(container.querySelector(".menu-metric__forecast")).not.toBeInTheDocument();
   });
 
+  it("hides derived pace advice for local OpenCode Go estimates", async () => {
+    const resetAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    const snapshot = provider(null, 12);
+    snapshot.providerId = "opencodego";
+    snapshot.displayName = "OpenCode Go";
+    snapshot.sourceLabel = "local estimate";
+    snapshot.primary = rateWindow(12, {
+      windowMinutes: 5 * 60,
+      resetsAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+    });
+    snapshot.secondary = rateWindow(23, {
+      windowMinutes: 7 * 24 * 60,
+      resetsAt: resetAt.toISOString(),
+      reservePercent: 34,
+      reserveWillLastToReset: true,
+    });
+    snapshot.pace = {
+      stage: "far_ahead",
+      deltaPercent: 20,
+      expectedUsedPercent: 20,
+      actualUsedPercent: 40,
+      etaSeconds: 90 * 60,
+      willLastToReset: false,
+    };
+
+    const { container } = renderCard(snapshot);
+
+    expect(await screen.findByText("88% left")).toBeInTheDocument();
+    expect(screen.getByText("77% left")).toBeInTheDocument();
+    expect(container.querySelector(".menu-card__pace")).not.toBeInTheDocument();
+    expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
+    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
+    expect(container.querySelector(".menu-metric__forecast")).not.toBeInTheDocument();
+  });
+
   it("renders local token and cost totals after chart data loads", async () => {
     const { container } = renderCard(provider(null));
 

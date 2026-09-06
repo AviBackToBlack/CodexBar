@@ -122,7 +122,7 @@ impl OpenRouterProvider {
                 supports_credits: true,
                 default_enabled: false,
                 is_primary: false,
-                dashboard_url: Some("https://openrouter.ai/settings/credits"),
+                dashboard_url: Some("https://openrouter.ai/activity"),
                 status_page_url: Some("https://status.openrouter.ai"),
             },
         }
@@ -472,6 +472,14 @@ mod tests {
     fn key_url_resolves_to_canonical_path() {
         let url = format!("{}/key", OPENROUTER_API_BASE);
         assert_eq!(url, "https://openrouter.ai/api/v1/key");
+    }
+
+    #[test]
+    fn usage_dashboard_opens_activity_history() {
+        assert_eq!(
+            OpenRouterProvider::new().metadata().dashboard_url,
+            Some("https://openrouter.ai/activity")
+        );
     }
 
     // ── F14: server-reported current-period remaining drives the key meter ──

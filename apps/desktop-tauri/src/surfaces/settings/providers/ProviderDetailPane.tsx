@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer } from "react";
 import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
+import { providerAllowsPace } from "../../../lib/providerPace";
 import {
   getCredentialStorageStatus,
   getProviderCookieSourceOptions,
@@ -299,7 +300,14 @@ export function ProviderDetailPane({
         t={t}
         onChange={onSettingsChange}
       />
-      <PaceSection pace={detail.pace} t={t} />
+      <PaceSection
+        pace={
+          providerAllowsPace(detail.id, detail.sourceLabel)
+            ? detail.pace
+            : null
+        }
+        t={t}
+      />
       <CostSection cost={detail.cost} t={t} />
 
       <UsageSourceSection

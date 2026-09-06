@@ -214,6 +214,16 @@ fn dashboard_url_for_provider(provider_id: &str) -> Option<String> {
         );
     }
 
+    // OpenRouter's Usage Dashboard is the Activity page. Resolve it from the
+    // provider metadata before the legacy API-key catalog entry, which still
+    // points at the credits settings page.
+    if provider_id == ProviderId::OpenRouter.cli_name() {
+        return instantiate_provider(ProviderId::OpenRouter)
+            .metadata()
+            .dashboard_url
+            .map(|s| s.to_string());
+    }
+
     if let Some(url) = codexbar::settings::get_api_key_providers()
         .into_iter()
         .find(|p| p.id.cli_name() == provider_id)
@@ -379,6 +389,14 @@ mod tests {
         assert_eq!(
             dashboard_url_for_provider("codex").as_deref(),
             Some("https://chatgpt.com/codex/settings/usage")
+        );
+    }
+
+    #[test]
+    fn dashboard_url_resolves_openrouter_activity() {
+        assert_eq!(
+            dashboard_url_for_provider("openrouter").as_deref(),
+            Some("https://openrouter.ai/activity")
         );
     }
 }
