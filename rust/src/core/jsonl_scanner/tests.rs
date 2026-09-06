@@ -758,6 +758,8 @@ fn interleaved_lineage_mid_range_climb_below_watermark_does_not_readd() {
 fn cost_scan_options_app_driven_bypasses_debounce() {
     let debounced = CostScanOptions::default();
     let forced = CostScanOptions::app_driven();
+    assert!(!debounced.is_app_driven());
+    assert!(forced.is_app_driven());
     let last = 1_000_000_i64;
     let now = last + 1_000; // 1s later, within 60s window
 

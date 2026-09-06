@@ -26,8 +26,8 @@ use crate::codex_costs::{
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{
-    CachedCostReport, CostScanOptions, CostUsageCache, CostUsageDayRange, CostUsageFileUsage,
-    CostUsagePricing, JsonlScanner, ProviderId,
+    CachedCostReport, CodexScanPauseReason, CostScanOptions, CostUsageCache, CostUsageDayRange,
+    CostUsageFileUsage, CostUsagePricing, JsonlScanner, ProviderId,
 };
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;

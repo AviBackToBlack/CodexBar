@@ -1656,6 +1656,247 @@ fn incomplete_summary_preserves_previous_report_and_marks_it_non_authoritative()
 }
 
 #[test]
+fn failed_catch_up_pause_preserves_cursor_and_report_until_explicit_refresh() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let pending = write_codex_session_fixture(&sessions, "pending.jsonl", 100);
+    let report = CachedCostReport {
+        total_cost_usd: 42.5,
+        input_tokens: 11,
+        cached_tokens: 2,
+        output_tokens: 3,
+        reasoning_tokens: Some(7),
+        sessions_count: 7,
+        updated_at: Some("2026-09-06T00:00:00Z".to_string()),
+        partial: false,
+    };
+    let mut cache = CostUsageCache::default();
+    cache.previous_report = Some(report.clone());
+    cache.codex_pending_paths = vec![pending.to_string_lossy().to_string()];
+    cache.codex_scan_incomplete = true;
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+    let failed = CostScanner::new(7)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![root.path().join("temporarily-unavailable")]);
+    let (failed_summary, _, failed_cache) = failed.scan_codex_detailed_with_cache(None);
+    assert_eq!(
+        failed_cache.codex_scan_pause_reason,
+        Some(CodexScanPauseReason::Error(
+            "Codex session source unavailable".to_string()
+        ))
+    );
+    assert_eq!(failed_cache.codex_pending_paths, cache.codex_pending_paths);
+    assert_eq!(
+        failed_cache
+            .previous_report
+            .as_ref()
+            .map(|saved| saved.total_cost_usd),
+        Some(report.total_cost_usd)
+    );
+    assert_eq!(failed_summary.total_cost_usd, report.total_cost_usd);
+
+    let background = CostScanner::new(7)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (background_summary, background_stats, background_cache) =
+        background.scan_codex_detailed_with_cache(None);
+    assert_eq!(background_stats.files_parsed, 0);
+    assert_eq!(background_summary.total_cost_usd, report.total_cost_usd);
+    assert_eq!(
+        background_cache.codex_pending_paths,
+        failed_cache.codex_pending_paths
+    );
+    assert_eq!(
+        background_cache.codex_scan_pause_reason,
+        failed_cache.codex_scan_pause_reason
+    );
+
+    let explicit = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (resumed_summary, _, resumed_cache) = explicit.scan_codex_detailed_with_cache(None);
+    assert!(resumed_cache.codex_scan_pause_reason.is_none());
+    assert!(!resumed_cache.codex_scan_incomplete);
+    assert!(resumed_cache.codex_pending_paths.is_empty());
+    assert!(resumed_summary.history_coverage_established);
+    assert_eq!(resumed_summary.input_tokens, 100);
+    assert!(resumed_cache.previous_report.is_none());
+}
+
+#[test]
+fn missing_unobserved_sessions_root_does_not_pause_validated_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let missing = root.path().join("optional-sessions");
+    let cache_root = root.path().join("cache");
+    write_codex_session_fixture(&sessions, "observed.jsonl", 100);
+
+    let initial = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (initial_summary, _) = initial.scan_codex_detailed(None);
+    assert!(initial_summary.history_coverage_established);
+
+    let mut cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    cache.last_scan_unix_ms = 1;
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+
+    let background = CostScanner::new(7)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions, missing]);
+    let (summary, _, saved) = background.scan_codex_detailed_with_cache(None);
+
+    assert!(summary.history_coverage_established);
+    assert_eq!(summary.input_tokens, 100);
+    assert!(!saved.codex_scan_incomplete);
+    assert!(saved.codex_scan_pause_reason.is_none());
+}
+
+#[test]
+fn trace_pruning_preserves_cursor_and_validated_history_until_refresh() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "pruned.jsonl", 100);
+
+    let initial = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (initial_summary, _, initial_cache) = initial.scan_codex_detailed_with_cache(None);
+    assert_eq!(initial_summary.input_tokens, 100);
+    assert!(!initial_cache.codex_scan_incomplete);
+
+    // Keep the next pass outside the scanner debounce while simulating Codex
+    // retention pruning the same trace file down to a smaller valid payload.
+    let mut initial_cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    initial_cache.last_scan_unix_ms = 1;
+    JsonlScanner::save_cache(ProviderId::Codex, &mut initial_cache, Some(&cache_root));
+    let _ = write_codex_session_fixture(&sessions, "pruned.jsonl", 1);
+
+    let background = CostScanner::new(7)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (paused_summary, _, paused_cache) = background.scan_codex_detailed_with_cache(None);
+    assert_eq!(paused_summary.input_tokens, 100);
+    assert_eq!(
+        paused_cache.codex_scan_pause_reason,
+        Some(CodexScanPauseReason::NoProgress)
+    );
+    assert_eq!(
+        paused_cache.codex_pending_paths,
+        vec![path.to_string_lossy().to_string()]
+    );
+    assert!(paused_cache.previous_report.is_some());
+
+    let explicit = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (resumed_summary, _, resumed_cache) = explicit.scan_codex_detailed_with_cache(None);
+    assert_eq!(resumed_summary.input_tokens, 1);
+    assert!(resumed_cache.codex_scan_pause_reason.is_none());
+    assert!(resumed_cache.codex_pending_paths.is_empty());
+    assert!(resumed_cache.previous_report.is_none());
+}
+
+#[test]
+fn disappeared_trace_path_waits_for_explicit_validation() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "disappeared.jsonl", 100);
+
+    let initial = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (initial_summary, _, _) = initial.scan_codex_detailed_with_cache(None);
+    assert_eq!(initial_summary.input_tokens, 100);
+
+    let mut cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    cache.last_scan_unix_ms = 1;
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+    std::fs::remove_file(&path).unwrap();
+
+    let background = CostScanner::new(7)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (paused_summary, _, paused_cache) = background.scan_codex_detailed_with_cache(None);
+    assert_eq!(paused_summary.input_tokens, 100);
+    assert_eq!(
+        paused_cache.codex_scan_pause_reason,
+        Some(CodexScanPauseReason::NoProgress)
+    );
+    assert_eq!(
+        paused_cache.codex_pending_paths,
+        vec![path.to_string_lossy().to_string()]
+    );
+
+    let explicit = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (resumed_summary, _, resumed_cache) = explicit.scan_codex_detailed_with_cache(None);
+    assert_eq!(resumed_summary.sessions_count, 0);
+    assert!(resumed_summary.history_coverage_established);
+    assert!(resumed_cache.codex_scan_pause_reason.is_none());
+    assert!(resumed_cache.codex_pending_paths.is_empty());
+    assert!(resumed_cache.previous_report.is_none());
+}
+
+#[test]
+fn paused_catch_up_round_trips_without_retrying_in_background() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let pending = write_codex_session_fixture(&sessions, "pending.jsonl", 100);
+    let report = CachedCostReport {
+        total_cost_usd: 9.25,
+        input_tokens: 21,
+        cached_tokens: 1,
+        output_tokens: 5,
+        reasoning_tokens: None,
+        sessions_count: 2,
+        updated_at: Some("2026-09-06T00:00:00Z".to_string()),
+        partial: true,
+    };
+    let mut cache = CostUsageCache::default();
+    cache.previous_report = Some(report.clone());
+    cache.codex_pending_paths = vec![pending.to_string_lossy().to_string()];
+    cache.codex_scan_incomplete = true;
+    cache.codex_scan_pause_reason = Some(CodexScanPauseReason::NoProgress);
+
+    let encoded = serde_json::to_string(&cache).unwrap();
+    let decoded: CostUsageCache = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(
+        decoded.codex_scan_pause_reason,
+        cache.codex_scan_pause_reason
+    );
+
+    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
+    let scanner = CostScanner::new(7)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (summary, stats, saved) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(stats.files_parsed, 0);
+    assert_eq!(summary.total_cost_usd, report.total_cost_usd);
+    assert_eq!(saved.codex_pending_paths, cache.codex_pending_paths);
+    assert_eq!(
+        saved
+            .previous_report
+            .as_ref()
+            .map(|saved| saved.total_cost_usd),
+        Some(report.total_cost_usd)
+    );
+    assert_eq!(saved.codex_scan_pause_reason, cache.codex_scan_pause_reason);
+}
+
+#[test]
 fn pending_and_incomplete_round_trip_through_cache_json() {
     let cache = CostUsageCache {
         codex_pending_paths: vec!["C:\\sessions\\pending.jsonl".to_string()],
