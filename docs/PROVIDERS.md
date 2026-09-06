@@ -65,10 +65,11 @@ Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend 
 
 ### AWS Bedrock monitoring
 
-AWS Bedrock is a Windows provider backed by signed Cost Explorer requests and
-optional CloudWatch activity. It is disabled by default, and AWS API requests
-can incur charges. Credential formats, permissions, refresh controls, and the
-current monitoring-cost warning are documented in [BEDROCK.md](./BEDROCK.md).
+AWS Bedrock is a Windows provider backed by signed Cost Explorer requests and optional CloudWatch activity. It is disabled by default, and monitoring requests can add charges to your AWS bill. AWS currently charges $0.01 per Cost Explorer API request; paginated monthly-spend reads can therefore use more than one billed request, while optional CloudWatch activity is billed under CloudWatch pricing.
+
+The shared refresh interval controls automatic provider polling. `0` / Manual disables the recurring timer, but explicit refreshes and **Refresh when the menu opens** can still fetch Bedrock data. Disable Bedrock itself to stop its app refreshes.
+
+`CODEXBAR_BEDROCK_BUDGET` changes only the displayed monthly progress. It does **not** cap AWS charges, stop polling, or enforce a billing limit.
 
 Custom pricing overlays are exact-match overrides used only where the local spend contract has matching provider/model token evidence. Explicit zero rates mean free; omitted rate fields stay unknown. The Usage & Spend surface keeps provenance/coverage visible, preserves cost-only model rows when token coverage is partial, and can Copy JSON or save the same JSON contract through the native file picker.
 
@@ -95,5 +96,4 @@ Upstream `docs/providers.md` is a large auto-strategy matrix (60+ providers) for
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
 - [CLI.md](./CLI.md)
 - [CONFIGURATION.md](./CONFIGURATION.md)
-- [BEDROCK.md](./BEDROCK.md)
 - [COOKIES.md](./COOKIES.md)
