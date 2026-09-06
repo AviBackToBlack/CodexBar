@@ -2173,3 +2173,103 @@ fn legacy_cache_json_defaults_bounded_scan_state() {
     assert!(cache.codex_pending_paths.is_empty());
     assert!(!cache.codex_scan_incomplete);
 }
+
+#[test]
+fn complete_empty_codex_fragment_persists_in_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "empty.jsonl", 100);
+    std::fs::write(&path, b"\n").unwrap();
+    let key = path.to_string_lossy().to_string();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 0);
+    let entry = cache.files.get(&key).expect("empty fragment is cached");
+    assert!(entry.days.is_empty());
+    assert_eq!(entry.parsed_bytes, Some(1));
+    assert_eq!(entry.codex_scan_target_size, Some(1));
+
+    let persisted = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    assert!(persisted.files.contains_key(&key));
+}
+
+#[test]
+fn complete_empty_codex_fragment_reparses_from_start_after_growth() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "empty.jsonl", 100);
+    std::fs::write(&path, b"\n").unwrap();
+    let key = path.to_string_lossy().to_string();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+    let first = first_cache.files.get(&key).expect("initial empty fragment");
+    assert_eq!(first.parsed_bytes, Some(1));
+    assert_eq!(first.codex_scan_target_size, Some(1));
+
+    write_codex_session_fixture(&sessions, "empty.jsonl", 100);
+    let (grown_summary, stats, grown_cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(grown_summary.input_tokens, 100);
+    assert_eq!(stats.files_resumed, 0);
+    assert!(!grown_cache.files[&key].days.is_empty());
+}
+
+#[test]
+fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "incomplete.jsonl", 100);
+    std::fs::write(&path, br#"{"timestamp":"2026-09-07T00:00:00Z""#).unwrap();
+    let key = path.to_string_lossy().to_string();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (_, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    let entry = cache
+        .files
+        .get(&key)
+        .expect("incomplete fragment is tracked");
+    assert!(entry.days.is_empty());
+    assert_ne!(entry.parsed_bytes, Some(entry.size));
+    assert!(cache.codex_scan_incomplete);
+    assert!(cache.codex_pending_paths.contains(&key));
+
+    let buffered_root = tempfile::tempdir().unwrap();
+    let buffered_sessions = buffered_root.path().join("sessions");
+    let buffered_cache_root = buffered_root.path().join("cache");
+    let buffered_path = write_codex_session_fixture(&buffered_sessions, "buffered.jsonl", 100);
+    std::fs::write(&buffered_path, b"\n").unwrap();
+    let buffered_key = buffered_path.to_string_lossy().to_string();
+    let mut options = CostScanOptions::app_driven();
+    options.codex_max_session_file_bytes = 0;
+    options.codex_max_scan_bytes_per_refresh = 0;
+    let buffered_scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&buffered_cache_root)
+        .with_sessions_dirs(vec![buffered_sessions]);
+    let (_, _, buffered_cache) = buffered_scanner.scan_codex_detailed_with_cache(None);
+
+    let buffered_entry = buffered_cache
+        .files
+        .get(&buffered_key)
+        .expect("buffered fragment is tracked");
+    assert!(buffered_entry.days.is_empty());
+    assert_ne!(buffered_entry.parsed_bytes, Some(buffered_entry.size));
+    assert!(buffered_cache.codex_scan_incomplete);
+    assert!(buffered_cache.codex_pending_paths.contains(&buffered_key));
+}

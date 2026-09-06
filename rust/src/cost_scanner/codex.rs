@@ -826,6 +826,13 @@ impl CostScanner {
             let parser_state_safe = entry.codex_token_timestamps_monotonic.is_some();
             if cache_covers_range
                 && (same_partial || growing)
+                && !(entry.days.is_empty()
+                    && entry.parsed_bytes == Some(entry.size)
+                    && entry.codex_scan_target_size == Some(entry.size)
+                    && entry.last_model.is_none()
+                    && entry.last_totals.is_none()
+                    && entry.codex_last_token_timestamp.is_none()
+                    && entry.codex_token_timestamps_monotonic != Some(false))
                 && start_offset > 0
                 && start_offset <= size
                 && parser_state_safe
