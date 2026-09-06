@@ -430,6 +430,24 @@ fn fetch_context_claude_uses_oauth_without_manual_cookie() {
 }
 
 #[test]
+fn fetch_context_claude_web_source_defers_cookie_resolution_to_provider() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Claude, "browser");
+    settings.set_usage_source(ProviderId::Claude, "web");
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Claude,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
 fn fetch_context_claude_explicit_cli_source_still_uses_cli() {
     let mut settings = Settings::default();
     settings.set_usage_source(ProviderId::Claude, "cli");
@@ -1062,6 +1080,94 @@ fn claude_repeated_auth_failure_surfaces_error() {
 }
 
 #[test]
+fn claude_cloudflare_challenge_retains_prior_usage_while_surfaceing_guidance() {
+    let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(42.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "OAuth".to_string(),
+    };
+    let good =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
+    let challenge = codexbar::providers::claude::CLOUDFLARE_CHALLENGE_MESSAGE;
+    let error = ProviderUsageSnapshot::from_error(
+        ProviderId::Claude,
+        &metadata,
+        challenge.to_string(),
+        codexbar::core::ProviderStateKind::Unknown,
+    );
+    let mut state = crate::state::AppState::new();
+    state.provider_cache.push(good);
+
+    let surfaced = super::providers::preserve_last_good_transient_failure(
+        &mut state,
+        ProviderId::Claude,
+        error,
+    );
+
+    assert_eq!(surfaced.error, None);
+    assert_eq!(surfaced.primary.used_percent, 42.0);
+    assert_eq!(
+        super::providers::preserve_last_good_transient_failure(
+            &mut state,
+            ProviderId::Claude,
+            ProviderUsageSnapshot::from_error(
+                ProviderId::Claude,
+                &metadata,
+                challenge.to_string(),
+                codexbar::core::ProviderStateKind::Unknown,
+            ),
+        )
+        .error
+        .as_deref(),
+        Some(challenge)
+    );
+}
+
+#[test]
+fn claude_cloudflare_challenge_keeps_prior_usage_when_guidance_surfaces() {
+    let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(42.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "Web".to_string(),
+    };
+    let mut good =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
+    good.updated_at = "2026-09-01T00:00:00Z".to_string();
+    let error = ProviderUsageSnapshot::from_error(
+        ProviderId::Claude,
+        &metadata,
+        codexbar::providers::claude::CLOUDFLARE_CHALLENGE_MESSAGE.to_string(),
+        codexbar::core::ProviderStateKind::Unknown,
+    );
+    let mut state = crate::state::AppState::new();
+    state.provider_cache.push(good.clone());
+
+    let first = super::providers::preserve_last_good_transient_failure(
+        &mut state,
+        ProviderId::Claude,
+        error.clone(),
+    );
+    let second = super::providers::preserve_last_good_transient_failure(
+        &mut state,
+        ProviderId::Claude,
+        error,
+    );
+
+    assert_eq!(first.error, None);
+    assert_eq!(first.primary.used_percent, 42.0);
+    assert_eq!(
+        second.error.as_deref(),
+        Some(codexbar::providers::claude::CLOUDFLARE_CHALLENGE_MESSAGE,)
+    );
+    assert_eq!(second.primary.used_percent, 42.0);
+    assert_eq!(second.updated_at, good.updated_at);
+}
+
+#[test]
 fn claude_cli_parse_failure_keeps_last_good_every_time() {
     let metadata = instantiate_provider(ProviderId::Claude).metadata().clone();
     let result = ProviderFetchResult {
@@ -1150,6 +1256,16 @@ fn claude_error_message_explains_missing_sign_in() {
         message,
         "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Win-CodexBar."
     );
+}
+
+#[test]
+fn claude_cloudflare_error_preserves_distinct_recovery_guidance() {
+    let challenge = codexbar::providers::claude::CLOUDFLARE_CHALLENGE_MESSAGE;
+    let message = super::friendly_provider_error(ProviderId::Claude, challenge);
+
+    assert_eq!(message, challenge);
+    assert!(message.contains("OAuth"));
+    assert!(message.contains("different network"));
 }
 
 #[test]

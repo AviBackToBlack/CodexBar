@@ -79,6 +79,13 @@ fn is_oauth_revoked_error(error: &ProviderError) -> bool {
 pub use oauth::ClaudeOAuthFetcher;
 pub use web_api::ClaudeWebApiFetcher;
 
+/// Recovery guidance for a Claude web request blocked by a Cloudflare challenge.
+pub const CLOUDFLARE_CHALLENGE_MESSAGE: &str = concat!(
+    "claude.ai is behind a Cloudflare challenge, often caused by VPN or datacenter networks. ",
+    "Re-authenticating will not help. Switch Claude Usage source to OAuth in Settings ",
+    "(Usage credits balance will be unavailable), or try a different network."
+);
+
 /// Whether the user explicitly consented to reading (and refreshing) Claude
 /// Code's own credentials. Upstream #2634/#2745: without consent the
 /// file/keyring sources stay closed and refreshed tokens are never rotated

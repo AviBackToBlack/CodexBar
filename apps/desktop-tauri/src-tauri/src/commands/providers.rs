@@ -26,6 +26,11 @@ pub(crate) fn build_fetch_context(
     let active_token_cookie = token_override
         .as_ref()
         .and_then(|override_data| override_data.cookie_header.clone());
+    // Claude's web fetcher owns cached-cookie validation and browser recovery.
+    // Keep token/manual overrides on the direct path, but defer an automatic
+    // browser lookup so a Cloudflare challenge cannot replace a valid cache.
+    let defer_claude_browser_cookie_lookup =
+        id == ProviderId::Claude && active_token_cookie.is_none() && stored_cookie.is_none();
     let active_token_env = token_override
         .as_ref()
         .and_then(|override_data| override_data.env_override.as_ref());
@@ -78,14 +83,18 @@ pub(crate) fn build_fetch_context(
             }
             // `browser` is accepted as a legacy alias from older settings.
             "auto" | "browser" | "web" => {
-                // Try browser cookie extraction as fallback when no manual cookie is set.
-                // On non-Windows this is a harmless no-op that returns an error.
+                // Claude resolves its cached cookie and browser fallback inside
+                // the provider; other providers retain the shell fallback.
                 let cookie_header = active_token_cookie.or(stored_cookie).or_else(|| {
-                    provider_cookie_domain(id, settings).and_then(|domain| {
-                        codexbar::browser::cookies::get_cookie_header(domain)
-                            .ok()
-                            .filter(|h| !h.is_empty())
-                    })
+                    if defer_claude_browser_cookie_lookup {
+                        None
+                    } else {
+                        provider_cookie_domain(id, settings).and_then(|domain| {
+                            codexbar::browser::cookies::get_cookie_header(domain)
+                                .ok()
+                                .filter(|h| !h.is_empty())
+                        })
+                    }
                 });
                 (usage_source, cookie_header)
             }
@@ -516,13 +525,15 @@ pub(super) fn preserve_last_good_transient_failure(
     }
 
     let error = snapshot.error.as_deref();
+    let cloudflare_challenge = is_claude_cloudflare_challenge(error);
     // Hard auth loss / subscription-unavailable answers should not keep stale bars.
     if is_hard_claude_auth_loss(error) {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
     }
 
-    let preservable = is_transient_claude_auth_error(error)
+    let preservable = cloudflare_challenge
+        || is_transient_claude_auth_error(error)
         || is_claude_cli_usage_parse_failure(error)
         || is_claude_cli_rate_limit_failure(error)
         || is_claude_timeout_failure(error);
@@ -562,8 +573,27 @@ pub(super) fn preserve_last_good_transient_failure(
         previous
     } else {
         *count = count.saturating_add(1);
-        snapshot
+        if cloudflare_challenge {
+            // A Cloudflare interstitial is not evidence that the prior web
+            // session or quota data is invalid. Surface the guidance while
+            // retaining the last known usage and its observation timestamp.
+            let mut surfaced = previous;
+            surfaced.error = snapshot.error;
+            surfaced.error_state = snapshot.error_state;
+            surfaced.fetch_duration_ms = snapshot.fetch_duration_ms;
+            surfaced
+        } else {
+            snapshot
+        }
     }
+}
+
+fn is_claude_cloudflare_challenge(error: Option<&str>) -> bool {
+    error.is_some_and(|error| {
+        error.to_ascii_lowercase().contains(
+            &codexbar::providers::claude::CLOUDFLARE_CHALLENGE_MESSAGE.to_ascii_lowercase(),
+        )
+    })
 }
 
 fn is_transient_claude_auth_error(error: Option<&str>) -> bool {
