@@ -71,6 +71,12 @@ const CODEX_JSONL_MAX_LINE_BYTES: usize = 256 * 1024;
 
 /// Default scanner-side refresh debounce (upstream CostUsageScanner).
 pub const DEFAULT_COST_SCAN_REFRESH_MIN_INTERVAL_SECS: u64 = 60;
+/// Default number of dirty Codex rollouts inspected in one refresh.
+pub const DEFAULT_CODEX_CANDIDATE_LIMIT: usize = 512;
+/// Default maximum newly-read bytes from one Codex rollout in one refresh.
+pub const DEFAULT_CODEX_MAX_SESSION_FILE_BYTES: i64 = 256 * 1024 * 1024;
+/// Default maximum newly-read Codex bytes across one refresh.
+pub const DEFAULT_CODEX_MAX_SCAN_BYTES_PER_REFRESH: i64 = 512 * 1024 * 1024;
 
 /// Options for a cost scan pass (disk-cache-backed full inspections).
 ///
@@ -87,6 +93,14 @@ pub struct CostScanOptions {
     /// pi/OMP-compatible agent session mirrors from Codex/Claude cost history.
     /// Defaults to true (include mirrors) for backward compatibility.
     pub include_pi_sessions: bool,
+    /// Maximum bytes newly read from one Codex rollout during a refresh.
+    pub codex_max_session_file_bytes: i64,
+    /// Maximum Codex JSONL bytes newly read across one refresh.
+    pub codex_max_scan_bytes_per_refresh: i64,
+    /// Maximum dirty/new Codex rollout candidates processed per refresh.
+    pub codex_candidate_limit: usize,
+    /// Prefer recent Codex rollouts while historical catch-up is pending.
+    pub prefer_newest_codex_sessions_first: bool,
 }
 
 impl Default for CostScanOptions {
@@ -94,6 +108,10 @@ impl Default for CostScanOptions {
         Self {
             refresh_min_interval_secs: DEFAULT_COST_SCAN_REFRESH_MIN_INTERVAL_SECS,
             include_pi_sessions: true,
+            codex_max_session_file_bytes: DEFAULT_CODEX_MAX_SESSION_FILE_BYTES,
+            codex_max_scan_bytes_per_refresh: DEFAULT_CODEX_MAX_SCAN_BYTES_PER_REFRESH,
+            codex_candidate_limit: DEFAULT_CODEX_CANDIDATE_LIMIT,
+            prefer_newest_codex_sessions_first: true,
         }
     }
 }
@@ -103,7 +121,7 @@ impl CostScanOptions {
     pub fn app_driven() -> Self {
         Self {
             refresh_min_interval_secs: 0,
-            include_pi_sessions: true,
+            ..Self::default()
         }
     }
 
@@ -158,6 +176,12 @@ pub struct CostUsageCache {
     /// publication completeness is carried separately on `CostSummary`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_report: Option<CachedCostReport>,
+    /// Dirty/incomplete Codex rollouts deferred by the foreground work budget.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_pending_paths: Vec<String>,
+    /// True while bounded Codex catch-up has not completed for this window.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub codex_scan_incomplete: bool,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
@@ -240,6 +264,10 @@ pub struct CodexParseResult {
     pub last_token_timestamp: Option<String>,
     /// Number of timestamp comparisons performed while validating this parse.
     pub token_timestamp_comparisons: u64,
+    /// Newly consumed bytes in this parse pass.
+    pub bytes_read: i64,
+    /// Whether this pass reached the file's current EOF without cancellation/budget deferral.
+    pub is_complete: bool,
 }
 
 /// A billable Codex token-count delta.
@@ -1269,6 +1297,36 @@ impl JsonlScanner {
         token_timestamps_monotonic: Option<bool>,
         cancel: Option<&AtomicBool>,
     ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded(
+            file_path,
+            range,
+            start_offset,
+            initial_model,
+            initial_totals,
+            previous_token_timestamp,
+            token_timestamps_monotonic,
+            cancel,
+            None,
+        )
+    }
+
+    /// Parse a Codex file with an optional cap on bytes newly consumed this pass.
+    /// The reader may finish the current bounded JSONL line before yielding.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "resume state mirrors the persisted parser cache"
+    )]
+    pub fn parse_codex_file_with_state_bounded(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        start_offset: i64,
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+        cancel: Option<&AtomicBool>,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
         let file = File::open(file_path)?;
         // Session JSONL files are bounded by the cache budget; sizes fit i64.
         #[allow(
@@ -1290,10 +1348,25 @@ impl JsonlScanner {
         );
         let mut parsed_bytes = start_offset;
         let mut cancelled = false;
+        let mut budget_exhausted = false;
 
-        while let Some((line_bytes, consumed)) =
-            read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
-        {
+        loop {
+            if max_bytes_to_read.is_some_and(|limit| {
+                parsed_bytes.saturating_sub(start_offset) >= limit.max(0)
+                    && parsed_bytes < file_size
+            }) {
+                budget_exhausted = true;
+                break;
+            }
+            if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                cancelled = true;
+                break;
+            }
+            let Some((line_bytes, consumed)) =
+                read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
+            else {
+                break;
+            };
             if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 cancelled = true;
                 break;
@@ -1315,18 +1388,22 @@ impl JsonlScanner {
             parser.process_line(line, range);
         }
 
+        let bytes_read = parsed_bytes.saturating_sub(start_offset).max(0);
+        let is_complete = !cancelled && !budget_exhausted && parsed_bytes >= file_size;
         Ok(CodexParseResult {
             records: parser.records,
-            parsed_bytes: if cancelled {
-                parsed_bytes
-            } else {
+            parsed_bytes: if is_complete {
                 file_size.max(parsed_bytes)
+            } else {
+                parsed_bytes
             },
             last_model: parser.current_model,
             last_totals: parser.previous_totals,
             token_timestamps_monotonic: parser.token_timestamps_monotonic,
             last_token_timestamp: parser.previous_token_timestamp,
             token_timestamp_comparisons: parser.token_timestamp_comparisons,
+            bytes_read,
+            is_complete,
         })
     }
 
@@ -1442,7 +1519,7 @@ impl JsonlScanner {
             previous_report: projection.previous_report,
         }
     }
-    fn cached_cost_report_from_days(cache: &CostUsageCache) -> CachedCostReport {
+    pub(crate) fn cached_cost_report_from_days(cache: &CostUsageCache) -> CachedCostReport {
         let mut total_cost_usd = 0.0;
         let mut input_tokens = 0_i32;
         let mut cached_tokens = 0_i32;
