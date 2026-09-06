@@ -585,14 +585,6 @@ fn delayed_candidate_decision(
         );
         return DelayedDecision::Discard;
     }
-    if !plans_match(state.plan.as_deref(), current, current) {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::PlanMismatch,
-        );
-        return DelayedDecision::Discard;
-    }
     let Some(previous_weekly) = state.published_weekly.as_ref() else {
         log_reset_diagnostic(
             "delayedCandidate",
@@ -602,6 +594,9 @@ fn delayed_candidate_decision(
         return DelayedDecision::Discard;
     };
     let Some(current_weekly) = weekly(current) else {
+        // Credits-only refreshes do not carry the weekly window (or necessarily
+        // the plan/inventory fields). Preserve the candidate and let the next
+        // complete usage observation validate it.
         log_reset_diagnostic(
             "delayedCandidate",
             "retain",
@@ -609,6 +604,14 @@ fn delayed_candidate_decision(
         );
         return DelayedDecision::Retain;
     };
+    if !plans_match(state.plan.as_deref(), current, current) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::PlanMismatch,
+        );
+        return DelayedDecision::Discard;
+    }
     if previous_weekly.used_percent <= RESET_THRESHOLD
         || current_weekly.used_percent > RESET_THRESHOLD
     {
@@ -975,23 +978,97 @@ mod tests {
         });
         let mut credits_only = UsageSnapshot::new(RateWindow::new(20.0));
         credits_only.updated_at = now() + chrono::Duration::minutes(1);
-        credits_only.login_method = Some("ChatGPT Pro".to_string());
-        let candidate = state.candidate.clone().unwrap();
+        // A credits-only refresh has no weekly window and may omit both plan and
+        // reset-credit inventory. It must not consume the pending evidence.
+        let candidate_before = serde_json::to_value(&state.candidate).unwrap();
         assert_eq!(
-            delayed_candidate_decision(
-                &state,
-                &candidate,
+            initial_decision(
+                &mut state,
                 &credits_only,
-                Some(&inventory("credit-a")),
+                None,
                 true,
                 now() + chrono::Duration::minutes(1),
             ),
-            DelayedDecision::Retain
+            InitialDecision::Preserve
+        );
+        assert_eq!(
+            serde_json::to_value(&state.candidate).unwrap(),
+            candidate_before
         );
         assert_ne!(
             scope_key(Some("account-a"), Path::new("C:/a/auth.json")),
             scope_key(Some("account-b"), Path::new("C:/b/auth.json"))
         );
+    }
+
+    #[test]
+    fn credits_only_refresh_candidate_survives_state_reload_until_full_usage() {
+        let mut state = baseline();
+        state.candidate = Some(DelayedCandidate {
+            evidence_version: EVIDENCE_VERSION,
+            first_observed_at: now(),
+            created_at: now(),
+            snapshot_updated_at: now(),
+            weekly: snapshot(0.0, 9, 1).secondary.unwrap(),
+            plan: Some("ChatGPT Pro".to_string()),
+            inventory: inventory("credit-a"),
+        });
+        let candidate_before = serde_json::to_value(&state.candidate).unwrap();
+        let mut credits_only = UsageSnapshot::new(RateWindow::new(20.0));
+        credits_only.updated_at = now() + chrono::Duration::minutes(1);
+
+        assert_eq!(
+            initial_decision(
+                &mut state,
+                &credits_only,
+                None,
+                true,
+                now() + chrono::Duration::minutes(1),
+            ),
+            InitialDecision::Preserve
+        );
+
+        // Model the StateFile envelope used by save/load without touching the
+        // user's real LocalAppData during a unit test.
+        let encoded = serde_json::to_vec(&StateFile {
+            version: STATE_VERSION,
+            accounts: HashMap::from([(String::from("scope"), state)]),
+        })
+        .unwrap();
+        let mut reloaded_file: StateFile = serde_json::from_slice(&encoded).unwrap();
+        let mut reloaded = reloaded_file.accounts.remove("scope").unwrap();
+        assert_eq!(
+            serde_json::to_value(&reloaded.candidate).unwrap(),
+            candidate_before
+        );
+
+        let mut incompatible = reloaded.clone();
+        let mut incompatible_usage = snapshot(0.0, 9, 3);
+        incompatible_usage.login_method = Some("ChatGPT Plus".to_string());
+        assert_eq!(
+            initial_decision(
+                &mut incompatible,
+                &incompatible_usage,
+                Some(&inventory("credit-a")),
+                true,
+                now() + chrono::Duration::seconds(60),
+            ),
+            InitialDecision::RequiresConfirmation
+        );
+        assert!(incompatible.candidate.is_none());
+
+        let full_usage = snapshot(0.0, 9, 3);
+        assert_eq!(
+            initial_decision(
+                &mut reloaded,
+                &full_usage,
+                Some(&inventory("credit-a")),
+                true,
+                now() + chrono::Duration::seconds(60),
+            ),
+            InitialDecision::Publish
+        );
+        assert!(reloaded.candidate.is_none());
     }
 
     #[test]
