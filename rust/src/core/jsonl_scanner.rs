@@ -163,7 +163,7 @@ pub struct CostUsageCache {
     pub last_scan_unix_ms: i64,
     /// Per-file usage data
     pub files: HashMap<String, CostUsageFileUsage>,
-    /// Aggregated daily data: day_key -> model -> [input, cached, output]
+    /// Aggregated daily data: day_key -> model -> [input, cached, output, reasoning?]
     pub days: HashMap<String, HashMap<String, Vec<i32>>>,
     /// Inclusive range covered by the last successful full inspection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,6 +243,8 @@ pub struct CodexTotals {
     pub input: i32,
     pub cached: i32,
     pub output: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<i32>,
 }
 
 /// Snapshot of the last validated cost report, persisted so spend surfaces keep
@@ -259,6 +261,9 @@ pub struct CachedCostReport {
     pub cached_tokens: i32,
     /// Total output tokens.
     pub output_tokens: i32,
+    /// Total reasoning output tokens when every contributing packed row knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<i32>,
     /// Number of sessions contributing.
     pub sessions_count: i32,
     /// ISO 8601 timestamp when this report was generated.
@@ -302,6 +307,7 @@ pub struct CodexUsageRecord {
     pub input: i32,
     pub cached: i32,
     pub output: i32,
+    pub reasoning: Option<i32>,
 }
 
 /// Day range for scanning
@@ -390,6 +396,8 @@ struct CodexFastPayload<'a> {
     cache_read_input_tokens: Option<i32>,
     #[serde(default)]
     output_tokens: Option<i32>,
+    #[serde(default)]
+    reasoning_output_tokens: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -414,6 +422,8 @@ struct CodexFastTotals {
     cache_read_input_tokens: Option<i32>,
     #[serde(default)]
     output_tokens: i32,
+    #[serde(default)]
+    reasoning_output_tokens: Option<i32>,
 }
 
 enum CodexFastEvent<'a> {
@@ -525,7 +535,14 @@ impl CodexParserState {
                     .or(model.as_deref().and_then(model_evidence))
                     .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
                     .to_string();
-                self.record_usage(day_key, &model, totals.input, totals.cached, totals.output);
+                self.record_usage(
+                    day_key,
+                    &model,
+                    totals.input,
+                    totals.cached,
+                    totals.output,
+                    totals.reasoning,
+                );
             }
             return;
         }
@@ -625,7 +642,8 @@ impl CodexParserState {
         let Some(payload) = token_count_payload(obj) else {
             return;
         };
-        let Some((delta_input, delta_cached, delta_output)) = self.token_deltas(payload) else {
+        let Some((delta_input, delta_cached, delta_output, reasoning)) = self.token_deltas(payload)
+        else {
             return;
         };
         if delta_input == 0 && delta_cached == 0 && delta_output == 0 {
@@ -634,11 +652,19 @@ impl CodexParserState {
 
         let info = payload.get("info");
         let model = self.resolve_token_model(info, payload, obj);
-        self.record_usage(day_key, &model, delta_input, delta_cached, delta_output);
+        self.record_usage(
+            day_key,
+            &model,
+            delta_input,
+            delta_cached,
+            delta_output,
+            reasoning,
+        );
     }
 
     fn record_fast_token_count(&mut self, payload: CodexFastPayload<'_>, day_key: String) {
-        let Some((delta_input, delta_cached, delta_output)) = self.fast_token_deltas(&payload)
+        let Some((delta_input, delta_cached, delta_output, reasoning)) =
+            self.fast_token_deltas(&payload)
         else {
             return;
         };
@@ -661,16 +687,32 @@ impl CodexParserState {
             .or(event_model)
             .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
             .to_string();
-        self.record_usage(day_key, &model, delta_input, delta_cached, delta_output);
+        self.record_usage(
+            day_key,
+            &model,
+            delta_input,
+            delta_cached,
+            delta_output,
+            reasoning,
+        );
     }
 
-    fn record_usage(&mut self, day_key: String, model: &str, input: i32, cached: i32, output: i32) {
+    fn record_usage(
+        &mut self,
+        day_key: String,
+        model: &str,
+        input: i32,
+        cached: i32,
+        output: i32,
+        reasoning: Option<i32>,
+    ) {
         self.records.push(CodexUsageRecord {
             day_key,
             model: CostUsagePricing::normalize_codex_model(model),
             input,
             cached: cached.min(input),
             output,
+            reasoning: clamp_reasoning(reasoning, output),
         });
     }
 
@@ -689,7 +731,7 @@ impl CodexParserState {
             .to_string()
     }
 
-    fn token_deltas(&mut self, payload: &Value) -> Option<(i32, i32, i32)> {
+    fn token_deltas(&mut self, payload: &Value) -> Option<(i32, i32, i32, Option<i32>)> {
         let info = payload.get("info");
         if let Some(total) = info.and_then(|i| i.get("total_token_usage")) {
             return Some(self.total_usage_delta(total));
@@ -704,10 +746,14 @@ impl CodexParserState {
             direct.input.max(0),
             direct.cached.max(0),
             direct.output.max(0),
+            direct.reasoning,
         ))
     }
 
-    fn fast_token_deltas(&mut self, payload: &CodexFastPayload<'_>) -> Option<(i32, i32, i32)> {
+    fn fast_token_deltas(
+        &mut self,
+        payload: &CodexFastPayload<'_>,
+    ) -> Option<(i32, i32, i32, Option<i32>)> {
         if let Some(total) = payload
             .info
             .as_ref()
@@ -725,20 +771,21 @@ impl CodexParserState {
             direct.input.max(0),
             direct.cached.max(0),
             direct.output.max(0),
+            direct.reasoning,
         ))
     }
 
-    fn total_usage_delta(&mut self, total: &Value) -> (i32, i32, i32) {
+    fn total_usage_delta(&mut self, total: &Value) -> (i32, i32, i32, Option<i32>) {
         let totals = read_token_totals(total);
         self.apply_totals_delta(totals)
     }
 
-    fn fast_total_usage_delta(&mut self, total: CodexFastTotals) -> (i32, i32, i32) {
+    fn fast_total_usage_delta(&mut self, total: CodexFastTotals) -> (i32, i32, i32, Option<i32>) {
         let totals = codex_totals_from_fast(total);
         self.apply_totals_delta(totals)
     }
 
-    fn apply_totals_delta(&mut self, totals: CodexTotals) -> (i32, i32, i32) {
+    fn apply_totals_delta(&mut self, totals: CodexTotals) -> (i32, i32, i32, Option<i32>) {
         self.latch_if_below_watermark(&totals);
 
         let delta = if self.saw_interleaved_totals {
@@ -749,16 +796,20 @@ impl CodexParserState {
             )
         } else {
             let previous = self.previous_totals.as_ref();
+            let input = (totals.input - previous.map_or(0, |t| t.input)).max(0);
+            let cached = (totals.cached - previous.map_or(0, |t| t.cached)).max(0);
+            let output = (totals.output - previous.map_or(0, |t| t.output)).max(0);
             CodexTotals {
-                input: (totals.input - previous.map_or(0, |t| t.input)).max(0),
-                cached: (totals.cached - previous.map_or(0, |t| t.cached)).max(0),
-                output: (totals.output - previous.map_or(0, |t| t.output)).max(0),
+                input,
+                cached,
+                output,
+                reasoning: cumulative_reasoning_delta(previous, totals.reasoning, output),
             }
         };
 
         self.previous_totals = Some(totals.clone());
         self.raise_watermark(&totals);
-        (delta.input, delta.cached, delta.output)
+        (delta.input, delta.cached, delta.output, delta.reasoning)
     }
 
     fn observe_token_timestamp(
@@ -816,6 +867,12 @@ impl CodexParserState {
                 input: water.input.max(totals.input),
                 cached: water.cached.max(totals.cached),
                 output: water.output.max(totals.output),
+                reasoning: match (water.reasoning, totals.reasoning) {
+                    (Some(water), Some(current)) => Some(water.max(current)),
+                    (Some(water), None) => Some(water),
+                    (None, Some(current)) => Some(current),
+                    (None, None) => None,
+                },
             },
             None => totals.clone(),
         });
@@ -838,11 +895,13 @@ fn contained_total_delta(
         input: 0,
         cached: 0,
         output: 0,
+        reasoning: None,
     });
     let counted = counted.cloned().unwrap_or(CodexTotals {
         input: 0,
         cached: 0,
         output: 0,
+        reasoning: None,
     });
 
     let component = |water: i32, counted: i32, current: i32| -> i32 {
@@ -860,7 +919,30 @@ fn contained_total_delta(
         input: component(water.input, counted.input, current.input),
         cached: component(water.cached, counted.cached, current.cached),
         output: component(water.output, counted.output, current.output),
+        reasoning: cumulative_reasoning_delta(
+            Some(&counted),
+            current.reasoning,
+            component(water.output, counted.output, current.output),
+        ),
     }
+}
+
+fn cumulative_reasoning_delta(
+    previous: Option<&CodexTotals>,
+    current: Option<i32>,
+    output_delta: i32,
+) -> Option<i32> {
+    let current = current?;
+    let previous = match previous {
+        Some(previous) => previous.reasoning?,
+        None => 0,
+    };
+    Some(
+        current
+            .saturating_sub(previous)
+            .max(0)
+            .min(output_delta.max(0)),
+    )
 }
 
 /// Read one JSONL line, discarding content when it exceeds `max_bytes`.
@@ -1150,6 +1232,7 @@ fn bare_usage_totals(obj: &Value) -> Option<(CodexTotals, Option<String>)> {
     .max()
     .unwrap_or(0)
     .max(0) as i32;
+    let reasoning = clamp_reasoning(optional_token_i32(usage, "reasoning_output_tokens"), output);
     if input == 0 && output == 0 && cached == 0 {
         return None;
     }
@@ -1167,6 +1250,7 @@ fn bare_usage_totals(obj: &Value) -> Option<(CodexTotals, Option<String>)> {
             input,
             cached,
             output,
+            reasoning,
         },
         model,
     ))
@@ -1204,6 +1288,10 @@ fn read_token_totals(value: &Value) -> CodexTotals {
         input: token_i32(value, "input_tokens"),
         cached,
         output: token_i32(value, "output_tokens"),
+        reasoning: clamp_reasoning(
+            optional_token_i32(value, "reasoning_output_tokens"),
+            token_i32(value, "output_tokens"),
+        ),
     }
 }
 
@@ -1215,6 +1303,7 @@ fn codex_totals_from_fast(value: CodexFastTotals) -> CodexTotals {
             .unwrap_or(0)
             .max(value.cache_read_input_tokens.unwrap_or(0)),
         output: value.output_tokens,
+        reasoning: clamp_reasoning(value.reasoning_output_tokens, value.output_tokens),
     }
 }
 
@@ -1226,6 +1315,10 @@ fn fast_totals_from_payload(value: &CodexFastPayload<'_>) -> CodexTotals {
             .unwrap_or(0)
             .max(value.cache_read_input_tokens.unwrap_or(0)),
         output: value.output_tokens.unwrap_or(0),
+        reasoning: clamp_reasoning(
+            value.reasoning_output_tokens,
+            value.output_tokens.unwrap_or(0),
+        ),
     }
 }
 
@@ -1239,21 +1332,39 @@ fn token_i32(value: &Value, key: &str) -> i32 {
     tokens
 }
 
-fn last_usage_delta(last: &Value) -> (i32, i32, i32) {
+fn optional_token_i32(value: &Value, key: &str) -> Option<i32> {
+    // Token counts from usage records fit i32, the canonical storage type.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "token counts from usage records fit i32"
+    )]
+    value
+        .get(key)
+        .and_then(Value::as_i64)
+        .map(|tokens| tokens as i32)
+}
+
+fn clamp_reasoning(reasoning: Option<i32>, output: i32) -> Option<i32> {
+    reasoning.map(|tokens| tokens.max(0).min(output.max(0)))
+}
+
+fn last_usage_delta(last: &Value) -> (i32, i32, i32, Option<i32>) {
     let totals = read_token_totals(last);
     (
         totals.input.max(0),
         totals.cached.max(0),
         totals.output.max(0),
+        totals.reasoning,
     )
 }
 
-fn fast_last_usage_delta(last: CodexFastTotals) -> (i32, i32, i32) {
+fn fast_last_usage_delta(last: CodexFastTotals) -> (i32, i32, i32, Option<i32>) {
     let totals = codex_totals_from_fast(last);
     (
         totals.input.max(0),
         totals.cached.max(0),
         totals.output.max(0),
+        totals.reasoning,
     )
 }
 
@@ -1721,6 +1832,8 @@ impl JsonlScanner {
         let mut input_tokens = 0_i32;
         let mut cached_tokens = 0_i32;
         let mut output_tokens = 0_i32;
+        let mut reasoning_tokens = 0_i32;
+        let mut reasoning_known = true;
         let mut partial = false;
 
         for (day_key, models) in &cache.days {
@@ -1732,6 +1845,14 @@ impl JsonlScanner {
                 input_tokens = input_tokens.saturating_add(input);
                 cached_tokens = cached_tokens.saturating_add(cached);
                 output_tokens = output_tokens.saturating_add(output);
+                if input > 0 || cached > 0 || output > 0 {
+                    if let Some(reasoning) = values.get(3).copied() {
+                        reasoning_tokens =
+                            reasoning_tokens.saturating_add(reasoning.max(0).min(output));
+                    } else {
+                        reasoning_known = false;
+                    }
+                }
 
                 if CostUsagePricing::is_codex_unattributed_model(model) {
                     partial = true;
@@ -1779,9 +1900,32 @@ impl JsonlScanner {
             input_tokens,
             cached_tokens,
             output_tokens,
+            reasoning_tokens: reasoning_known.then_some(reasoning_tokens),
             sessions_count,
             updated_at: Some(Utc::now().to_rfc3339()),
             partial,
+        }
+    }
+
+    /// Merge one Codex record into a packed day/model row. A three-slot row is
+    /// deliberately treated as reasoning-unknown, including when a known row
+    /// is merged into an existing legacy row.
+    pub(crate) fn merge_codex_record_into_packed(packed: &mut Vec<i32>, record: &CodexUsageRecord) {
+        let was_empty = packed.is_empty();
+        if packed.len() < 3 {
+            packed.resize(3, 0);
+        }
+        packed[0] = packed[0].saturating_add(record.input.max(0));
+        packed[1] = packed[1].saturating_add(record.cached.max(0));
+        packed[2] = packed[2].saturating_add(record.output.max(0));
+
+        match record.reasoning {
+            Some(reasoning) if was_empty => packed.push(reasoning.max(0).min(record.output.max(0))),
+            Some(reasoning) if packed.len() >= 4 => {
+                packed[3] = packed[3].saturating_add(reasoning.max(0).min(record.output.max(0)));
+            }
+            Some(_) => {}
+            None => packed.truncate(3),
         }
     }
 
@@ -1979,6 +2123,157 @@ mod tests {
         assert_eq!(range.until_key, "2026-01-20");
         assert_eq!(range.scan_since_key, "2026-01-14");
         assert_eq!(range.scan_until_key, "2026-01-21");
+    }
+
+    #[test]
+    fn reasoning_output_is_clamped_and_preserved_for_value_and_fast_shapes() {
+        let value = serde_json::json!({
+            "output_tokens": 20,
+            "reasoning_output_tokens": 7,
+        });
+        let totals = read_token_totals(&value);
+        assert_eq!(totals.output, 20);
+        assert_eq!(totals.reasoning, Some(7));
+        assert_eq!(last_usage_delta(&value), (0, 0, 20, Some(7)));
+
+        let fast: CodexFastTotals = serde_json::from_value(serde_json::json!({
+            "output_tokens": 20,
+            "reasoning_output_tokens": 99,
+        }))
+        .unwrap();
+        let fast_totals = codex_totals_from_fast(fast);
+        assert_eq!(fast_totals.output, 20);
+        assert_eq!(fast_totals.reasoning, Some(20));
+    }
+
+    #[test]
+    fn missing_reasoning_stays_unknown_for_cumulative_and_event_usage() {
+        let value = serde_json::json!({ "output_tokens": 20 });
+        assert_eq!(read_token_totals(&value).reasoning, None);
+        assert_eq!(last_usage_delta(&value), (0, 0, 20, None));
+
+        let mut state = CodexParserState::new(None, None);
+        assert_eq!(
+            state.total_usage_delta(&serde_json::json!({
+                "output_tokens": 10,
+            })),
+            (0, 0, 10, None)
+        );
+    }
+
+    #[test]
+    fn cumulative_reasoning_uses_the_comparable_previous_total() {
+        let mut state = CodexParserState::new(None, None);
+        assert_eq!(
+            state.total_usage_delta(&serde_json::json!({
+                "output_tokens": 10,
+                "reasoning_output_tokens": 4,
+            })),
+            (0, 0, 10, Some(4))
+        );
+        assert_eq!(
+            state.total_usage_delta(&serde_json::json!({
+                "output_tokens": 20,
+                "reasoning_output_tokens": 9,
+            })),
+            (0, 0, 10, Some(5))
+        );
+    }
+
+    #[test]
+    fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
+        let baseline = CodexTotals {
+            input: 10,
+            cached: 2,
+            output: 10,
+            reasoning: Some(4),
+        };
+        let mut state = CodexParserState::with_timestamp_state_and_fork_mode(
+            None,
+            Some(baseline),
+            None,
+            None,
+            true,
+        );
+        assert_eq!(
+            state.apply_totals_delta(CodexTotals {
+                input: 20,
+                cached: 5,
+                output: 20,
+                reasoning: Some(9),
+            }),
+            (10, 3, 10, Some(5))
+        );
+
+        let baseline_without_reasoning = CodexTotals {
+            input: 10,
+            cached: 2,
+            output: 10,
+            reasoning: None,
+        };
+        let mut state = CodexParserState::with_timestamp_state_and_fork_mode(
+            None,
+            Some(baseline_without_reasoning),
+            None,
+            None,
+            true,
+        );
+        assert_eq!(
+            state.apply_totals_delta(CodexTotals {
+                input: 20,
+                cached: 5,
+                output: 20,
+                reasoning: Some(9),
+            }),
+            (10, 3, 10, None)
+        );
+        assert!(!state.fork_baseline_ambiguous);
+    }
+
+    #[test]
+    fn legacy_packed_rows_remain_three_slots_and_report_reasoning_is_unknown() {
+        let record = CodexUsageRecord {
+            day_key: "2026-05-31".to_string(),
+            model: "gpt-5.6-sol".to_string(),
+            input: 5,
+            cached: 1,
+            output: 3,
+            reasoning: Some(2),
+        };
+        let mut packed = vec![10, 2, 4];
+        JsonlScanner::merge_codex_record_into_packed(&mut packed, &record);
+        assert_eq!(packed, vec![15, 3, 7]);
+
+        let mut cache = CostUsageCache::default();
+        cache.days.insert(
+            "2026-05-31".to_string(),
+            HashMap::from([("gpt-5.6-sol".to_string(), packed)]),
+        );
+        let report = JsonlScanner::cached_cost_report_from_days(&cache);
+        assert_eq!(report.reasoning_tokens, None);
+    }
+
+    #[test]
+    fn known_packed_rows_report_reasoning_only_when_all_token_rows_are_known() {
+        let mut cache = CostUsageCache::default();
+        cache.days.insert(
+            "2026-05-31".to_string(),
+            HashMap::from([("gpt-5.6-sol".to_string(), vec![10, 2, 4, 3])]),
+        );
+        assert_eq!(
+            JsonlScanner::cached_cost_report_from_days(&cache).reasoning_tokens,
+            Some(3)
+        );
+
+        cache
+            .days
+            .get_mut("2026-05-31")
+            .unwrap()
+            .insert("gpt-5.6-fast".to_string(), vec![1, 0, 1]);
+        assert_eq!(
+            JsonlScanner::cached_cost_report_from_days(&cache).reasoning_tokens,
+            None
+        );
     }
 
     #[test]
@@ -2647,6 +2942,12 @@ mod tests {
         assert_eq!(usage.codex_forked_from_id, None);
         assert_eq!(usage.codex_fork_timestamp, None);
         assert!(!usage.codex_unresolved_fork_parent);
+
+        let report: CachedCostReport = serde_json::from_str(
+            r#"{"total_cost_usd":1.5,"input_tokens":10,"cached_tokens":2,"output_tokens":3,"sessions_count":1,"updated_at":null,"partial":false}"#,
+        )
+        .unwrap();
+        assert_eq!(report.reasoning_tokens, None);
     }
 
     #[test]

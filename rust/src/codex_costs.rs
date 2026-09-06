@@ -63,15 +63,8 @@ pub(crate) fn merge_codex_records_into_days(
             continue;
         }
         let models = days.entry(record.day_key.clone()).or_default();
-        let packed = models
-            .entry(record.model.clone())
-            .or_insert_with(|| vec![0, 0, 0]);
-        if packed.len() < 3 {
-            packed.resize(3, 0);
-        }
-        packed[0] = packed[0].saturating_add(record.input.max(0));
-        packed[1] = packed[1].saturating_add(record.cached.max(0));
-        packed[2] = packed[2].saturating_add(record.output.max(0));
+        let packed = models.entry(record.model.clone()).or_default();
+        JsonlScanner::merge_codex_record_into_packed(packed, record);
     }
 }
 
@@ -478,6 +471,7 @@ mod tests {
                 input: 200_000,
                 cached: 0,
                 output: 0,
+                reasoning: None,
             },
             CodexUsageRecord {
                 day_key: "2026-05-31".to_string(),
@@ -485,6 +479,7 @@ mod tests {
                 input: 200_000,
                 cached: 0,
                 output: 0,
+                reasoning: None,
             },
             CodexUsageRecord {
                 day_key: "2026-05-30".to_string(),
@@ -492,6 +487,7 @@ mod tests {
                 input: 200_000,
                 cached: 0,
                 output: 0,
+                reasoning: None,
             },
         ];
         let mut summary = CostSummary::default();
@@ -538,6 +534,7 @@ mod tests {
                 input: 100,
                 cached: 0,
                 output: 5,
+                reasoning: None,
             },
             CodexUsageRecord {
                 day_key: "2026-08-19".to_string(),
@@ -545,6 +542,7 @@ mod tests {
                 input: 1_000_000,
                 cached: 0,
                 output: 1_000_000,
+                reasoning: None,
             },
         ];
         let mut summary = CostSummary::default();
@@ -567,6 +565,7 @@ mod tests {
             input: 10,
             cached: 0,
             output: 1,
+            reasoning: None,
         }];
         let mut days = std::collections::HashMap::new();
         merge_codex_records_into_days(&mut days, &records);
@@ -583,6 +582,7 @@ mod tests {
             input: 55_000_000,
             cached: 0,
             output: 0,
+            reasoning: None,
         }];
         let mut summary = CostSummary::default();
 
@@ -611,6 +611,7 @@ mod tests {
             input: 1_000_000,
             cached: 0,
             output: 1_000_000,
+            reasoning: None,
         }];
         let mut summary = CostSummary::default();
 
