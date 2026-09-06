@@ -125,6 +125,7 @@ Win-CodexBar/
 | [CLI.md](./CLI.md) | `codexbar.exe` commands |
 | [CONFIGURATION.md](./CONFIGURATION.md) | Config paths, `codexbar config`, settings tabs |
 | [PROVIDERS.md](./PROVIDERS.md) | Provider factory and sources |
+| [BEDROCK.md](./BEDROCK.md) | AWS Bedrock credentials, monitoring, and request-cost warning |
 | [COOKIES.md](./COOKIES.md) | Browser cookie import (DPAPI) |
 | [WSL.md](./WSL.md) | WSL limitations |
 | [WINDOWS_PROOF.md](./WINDOWS_PROOF.md) | Manual/runtime proof checklist |

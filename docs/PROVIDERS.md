@@ -63,6 +63,13 @@ Optional status polling (provider status pages) is available via CLI `--status` 
 
 Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, or DeepSeek subscription instead of appearing as a second fake provider. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only. Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
 
+### AWS Bedrock monitoring
+
+AWS Bedrock is a Windows provider backed by signed Cost Explorer requests and
+optional CloudWatch activity. It is disabled by default, and AWS API requests
+can incur charges. Credential formats, permissions, refresh controls, and the
+current monitoring-cost warning are documented in [BEDROCK.md](./BEDROCK.md).
+
 Custom pricing overlays are exact-match overrides used only where the local spend contract has matching provider/model token evidence. Explicit zero rates mean free; omitted rate fields stay unknown. The Usage & Spend surface keeps provenance/coverage visible, preserves cost-only model rows when token coverage is partial, and can Copy JSON or save the same JSON contract through the native file picker.
 
 ### OpenCode, Codex quota, and local cost boundaries
@@ -88,4 +95,5 @@ Upstream `docs/providers.md` is a large auto-strategy matrix (60+ providers) for
 - [ARCHITECTURE.md](./ARCHITECTURE.md)
 - [CLI.md](./CLI.md)
 - [CONFIGURATION.md](./CONFIGURATION.md)
+- [BEDROCK.md](./BEDROCK.md)
 - [COOKIES.md](./COOKIES.md)
