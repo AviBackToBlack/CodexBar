@@ -28,6 +28,6 @@ pub use codex_desktop::{
 pub use login_runner::{CodexLoginOutcome, CodexLoginResult, ManagedLoginProcess};
 pub use models::{
     AccountUsageSnapshot, CodexAccount, CodexAccountSource, CreditsBalanceSnapshot,
-    RemovedAccountIdentity, UsageWindowSnapshot, utc_now,
+    RemovedAccountIdentity, UsageWindowSnapshot, display_names_by_id, utc_now,
 };
 pub use stores::{AccountStore, SnapshotStore};

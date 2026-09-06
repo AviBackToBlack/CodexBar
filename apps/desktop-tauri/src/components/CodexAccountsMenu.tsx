@@ -8,6 +8,7 @@ import type {
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import { maskEmail } from "./MenuCard";
+import { buildCodexAccountDisplayNames } from "./codexAccountDisplay";
 import {
   codexAccountSwitch,
   getCodexAccountsState,
@@ -35,6 +36,7 @@ export default function CodexAccountsMenu({
   const [snapshots, setSnapshots] = useState<
     Record<string, CodexAccountUsageSnapshot>
   >({});
+  const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +46,7 @@ export default function CodexAccountsMenu({
     try {
       const next: CodexAccountsStateBridge = await getCodexAccountsState();
       setAccounts(next.accounts);
+      setDisplayNames(next.displayNames ?? {});
       setSnapshots(next.snapshots);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -86,6 +89,11 @@ export default function CodexAccountsMenu({
     return null;
   }
 
+  const accountDisplayNames = buildCodexAccountDisplayNames(
+    accounts,
+    displayNames,
+  );
+
   return (
     <details className="codex-menu-accounts">
       <summary className="codex-menu-accounts__summary">
@@ -103,6 +111,7 @@ export default function CodexAccountsMenu({
             key={account.id}
             account={account}
             snapshot={snapshots[account.id]}
+            displayName={accountDisplayNames[account.id]}
             hideEmail={hideEmail}
             resetTimeRelative={resetTimeRelative}
             busy={busy}
@@ -117,6 +126,7 @@ export default function CodexAccountsMenu({
 function CodexAccountRow({
   account,
   snapshot,
+  displayName,
   hideEmail,
   resetTimeRelative,
   busy,
@@ -124,6 +134,7 @@ function CodexAccountRow({
 }: {
   account: CodexAccount;
   snapshot: CodexAccountUsageSnapshot | undefined;
+  displayName: string;
   hideEmail: boolean;
   resetTimeRelative: boolean;
   busy: boolean;
@@ -147,12 +158,13 @@ function CodexAccountRow({
       : `${t("MetricResetsIn")} ${resetText}`
     : null;
   const windowLabel = formatWindowLabel(usageWindow?.limitWindowSeconds);
-  const label =
-    account.nickname ??
-    account.emailHint ??
-    account.authSubject ??
-    shrink(account.id);
-  const shown = hideEmail ? maskEmail(label) : label;
+  // Only mask labels that actually contain an email. Generic/nickname labels
+  // have no personal data to hide, and masking them would erase their opaque
+  // workspace suffix and make distinct accounts look identical.
+  const shown =
+    hideEmail && displayName.includes("@")
+      ? maskEmail(displayName)
+      : displayName;
   const isAmbient = account.source === "ambient";
 
   return (
@@ -211,8 +223,4 @@ function formatWindowLabel(
     return `${limitWindowSeconds / 3_600}h`;
   }
   return null;
-}
-
-function shrink(id: string): string {
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
 }
