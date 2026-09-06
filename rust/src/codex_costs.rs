@@ -165,9 +165,9 @@ impl CodexTokenCounts {
 }
 
 fn add_tokens(summary: &mut ModelTokenCounts, tokens: CodexTokenCounts) {
-    summary.input_tokens += tokens.input;
-    summary.output_tokens += tokens.output;
-    summary.cached_tokens += tokens.cached;
+    summary.input_tokens = summary.input_tokens.saturating_add(tokens.input);
+    summary.output_tokens = summary.output_tokens.saturating_add(tokens.output);
+    summary.cached_tokens = summary.cached_tokens.saturating_add(tokens.cached);
 }
 
 fn add_codex_tokens_to_summary(
@@ -200,9 +200,9 @@ fn add_codex_tokens_to_summary(
     // not "unknown yet"). Upstream 0.48.0 F18: codex-auto-review rows are retained
     // with cost-nil so priced rows in the same history stay ranked.
     if CostUsagePricing::is_codex_unattributed_model(&model_key) || is_routing_unpriced {
-        summary.input_tokens += tokens.input;
-        summary.cached_tokens += tokens.cached;
-        summary.output_tokens += tokens.output;
+        summary.input_tokens = summary.input_tokens.saturating_add(tokens.input);
+        summary.cached_tokens = summary.cached_tokens.saturating_add(tokens.cached);
+        summary.output_tokens = summary.output_tokens.saturating_add(tokens.output);
         summary.by_model.entry(model_key.clone()).or_insert(0.0);
         add_tokens(
             summary
@@ -264,9 +264,9 @@ fn add_codex_tokens_to_summary(
         }
     }
 
-    summary.input_tokens += tokens.input;
-    summary.cached_tokens += tokens.cached;
-    summary.output_tokens += tokens.output;
+    summary.input_tokens = summary.input_tokens.saturating_add(tokens.input);
+    summary.cached_tokens = summary.cached_tokens.saturating_add(tokens.cached);
+    summary.output_tokens = summary.output_tokens.saturating_add(tokens.output);
     *summary.by_model.entry(model_key.clone()).or_insert(0.0) += cost;
 
     let speed_bucket = codex_speed_bucket(&model_key);
@@ -428,6 +428,33 @@ mod tests {
         // Test GPT-4o pricing: $2.50/1M input, $10/1M output
         let cost = codex_cost_usd("gpt-4o", 1_000_000, 0, 1_000_000);
         assert!((cost - 12.50).abs() < 0.01);
+    }
+
+    #[test]
+    fn token_breakdown_addition_saturates_without_wrapping() {
+        let counts = ModelTokenCounts {
+            input_tokens: u64::MAX,
+            output_tokens: 1,
+            cached_tokens: u64::MAX,
+        };
+        assert_eq!(counts.total(), u64::MAX);
+
+        let mut merged = ModelTokenCounts {
+            input_tokens: u64::MAX,
+            output_tokens: u64::MAX,
+            cached_tokens: u64::MAX,
+        };
+        add_tokens(
+            &mut merged,
+            CodexTokenCounts {
+                input: 1,
+                cached: 1,
+                output: 1,
+            },
+        );
+        assert_eq!(merged.input_tokens, u64::MAX);
+        assert_eq!(merged.output_tokens, u64::MAX);
+        assert_eq!(merged.cached_tokens, u64::MAX);
     }
 
     #[test]

@@ -10,6 +10,7 @@
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -98,7 +99,7 @@ pub struct CostSummary {
 }
 
 /// Per-model token counts
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelTokenCounts {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -107,7 +108,7 @@ pub struct ModelTokenCounts {
 
 impl ModelTokenCounts {
     pub fn total(&self) -> u64 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 
@@ -169,6 +170,39 @@ fn rebuild_cache_days(cache: &mut CostUsageCache) {
             }
         }
     }
+}
+
+/// Remove cached Codex files that are provably gone from the portion of the
+/// sessions tree covered by this scan. Entries outside the current roots or
+/// date directories are intentionally retained for a later scan.
+fn reconcile_missing_codex_cache_files(
+    cache: &mut CostUsageCache,
+    sessions_dirs: &[PathBuf],
+    range: &CostUsageDayRange,
+) {
+    let scanned_date_dirs: Vec<PathBuf> = sessions_dirs
+        .iter()
+        .flat_map(|sessions_dir| {
+            codex_scan_dates(range).into_iter().map(|date| {
+                sessions_dir
+                    .join(date.format("%Y").to_string())
+                    .join(date.format("%m").to_string())
+                    .join(date.format("%d").to_string())
+            })
+        })
+        .collect();
+
+    cache.files.retain(|path_key, _| {
+        let path = Path::new(path_key);
+        let in_scanned_root = sessions_dirs
+            .iter()
+            .any(|sessions_dir| path.starts_with(sessions_dir));
+        let in_scanned_date = scanned_date_dirs
+            .iter()
+            .any(|date_dir| path.starts_with(date_dir));
+
+        !(in_scanned_root && in_scanned_date && !path.exists())
+    });
 }
 
 /// Claude cost calculation for the usage scanner.
@@ -252,8 +286,12 @@ struct CodexEventMsg {
     output_tokens: Option<u64>,
 }
 
-/// JSONL event structures for Claude transcripts. Unknown fields are
-/// ignored, so lines that are not assistant usage events still parse.
+/// JSONL event structures for Claude transcripts.
+///
+/// The flattened values retain otherwise-unknown metadata long enough to
+/// distinguish Anthropic rows from Vertex AI rows. Claude's local transcript
+/// format can contain both shapes, and counting Vertex rows with Anthropic
+/// pricing would misstate both cost and token history.
 #[derive(Debug, Deserialize)]
 struct ClaudeEvent {
     #[serde(rename = "type")]
@@ -262,6 +300,8 @@ struct ClaudeEvent {
     #[serde(rename = "requestId", alias = "request_id")]
     request_id: Option<String>,
     message: Option<ClaudeMessage>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
 }
 
 impl ClaudeEvent {
@@ -271,6 +311,39 @@ impl ClaudeEvent {
             .ok()
             .map(|ts| ts.with_timezone(&Utc))
     }
+
+    fn is_vertex_ai_usage_entry(&self) -> bool {
+        // Vertex AI message/request identifiers use the `_vrtx_` marker.
+        if self
+            .message
+            .as_ref()
+            .and_then(|message| message.id.as_deref())
+            .is_some_and(|id| id.contains("_vrtx_"))
+            || self
+                .request_id
+                .as_deref()
+                .is_some_and(|request_id| request_id.contains("_vrtx_"))
+        {
+            return true;
+        }
+
+        // Vertex AI model names use `@` as the version separator.
+        if self
+            .message
+            .as_ref()
+            .and_then(|message| message.model.as_deref())
+            .is_some_and(model_name_looks_vertex)
+        {
+            return true;
+        }
+
+        if contains_claude_vertex_metadata_entries(self.extra.iter()) {
+            return true;
+        }
+        self.message
+            .as_ref()
+            .is_some_and(ClaudeMessage::contains_vertex_metadata)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,6 +351,19 @@ struct ClaudeMessage {
     id: Option<String>,
     model: Option<String>,
     usage: Option<ClaudeUsage>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl ClaudeMessage {
+    fn contains_vertex_metadata(&self) -> bool {
+        if contains_claude_vertex_metadata_entries(self.extra.iter()) {
+            return true;
+        }
+        self.usage
+            .as_ref()
+            .is_some_and(ClaudeUsage::contains_vertex_metadata)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -287,6 +373,19 @@ struct ClaudeUsage {
     cache_creation_input_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
     cache_creation: Option<ClaudeCacheCreation>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl ClaudeUsage {
+    fn contains_vertex_metadata(&self) -> bool {
+        if contains_claude_vertex_metadata_entries(self.extra.iter()) {
+            return true;
+        }
+        self.cache_creation
+            .as_ref()
+            .is_some_and(ClaudeCacheCreation::contains_vertex_metadata)
+    }
 }
 
 impl ClaudeUsage {
@@ -304,6 +403,82 @@ impl ClaudeUsage {
 #[derive(Debug, Deserialize)]
 struct ClaudeCacheCreation {
     ephemeral_1h_input_tokens: Option<u64>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl ClaudeCacheCreation {
+    fn contains_vertex_metadata(&self) -> bool {
+        contains_claude_vertex_metadata_entries(self.extra.iter())
+    }
+}
+
+const CLAUDE_VERTEX_PROVIDER_KEYS: &[&str] = &[
+    "provider",
+    "platform",
+    "backend",
+    "api_provider",
+    "apiprovider",
+    "api_type",
+    "apitype",
+    "source",
+    "vendor",
+    "client",
+];
+
+fn model_name_looks_vertex(model: &str) -> bool {
+    model.starts_with("claude-") && model.contains('@')
+}
+
+/// Match the upstream Claude classifier's recursive metadata rules. Marker
+/// keys (`vertex`/`gcp`) classify regardless of value; provider-key values
+/// classify only when their text contains `vertex` (not merely `gcp`).
+fn contains_claude_vertex_metadata(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => contains_claude_vertex_metadata_entries(object.iter()),
+        Value::Array(array) => array.iter().any(contains_claude_vertex_metadata),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
+}
+
+fn contains_claude_vertex_metadata_entries<'a, I>(entries: I) -> bool
+where
+    I: IntoIterator<Item = (&'a String, &'a Value)>,
+{
+    entries.into_iter().any(|(key, value)| {
+        contains_claude_vertex_marker(key, true)
+            || (CLAUDE_VERTEX_PROVIDER_KEYS
+                .iter()
+                .any(|candidate| key.eq_ignore_ascii_case(candidate))
+                && value
+                    .as_str()
+                    .is_some_and(|text| contains_claude_vertex_marker(text, false)))
+            || contains_claude_vertex_metadata(value)
+    })
+}
+
+fn contains_claude_vertex_marker(value: &str, include_gcp: bool) -> bool {
+    let bytes = value.as_bytes();
+    let has_marker = |marker: &[u8]| {
+        bytes.windows(marker.len()).any(|window| {
+            window
+                .iter()
+                .zip(marker)
+                .all(|(byte, expected)| byte.to_ascii_lowercase() == *expected)
+        })
+    };
+
+    if has_marker(b"vertex") || (include_gcp && has_marker(b"gcp")) {
+        return true;
+    }
+
+    // ASCII folding above is enough for the common path. Unicode lowercasing
+    // preserves the historical classifier's behavior for non-ASCII strings.
+    if value.is_ascii() {
+        return false;
+    }
+    let lower = value.to_lowercase();
+    lower.contains("vertex") || (include_gcp && lower.contains("gcp"))
 }
 
 #[derive(Debug)]
@@ -325,6 +500,8 @@ pub struct CostScanStats {
     pub files_parsed: u32,
     pub files_skipped: u32,
     pub files_resumed: u32,
+    /// Timestamp comparisons performed while validating Codex append history.
+    pub token_timestamp_comparisons: u64,
     pub used_cache_debounce: bool,
 }
 
@@ -378,6 +555,20 @@ impl CostScanner {
 
     /// Scan Codex and return cache/resume stats alongside the summary.
     pub fn scan_codex_detailed(&self, cancel: Option<&AtomicBool>) -> (CostSummary, CostScanStats) {
+        let (summary, stats, _cache) = self.scan_codex_detailed_with_cache(cancel);
+        (summary, stats)
+    }
+
+    /// Scan Codex and retain the decoded cache baseline for same-cycle readers.
+    ///
+    /// The returned cache is the exact in-memory value used for publication,
+    /// including any persistence-budget pruning.  Callers that only need the
+    /// summary should use [`Self::scan_codex_detailed`]; daily history readers
+    /// use this seam to avoid decoding the same native cache a second time.
+    pub(crate) fn scan_codex_detailed_with_cache(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> (CostSummary, CostScanStats, CostUsageCache) {
         let mut summary = CostSummary::default();
         let mut stats = CostScanStats::default();
         let today = Local::now().date_naive();
@@ -435,10 +626,11 @@ impl CostScanner {
             // established but zero sessions in-range is a known-zero.
             summary.known_zero =
                 summary.history_coverage_established && summary.sessions_count == 0;
-            return (summary, stats);
+            return (summary, stats, cache);
         }
 
-        for sessions_dir in self.get_codex_sessions_dirs() {
+        let sessions_dirs = self.get_codex_sessions_dirs();
+        for sessions_dir in &sessions_dirs {
             if is_cancelled(cancel) {
                 break;
             }
@@ -455,6 +647,7 @@ impl CostScanner {
         }
 
         if !is_cancelled(cancel) {
+            reconcile_missing_codex_cache_files(&mut cache, &sessions_dirs, &range);
             rebuild_cache_days(&mut cache);
             cache.last_scan_unix_ms = now_ms;
             cache.scan_since_key = Some(range.since_key.clone());
@@ -492,7 +685,7 @@ impl CostScanner {
         // scan must NOT fabricate a zero.
         summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
 
-        (summary, stats)
+        (summary, stats, cache)
     }
 
     /// Scan Claude local logs
@@ -688,18 +881,30 @@ impl CostScanner {
                 && start_offset > 0
                 && start_offset <= size
                 && entry.last_totals.is_some()
+                // Older JSON caches have no timestamp-order state.  Resuming
+                // those prefixes would make the append validation unverifiable;
+                // the next full parse establishes the compact state.
+                && entry.codex_token_timestamps_monotonic.is_some()
+                && entry.codex_last_token_timestamp.is_some()
                 && JsonlScanner::is_line_boundary_offset(path, start_offset)
             {
-                let parse_result = match JsonlScanner::parse_codex_file(
+                let parse_result = match JsonlScanner::parse_codex_file_with_state(
                     path,
                     range,
                     start_offset,
                     entry.last_model.clone(),
                     entry.last_totals.clone(),
+                    entry.codex_last_token_timestamp.clone(),
+                    entry.codex_token_timestamps_monotonic,
+                    cancel,
                 ) {
                     Ok(result) => result,
                     Err(_) => return,
                 };
+
+                stats.token_timestamp_comparisons = stats
+                    .token_timestamp_comparisons
+                    .saturating_add(parse_result.token_timestamp_comparisons);
 
                 let mut days = entry.days.clone();
                 merge_codex_records_into_days(&mut days, &parse_result.records);
@@ -722,6 +927,12 @@ impl CostScanner {
                         last_totals: parse_result
                             .last_totals
                             .or_else(|| entry.last_totals.clone()),
+                        codex_token_timestamps_monotonic: parse_result
+                            .token_timestamps_monotonic
+                            .or(entry.codex_token_timestamps_monotonic),
+                        codex_last_token_timestamp: parse_result
+                            .last_token_timestamp
+                            .or_else(|| entry.codex_last_token_timestamp.clone()),
                     },
                 );
                 stats.files_resumed += 1;
@@ -730,10 +941,16 @@ impl CostScanner {
         }
 
         // Full parse from offset 0.
-        let parse_result = match JsonlScanner::parse_codex_file(path, range, 0, None, None) {
+        let parse_result = match JsonlScanner::parse_codex_file_with_state(
+            path, range, 0, None, None, None, None, cancel,
+        ) {
             Ok(result) => result,
             Err(_) => return,
         };
+
+        stats.token_timestamp_comparisons = stats
+            .token_timestamp_comparisons
+            .saturating_add(parse_result.token_timestamp_comparisons);
 
         let mut days = HashMap::new();
         merge_codex_records_into_days(&mut days, &parse_result.records);
@@ -755,6 +972,8 @@ impl CostScanner {
                 parsed_bytes: Some(parse_result.parsed_bytes),
                 last_model: parse_result.last_model,
                 last_totals: parse_result.last_totals,
+                codex_token_timestamps_monotonic: parse_result.token_timestamps_monotonic,
+                codex_last_token_timestamp: parse_result.last_token_timestamp,
             },
         );
         stats.files_parsed += 1;
@@ -827,6 +1046,7 @@ where
             return false;
         }
         if let Ok(event) = serde_json::from_str::<ClaudeEvent>(line)
+            && !event.is_vertex_ai_usage_entry()
             && let Some(record) = claude_usage_record_from_event(&event)
             && should_count_claude_record(&record, cutoff, seen)
         {
@@ -1012,8 +1232,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
             // Warm/refresh the disk cache, then price from packed days. v0.56.1
             // preserves every calendar slot and distinguishes covered zero from
             // unscanned/unpriced history.
-            let _scan = scanner.scan_codex();
-            let cache = JsonlScanner::load_cache(ProviderId::Codex, scanner.cache_root.as_deref());
+            let (_summary, _stats, cache) = scanner.scan_codex_detailed_with_cache(None);
             if cache.previous_report.is_none() {
                 for (day_key, slot) in &mut daily_costs {
                     if cache
@@ -1099,8 +1318,7 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
             // Warm/refresh the disk cache, then read exact local token totals
             // from packed days through the same summary path the cost chart
             // uses.
-            let _ = scanner.scan_codex();
-            let cache = JsonlScanner::load_cache(ProviderId::Codex, scanner.cache_root.as_deref());
+            let (_summary, _stats, cache) = scanner.scan_codex_detailed_with_cache(None);
             for (day_key, models) in &cache.days {
                 if !daily_tokens.contains_key(day_key) {
                     continue;
@@ -1400,6 +1618,80 @@ mod tests {
         assert!(claude_usage_record_from_event(&event).is_none());
     }
 
+    #[test]
+    fn classifies_vertex_ai_claude_metadata_without_changing_anthropic_rows() {
+        let cases = [
+            (
+                r#"{"type":"assistant","requestId":"req_vrtx_123","message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":1}}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_vrtx_123","model":"claude-sonnet-4-6","usage":{"input_tokens":1}}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-6@20260217","usage":{"input_tokens":1}}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-6","metadata":{"provider":"Google-Vertex-AI"},"usage":{"input_tokens":1}}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-6","content":[{"context":{"gcp_project":false}}],"usage":{"input_tokens":1}}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":1}} ,"metadata":{"provider":"anthropic"}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":1}} ,"metadata":{"provider":"gcp"}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4-6","content":[{"text":"vertex"}],"usage":{"input_tokens":1}}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","requestId":"req_1","message":{"id":"msg_1","model":"Claude-sonnet-4-6@20260217","usage":{"input_tokens":1}}}"#,
+                false,
+            ),
+        ];
+
+        for (json, expected) in cases {
+            let event: ClaudeEvent = serde_json::from_str(json).unwrap();
+            assert_eq!(event.is_vertex_ai_usage_entry(), expected, "{json}");
+        }
+    }
+
+    #[test]
+    fn shared_claude_reader_excludes_vertex_rows_but_keeps_anthropic_usage() {
+        let path = std::env::temp_dir().join(format!(
+            "codexbar-claude-vertex-filter-{}.jsonl",
+            std::process::id()
+        ));
+        let timestamp = (Utc::now() - Duration::hours(1)).to_rfc3339();
+        let anthropic = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_anthropic","message":{{"id":"msg_anthropic","model":"claude-sonnet-4-6","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        );
+        let vertex = format!(
+            r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_vrtx_123","message":{{"id":"msg_vrtx_123","model":"claude-sonnet-4-6","usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
+        );
+        std::fs::write(&path, format!("{anthropic}\n{vertex}\n")).unwrap();
+
+        let cutoff = Utc::now() - Duration::days(30);
+        let mut seen = HashSet::new();
+        let mut records = Vec::new();
+        let counted = for_each_claude_usage_record(&path, &cutoff, &mut seen, None, |record| {
+            records.push((record.input, record.output))
+        });
+
+        assert_eq!(counted, 1);
+        assert_eq!(records, vec![(10, 5)]);
+        let _removed = std::fs::remove_file(&path);
+    }
+
     fn claude_transcript_line(
         timestamp: &str,
         request_key: &str,
@@ -1593,6 +1885,8 @@ mod tests {
                     parsed_bytes: Some(100),
                     last_model: Some("gpt-5.6-sol".to_string()),
                     last_totals: None,
+                    codex_token_timestamps_monotonic: Some(true),
+                    codex_last_token_timestamp: None,
                 },
             )]),
             days: usage,
@@ -1638,6 +1932,98 @@ mod tests {
     }
 
     #[test]
+    fn cost_scan_reconciles_deleted_file_to_known_zero() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let path = write_codex_session_fixture(&sessions, "deleted.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (first, _) = scanner.scan_codex_detailed(None);
+        assert_eq!(first.sessions_count, 1);
+        assert!(first.total_cost_usd > 0.0);
+
+        std::fs::remove_file(&path).unwrap();
+        let (second, _) = scanner.scan_codex_detailed(None);
+
+        assert_eq!(second.sessions_count, 0);
+        assert_eq!(second.total_cost_usd, 0.0);
+        assert!(second.history_coverage_established);
+        assert!(second.known_zero);
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(cache.files.is_empty(), "deleted JSONL row must be removed");
+        assert!(cache.days.is_empty(), "stale daily totals must disappear");
+    }
+
+    #[test]
+    fn cost_scan_reconciliation_preserves_sibling_totals_once() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let deleted = write_codex_session_fixture(&sessions, "deleted.jsonl", 100);
+        let sibling = write_codex_session_fixture(&sessions, "sibling.jsonl", 200);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (first, _) = scanner.scan_codex_detailed(None);
+        assert_eq!(first.sessions_count, 2);
+
+        std::fs::remove_file(&deleted).unwrap();
+        let (second, _) = scanner.scan_codex_detailed(None);
+
+        assert_eq!(second.sessions_count, 1);
+        assert_eq!(second.input_tokens, 200);
+        assert_eq!(second.output_tokens, 5);
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert_eq!(cache.files.len(), 1);
+        assert!(
+            !cache
+                .files
+                .contains_key(&deleted.to_string_lossy().to_string())
+        );
+        assert!(
+            cache
+                .files
+                .contains_key(&sibling.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
+    fn cancelled_scan_after_deletion_preserves_stale_cache_row() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let cache_root = root.path().join("cache");
+        let path = write_codex_session_fixture(&sessions, "deleted.jsonl", 100);
+
+        let scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions]);
+        let (first, _) = scanner.scan_codex_detailed(None);
+        assert_eq!(first.sessions_count, 1);
+        std::fs::remove_file(&path).unwrap();
+
+        let cancel = AtomicBool::new(true);
+        let (cancelled, stats) = scanner.scan_codex_detailed(Some(&cancel));
+
+        assert_eq!(stats.files_seen, 0);
+        assert_eq!(cancelled.sessions_count, 0);
+        assert!(!cancelled.history_coverage_established);
+        assert!(!cancelled.known_zero);
+        let cache = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        assert!(
+            cache
+                .files
+                .contains_key(&path.to_string_lossy().to_string())
+        );
+    }
+
+    #[test]
     fn cost_scan_resumes_appended_bytes() {
         let root = tempfile::tempdir().unwrap();
         let sessions = root.path().join("sessions");
@@ -1650,6 +2036,7 @@ mod tests {
             .with_sessions_dirs(vec![sessions.clone()]);
         let (s1, st1) = scanner.scan_codex_detailed(None);
         assert_eq!(st1.files_parsed, 1);
+        assert_eq!(st1.token_timestamp_comparisons, 0);
         assert_eq!(s1.input_tokens, 50);
 
         // Append another cumulative token_count event (100 total => +50 delta).
@@ -1670,7 +2057,39 @@ mod tests {
         let (s2, st2) = scanner.scan_codex_detailed(None);
         assert_eq!(st2.files_resumed, 1, "grown file resumes from offset");
         assert_eq!(st2.files_parsed, 0);
+        assert_eq!(
+            st2.token_timestamp_comparisons, 1,
+            "resume validates only the cached-prefix boundary and appended event"
+        );
         assert_eq!(s2.input_tokens, 100);
+
+        // The append-only path must publish the same aggregate as a fresh
+        // full parse; the optimization is allowed to change work, not data.
+        let full_scanner = CostScanner::new(7)
+            .with_options(CostScanOptions::app_driven())
+            .with_cache_root(root.path().join("fresh-cache"))
+            .with_sessions_dirs(vec![sessions]);
+        let (full, full_stats) = full_scanner.scan_codex_detailed(None);
+        assert_eq!(full_stats.files_parsed, 1);
+        assert_eq!(s2.input_tokens, full.input_tokens);
+        assert_eq!(s2.cached_tokens, full.cached_tokens);
+        assert_eq!(s2.output_tokens, full.output_tokens);
+        assert_eq!(s2.sessions_count, full.sessions_count);
+        assert_eq!(s2.by_model_tokens, full.by_model_tokens);
+        assert_eq!(s2.by_model.len(), full.by_model.len());
+        for (model, resumed_cost) in &s2.by_model {
+            let full_cost = full.by_model.get(model).copied().expect("full model row");
+            assert!((resumed_cost - full_cost).abs() < 1e-12);
+        }
+        assert!((s2.total_cost_usd - full.total_cost_usd).abs() < 1e-12);
+
+        let cached = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        let cached_file = cached
+            .files
+            .get(&path.to_string_lossy().to_string())
+            .expect("resumed file cache entry");
+        assert_eq!(cached_file.codex_token_timestamps_monotonic, Some(true));
+        assert!(cached_file.codex_last_token_timestamp.is_some());
     }
 
     #[test]

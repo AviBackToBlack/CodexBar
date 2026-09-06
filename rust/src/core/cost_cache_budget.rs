@@ -325,6 +325,8 @@ mod tests {
             parsed_bytes: parsed,
             last_model: None,
             last_totals: None,
+            codex_token_timestamps_monotonic: None,
+            codex_last_token_timestamp: None,
         }
     }
 

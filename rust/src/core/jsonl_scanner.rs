@@ -9,13 +9,15 @@
 )]
 
 use crate::core::{CostUsagePricing, ProviderId};
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, FixedOffset, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Default)]
 pub struct CachedCostReadStatus {
@@ -119,6 +121,23 @@ impl CostScanOptions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CacheStamp {
+    byte_len: usize,
+    content_hash: u64,
+}
+
+impl CacheStamp {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Self {
+            byte_len: bytes.len(),
+            content_hash: hasher.finish(),
+        }
+    }
+}
+
 /// Cache for scanned file data
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CostUsageCache {
@@ -139,6 +158,10 @@ pub struct CostUsageCache {
     /// publication completeness is carried separately on `CostSummary`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_report: Option<CachedCostReport>,
+    /// Content stamp of the decoded on-disk baseline. This is process-local
+    /// and omitted from JSON so a stale reader cannot replace a newer cache.
+    #[serde(skip)]
+    pub(crate) loaded_stamp: Option<Option<CacheStamp>>,
 }
 
 /// Per-file usage tracking
@@ -156,6 +179,17 @@ pub struct CostUsageFileUsage {
     pub last_model: Option<String>,
     /// Last token totals (for delta calculations)
     pub last_totals: Option<CodexTotals>,
+    /// Whether the parsed Codex token timestamps were non-decreasing.
+    ///
+    /// `None` is an old cache entry that has never had its timestamp order
+    /// validated.  Such an entry must not use the append-only fast path until
+    /// a full parse establishes this state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_token_timestamps_monotonic: Option<bool>,
+    /// The last parsed Codex token timestamp, used to validate an appended
+    /// suffix without replaying the cached prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_last_token_timestamp: Option<String>,
 }
 
 /// Running totals for Codex token counting
@@ -200,6 +234,12 @@ pub struct CodexParseResult {
     pub last_model: Option<String>,
     /// Last totals seen
     pub last_totals: Option<CodexTotals>,
+    /// Timestamp-order state for the parsed token history.
+    pub token_timestamps_monotonic: Option<bool>,
+    /// Last token timestamp observed by the parser.
+    pub last_token_timestamp: Option<String>,
+    /// Number of timestamp comparisons performed while validating this parse.
+    pub token_timestamp_comparisons: u64,
 }
 
 /// A billable Codex token-count delta.
@@ -258,6 +298,10 @@ struct CodexParserState {
     /// Latched once any cumulative component drops below the watermark.
     saw_interleaved_totals: bool,
     records: Vec<CodexUsageRecord>,
+    previous_token_timestamp: Option<String>,
+    previous_token_timestamp_parsed: Option<DateTime<chrono::FixedOffset>>,
+    token_timestamps_monotonic: Option<bool>,
+    token_timestamp_comparisons: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,12 +374,30 @@ enum CodexFastEvent<'a> {
 
 impl CodexParserState {
     fn new(initial_model: Option<String>, initial_totals: Option<CodexTotals>) -> Self {
+        Self::with_timestamp_state(initial_model, initial_totals, None, None)
+    }
+
+    fn with_timestamp_state(
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+    ) -> Self {
+        let previous_token_timestamp_parsed = previous_token_timestamp
+            .as_deref()
+            .and_then(parse_rfc3339_timestamp);
         Self {
             current_model: initial_model,
             previous_totals: initial_totals.clone(),
             totals_watermark: initial_totals,
             saw_interleaved_totals: false,
             records: Vec::new(),
+            previous_token_timestamp,
+            previous_token_timestamp_parsed,
+            // A parser always validates a fresh prefix.  `None` is only an
+            // input marker for the legacy-cache path, not an output state.
+            token_timestamps_monotonic: Some(token_timestamps_monotonic.unwrap_or(true)),
+            token_timestamp_comparisons: 0,
         }
     }
 
@@ -359,9 +421,27 @@ impl CodexParserState {
             if obj.get("type").is_some() {
                 return;
             }
-            let Some(day_key) = codex_line_day_key(&obj, range)
-                .or_else(|| self.records.last().map(|record| record.day_key.clone()))
-            else {
+            let parsed_timestamp = obj
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(parse_codex_timestamp);
+            if let Some(timestamp) = obj.get("timestamp").and_then(Value::as_str) {
+                // Timestamp order is a property of the whole native file,
+                // including usage records outside the requested day window.
+                self.observe_token_timestamp(timestamp, parsed_timestamp.as_ref());
+            }
+            let day_key = parsed_timestamp
+                .as_ref()
+                .map(ParsedCodexTimestamp::day_key)
+                .filter(|day_key| {
+                    CostUsageDayRange::is_in_range(
+                        day_key,
+                        &range.scan_since_key,
+                        &range.scan_until_key,
+                    )
+                })
+                .or_else(|| self.records.last().map(|record| record.day_key.clone()));
+            let Some(day_key) = day_key else {
                 return;
             };
             if let Some((totals, model)) = bare_usage_totals(&obj) {
@@ -377,14 +457,35 @@ impl CodexParserState {
             return;
         }
 
-        let Some(day_key) = codex_line_day_key(&obj, range) else {
+        let is_token_count = token_count_payload(&obj).is_some();
+        let parsed_timestamp = obj
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_codex_timestamp);
+        if is_token_count && let Some(timestamp) = obj.get("timestamp").and_then(Value::as_str) {
+            // Timestamp order is a property of the whole native file, not
+            // only the requested display window. Validate it before the
+            // range filter so a cached prefix remains safe to extend.
+            self.observe_token_timestamp(timestamp, parsed_timestamp.as_ref());
+        }
+        let Some(day_key) = parsed_timestamp
+            .as_ref()
+            .map(ParsedCodexTimestamp::day_key)
+            .filter(|day_key| {
+                CostUsageDayRange::is_in_range(
+                    day_key,
+                    &range.scan_since_key,
+                    &range.scan_until_key,
+                )
+            })
+        else {
             return;
         };
         if obj.get("type").and_then(|v| v.as_str()) == Some("turn_context") {
             self.update_current_model(&obj);
         }
 
-        if token_count_payload(&obj).is_some() {
+        if is_token_count {
             self.record_token_count(&obj, day_key);
         }
     }
@@ -398,9 +499,12 @@ impl CodexParserState {
                 }
             }
             CodexFastEvent::TokenCount { timestamp, payload } => {
-                let Some(day_key) = codex_timestamp_day_key(timestamp) else {
+                let parsed_timestamp = parse_codex_timestamp(timestamp);
+                self.observe_token_timestamp(timestamp, parsed_timestamp.as_ref());
+                let Some(parsed_timestamp) = parsed_timestamp else {
                     return;
                 };
+                let day_key = parsed_timestamp.day_key();
                 if !CostUsageDayRange::is_in_range(
                     &day_key,
                     &range.scan_since_key,
@@ -584,6 +688,36 @@ impl CodexParserState {
         (delta.input, delta.cached, delta.output)
     }
 
+    fn observe_token_timestamp(
+        &mut self,
+        timestamp: &str,
+        parsed_timestamp: Option<&ParsedCodexTimestamp>,
+    ) {
+        let current_parsed = parsed_timestamp
+            .map(|parsed| parsed.parsed)
+            .unwrap_or_else(|| parse_rfc3339_timestamp(timestamp));
+        if let Some(previous) = self.previous_token_timestamp.as_deref()
+            && self.token_timestamps_monotonic != Some(false)
+        {
+            self.token_timestamp_comparisons = self.token_timestamp_comparisons.saturating_add(1);
+            let ordered = match (
+                self.previous_token_timestamp_parsed.as_ref(),
+                current_parsed.as_ref(),
+            ) {
+                (Some(previous), Some(current)) => previous <= current,
+                // A malformed historical timestamp keeps the scanner's
+                // existing lexical fallback semantics.  The current parsed
+                // value is deliberately not reparsed here.
+                _ => previous <= timestamp,
+            };
+            if !ordered {
+                self.token_timestamps_monotonic = Some(false);
+            }
+        }
+        self.previous_token_timestamp = Some(timestamp.to_string());
+        self.previous_token_timestamp_parsed = current_parsed;
+    }
+
     fn latch_if_below_watermark(&mut self, totals: &CodexTotals) {
         let Some(water) = self.totals_watermark.as_ref() else {
             return;
@@ -734,24 +868,140 @@ fn is_candidate_codex_line(line: &str) -> bool {
     !line.contains("\"type\":\"event_msg\"") || line.contains("\"token_count\"")
 }
 
-fn codex_line_day_key(obj: &Value, range: &CostUsageDayRange) -> Option<String> {
-    let ts = obj.get("timestamp").and_then(|v| v.as_str())?;
-    let day_key = codex_timestamp_day_key(ts)?;
-
-    CostUsageDayRange::is_in_range(&day_key, &range.scan_since_key, &range.scan_until_key)
-        .then_some(day_key)
+fn codex_timestamp_day_key(timestamp: &str) -> Option<String> {
+    parse_codex_timestamp(timestamp).map(|parsed| parsed.day_key())
 }
 
-fn codex_timestamp_day_key(timestamp: &str) -> Option<String> {
-    DateTime::parse_from_rfc3339(timestamp)
-        .ok()
-        .map(|ts| {
-            ts.with_timezone(&Local)
-                .date_naive()
-                .format("%Y-%m-%d")
-                .to_string()
-        })
-        .or_else(|| timestamp.get(..10).map(str::to_string))
+#[derive(Debug, Clone)]
+struct ParsedCodexTimestamp {
+    parsed: Option<DateTime<FixedOffset>>,
+    fallback_day_key: String,
+}
+
+impl ParsedCodexTimestamp {
+    fn day_key(&self) -> String {
+        self.parsed
+            .as_ref()
+            .map(|timestamp| {
+                timestamp
+                    .with_timezone(&Local)
+                    .date_naive()
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
+            .unwrap_or_else(|| self.fallback_day_key.clone())
+    }
+}
+
+fn parse_codex_timestamp(timestamp: &str) -> Option<ParsedCodexTimestamp> {
+    let bytes = timestamp.as_bytes();
+    if bytes.len() < 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return None;
+    }
+    let fallback_day_key = timestamp.get(..10)?;
+    NaiveDate::parse_from_str(fallback_day_key, "%Y-%m-%d").ok()?;
+    Some(ParsedCodexTimestamp {
+        parsed: parse_rfc3339_timestamp(timestamp),
+        fallback_day_key: fallback_day_key.to_string(),
+    })
+}
+
+fn parse_rfc3339_timestamp(timestamp: &str) -> Option<DateTime<FixedOffset>> {
+    parse_native_rfc3339(timestamp).or_else(|| DateTime::parse_from_rfc3339(timestamp).ok())
+}
+
+/// Fast path for the RFC3339 spelling emitted by native Codex logs. Historical
+/// spellings still fall through to chrono's parser, preserving old behavior.
+fn parse_native_rfc3339(timestamp: &str) -> Option<DateTime<FixedOffset>> {
+    let bytes = timestamp.as_bytes();
+    if bytes.len() < 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return None;
+    }
+
+    let year = parse_ascii_number(bytes, 0, 4)?;
+    if year < 1900 {
+        return None;
+    }
+    let month = parse_ascii_number(bytes, 5, 2)?;
+    let day = parse_ascii_number(bytes, 8, 2)?;
+    let hour = parse_ascii_number(bytes, 11, 2)?;
+    let minute = parse_ascii_number(bytes, 14, 2)?;
+    let second = parse_ascii_number(bytes, 17, 2)?;
+    if !(1..=12).contains(&month) || hour >= 24 || minute >= 60 || second >= 60 {
+        return None;
+    }
+
+    let mut zone_index = 19;
+    let mut nanoseconds = 0_u32;
+    if bytes.get(zone_index) == Some(&b'.') {
+        zone_index += 1;
+        let fraction_start = zone_index;
+        while bytes
+            .get(zone_index)
+            .is_some_and(|byte| byte.is_ascii_digit())
+        {
+            let digits = zone_index - fraction_start;
+            if digits >= 9 {
+                return None;
+            }
+            nanoseconds = nanoseconds * 10 + u32::from(bytes[zone_index] - b'0');
+            zone_index += 1;
+        }
+        let digits = zone_index - fraction_start;
+        if digits == 0 {
+            return None;
+        }
+        for _ in digits..9 {
+            nanoseconds *= 10;
+        }
+    }
+
+    let offset_seconds = match bytes.get(zone_index) {
+        Some(b'Z') if zone_index + 1 == bytes.len() => 0,
+        Some(sign) if (*sign == b'+' || *sign == b'-') && zone_index + 6 == bytes.len() => {
+            if bytes[zone_index + 3] != b':' {
+                return None;
+            }
+            let hours = parse_ascii_number(bytes, zone_index + 1, 2)?;
+            let minutes = parse_ascii_number(bytes, zone_index + 4, 2)?;
+            if hours >= 24 || minutes >= 60 {
+                return None;
+            }
+            let seconds = i32::try_from((hours * 60 + minutes) * 60).ok()?;
+            if *sign == b'-' { -seconds } else { seconds }
+        }
+        _ => return None,
+    };
+
+    let year = i32::try_from(year).ok()?;
+    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    let local = date.and_hms_nano_opt(hour, minute, second, nanoseconds)?;
+    FixedOffset::east_opt(offset_seconds)
+        .and_then(|offset| offset.from_local_datetime(&local).single())
+}
+
+fn parse_ascii_number(bytes: &[u8], start: usize, count: usize) -> Option<u32> {
+    let slice = bytes.get(start..start.checked_add(count)?)?;
+    let mut value = 0_u32;
+    for byte in slice {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u32::from(*byte - b'0');
+    }
+    Some(value)
 }
 
 fn bare_usage_totals(obj: &Value) -> Option<(CodexTotals, Option<String>)> {
@@ -988,6 +1238,32 @@ impl JsonlScanner {
         initial_model: Option<String>,
         initial_totals: Option<CodexTotals>,
     ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state(
+            file_path,
+            range,
+            start_offset,
+            initial_model,
+            initial_totals,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// Parse a Codex file while retaining the timestamp-order state of an
+    /// already decoded prefix.  A known prefix only pays for the append
+    /// boundary and newly read token events; an unknown legacy prefix is
+    /// intentionally rejected by the caller and should be parsed from zero.
+    pub fn parse_codex_file_with_state(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        start_offset: i64,
+        initial_model: Option<String>,
+        initial_totals: Option<CodexTotals>,
+        previous_token_timestamp: Option<String>,
+        token_timestamps_monotonic: Option<bool>,
+        cancel: Option<&AtomicBool>,
+    ) -> std::io::Result<CodexParseResult> {
         let file = File::open(file_path)?;
         // Session JSONL files are bounded by the cache budget; sizes fit i64.
         #[allow(
@@ -1001,12 +1277,22 @@ impl JsonlScanner {
             reader.seek(SeekFrom::Start(start_offset as u64))?;
         }
 
-        let mut parser = CodexParserState::new(initial_model, initial_totals);
+        let mut parser = CodexParserState::with_timestamp_state(
+            initial_model,
+            initial_totals,
+            previous_token_timestamp,
+            token_timestamps_monotonic,
+        );
         let mut parsed_bytes = start_offset;
+        let mut cancelled = false;
 
         while let Some((line_bytes, consumed)) =
             read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
         {
+            if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                cancelled = true;
+                break;
+            }
             // Per-line byte counts are capped at 256 KiB, far inside i64::MAX.
             #[allow(
                 clippy::cast_possible_wrap,
@@ -1026,9 +1312,16 @@ impl JsonlScanner {
 
         Ok(CodexParseResult {
             records: parser.records,
-            parsed_bytes: file_size.max(parsed_bytes),
+            parsed_bytes: if cancelled {
+                parsed_bytes
+            } else {
+                file_size.max(parsed_bytes)
+            },
             last_model: parser.current_model,
             last_totals: parser.previous_totals,
+            token_timestamps_monotonic: parser.token_timestamps_monotonic,
+            last_token_timestamp: parser.previous_token_timestamp,
+            token_timestamp_comparisons: parser.token_timestamp_comparisons,
         })
     }
 
@@ -1098,12 +1391,17 @@ impl JsonlScanner {
         }
 
         if let Ok(contents) = fs::read_to_string(&cache_path)
-            && let Ok(cache) = serde_json::from_str(&contents)
+            && let Ok(mut cache) = serde_json::from_str::<CostUsageCache>(&contents)
         {
+            cache.loaded_stamp = Some(Some(CacheStamp::from_bytes(contents.as_bytes())));
             return cache;
         }
 
-        CostUsageCache::default()
+        let mut cache = CostUsageCache::default();
+        // Track a missing or unreadable baseline separately from a manually
+        // constructed cache so a concurrent first writer can invalidate it.
+        cache.loaded_stamp = Some(Self::cache_stamp(&cache_path));
+        cache
     }
 
     /// Read only the cache metadata needed by presentation surfaces.
@@ -1239,6 +1537,15 @@ impl JsonlScanner {
     ) {
         let cache_path = Self::cache_path(provider, cache_root);
 
+        // A decoded baseline is only valid for the file contents that produced
+        // it. Refuse a stale writer before pruning or creating directories so a
+        // concurrent scan remains authoritative.
+        if let Some(expected) = cache.loaded_stamp.as_ref()
+            && Self::cache_stamp(&cache_path).as_ref() != expected.as_ref()
+        {
+            return;
+        }
+
         let Some(parent) = cache_path.parent() else {
             return;
         };
@@ -1319,10 +1626,23 @@ impl JsonlScanner {
         if fs::write(&tmp_path, json.as_bytes()).is_err() {
             return;
         }
+        // Recheck after encoding/pruning: another scan may have replaced the
+        // destination while this writer was preparing its payload.
+        if let Some(expected) = cache.loaded_stamp.as_ref()
+            && Self::cache_stamp(&cache_path).as_ref() != expected.as_ref()
+        {
+            let _removed_tmp = fs::remove_file(&tmp_path);
+            return;
+        }
         // `copy` replaces an existing target on Windows; prefer it over rename.
-        if fs::copy(&tmp_path, &cache_path).is_err() {
+        let wrote = if fs::copy(&tmp_path, &cache_path).is_ok() {
+            true
+        } else {
             // Fallback direct write when copy fails; the copy error already surfaced.
-            let _fallback_written = fs::write(&cache_path, json.as_bytes());
+            fs::write(&cache_path, json.as_bytes()).is_ok()
+        };
+        if wrote {
+            cache.loaded_stamp = Some(Some(CacheStamp::from_bytes(json.as_bytes())));
         }
         // Best-effort temp cleanup (ignore errors — unique name avoids clashes).
         let _truncated_tmp = fs::File::create(&tmp_path).and_then(|f| f.set_len(0));
@@ -1342,6 +1662,12 @@ impl JsonlScanner {
         // Mirror upstream layout: {cacheRoot}/cost-usage/{provider}-v1.json
         root.join("cost-usage")
             .join(format!("{}-v1.json", provider.cli_name()))
+    }
+
+    fn cache_stamp(cache_path: &Path) -> Option<CacheStamp> {
+        fs::read(cache_path)
+            .ok()
+            .map(|contents| CacheStamp::from_bytes(&contents))
     }
 
     /// Whether `cache` covers the requested day window (for debounce short-circuit).
@@ -1418,6 +1744,102 @@ mod tests {
         assert_eq!(
             codex_timestamp_day_key(&utc_timestamp).as_deref(),
             Some(expected.as_str())
+        );
+    }
+
+    #[test]
+    fn native_codex_timestamp_parser_matches_chrono_for_supported_spellings() {
+        for timestamp in [
+            "2026-05-31T10:00:00Z",
+            "2026-05-31T10:00:00.123456789Z",
+            "2024-02-29T23:59:59.999+05:30",
+            "1900-02-28T00:00:00-08:00",
+            "1899-12-31T23:59:59.000Z",
+        ] {
+            assert_eq!(
+                parse_rfc3339_timestamp(timestamp),
+                DateTime::parse_from_rfc3339(timestamp).ok(),
+                "native parser changed {timestamp}"
+            );
+        }
+        for timestamp in [
+            "2026-02-29T10:00:00Z",
+            "2026-05-31T10:00:00.1234567890Z",
+            "2026-05-31T10:00:00+0530",
+            "2026-05-31T24:00:00Z",
+        ] {
+            assert_eq!(
+                parse_rfc3339_timestamp(timestamp),
+                DateTime::parse_from_rfc3339(timestamp).ok(),
+                "native parser changed invalid {timestamp}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_timestamp_fallback_rejects_invalid_calendar_prefixes() {
+        for timestamp in [
+            "2026-02-29T10:00:00Z",
+            "2026-04-31T10:00:00Z",
+            "not-a-dateT10:00:00Z",
+            "2026-05-31",
+        ] {
+            assert!(
+                parse_codex_timestamp(timestamp).is_none(),
+                "invalid timestamp must not be accepted by the day-key fallback: {timestamp}"
+            );
+        }
+
+        for timestamp in ["2026-05-31T10:00:00+0530", "2026-05-31T10:00:00+05"] {
+            let parsed = parse_codex_timestamp(timestamp).expect("historical timestamp shape");
+            assert_eq!(parsed.fallback_day_key, "2026-05-31");
+            assert!(parsed.parsed.is_none());
+        }
+    }
+
+    #[test]
+    fn codex_timestamp_order_latches_false_and_stops_rechecking() {
+        let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for (timestamp, input) in [
+            ("2026-05-31T10:00:02Z", 10),
+            ("2026-05-31T10:00:01Z", 20),
+            ("2026-05-31T10:00:03Z", 30),
+        ] {
+            parser.process_line(
+                &format!(
+                    r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":1}}}}}}}}"#
+                ),
+                &range,
+            );
+        }
+
+        assert_eq!(parser.token_timestamps_monotonic, Some(false));
+        assert_eq!(parser.token_timestamp_comparisons, 1);
+        assert_eq!(parser.records.len(), 3);
+    }
+
+    #[test]
+    fn codex_timestamp_order_checks_token_history_outside_requested_window() {
+        let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+
+        for line in [
+            r#"{"timestamp":"2026-06-01T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}}}}"#,
+            r#"{"timestamp":"2026-05-31T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"cached_input_tokens":0,"output_tokens":2}}}}"#,
+        ] {
+            parser.process_line(line, &range);
+        }
+
+        assert_eq!(parser.token_timestamps_monotonic, Some(false));
+        assert_eq!(parser.token_timestamp_comparisons, 1);
+        assert_eq!(
+            parser.records.len(),
+            1,
+            "only the in-range event is recorded"
         );
     }
 
@@ -1524,6 +1946,59 @@ mod tests {
         assert_eq!(record.day_key, "2026-05-31");
         assert_eq!(record.model, "gpt-5.5");
         assert_eq!((record.input, record.cached, record.output), (45, 12, 8));
+    }
+
+    #[test]
+    fn codex_append_timestamp_state_is_output_equivalent_and_boundary_only() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        for (timestamp, input, output) in [
+            ("2026-05-31T10:00:01.000Z", 10, 1),
+            ("2026-05-31T10:00:02.000Z", 20, 2),
+        ] {
+            writeln!(
+                file,
+                r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5.5","total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":{output}}}}}}}}}"#
+            )
+            .unwrap();
+        }
+
+        let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+        let range = CostUsageDayRange::new(day, day);
+        let prefix = JsonlScanner::parse_codex_file(file.path(), &range, 0, None, None)
+            .expect("parse prefix");
+        assert_eq!(prefix.token_timestamps_monotonic, Some(true));
+        assert_eq!(prefix.token_timestamp_comparisons, 1);
+        let prefix_input: i32 = prefix.records.iter().map(|record| record.input).sum();
+
+        writeln!(
+            file,
+            r#"{{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5.5","total_token_usage":{{"input_tokens":30,"cached_input_tokens":0,"output_tokens":3}}}}}}}}}"#
+        )
+        .unwrap();
+
+        let appended = JsonlScanner::parse_codex_file_with_state(
+            file.path(),
+            &range,
+            prefix.parsed_bytes,
+            prefix.last_model.clone(),
+            prefix.last_totals.clone(),
+            prefix.last_token_timestamp.clone(),
+            prefix.token_timestamps_monotonic,
+            None,
+        )
+        .expect("parse appended suffix");
+        assert_eq!(appended.token_timestamps_monotonic, Some(true));
+        assert_eq!(
+            appended.token_timestamp_comparisons, 1,
+            "only the cached-prefix boundary is compared"
+        );
+
+        let full = JsonlScanner::parse_codex_file(file.path(), &range, 0, None, None)
+            .expect("parse complete file");
+        let full_input: i32 = full.records.iter().map(|record| record.input).sum();
+        let appended_input: i32 = appended.records.iter().map(|record| record.input).sum();
+        assert_eq!(prefix_input + appended_input, full_input);
+        assert_eq!(full_input, 30);
     }
 
     #[test]
@@ -1879,6 +2354,8 @@ line2
                 parsed_bytes: Some(100),
                 last_model: Some("gpt-5.6-sol".to_string()),
                 last_totals: None,
+                codex_token_timestamps_monotonic: Some(true),
+                codex_last_token_timestamp: None,
             },
         );
         cache.files.insert(
@@ -1890,6 +2367,8 @@ line2
                 parsed_bytes: Some(10),
                 last_model: None,
                 last_totals: None,
+                codex_token_timestamps_monotonic: None,
+                codex_last_token_timestamp: None,
             },
         );
         cache.days.insert(
@@ -1938,6 +2417,8 @@ line2
                     parsed_bytes: None,
                     last_model: None,
                     last_totals: None,
+                    codex_token_timestamps_monotonic: None,
+                    codex_last_token_timestamp: None,
                 },
             )]),
             ..Default::default()
@@ -1952,6 +2433,32 @@ line2
             "small artifact persisted"
         );
         assert_eq!(loaded.scan_since_key, Some("2026-01-01".to_string()));
+    }
+
+    #[test]
+    fn stale_loaded_cache_does_not_replace_newer_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = root.path();
+
+        let mut initial = CostUsageCache {
+            last_scan_unix_ms: 1,
+            ..Default::default()
+        };
+        JsonlScanner::save_cache(ProviderId::Codex, &mut initial, Some(cache_root));
+
+        let mut stale = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
+        let mut newer = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
+        newer.last_scan_unix_ms = 2;
+        JsonlScanner::save_cache(ProviderId::Codex, &mut newer, Some(cache_root));
+
+        stale.last_scan_unix_ms = 3;
+        JsonlScanner::save_cache(ProviderId::Codex, &mut stale, Some(cache_root));
+
+        let loaded = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
+        assert_eq!(
+            loaded.last_scan_unix_ms, 2,
+            "a stale decoded baseline must not overwrite the newer cache"
+        );
     }
 
     #[test]
@@ -1972,6 +2479,8 @@ line2
                 parsed_bytes: None,
                 last_model: None,
                 last_totals: None,
+                codex_token_timestamps_monotonic: None,
+                codex_last_token_timestamp: None,
             },
         );
 
@@ -2001,6 +2510,8 @@ line2
                 parsed_bytes: None,
                 last_model: None,
                 last_totals: None,
+                codex_token_timestamps_monotonic: None,
+                codex_last_token_timestamp: None,
             },
         );
 

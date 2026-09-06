@@ -35,12 +35,20 @@ pub struct CostCoverageCounts {
 
 impl CostCoverageCounts {
     pub fn total(&self) -> u32 {
-        self.priced + self.unpriced + self.unmetered + self.estimated
+        self.checked_total().unwrap_or(u32::MAX)
+    }
+
+    fn checked_total(&self) -> Option<u32> {
+        self.priced
+            .checked_add(self.unpriced)?
+            .checked_add(self.unmetered)?
+            .checked_add(self.estimated)
     }
 
     pub fn coverage_ratio(&self) -> Option<f64> {
-        let denominator = self.total();
-        (denominator > 0).then(|| (self.priced + self.estimated) as f64 / denominator as f64)
+        let denominator = self.checked_total()?;
+        let covered = self.priced.checked_add(self.estimated)?;
+        (denominator > 0).then(|| covered as f64 / denominator as f64)
     }
 }
 
@@ -52,6 +60,11 @@ pub struct SpendTokenMix {
     pub cache_read_tokens: Option<u64>,
     pub cache_creation_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
+    /// Keeps arithmetic overflow distinct from an ordinary missing class while
+    /// the report is merged in memory.  It is deliberately not part of the
+    /// wire contract: both cases are exposed as unknown (`None`).
+    #[serde(skip)]
+    pub(crate) overflowed_classes: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +123,7 @@ struct NativeSpendData {
 struct ResolvedSpendData {
     known_cost_usd: Option<f64>,
     price_coverage: CostCoverageCounts,
+    price_coverage_exact: bool,
     token_mix: SpendTokenMix,
     models: Vec<SpendModelRow>,
     daily: Vec<SpendDailyPoint>,
@@ -278,6 +292,7 @@ pub fn build_local_spend_contract_from_summary(
         cache_read_tokens: Some(summary.cached_tokens),
         cache_creation_tokens: None,
         reasoning_tokens: None,
+        ..SpendTokenMix::default()
     };
 
     let native = load_native_spend(provider_id, history_days, hide_personal_info);
@@ -336,7 +351,11 @@ pub fn build_local_spend_contract_from_summary(
         } else {
             CostProvenance::Unknown
         },
-        price_coverage_ratio: resolved.price_coverage.coverage_ratio(),
+        price_coverage_ratio: if resolved.price_coverage_exact {
+            resolved.price_coverage.coverage_ratio()
+        } else {
+            None
+        },
         price_coverage: resolved.price_coverage,
         history_coverage_established: summary.history_coverage_established,
         token_mix: resolved.token_mix,
@@ -417,21 +436,28 @@ fn resolve_spend(
         Some(imported) if replace_native => ResolvedSpendData {
             known_cost_usd: imported.known_cost_usd,
             price_coverage: imported.coverage.clone(),
+            price_coverage_exact: imported.coverage.checked_total().is_some(),
             token_mix: imported.token_mix.clone(),
             models: imported.models.clone(),
             daily: imported.daily.clone(),
             hourly_activity: imported.hourly_activity.clone(),
         },
-        Some(imported) => ResolvedSpendData {
-            known_cost_usd: sum_optional_cost(native_cost, imported.known_cost_usd),
-            price_coverage: merge_coverage(native_coverage, &imported.coverage),
-            token_mix: merge_token_mix(native_token_mix, &imported.token_mix),
-            models: merge_models(native_models, &imported.models),
-            daily: merge_daily(native_daily, &imported.daily),
-            hourly_activity: merge_activity(native_activity, &imported.hourly_activity),
-        },
+        Some(imported) => {
+            let (price_coverage, price_coverage_exact) =
+                merge_coverage(native_coverage, &imported.coverage);
+            ResolvedSpendData {
+                known_cost_usd: sum_optional_cost(native_cost, imported.known_cost_usd),
+                price_coverage,
+                price_coverage_exact,
+                token_mix: merge_token_mix(native_token_mix, &imported.token_mix),
+                models: merge_models(native_models, &imported.models),
+                daily: merge_daily(native_daily, &imported.daily),
+                hourly_activity: merge_activity(native_activity, &imported.hourly_activity),
+            }
+        }
         None => ResolvedSpendData {
             known_cost_usd: native_cost,
+            price_coverage_exact: native_coverage.checked_total().is_some(),
             price_coverage: native_coverage,
             token_mix: native_token_mix,
             models: native_models,
@@ -565,29 +591,94 @@ fn activity_from_sessions(sessions: &[SessionUsage]) -> Vec<SpendActivityCell> {
         .collect()
 }
 fn sum_optional_cost(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    let valid = |value: f64| value.is_finite() && value >= 0.0;
     match (left, right) {
-        (Some(left), Some(right)) => (left + right).is_finite().then_some(left + right),
-        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(left), Some(right)) if valid(left) && valid(right) => {
+            let total = left + right;
+            valid(total).then_some(total)
+        }
+        (Some(value), None) | (None, Some(value)) if valid(value) => Some(value),
         (None, None) => None,
+        _ => None,
     }
 }
 
-fn merge_coverage(mut left: CostCoverageCounts, right: &CostCoverageCounts) -> CostCoverageCounts {
-    left.priced = left.priced.saturating_add(right.priced);
-    left.unpriced = left.unpriced.saturating_add(right.unpriced);
-    left.unmetered = left.unmetered.saturating_add(right.unmetered);
-    left.estimated = left.estimated.saturating_add(right.estimated);
-    left
+fn merge_coverage(
+    left: CostCoverageCounts,
+    right: &CostCoverageCounts,
+) -> (CostCoverageCounts, bool) {
+    let priced = left.priced.checked_add(right.priced);
+    let unpriced = left.unpriced.checked_add(right.unpriced);
+    let unmetered = left.unmetered.checked_add(right.unmetered);
+    let estimated = left.estimated.checked_add(right.estimated);
+    let exact =
+        priced.is_some() && unpriced.is_some() && unmetered.is_some() && estimated.is_some();
+    let merged = CostCoverageCounts {
+        priced: priced.unwrap_or(u32::MAX),
+        unpriced: unpriced.unwrap_or(u32::MAX),
+        unmetered: unmetered.unwrap_or(u32::MAX),
+        estimated: estimated.unwrap_or(u32::MAX),
+    };
+    let exact = exact && merged.checked_total().is_some();
+    (merged, exact)
 }
 
 fn merge_token_mix(mut left: SpendTokenMix, right: &SpendTokenMix) -> SpendTokenMix {
-    left.input_tokens = add_optional(left.input_tokens, right.input_tokens);
-    left.output_tokens = add_optional(left.output_tokens, right.output_tokens);
-    left.cache_read_tokens = add_optional(left.cache_read_tokens, right.cache_read_tokens);
-    left.cache_creation_tokens =
-        add_optional(left.cache_creation_tokens, right.cache_creation_tokens);
-    left.reasoning_tokens = add_optional(left.reasoning_tokens, right.reasoning_tokens);
+    left.overflowed_classes |= right.overflowed_classes;
+    left.input_tokens = merge_token_class(
+        left.input_tokens,
+        right.input_tokens,
+        &mut left.overflowed_classes,
+        1 << 0,
+    );
+    left.output_tokens = merge_token_class(
+        left.output_tokens,
+        right.output_tokens,
+        &mut left.overflowed_classes,
+        1 << 1,
+    );
+    left.cache_read_tokens = merge_token_class(
+        left.cache_read_tokens,
+        right.cache_read_tokens,
+        &mut left.overflowed_classes,
+        1 << 2,
+    );
+    left.cache_creation_tokens = merge_token_class(
+        left.cache_creation_tokens,
+        right.cache_creation_tokens,
+        &mut left.overflowed_classes,
+        1 << 3,
+    );
+    left.reasoning_tokens = merge_token_class(
+        left.reasoning_tokens,
+        right.reasoning_tokens,
+        &mut left.overflowed_classes,
+        1 << 4,
+    );
     left
+}
+
+fn merge_token_class(
+    left: Option<u64>,
+    right: Option<u64>,
+    overflowed_classes: &mut u8,
+    bit: u8,
+) -> Option<u64> {
+    if *overflowed_classes & bit != 0 {
+        return None;
+    }
+    match (left, right) {
+        (Some(left), Some(right)) => match left.checked_add(right) {
+            Some(total) => Some(total),
+            None => {
+                *overflowed_classes |= bit;
+                None
+            }
+        },
+        (Some(left), None) => Some(left),
+        (None, Some(right)) => Some(right),
+        (None, None) => None,
+    }
 }
 
 fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
@@ -685,6 +776,32 @@ mod tests {
     }
 
     #[test]
+    fn coverage_overflow_is_unknown_instead_of_a_fake_ratio() {
+        let coverage = CostCoverageCounts {
+            priced: u32::MAX,
+            unpriced: 1,
+            unmetered: 0,
+            estimated: 0,
+        };
+        assert_eq!(coverage.total(), u32::MAX);
+        assert_eq!(coverage.checked_total(), None);
+        assert_eq!(coverage.coverage_ratio(), None);
+
+        let (merged, exact) = merge_coverage(
+            CostCoverageCounts {
+                priced: u32::MAX,
+                ..CostCoverageCounts::default()
+            },
+            &CostCoverageCounts {
+                priced: 1,
+                ..CostCoverageCounts::default()
+            },
+        );
+        assert!(!exact);
+        assert_eq!(merged.priced, u32::MAX);
+    }
+
+    #[test]
     fn explicit_zero_custom_rate_is_known_free_but_missing_rate_is_unknown() {
         let counts = ModelTokenCounts {
             input_tokens: 1_000_000,
@@ -707,6 +824,8 @@ mod tests {
         assert_eq!(sum_optional_cost(None, Some(2.0)), Some(2.0));
         assert_eq!(sum_optional_cost(None, None), None);
         assert_eq!(sum_optional_cost(Some(f64::INFINITY), Some(1.0)), None);
+        assert_eq!(sum_optional_cost(Some(-1.0), None), None);
+        assert_eq!(sum_optional_cost(Some(1.0), Some(f64::NAN)), None);
     }
 
     #[test]
@@ -715,6 +834,49 @@ mod tests {
         assert_eq!(add_optional(Some(2), None), Some(2));
         assert_eq!(add_optional(None, None), None);
         assert_eq!(add_optional(Some(u64::MAX), Some(1)), None);
+    }
+
+    #[test]
+    fn merge_token_mix_preserves_optional_reasoning_and_unknown_classes() {
+        let merged = merge_token_mix(
+            SpendTokenMix {
+                input_tokens: None,
+                reasoning_tokens: Some(2),
+                ..SpendTokenMix::default()
+            },
+            &SpendTokenMix {
+                input_tokens: Some(5),
+                reasoning_tokens: Some(3),
+                ..SpendTokenMix::default()
+            },
+        );
+        assert_eq!(merged.input_tokens, Some(5));
+        assert_eq!(merged.reasoning_tokens, Some(5));
+        assert_eq!(merged.output_tokens, None);
+    }
+
+    #[test]
+    fn merge_token_mix_keeps_overflow_unknown_across_later_sources() {
+        let overflowed = merge_token_mix(
+            SpendTokenMix {
+                input_tokens: Some(u64::MAX),
+                ..SpendTokenMix::default()
+            },
+            &SpendTokenMix {
+                input_tokens: Some(1),
+                ..SpendTokenMix::default()
+            },
+        );
+        assert_eq!(overflowed.input_tokens, None);
+
+        let merged = merge_token_mix(
+            overflowed,
+            &SpendTokenMix {
+                input_tokens: Some(2),
+                ..SpendTokenMix::default()
+            },
+        );
+        assert_eq!(merged.input_tokens, None);
     }
 
     #[test]
@@ -774,6 +936,114 @@ mod tests {
         assert_eq!(merged[0].cost_usd, None, "unknown stays unknown");
         assert_eq!(merged[0].total_tokens, None);
         assert_eq!(merged[2].total_tokens, None);
+    }
+
+    #[test]
+    fn resolve_spend_preserves_merged_report_details() {
+        let native_models = vec![SpendModelRow {
+            model: "gpt-5".to_string(),
+            cost_usd: Some(1.0),
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_read_tokens: 0,
+            total_tokens: 12,
+            custom_pricing: false,
+        }];
+        let imported = ImportedSpendSource {
+            source_id: "fixture".to_string(),
+            display_name: "Fixture".to_string(),
+            request_count: 2,
+            conversation_count: 1,
+            known_cost_usd: Some(2.0),
+            token_mix: SpendTokenMix {
+                input_tokens: Some(5),
+                cache_read_tokens: Some(4),
+                reasoning_tokens: Some(1),
+                ..SpendTokenMix::default()
+            },
+            coverage: CostCoverageCounts {
+                priced: 2,
+                unpriced: 1,
+                unmetered: 0,
+                estimated: 1,
+            },
+            models: vec![SpendModelRow {
+                model: "gpt-5".to_string(),
+                cost_usd: Some(2.0),
+                input_tokens: 5,
+                output_tokens: 0,
+                cache_read_tokens: 4,
+                total_tokens: 9,
+                custom_pricing: true,
+            }],
+            daily: vec![
+                SpendDailyPoint {
+                    day: "2026-08-01".to_string(),
+                    cost_usd: Some(2.0),
+                    total_tokens: Some(9),
+                },
+                SpendDailyPoint {
+                    day: "2026-08-02".to_string(),
+                    cost_usd: None,
+                    total_tokens: None,
+                },
+            ],
+            hourly_activity: vec![SpendActivityCell {
+                weekday: 1,
+                hour: 2,
+                conversations: 4,
+            }],
+        };
+
+        let resolved = resolve_spend(
+            Some(1.0),
+            CostCoverageCounts {
+                priced: 1,
+                unpriced: 0,
+                unmetered: 1,
+                estimated: 0,
+            },
+            SpendTokenMix {
+                input_tokens: Some(10),
+                output_tokens: Some(2),
+                ..SpendTokenMix::default()
+            },
+            native_models,
+            vec![SpendDailyPoint {
+                day: "2026-08-01".to_string(),
+                cost_usd: Some(1.0),
+                total_tokens: Some(12),
+            }],
+            vec![SpendActivityCell {
+                weekday: 1,
+                hour: 2,
+                conversations: 3,
+            }],
+            Some(&imported),
+            false,
+        );
+
+        assert_eq!(resolved.known_cost_usd, Some(3.0));
+        assert_eq!(resolved.token_mix.input_tokens, Some(15));
+        assert_eq!(resolved.token_mix.output_tokens, Some(2));
+        assert_eq!(resolved.token_mix.cache_read_tokens, Some(4));
+        assert_eq!(resolved.token_mix.reasoning_tokens, Some(1));
+        assert_eq!(resolved.price_coverage.priced, 3);
+        assert_eq!(resolved.price_coverage.unpriced, 1);
+        assert_eq!(resolved.price_coverage.unmetered, 1);
+        assert_eq!(resolved.price_coverage.estimated, 1);
+        assert!(resolved.price_coverage_exact);
+
+        let model = &resolved.models[0];
+        assert_eq!(model.cost_usd, Some(3.0));
+        assert_eq!(model.input_tokens, 15);
+        assert_eq!(model.cache_read_tokens, 4);
+        assert!(model.custom_pricing);
+        assert_eq!(resolved.daily[0].cost_usd, Some(3.0));
+        assert_eq!(resolved.daily[0].total_tokens, Some(21));
+        assert_eq!(resolved.daily[1].cost_usd, None);
+        assert_eq!(resolved.daily[1].total_tokens, None);
+        assert_eq!(resolved.hourly_activity[0].conversations, 7);
     }
 
     #[test]
