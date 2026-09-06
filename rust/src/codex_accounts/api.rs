@@ -282,6 +282,21 @@ impl CodexAccountApi {
         email_hint: Option<&str>,
         verify_live_data: bool,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        self.fetch_snapshot_for_workspace(codex_home_path, email_hint, None, verify_live_data)
+            .await
+    }
+
+    /// Fetch a snapshot while scoping every usage/credits request to the
+    /// app-selected workspace. The selected id is request metadata only: the
+    /// auth file remains untouched and may retain a different default.
+    pub async fn fetch_snapshot_for_workspace(
+        &self,
+        codex_home_path: &Path,
+        email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
+        verify_live_data: bool,
+    ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        let workspace_account_id = workspace_account_id.and_then(|id| normalize_string(Some(id)));
         let mut credentials = load_credentials(codex_home_path)?;
 
         if credentials.needs_refresh()
@@ -295,7 +310,13 @@ impl CodexAccountApi {
         }
 
         let result = self
-            .fetch_once(codex_home_path, &credentials, email_hint, verify_live_data)
+            .fetch_once(
+                codex_home_path,
+                &credentials,
+                email_hint,
+                workspace_account_id.as_deref(),
+                verify_live_data,
+            )
             .await;
         if !matches!(&result, Err(CodexApiError::Message(msg)) if msg == UNAUTHORIZED_MESSAGE)
             || credentials.refresh_token.is_empty()
@@ -308,7 +329,13 @@ impl CodexAccountApi {
             // cannot block the fetch already in progress.
             let _saved_retry = save_credentials(codex_home_path, &refreshed);
             return self
-                .fetch_once(codex_home_path, &refreshed, email_hint, verify_live_data)
+                .fetch_once(
+                    codex_home_path,
+                    &refreshed,
+                    email_hint,
+                    workspace_account_id.as_deref(),
+                    verify_live_data,
+                )
                 .await;
         }
         result
@@ -319,14 +346,25 @@ impl CodexAccountApi {
         codex_home_path: &Path,
         credentials: &AuthCredentials,
         email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
         verify_live_data: bool,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
         if verify_live_data {
-            self.fetch_verified(codex_home_path, credentials, email_hint)
-                .await
+            self.fetch_verified(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
+            .await
         } else {
-            self.fetch_single(codex_home_path, credentials, email_hint)
-                .await
+            self.fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
+            .await
         }
     }
 
@@ -336,18 +374,34 @@ impl CodexAccountApi {
         codex_home_path: &Path,
         credentials: &AuthCredentials,
         email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
         let first = self
-            .fetch_single(codex_home_path, credentials, email_hint)
+            .fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
             .await?;
         let second = self
-            .fetch_single(codex_home_path, credentials, email_hint)
+            .fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
             .await?;
         if is_equivalent(&first, &second) {
             return Ok(second);
         }
         let third = self
-            .fetch_single(codex_home_path, credentials, email_hint)
+            .fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
             .await?;
         if is_equivalent(&first, &third) || is_equivalent(&second, &third) {
             return Ok(third);
@@ -362,13 +416,18 @@ impl CodexAccountApi {
         codex_home_path: &Path,
         credentials: &AuthCredentials,
         fallback_email: Option<&str>,
+        workspace_account_id: Option<&str>,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
         let identity = identity_from_credentials(credentials);
+        let remote_account_id = workspace_account_id
+            .and_then(|id| normalize_string(Some(id)))
+            .or_else(|| identity.provider_account_id.clone())
+            .or_else(|| credentials.account_id.clone());
         let response = self
             .fetch_usage(
                 codex_home_path,
                 &credentials.access_token,
-                credentials.account_id.as_deref(),
+                remote_account_id.as_deref(),
             )
             .await?;
         let rate_limit = response.get("rate_limit").and_then(|v| v.as_object());
@@ -380,9 +439,7 @@ impl CodexAccountApi {
 
         Ok(AccountUsageSnapshot {
             email: identity.email.or_else(|| normalize_string(fallback_email)),
-            provider_account_id: identity
-                .provider_account_id
-                .or_else(|| credentials.account_id.clone()),
+            provider_account_id: remote_account_id,
             plan: normalize_string(response.get("plan_type").and_then(|v| v.as_str()))
                 .or(identity.plan),
             allowed: rate_limit

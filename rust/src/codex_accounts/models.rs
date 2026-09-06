@@ -100,7 +100,14 @@ pub struct CodexAccount {
     pub nickname: Option<String>,
     pub email_hint: Option<String>,
     pub auth_subject: Option<String>,
+    /// Legacy persisted workspace selection. New records should prefer
+    /// `workspace_account_id`, but this remains a valid selected-workspace
+    /// fallback for v0.56.3 accounts.
     pub provider_account_id: Option<String>,
+    /// App-owned remote workspace selection. This deliberately is not copied
+    /// into the Codex auth file, whose account id may name another default.
+    #[serde(default)]
+    pub workspace_account_id: Option<String>,
     pub codex_home_path: PathBuf,
     pub source: CodexAccountSource,
     pub created_at: DateTime<Utc>,
@@ -131,6 +138,7 @@ impl CodexAccount {
             email_hint,
             auth_subject,
             provider_account_id,
+            workspace_account_id: None,
             codex_home_path,
             source,
             created_at,
@@ -178,6 +186,35 @@ impl CodexAccount {
         normalize_identifier(self.provider_account_id.as_deref())
     }
 
+    pub fn normalized_workspace_account_id(&self) -> Option<String> {
+        normalize_identifier(self.workspace_account_id.as_deref())
+    }
+
+    /// The remote workspace owned by the app for this account.
+    ///
+    /// `provider_account_id` was the selected workspace field in the local
+    /// v0.56.3 store. Keep it as the compatibility fallback, while an explicit
+    /// selection always wins over the auth file's default account id.
+    pub fn effective_workspace_account_id(&self) -> Option<String> {
+        self.normalized_workspace_account_id()
+            .or_else(|| self.normalized_provider_account_id())
+    }
+
+    /// Whether the app-selected workspace differs from the auth file default.
+    /// A missing side is not a proven mismatch, matching the upstream guard.
+    pub fn selected_workspace_differs_from_auth_default(
+        &self,
+        auth_default_account_id: Option<&str>,
+    ) -> bool {
+        match (
+            self.effective_workspace_account_id(),
+            normalize_identifier(auth_default_account_id),
+        ) {
+            (Some(selected), Some(default_id)) => selected != default_id,
+            _ => false,
+        }
+    }
+
     pub fn standardized_home_path(&self) -> String {
         std::path::absolute(&self.codex_home_path)
             .unwrap_or_else(|_| self.codex_home_path.clone())
@@ -186,7 +223,7 @@ impl CodexAccount {
     }
 
     fn display_identity(&self) -> String {
-        self.normalized_provider_account_id()
+        self.effective_workspace_account_id()
             .unwrap_or_else(|| self.id.to_string().to_lowercase())
     }
 
@@ -204,14 +241,14 @@ impl CodexAccount {
             return true;
         }
         if let (Some(a), Some(b)) = (
-            self.normalized_provider_account_id(),
-            other.normalized_provider_account_id(),
+            self.effective_workspace_account_id(),
+            other.effective_workspace_account_id(),
         ) && a == b
         {
             return true;
         }
-        if self.normalized_provider_account_id().is_some()
-            || other.normalized_provider_account_id().is_some()
+        if self.effective_workspace_account_id().is_some()
+            || other.effective_workspace_account_id().is_some()
         {
             return false;
         }
@@ -253,10 +290,26 @@ impl CodexAccount {
         };
         pick(&mut self.email_hint, other.email_hint.as_ref());
         pick(&mut self.auth_subject, other.auth_subject.as_ref());
-        pick(
-            &mut self.provider_account_id,
-            other.provider_account_id.as_ref(),
-        );
+        if self.workspace_account_id.is_none() {
+            if other.workspace_account_id.is_some() {
+                self.workspace_account_id = other.workspace_account_id.clone();
+            } else if self.provider_account_id.is_none()
+                || self.normalized_provider_account_id() == other.normalized_provider_account_id()
+            {
+                pick(
+                    &mut self.provider_account_id,
+                    other.provider_account_id.as_ref(),
+                );
+            }
+        } else {
+            // The explicit app-owned selection is authoritative. The legacy
+            // provider field may still refresh as auth metadata, but must never
+            // replace the selected workspace above.
+            pick(
+                &mut self.provider_account_id,
+                other.provider_account_id.as_ref(),
+            );
+        }
 
         if prefer_other {
             self.source = other.source;
@@ -330,6 +383,8 @@ pub struct RemovedAccountIdentity {
     pub email_hint: Option<String>,
     pub auth_subject: Option<String>,
     pub provider_account_id: Option<String>,
+    #[serde(default)]
+    pub workspace_account_id: Option<String>,
     pub codex_home_path: PathBuf,
     pub source: CodexAccountSource,
     pub removed_at: DateTime<Utc>,
@@ -342,6 +397,7 @@ impl RemovedAccountIdentity {
             email_hint: account.email_hint.clone(),
             auth_subject: account.auth_subject.clone(),
             provider_account_id: account.provider_account_id.clone(),
+            workspace_account_id: account.workspace_account_id.clone(),
             codex_home_path: account.codex_home_path.clone(),
             source: account.source,
             removed_at: utc_now(),
@@ -353,18 +409,14 @@ impl RemovedAccountIdentity {
             return true;
         }
         if let (Some(a), Some(b)) = (
-            normalize_identifier(self.provider_account_id.as_deref()),
-            account.normalized_provider_account_id(),
+            self.effective_workspace_account_id(),
+            account.effective_workspace_account_id(),
         ) && a == b
         {
             return true;
         }
-        if self
-            .provider_account_id
-            .as_ref()
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-            || account.provider_account_id.as_ref().is_some()
+        if self.effective_workspace_account_id().is_some()
+            || account.effective_workspace_account_id().is_some()
         {
             return false;
         }
@@ -390,6 +442,11 @@ impl RemovedAccountIdentity {
             .unwrap_or_else(|_| self.codex_home_path.clone())
             .to_string_lossy()
             .to_lowercase()
+    }
+
+    fn effective_workspace_account_id(&self) -> Option<String> {
+        normalize_identifier(self.workspace_account_id.as_deref())
+            .or_else(|| normalize_identifier(self.provider_account_id.as_deref()))
     }
 }
 
@@ -627,6 +684,48 @@ mod tests {
             Some("acct-2"),
         );
         assert!(!a.matches(&b));
+    }
+
+    #[test]
+    fn explicit_workspace_beats_auth_default_and_survives_discovery_merge() {
+        let mut selected = account(
+            "11111111-1111-1111-1111-111111111111",
+            "/managed/selected",
+            CodexAccountSource::ManagedByApp,
+            Some("auth-default-a"),
+        );
+        selected.workspace_account_id = Some("selected-workspace-b".to_string());
+        let discovered = account(
+            "22222222-2222-2222-2222-222222222222",
+            "/managed/selected",
+            CodexAccountSource::ManagedByApp,
+            Some("auth-default-a"),
+        );
+
+        assert_eq!(
+            selected.effective_workspace_account_id().as_deref(),
+            Some("selected-workspace-b")
+        );
+        assert!(selected.selected_workspace_differs_from_auth_default(Some("auth-default-a")));
+        selected.merge_from(&discovered);
+        assert_eq!(
+            selected.effective_workspace_account_id().as_deref(),
+            Some("selected-workspace-b")
+        );
+    }
+
+    #[test]
+    fn legacy_provider_account_id_is_selected_workspace_fallback() {
+        let account = account(
+            "11111111-1111-1111-1111-111111111111",
+            "/managed/selected",
+            CodexAccountSource::ManagedByApp,
+            Some("Selected-Workspace-B"),
+        );
+        assert_eq!(
+            account.effective_workspace_account_id().as_deref(),
+            Some("selected-workspace-b")
+        );
     }
 
     #[test]
