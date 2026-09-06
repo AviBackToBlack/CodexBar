@@ -27,11 +27,15 @@ use crate::codex_costs::{
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{
     CachedCostReport, CodexScanPauseReason, CostScanOptions, CostUsageCache, CostUsageDayRange,
-    CostUsageFileUsage, CostUsagePricing, JsonlScanner, ProviderId,
+    CostUsageFileUsage, JsonlScanner, ProviderId,
 };
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
+mod claude_pricing;
 mod codex;
+use claude_pricing::ClaudeScanPricingResolver;
+#[cfg(test)]
+use claude_pricing::{ClaudePricing, FALLBACK_CLAUDE_MODEL};
 
 /// Completeness of the pricing coverage in a [`CostSummary`] (upstream 0.48.0 F18).
 ///
@@ -126,10 +130,6 @@ fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel.is_some_and(|flag| flag.load(Ordering::Relaxed))
 }
 
-/// Fallback Claude model used when a scanned model isn't in the canonical
-/// pricing table (unknown or retired IDs). Prices as Sonnet 4.6.
-const FALLBACK_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
-
 fn unix_now_ms() -> i64 {
     // Duration is clamped to i64::MAX before casting, so the value fits i64.
     #[allow(
@@ -154,56 +154,6 @@ fn system_time_to_unix_ms(modified: Option<SystemTime>) -> i64 {
         .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0);
     millis
-}
-
-/// input rate.
-struct ClaudePricing;
-
-impl ClaudePricing {
-    fn cost_usd_with_cache_ttl(
-        model: &str,
-        input: u64,
-        cache_create: u64,
-        cache_create_1h: u64,
-        cache_read: u64,
-        output: u64,
-    ) -> f64 {
-        let cache_create_1h = cache_create_1h.min(cache_create);
-        let cache_create_5m = cache_create.saturating_sub(cache_create_1h);
-
-        // Standard buckets (input, cache-read, 5-minute cache-write, output),
-        // including any long-context tiering, come from the canonical table.
-        // Unknown/retired models fall back to Sonnet pricing.
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "clamped to i32::MAX before casting"
-        )]
-        let clamp = |v: u64| v.min(i32::MAX as u64) as i32;
-        let base = CostUsagePricing::claude_cost_usd(
-            model,
-            clamp(input),
-            clamp(cache_read),
-            clamp(cache_create_5m),
-            clamp(output),
-        )
-        .or_else(|| {
-            CostUsagePricing::claude_cost_usd(
-                FALLBACK_CLAUDE_MODEL,
-                clamp(input),
-                clamp(cache_read),
-                clamp(cache_create_5m),
-                clamp(output),
-            )
-        })
-        .unwrap_or(0.0);
-
-        // Scanner-specific: one-hour cache writes bill at 2x the input rate.
-        let input_rate = CostUsagePricing::claude_input_cost_per_token(model)
-            .or_else(|| CostUsagePricing::claude_input_cost_per_token(FALLBACK_CLAUDE_MODEL))
-            .unwrap_or(0.0);
-
-        base + (cache_create_1h as f64) * input_rate * 2.0
-    }
 }
 
 /// JSONL event structures for Codex
@@ -429,6 +379,7 @@ fn contains_claude_vertex_marker(value: &str, include_gcp: bool) -> bool {
 #[derive(Debug)]
 struct ClaudeUsageRecord {
     model: String,
+    pricing_known: bool,
     timestamp: Option<DateTime<Utc>>,
     dedup_key: Option<String>,
     input: u64,
@@ -512,11 +463,18 @@ impl CostScanner {
         // that appear across multiple files.
         if projects_dir.exists() {
             let mut seen = HashSet::new();
+            let mut pricing = ClaudeScanPricingResolver::default();
             let mut handle_file = |path: &Path| {
-                let counted =
-                    for_each_claude_usage_record(path, &cutoff, &mut seen, cancel, |record| {
+                let counted = for_each_claude_usage_record_with_pricing(
+                    path,
+                    &cutoff,
+                    &mut seen,
+                    cancel,
+                    &mut pricing,
+                    |record| {
                         add_claude_record_to_summary(&mut summary, record);
-                    });
+                    },
+                );
                 if counted > 0 {
                     summary.sessions_count += 1;
                 }
@@ -624,11 +582,27 @@ impl CostScanner {
 /// consume this single reader, so Claude log semantics live in one place.
 /// Returns the number of records consumed, so callers can tell whether the
 /// file contributed anything.
+#[cfg(test)]
 fn for_each_claude_usage_record<F>(
     path: &Path,
     cutoff: &DateTime<Utc>,
     seen: &mut HashSet<String>,
     cancel: Option<&AtomicBool>,
+    mut on_record: F,
+) -> usize
+where
+    F: FnMut(&ClaudeUsageRecord),
+{
+    let mut pricing = ClaudeScanPricingResolver::default();
+    for_each_claude_usage_record_with_pricing(path, cutoff, seen, cancel, &mut pricing, on_record)
+}
+
+fn for_each_claude_usage_record_with_pricing<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    seen: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
+    pricing: &mut ClaudeScanPricingResolver,
     mut on_record: F,
 ) -> usize
 where
@@ -648,7 +622,7 @@ where
         }
         if let Ok(event) = serde_json::from_str::<ClaudeEvent>(line)
             && !event.is_vertex_ai_usage_entry()
-            && let Some(record) = claude_usage_record_from_event(&event)
+            && let Some(record) = claude_usage_record_from_event_with_pricing(&event, pricing)
             && should_count_claude_record(&record, cutoff, seen)
         {
             counted += 1;
@@ -686,7 +660,16 @@ where
     }
 }
 
+#[cfg(test)]
 fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageRecord> {
+    let mut pricing = ClaudeScanPricingResolver::default();
+    claude_usage_record_from_event_with_pricing(event, &mut pricing)
+}
+
+fn claude_usage_record_from_event_with_pricing(
+    event: &ClaudeEvent,
+    pricing: &mut ClaudeScanPricingResolver,
+) -> Option<ClaudeUsageRecord> {
     if event.event_type.as_deref() != Some("assistant") {
         return None;
     }
@@ -705,7 +688,8 @@ fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageReco
     }
 
     let cache_create_1h = usage.one_hour_cache_creation_tokens(cache_create);
-    let cost = ClaudePricing::cost_usd_with_cache_ttl(
+    let pricing_known = pricing.is_known(model);
+    let cost = pricing.cost_usd_with_cache_ttl(
         model,
         input,
         cache_create,
@@ -716,6 +700,7 @@ fn claude_usage_record_from_event(event: &ClaudeEvent) -> Option<ClaudeUsageReco
 
     Some(ClaudeUsageRecord {
         model: model.to_string(),
+        pricing_known,
         timestamp: event.parsed_timestamp(),
         dedup_key: claude_usage_dedup_key(message.id.as_deref(), event.request_id.as_deref()),
         input,
@@ -756,7 +741,7 @@ fn should_count_claude_record(
 }
 
 fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) {
-    if CostUsagePricing::claude_cost_usd(&record.model, 0, 0, 0, 0).is_none() {
+    if !record.pricing_known {
         summary.unknown_models.insert(record.model.clone());
     }
 
@@ -871,10 +856,18 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
             if projects_dir.exists() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
+                let mut pricing = ClaudeScanPricingResolver::default();
                 let mut handle_file = |path: &Path| {
-                    for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-                        add_claude_record_to_daily_costs(&mut daily_costs, record);
-                    });
+                    for_each_claude_usage_record_with_pricing(
+                        path,
+                        &cutoff,
+                        &mut seen,
+                        None,
+                        &mut pricing,
+                        |record| {
+                            add_claude_record_to_daily_costs(&mut daily_costs, record);
+                        },
+                    );
                 };
                 scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
             }
@@ -946,10 +939,18 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
             if projects_dir.exists() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
+                let mut pricing = ClaudeScanPricingResolver::default();
                 let mut handle_file = |path: &Path| {
-                    for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-                        add_claude_record_to_daily_tokens(&mut daily_tokens, record);
-                    });
+                    for_each_claude_usage_record_with_pricing(
+                        path,
+                        &cutoff,
+                        &mut seen,
+                        None,
+                        &mut pricing,
+                        |record| {
+                            add_claude_record_to_daily_tokens(&mut daily_tokens, record);
+                        },
+                    );
                 };
                 scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
             }

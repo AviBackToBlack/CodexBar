@@ -27,6 +27,74 @@ fn records_unknown_claude_model_while_using_fallback_cost() {
 }
 
 #[test]
+fn claude_scan_pricing_resolver_reuses_positive_and_negative_resolution() {
+    let unknown = format!("claude-scan-unknown-{}", std::process::id());
+    let mut resolver = ClaudeScanPricingResolver::default();
+
+    assert!(resolver.is_known("claude-sonnet-4-6"));
+    assert!(!resolver.is_known(&unknown));
+    assert!(resolver.is_known("claude-sonnet-4-6"));
+    assert!(!resolver.is_known(&unknown));
+    assert_eq!(resolver.normalization_cache_misses, 2);
+    assert_eq!(resolver.resolution_cache_misses, 2);
+    assert_eq!(resolver.resolutions.len(), 2);
+
+    let mut cost_resolver = ClaudeScanPricingResolver::default();
+    let resolved_unknown = cost_resolver.cost_usd_with_cache_ttl(&unknown, 100, 20, 10, 30, 40);
+    let fallback =
+        ClaudePricing::cost_usd_with_cache_ttl(FALLBACK_CLAUDE_MODEL, 100, 20, 10, 30, 40);
+    assert!((resolved_unknown - fallback).abs() < f64::EPSILON);
+}
+
+#[test]
+fn claude_scan_pricing_resolver_preserves_tiered_and_cache_ttl_pricing() {
+    let mut resolver = ClaudeScanPricingResolver::default();
+    let cases = [
+        ("claude-sonnet-4-6", 240_000, 0, 0, 0, 0),
+        ("claude-fable-5", 100, 30, 20, 20, 5),
+    ];
+
+    for (model, input, cache_create, cache_create_1h, cache_read, output) in cases {
+        let actual = resolver.cost_usd_with_cache_ttl(
+            model,
+            input,
+            cache_create,
+            cache_create_1h,
+            cache_read,
+            output,
+        );
+        let expected = ClaudePricing::cost_usd_with_cache_ttl(
+            model,
+            input,
+            cache_create,
+            cache_create_1h,
+            cache_read,
+            output,
+        );
+        assert!((actual - expected).abs() < f64::EPSILON, "{model}");
+    }
+}
+
+#[test]
+fn claude_scan_pricing_resolver_bounds_normalization_memo() {
+    let mut resolver = ClaudeScanPricingResolver::default();
+    for index in 0..(ClaudeScanPricingResolver::MEMO_ENTRY_LIMIT + 8) {
+        let model = format!("claude-memo-{index}");
+        assert_eq!(resolver.normalize(&model), model);
+    }
+    assert_eq!(
+        resolver.normalized_models.len(),
+        ClaudeScanPricingResolver::MEMO_ENTRY_LIMIT
+    );
+
+    let misses = resolver.normalization_cache_misses;
+    assert_eq!(resolver.normalize("claude-memo-0"), "claude-memo-0");
+    assert_eq!(resolver.normalization_cache_misses, misses);
+    assert_eq!(resolver.normalize("claude-memo-1024"), "claude-memo-1024");
+    assert_eq!(resolver.normalization_cache_misses, misses + 1);
+}
+
+#[test]
 fn test_claude_fable_5_pricing() {
     let cost = ClaudePricing::cost_usd_with_cache_ttl("claude-fable-5", 100, 10, 0, 20, 5);
     let expected = (100.0 / 1_000_000.0) * 10.00
