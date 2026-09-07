@@ -607,6 +607,8 @@ export interface ProviderUsageSnapshot {
   planName: string | null;
   accountEmail: string | null;
   sourceLabel: string;
+  /** Backend proof of a live successful Claude CLI quota fetch; only true is proof. */
+  hasSuccessfulClaudeCliQuota?: boolean;
   updatedAt: string;
   error: string | null;
   errorState: ProviderStateKind;

@@ -227,6 +227,18 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
             canSwitchClaudeAccount) && (
           <div className="context-actions">
             <div className="context-actions__divider" />
+            {canSwitchClaudeAccount && (
+              <button
+                type="button"
+                className="context-actions__btn"
+                onClick={() => openSettingsWindow("providers")}
+              >
+                <span className="context-actions__icon" aria-hidden>
+                  ⇄
+                </span>
+                {t("ActionSwitchAccount")}
+              </button>
+            )}
             {HAS_DASHBOARD.has(selectedProviderId) && (
               <button
                 type="button"
@@ -255,18 +267,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
                   </svg>
                 </span>
                 {t("ActionStatusPage")}
-              </button>
-            )}
-            {canSwitchClaudeAccount && (
-              <button
-                type="button"
-                className="context-actions__btn"
-                onClick={() => openSettingsWindow("providers")}
-              >
-                <span className="context-actions__icon" aria-hidden>
-                  ⇄
-                </span>
-                {t("ActionSwitchAccount")}
               </button>
             )}
           </div>

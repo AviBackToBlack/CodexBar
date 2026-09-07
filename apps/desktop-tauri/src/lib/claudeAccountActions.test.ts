@@ -1,18 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { hasSuccessfulClaudeCliQuota } from "./claudeAccountActions";
 import type { ProviderUsageSnapshot } from "../types/bridge";
+import { hasSuccessfulClaudeCliQuota } from "./claudeAccountActions";
 
 function provider(
   overrides: Partial<ProviderUsageSnapshot> = {},
 ): Pick<
   ProviderUsageSnapshot,
-  "providerId" | "sourceLabel" | "error" | "errorState" | "primary" | "secondary"
+  | "providerId"
+  | "sourceLabel"
+  | "hasSuccessfulClaudeCliQuota"
+  | "error"
+  | "primary"
+  | "secondary"
 > {
   return {
     providerId: "claude",
     sourceLabel: "Claude CLI",
+    hasSuccessfulClaudeCliQuota: true,
     error: null,
-    errorState: "ready",
     primary: {
       usedPercent: 25,
       isExhausted: false,
@@ -31,9 +36,10 @@ describe("hasSuccessfulClaudeCliQuota", () => {
   });
 
   it("does not treat retained, failed, or non-CLI data as account proof", () => {
-    expect(hasSuccessfulClaudeCliQuota(provider({ sourceLabel: "OAuth" }))).toBe(false);
+    expect(hasSuccessfulClaudeCliQuota(provider({ hasSuccessfulClaudeCliQuota: false }))).toBe(
+      false,
+    );
     expect(hasSuccessfulClaudeCliQuota(provider({ error: "timed out" }))).toBe(false);
-    expect(hasSuccessfulClaudeCliQuota(provider({ errorState: "unknown" }))).toBe(false);
     expect(
       hasSuccessfulClaudeCliQuota(
         provider({

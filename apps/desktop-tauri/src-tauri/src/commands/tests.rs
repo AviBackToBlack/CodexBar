@@ -939,6 +939,7 @@ fn provider_cache_upsert_replaces_existing_provider() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let mut first =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -962,6 +963,7 @@ fn provider_cache_prunes_disabled_providers() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let codex =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -992,6 +994,7 @@ fn hiding_codex_spark_rows_preserves_other_extra_usage() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let mut snapshot =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -1022,6 +1025,7 @@ fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1052,6 +1056,7 @@ fn claude_repeated_auth_failure_surfaces_error() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1087,6 +1092,7 @@ fn claude_cloudflare_challenge_retains_prior_usage_while_surfaceing_guidance() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1133,6 +1139,7 @@ fn claude_cloudflare_challenge_keeps_prior_usage_when_guidance_surfaces() {
         cost: None,
         wayfinder_usage: None,
         source_label: "Web".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let mut good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1175,6 +1182,7 @@ fn claude_cli_parse_failure_keeps_last_good_every_time() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        has_successful_claude_cli_quota: true,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1197,6 +1205,7 @@ fn claude_cli_parse_failure_keeps_last_good_every_time() {
 
     assert_eq!(first.error, None);
     assert_eq!(first.primary.used_percent, 17.0);
+    assert!(!first.has_successful_claude_cli_quota);
     // Parse failures keep last-good on every refresh (upstream #2247), unlike one-shot auth.
     assert_eq!(second.error, None);
     assert_eq!(second.primary.used_percent, 17.0);
@@ -1210,6 +1219,7 @@ fn claude_hard_credentials_missing_does_not_preserve_stale() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1370,6 +1380,7 @@ fn japanese_provider_snapshot_localizes_weekly_label() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
     };
 
     let snapshot =
@@ -1399,6 +1410,7 @@ fn japanese_provider_snapshot_localizes_pace_reserve_description() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
     };
 
     let snapshot =

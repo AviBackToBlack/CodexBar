@@ -558,7 +558,7 @@ pub(super) fn preserve_last_good_transient_failure(
         return snapshot;
     }
 
-    let Some(previous) = guard
+    let Some(mut previous) = guard
         .provider_cache
         .iter()
         .find(|cached| cached.provider_id == id.cli_name() && cached.error.is_none())
@@ -566,6 +566,9 @@ pub(super) fn preserve_last_good_transient_failure(
     else {
         return snapshot;
     };
+    // Preserved quota remains useful for display, but the failed current
+    // attempt cannot prove that Claude CLI is available for account actions.
+    previous.has_successful_claude_cli_quota = false;
 
     // Parse / rate-limit / timeout: keep last-good every time (upstream #2247).
     // Transient auth (unauthorized-ish) still only preserves once so real logout surfaces.
@@ -1218,6 +1221,7 @@ mod reset_backfill_tests {
             plan_name: None,
             account_email: None,
             source_label: String::new(),
+            has_successful_claude_cli_quota: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
             error: None,
             error_state: codexbar::core::ProviderStateKind::Ready,

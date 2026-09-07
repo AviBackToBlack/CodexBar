@@ -10,28 +10,22 @@ import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../types/bridge"
 export function hasSuccessfulClaudeCliQuota(
   provider: Pick<
     ProviderUsageSnapshot,
-    "providerId" | "sourceLabel" | "error" | "primary" | "secondary"
+    | "providerId"
+    | "hasSuccessfulClaudeCliQuota"
+    | "error"
+    | "primary"
+    | "secondary"
   >,
 ): boolean {
   if (
     provider.providerId !== "claude" ||
     provider.error !== null ||
-    !isClaudeCliSource(provider.sourceLabel)
+    !provider.hasSuccessfulClaudeCliQuota
   ) {
     return false;
   }
 
   return hasQuotaWindow(provider.primary) || hasQuotaWindow(provider.secondary);
-}
-
-function isClaudeCliSource(sourceLabel: string): boolean {
-  const normalized = sourceLabel.trim().toLowerCase();
-  return (
-    normalized === "claude" ||
-    normalized === "cli" ||
-    normalized.includes("claude cli") ||
-    normalized.includes("claude code")
-  );
 }
 
 function hasQuotaWindow(window: RateWindowSnapshot | null): boolean {

@@ -504,6 +504,10 @@ pub struct ProviderFetchResult {
 
     /// Label describing the data source (e.g., "oauth", "web", "cli")
     pub source_label: String,
+
+    /// True only for a live Claude CLI fetch with usable quota windows.
+    #[serde(default)]
+    pub has_successful_claude_cli_quota: bool,
 }
 
 impl ProviderFetchResult {
@@ -514,6 +518,7 @@ impl ProviderFetchResult {
             cost: None,
             wayfinder_usage: None,
             source_label: source_label.into(),
+            has_successful_claude_cli_quota: false,
         }
     }
 
