@@ -202,6 +202,22 @@ pub struct CostUsageCache {
     /// True while bounded Codex catch-up has not completed for this window.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub codex_scan_incomplete: bool,
+    /// Earliest scan start retained for the active Codex catch-up cycle.
+    ///
+    /// This is deliberately separate from `scan_since_key`: that field is the
+    /// last successfully completed scan and must not change merely because a
+    /// narrower report was requested while catch-up is pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_pending_scan_since_key: Option<String>,
+    /// Scan end and source identity for the active Codex catch-up cycle.
+    /// Requests may retain the pending start only when all of these remain
+    /// compatible with the persisted work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_pending_scan_until_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_pending_scan_root_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_pending_scan_timezone: Option<String>,
     /// Terminal catch-up pause attached to the existing incomplete state. A
     /// background scan must not clear or retry this state; an app-driven
     /// refresh clears it before starting the next pass.
