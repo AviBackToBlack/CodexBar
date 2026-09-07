@@ -215,6 +215,50 @@ fn parses_current_codex_payload_token_count_events() {
 }
 
 #[test]
+fn scans_gpt6_astra_usage_with_cached_and_reasoning_tokens() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let today = Local::now().date_naive();
+    let day = today.format("%Y-%m-%d").to_string();
+    let day_dir = sessions
+        .join(today.format("%Y").to_string())
+        .join(today.format("%m").to_string())
+        .join(today.format("%d").to_string());
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let line = serde_json::json!({
+        "timestamp": Local::now().to_rfc3339(),
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "model": "gpt-6-astra",
+                "total_token_usage": {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 300,
+                    "output_tokens": 100,
+                    "reasoning_output_tokens": 7
+                }
+            }
+        }
+    });
+    std::fs::write(day_dir.join("astra.jsonl"), format!("{line}\n")).unwrap();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 1000);
+    assert_eq!(summary.cached_tokens, 300);
+    assert_eq!(summary.output_tokens, 100);
+    assert_eq!(summary.reasoning_tokens, Some(7));
+    assert!((summary.total_cost_usd - 0.0103).abs() < 1e-12);
+    assert_eq!(cache.days[&day]["gpt-6-astra"], vec![1000, 300, 100, 7]);
+}
+
+#[test]
 fn derives_claude_dedup_key_from_message_and_request_ids() {
     assert_eq!(
         claude_usage_dedup_key(Some("msg_1"), Some("req_1")).as_deref(),
