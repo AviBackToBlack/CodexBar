@@ -84,7 +84,7 @@ impl Provider for PoeProvider {
                 let response = self
                     .client
                     .get(POE_BALANCE_URL)
-                    .bearer_auth(key)
+                    .bearer_auth(&key)
                     .header("Accept", "application/json")
                     .send()
                     .await?;

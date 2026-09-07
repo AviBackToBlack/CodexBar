@@ -634,7 +634,8 @@ fn codex_parser_discards_huge_malformed_lines_before_and_after_valid_records() {
 fn bounded_jsonl_reader_accepts_exact_limit_without_retaining_larger_input() {
     let mut input = vec![b'x'; CODEX_JSONL_MAX_LINE_BYTES];
     input.push(b'\n');
-    input.extend_from_slice(b"{\"type\":\"event_msg\"}\n");
+    input.extend_from_slice(br#"{"type":"event_msg"}"#);
+    input.push(b'\n');
     let mut reader = BufReader::with_capacity(64 * 1024, std::io::Cursor::new(input));
 
     let exact = match read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)
