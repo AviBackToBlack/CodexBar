@@ -519,6 +519,9 @@ fn load_openai_dashboard_chart_data(
 }
 
 #[cfg(test)]
+pub(crate) use load_openai_dashboard_chart_data as load_openai_dashboard_chart_data_for_test;
+
+#[cfg(test)]
 mod tests {
     use super::{
         CostFetchFailure, ProviderLocalUsageSummary, cost_fetch_failure_allows_early_retry,
