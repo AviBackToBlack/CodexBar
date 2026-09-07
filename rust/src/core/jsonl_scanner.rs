@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct CachedCostReadStatus {
     pub has_days: bool,
     pub previous_report: Option<CachedCostReport>,
+    pub codex_scan_pause_reason: Option<CodexScanPauseReason>,
 }
 
 #[derive(Deserialize, Default)]
@@ -38,6 +39,8 @@ struct CachedCostReadStatusProjection {
     has_days: bool,
     #[serde(default)]
     previous_report: Option<CachedCostReport>,
+    #[serde(default)]
+    codex_scan_pause_reason: Option<CodexScanPauseReason>,
 }
 
 fn deserialize_nonempty_object<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -476,6 +479,7 @@ impl JsonlScanner {
         CachedCostReadStatus {
             has_days: projection.has_days,
             previous_report: projection.previous_report,
+            codex_scan_pause_reason: projection.codex_scan_pause_reason,
         }
     }
     pub(crate) fn cached_cost_report_from_days(cache: &CostUsageCache) -> CachedCostReport {
