@@ -438,7 +438,7 @@ impl CodexAccountApi {
             .and_then(|v| v.as_object())
             .map(make_credits);
 
-        let cost_account_id = provider_account_id.clone();
+        let cost_account_id = remote_account_id.clone();
         Ok(AccountUsageSnapshot {
             email: identity.email.or_else(|| normalize_string(fallback_email)),
             provider_account_id: remote_account_id,

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::local_step_resolver::StepOccurrence;
+use super::super::local_step_resolver::StepOccurrence;
 use super::{Event, PendingTimestampRow, StepTimestampScan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

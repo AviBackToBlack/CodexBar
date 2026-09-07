@@ -577,13 +577,15 @@ fn read_step_timestamps(
             continue;
         };
         if let Some(bot_id) = metadata.bot_id.as_deref() {
-            record_exact_bot_id(
-                bot_id,
-                &step_uuid,
-                metadata.timestamp_ms,
-                &mut by_bot_id,
-                &mut ambiguous_bot_ids,
-            );
+            if let Some(timestamp_ms) = metadata.timestamp_ms {
+                record_exact_bot_id(
+                    bot_id,
+                    &step_uuid,
+                    timestamp_ms,
+                    &mut by_bot_id,
+                    &mut ambiguous_bot_ids,
+                );
+            }
         }
         if needed_occurrences.contains_key(&step_uuid) {
             timestamps
