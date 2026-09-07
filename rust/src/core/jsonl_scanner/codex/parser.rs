@@ -102,11 +102,7 @@ impl CodexParserState {
                 .as_ref()
                 .map(ParsedCodexTimestamp::day_key)
                 .filter(|day_key| {
-                    CostUsageDayRange::is_in_range(
-                        day_key,
-                        &range.scan_since_key,
-                        &range.scan_until_key,
-                    )
+                    CostUsageDayRange::is_in_range(day_key, &range.since_key, &range.until_key)
                 })
                 .or_else(|| self.records.last().map(|record| record.day_key.clone()));
             let Some(day_key) = day_key else {
@@ -121,6 +117,7 @@ impl CodexParserState {
                     .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
                     .to_string();
                 self.record_usage(
+                    range,
                     day_key,
                     &model,
                     totals.input,
@@ -147,11 +144,7 @@ impl CodexParserState {
             .as_ref()
             .map(ParsedCodexTimestamp::day_key)
             .filter(|day_key| {
-                CostUsageDayRange::is_in_range(
-                    day_key,
-                    &range.scan_since_key,
-                    &range.scan_until_key,
-                )
+                CostUsageDayRange::is_in_range(day_key, &range.since_key, &range.until_key)
             })
         else {
             return;
@@ -161,7 +154,7 @@ impl CodexParserState {
         }
 
         if is_token_count {
-            self.record_token_count(&obj, day_key);
+            self.record_token_count(&obj, day_key, range);
         }
     }
 
@@ -180,14 +173,10 @@ impl CodexParserState {
                     return;
                 };
                 let day_key = parsed_timestamp.day_key();
-                if !CostUsageDayRange::is_in_range(
-                    &day_key,
-                    &range.scan_since_key,
-                    &range.scan_until_key,
-                ) {
+                if !CostUsageDayRange::is_in_range(&day_key, &range.since_key, &range.until_key) {
                     return;
                 }
-                self.record_fast_token_count(payload, day_key);
+                self.record_fast_token_count(payload, day_key, range);
             }
         }
     }
@@ -223,7 +212,7 @@ impl CodexParserState {
             .map(str::to_string);
     }
 
-    fn record_token_count(&mut self, obj: &Value, day_key: String) {
+    fn record_token_count(&mut self, obj: &Value, day_key: String, range: &CostUsageDayRange) {
         let Some(payload) = token_count_payload(obj) else {
             return;
         };
@@ -238,6 +227,7 @@ impl CodexParserState {
         let info = payload.get("info");
         let model = self.resolve_token_model(info, payload, obj);
         self.record_usage(
+            range,
             day_key,
             &model,
             delta_input,
@@ -247,7 +237,12 @@ impl CodexParserState {
         );
     }
 
-    fn record_fast_token_count(&mut self, payload: CodexFastPayload<'_>, day_key: String) {
+    fn record_fast_token_count(
+        &mut self,
+        payload: CodexFastPayload<'_>,
+        day_key: String,
+        range: &CostUsageDayRange,
+    ) {
         let Some((delta_input, delta_cached, delta_output, reasoning)) =
             self.fast_token_deltas(&payload)
         else {
@@ -273,6 +268,7 @@ impl CodexParserState {
             .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
             .to_string();
         self.record_usage(
+            range,
             day_key,
             &model,
             delta_input,
@@ -284,6 +280,7 @@ impl CodexParserState {
 
     fn record_usage(
         &mut self,
+        range: &CostUsageDayRange,
         day_key: String,
         model: &str,
         input: i32,
@@ -291,6 +288,9 @@ impl CodexParserState {
         output: i32,
         reasoning: Option<i32>,
     ) {
+        if !CostUsageDayRange::is_in_range(&day_key, &range.since_key, &range.until_key) {
+            return;
+        }
         self.records.push(CodexUsageRecord {
             day_key,
             model: CostUsagePricing::normalize_codex_model(model),
