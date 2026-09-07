@@ -273,26 +273,93 @@ fn duplicate_or_malformed_step_rows_fail_closed() {
 }
 
 #[test]
-fn null_or_unidentified_step_rows_fail_closed() {
-    for (session, step_row) in [
-        ("null-step", (10, None)),
+fn null_step_rows_fail_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    database(
+        &dir,
+        "null-step",
+        &[(0, turn_blob(Some("null-step"), 100, None))],
+        Some(&[(10, None)]),
+    );
+
+    let summary = summary(&dir);
+
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+    assert_eq!(summary.total_tokens, 0);
+}
+
+#[test]
+fn unidentified_step_rows_do_not_invalidate_timestamp_recovery() {
+    let uuid = "unidentified-step";
+    for (session, step_rows) in [
         (
-            "unidentified-step",
-            (10, Some(step_metadata(None, Some(NOW_SECONDS - 60)))),
+            "unidentified-first",
+            vec![
+                (10, Some(step_metadata(None, Some(NOW_SECONDS - 60)))),
+                (20, Some(step_metadata(Some(uuid), Some(NOW_SECONDS - 120)))),
+            ],
+        ),
+        (
+            "identified-first",
+            vec![
+                (20, Some(step_metadata(Some(uuid), Some(NOW_SECONDS - 120)))),
+                (10, Some(step_metadata(None, Some(NOW_SECONDS - 60)))),
+            ],
         ),
     ] {
         let dir = tempfile::tempdir().unwrap();
         database(
             &dir,
             session,
-            &[(0, turn_blob(Some(session), 100, None))],
-            Some(&[step_row]),
+            &[(0, turn_blob(Some(uuid), 100, None))],
+            Some(&step_rows),
         );
 
         let summary = summary(&dir);
 
-        assert_eq!(summary.coverage, LocalHistoryCoverage::Partial, "{session}");
-        assert_eq!(summary.total_tokens, 0, "{session}");
+        assert_eq!(
+            summary.coverage,
+            LocalHistoryCoverage::Complete,
+            "{session}"
+        );
+        assert_eq!(summary.total_tokens, 198, "{session}");
+    }
+}
+
+#[test]
+fn exact_bot_id_recovery_survives_an_unidentified_step_row() {
+    let uuid = "exact-with-unidentified";
+    let bot_id = "exact-bot";
+    for unidentified_first in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let identified = (
+            20,
+            Some(step_metadata_with_bot_id(
+                Some(uuid),
+                Some(NOW_SECONDS - 120),
+                Some(bot_id),
+            )),
+        );
+        let unidentified = (10, Some(step_metadata(None, Some(NOW_SECONDS - 60))));
+        let step_rows = if unidentified_first {
+            vec![unidentified, identified]
+        } else {
+            vec![identified, unidentified]
+        };
+        database(
+            &dir,
+            "exact-with-unidentified",
+            &[(
+                0,
+                turn_blob_with_bot_id(Some(uuid), 100, None, Some(bot_id)),
+            )],
+            Some(&step_rows),
+        );
+
+        let summary = summary(&dir);
+
+        assert_eq!(summary.coverage, LocalHistoryCoverage::Complete);
+        assert_eq!(summary.total_tokens, 198);
     }
 }
 
@@ -368,6 +435,105 @@ fn unique_bot_ids_recover_each_turn_despite_auxiliary_step_rows() {
 
     assert_eq!(summary.coverage, LocalHistoryCoverage::Complete);
     assert_eq!(summary.total_tokens, 496);
+}
+
+#[test]
+fn reused_step_uuid_recovers_distinct_timestamps_with_an_unidentified_row() {
+    let uuid = "reused-with-unidentified";
+    for unidentified_position in 0..=2 {
+        let dir = tempfile::tempdir().unwrap();
+        let mut step_rows = vec![
+            (10, Some(step_metadata(Some(uuid), Some(NOW_SECONDS - 120)))),
+            (20, Some(step_metadata(Some(uuid), Some(NOW_SECONDS - 60)))),
+        ];
+        step_rows.insert(
+            unidentified_position,
+            (15, Some(step_metadata(None, Some(NOW_SECONDS - 300)))),
+        );
+        database(
+            &dir,
+            "reused-with-unidentified",
+            &[
+                (0, turn_blob(Some(uuid), 100, None)),
+                (1, turn_blob(Some(uuid), 200, None)),
+            ],
+            Some(&step_rows),
+        );
+
+        let summary = summary(&dir);
+
+        assert_eq!(summary.coverage, LocalHistoryCoverage::Complete);
+        assert_eq!(summary.total_tokens, 496);
+    }
+}
+
+#[test]
+fn reused_step_uuid_with_one_identified_row_and_an_unidentified_row_stays_partial() {
+    let dir = tempfile::tempdir().unwrap();
+    let uuid = "single-identified-with-unidentified";
+    database(
+        &dir,
+        "single-identified-with-unidentified",
+        &[
+            (0, turn_blob(Some(uuid), 100, None)),
+            (1, turn_blob(Some(uuid), 200, None)),
+        ],
+        Some(&[
+            (10, Some(step_metadata(Some(uuid), Some(NOW_SECONDS - 120)))),
+            (20, Some(step_metadata(None, Some(NOW_SECONDS - 60)))),
+        ]),
+    );
+
+    let summary = summary(&dir);
+
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+    assert_eq!(summary.total_tokens, 0);
+}
+
+#[test]
+fn unidentified_duplicate_bot_id_withholds_exact_and_positional_recovery() {
+    let uuid = "duplicate-bot-with-unidentified";
+    let bot_id = "shared-bot";
+    for unidentified_first in [false, true] {
+        for unidentified_timestamp in [Some(NOW_SECONDS - 60), None] {
+            let dir = tempfile::tempdir().unwrap();
+            let identified = (
+                10,
+                Some(step_metadata_with_bot_id(
+                    Some(uuid),
+                    Some(NOW_SECONDS - 120),
+                    Some(bot_id),
+                )),
+            );
+            let unidentified = (
+                20,
+                Some(step_metadata_with_bot_id(
+                    None,
+                    unidentified_timestamp,
+                    Some(bot_id),
+                )),
+            );
+            let step_rows = if unidentified_first {
+                vec![unidentified, identified]
+            } else {
+                vec![identified, unidentified]
+            };
+            database(
+                &dir,
+                "duplicate-bot-with-unidentified",
+                &[(
+                    0,
+                    turn_blob_with_bot_id(Some(uuid), 100, None, Some(bot_id)),
+                )],
+                Some(&step_rows),
+            );
+
+            let summary = summary(&dir);
+
+            assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+            assert_eq!(summary.total_tokens, 0);
+        }
+    }
 }
 
 #[test]

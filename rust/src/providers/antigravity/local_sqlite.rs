@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
 use self::local_bot_id::{ExactStepTimestamp, embedded_timestamps_agree, record_exact_bot_id};
 use super::local_proto::{ParsedTurn, parse_step_metadata, parse_turn};
 use super::local_sessions::{LocalHistoryCoverage, LocalSessionSummary};
-use super::local_step_resolver::{StepOccurrence, StepTimestamp, resolve_step_timestamps};
+use super::local_step_resolver::{StepOccurrence, resolve_step_timestamps};
 
 const MAX_DATABASES: usize = 500;
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
@@ -98,9 +98,10 @@ struct ParsedRows {
 
 #[derive(Debug)]
 struct StepTimestampScan {
-    timestamps: HashMap<String, Vec<StepTimestamp>>,
+    timestamps: HashMap<String, Vec<StepOccurrence>>,
     by_bot_id: HashMap<String, ExactStepTimestamp>,
     ambiguous_bot_ids: HashSet<String>,
+    unidentified_rows_present: bool,
     complete: bool,
 }
 
@@ -355,7 +356,12 @@ fn read_database(path: &Path, budget: &mut Budget) -> rusqlite::Result<(Vec<Even
         return Ok((rows.events, false));
     }
 
-    let resolved = resolve_step_timestamps(&step_scan.timestamps, &needed_occurrences);
+    let resolved = resolve_step_timestamps(
+        &step_scan.timestamps,
+        &needed_occurrences,
+        &step_scan.ambiguous_bot_ids,
+        step_scan.unidentified_rows_present,
+    );
     let recovered = local_bot_id::append_recovered_events(
         &mut rows.events,
         &session,
@@ -513,11 +519,12 @@ fn read_step_timestamps(
     )?;
     let blob_limit = i64::try_from(MAX_BLOB_BYTES).unwrap_or(i64::MAX);
     let mut query = statement.query([blob_limit])?;
-    let mut timestamps = HashMap::<String, Vec<StepTimestamp>>::new();
+    let mut timestamps = HashMap::<String, Vec<StepOccurrence>>::new();
     let mut by_bot_id = HashMap::<String, ExactStepTimestamp>::new();
     let mut ambiguous_bot_ids = HashSet::new();
     let mut complete = true;
     let mut rows_are_valid = true;
+    let mut unidentified_rows_present = false;
 
     while let Some(row) = query.next()? {
         if !budget.check() {
@@ -572,26 +579,25 @@ fn read_step_timestamps(
             rows_are_valid = false;
             continue;
         };
-        let Some(step_uuid) = metadata.step_uuid.filter(|value| !value.is_empty()) else {
-            rows_are_valid = false;
-            continue;
-        };
-        if let Some(bot_id) = metadata.bot_id.as_deref()
-            && let Some(timestamp_ms) = metadata.timestamp_ms
-        {
+        if let Some(bot_id) = metadata.bot_id.as_deref() {
             record_exact_bot_id(
                 bot_id,
-                &step_uuid,
-                timestamp_ms,
+                metadata.step_uuid.as_deref(),
+                metadata.timestamp_ms,
                 &mut by_bot_id,
                 &mut ambiguous_bot_ids,
             );
         }
+        // Unidentified rows cannot supply UUID positions, but their bot IDs still count as evidence.
+        let Some(step_uuid) = metadata.step_uuid else {
+            unidentified_rows_present = true;
+            continue;
+        };
         if needed_occurrences.contains_key(&step_uuid) {
             timestamps
                 .entry(step_uuid)
                 .or_default()
-                .push(StepTimestamp {
+                .push(StepOccurrence {
                     row: idx,
                     timestamp_ms: metadata.timestamp_ms,
                     bot_id: metadata.bot_id,
@@ -599,33 +605,11 @@ fn read_step_timestamps(
         }
     }
 
-    let positional_timestamps = timestamps
-        .into_iter()
-        .map(|(step_uuid, values)| {
-            let values = values
-                .into_iter()
-                .map(|timestamp| StepTimestamp {
-                    row: timestamp.row,
-                    timestamp_ms: if timestamp
-                        .bot_id
-                        .as_deref()
-                        .is_some_and(|bot_id| ambiguous_bot_ids.contains(bot_id))
-                    {
-                        None
-                    } else {
-                        timestamp.timestamp_ms
-                    },
-                    bot_id: timestamp.bot_id,
-                })
-                .collect();
-            (step_uuid, values)
-        })
-        .collect();
-
     Ok(StepTimestampScan {
-        timestamps: positional_timestamps,
+        timestamps,
         by_bot_id,
         ambiguous_bot_ids,
+        unidentified_rows_present,
         complete: complete && rows_are_valid,
     })
 }

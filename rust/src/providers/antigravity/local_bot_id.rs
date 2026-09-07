@@ -11,8 +11,8 @@ pub(super) struct ExactStepTimestamp {
 
 pub(super) fn record_exact_bot_id(
     bot_id: &str,
-    step_uuid: &str,
-    timestamp_ms: i64,
+    step_uuid: Option<&str>,
+    timestamp_ms: Option<i64>,
     by_bot_id: &mut HashMap<String, ExactStepTimestamp>,
     ambiguous_bot_ids: &mut HashSet<String>,
 ) {
@@ -20,6 +20,11 @@ pub(super) fn record_exact_bot_id(
         return;
     }
 
+    let (Some(step_uuid), Some(timestamp_ms)) = (step_uuid, timestamp_ms) else {
+        by_bot_id.remove(bot_id);
+        ambiguous_bot_ids.insert(bot_id.to_string());
+        return;
+    };
     let candidate = ExactStepTimestamp {
         step_uuid: step_uuid.to_string(),
         timestamp_ms,
