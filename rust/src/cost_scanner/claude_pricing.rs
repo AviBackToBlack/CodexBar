@@ -1,7 +1,7 @@
 use crate::core::{ClaudePricingResolution, CostUsagePricing, ModelsDevPricingSnapshot};
 use std::collections::HashMap;
 
-pub(super) const FALLBACK_CLAUDE_MODEL: &str = "claude-3-5-sonnet-20241022";
+pub(super) const FALLBACK_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 
 #[cfg(test)]
 pub(super) struct ClaudePricing;
