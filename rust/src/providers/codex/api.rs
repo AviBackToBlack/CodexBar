@@ -262,14 +262,8 @@ impl CodexApi {
             request = request.header("ChatGPT-Account-Id", account_id);
         }
         let response = request.send().await?;
-        if response.status() == 401 || response.status() == 403 {
-            return Err(ProviderError::AuthRequired);
-        }
         if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "Codex API returned {}",
-                response.status()
-            )));
+            return Err(super::authenticated_http_error(response, "Codex API").await);
         }
         let json: serde_json::Value = response
             .json()
@@ -307,10 +301,7 @@ impl CodexApi {
         }
         let response = request.send().await?;
         if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "Codex reset credits returned {}",
-                response.status()
-            )));
+            return Err(super::authenticated_http_error(response, "Codex reset credits").await);
         }
         decode_reset_credits(&response.bytes().await?)
     }
@@ -1591,6 +1582,36 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         assert_eq!(extra.window.resets_at, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn authenticated_codex_http_distinguishes_401_from_403() {
+        for (status, expects_authentication) in [(401, true), (403, false)] {
+            let mut server = mockito::Server::new_async().await;
+            let mock = server
+                .mock("GET", "/wham/usage")
+                .with_status(status)
+                .with_body("fixture refusal")
+                .create_async()
+                .await;
+
+            let home = write_codex_home(&server.url());
+            let api = CodexApi::new().with_codex_home(home.path());
+            let error = match api.fetch_usage().await {
+                Ok(_) => panic!("expected HTTP {status} to fail"),
+                Err(error) => error,
+            };
+
+            if expects_authentication {
+                assert!(matches!(error, ProviderError::AuthRequired));
+            } else {
+                let message = error.to_string();
+                assert!(message.contains("403"));
+                assert!(message.contains("fixture refusal"));
+                assert!(!matches!(error, ProviderError::AuthRequired));
+            }
+            mock.assert_async().await;
+        }
     }
 
     #[tokio::test]

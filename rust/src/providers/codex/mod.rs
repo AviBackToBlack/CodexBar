@@ -72,6 +72,20 @@ fn pat_allows_auto_fallback(error: &ProviderError) -> bool {
     )
 }
 
+async fn authenticated_http_error(response: reqwest::Response, endpoint: &str) -> ProviderError {
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return ProviderError::AuthRequired;
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    if body.is_empty() {
+        ProviderError::Other(format!("{endpoint} returned {status}"))
+    } else {
+        ProviderError::Other(format!("{endpoint} returned {status}: {body}"))
+    }
+}
+
 impl Default for CodexProvider {
     fn default() -> Self {
         Self::new()
