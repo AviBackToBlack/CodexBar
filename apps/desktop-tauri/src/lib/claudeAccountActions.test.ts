@@ -20,9 +20,13 @@ function provider(
     error: null,
     primary: {
       usedPercent: 25,
+      remainingPercent: 75,
+      windowMinutes: null,
       isExhausted: false,
       resetsAt: null,
       resetDescription: null,
+      reservePercent: null,
+      reserveDescription: null,
       isInformational: false,
     },
     secondary: null,
@@ -45,9 +49,13 @@ describe("hasSuccessfulClaudeCliQuota", () => {
         provider({
           primary: {
             usedPercent: 25,
+            remainingPercent: 75,
+            windowMinutes: null,
             isExhausted: false,
             resetsAt: null,
             resetDescription: "Status",
+            reservePercent: null,
+            reserveDescription: null,
             isInformational: true,
           },
         }),
