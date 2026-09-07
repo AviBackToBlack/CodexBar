@@ -46,6 +46,15 @@ fn managed_plan_without_metrics_is_unavailable() {
 }
 
 #[test]
+fn managed_marker_without_plan_is_not_a_valid_summary() {
+    assert!(
+        KiroProvider::new()
+            .parse_cli_output("Your plan is managed by admin\n")
+            .is_err()
+    );
+}
+
+#[test]
 fn malformed_summaries_do_not_become_plan_only_usage() {
     for output in [
         "Plan: KIRO PRO MAX",
@@ -88,6 +97,36 @@ fn cli_brief_summary_reports_unavailable_instead_of_zero() {
 }
 
 #[test]
+fn plan_only_summary_keeps_bonus_and_overage_metadata() {
+    let usage = parse(
+        "Plan: KIRO PRO MAX | 1 usage breakdowns\n\
+         Bonus credits: 10/100 credits used, expires in 3 days\n\
+         Overages: Enabled\n\
+         Credits used: 4.5\n\
+         Est. cost: $1.25 USD\n",
+    );
+
+    assert!(usage.primary.is_informational);
+    assert_eq!(
+        usage.secondary.as_ref().map(|window| window.used_percent),
+        Some(10.0)
+    );
+    assert_eq!(usage.extra_rate_windows.len(), 2);
+    assert!(
+        usage
+            .extra_rate_windows
+            .iter()
+            .any(|row| row.id == "kiro-overage-credits" && row.window.is_informational)
+    );
+    assert!(
+        usage
+            .extra_rate_windows
+            .iter()
+            .any(|row| row.id == "kiro-overage-cost" && row.window.is_informational)
+    );
+}
+
+#[test]
 fn positive_api_allowance_enriches_plan_only_summary() {
     let usage = usage_limits::apply_usage_limits(
         parse("Plan: KIRO PRO MAX | 1 usage breakdowns\n"),
@@ -100,6 +139,7 @@ fn positive_api_allowance_enriches_plan_only_summary() {
         usage.primary.resets_at,
         Some(limits(5000.0, 282.49).resets_at)
     );
+    assert!(usage.primary.reset_description.is_none());
 }
 
 #[test]

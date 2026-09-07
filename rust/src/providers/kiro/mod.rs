@@ -183,17 +183,16 @@ impl KiroProvider {
         let lowered = stripped.to_lowercase();
         let parsed = Self::parse_usage_fields(&stripped, &lowered);
 
-        if let Some(usage) = Self::usage_without_metrics(&parsed) {
-            return Ok(usage);
-        }
-
-        if !parsed.matched_percent && !parsed.matched_credits {
-            return Err(ProviderError::Parse(
-                "Kiro CLI output did not include usable usage metrics".to_string(),
-            ));
-        }
-
-        let mut usage = Self::usage_with_metrics(&parsed);
+        let mut usage = if let Some(usage) = Self::usage_without_metrics(&parsed) {
+            usage
+        } else {
+            if !parsed.matched_percent && !parsed.matched_credits {
+                return Err(ProviderError::Parse(
+                    "Kiro CLI output did not include usable usage metrics".to_string(),
+                ));
+            }
+            Self::usage_with_metrics(&parsed)
+        };
         usage = Self::apply_overage_windows(usage, &parsed);
 
         if let Some(bonus) = parsed.bonus_window {
@@ -225,7 +224,7 @@ impl KiroProvider {
     fn usage_without_metrics(parsed: &KiroCliUsage) -> Option<UsageSnapshot> {
         if parsed.matched_percent
             || parsed.matched_credits
-            || !(parsed.is_summary || parsed.is_managed_plan)
+            || !(parsed.is_summary || (parsed.matched_new_format && parsed.is_managed_plan))
         {
             return None;
         }
@@ -348,7 +347,7 @@ impl KiroProvider {
             usage = usage.with_extra_rate_window(
                 "kiro-overage-credits",
                 "Overage usage",
-                RateWindow::with_details(0.0, None, None, Some(format!("{credits:.2} credits"))),
+                RateWindow::informational(format!("{credits:.2} credits")),
             );
         }
         if let Some(cost) = parsed.estimated_overage_cost {
