@@ -1452,8 +1452,8 @@ mod tests {
         let settings = Settings::default();
         let mut snapshot = fake_snapshot_with("claude", "Claude", 40.0, Some(22.0), None, None);
         snapshot.model_specific = Some(crate::commands::RateWindowSnapshot {
-            used_percent: 100.0,
-            remaining_percent: 0.0,
+            used_percent: 40.0,
+            remaining_percent: 60.0,
             window_minutes: Some(10080),
             resets_at: None,
             reset_description: None,

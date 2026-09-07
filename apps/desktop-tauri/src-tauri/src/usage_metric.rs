@@ -181,9 +181,11 @@ fn highest_window<'a>(
     windows: impl Iterator<Item = &'a RateWindowSnapshot>,
 ) -> Option<&'a RateWindowSnapshot> {
     windows.max_by(|a, b| {
-        a.used_percent
-            .partial_cmp(&b.used_percent)
-            .unwrap_or(Ordering::Equal)
+        a.is_exhausted.cmp(&b.is_exhausted).then_with(|| {
+            a.used_percent
+                .partial_cmp(&b.used_percent)
+                .unwrap_or(Ordering::Equal)
+        })
     })
 }
 
@@ -258,6 +260,17 @@ mod tests {
             selected_usage_window(&snapshot, &Settings::default()).used_percent,
             60.0
         );
+    }
+
+    #[test]
+    fn automatic_prefers_explicitly_exhausted_window_over_higher_percentage() {
+        let mut snapshot = snapshot();
+        snapshot.primary.is_exhausted = true;
+
+        let selected = selected_usage_window(&snapshot, &Settings::default());
+
+        assert_eq!(selected.used_percent, 20.0);
+        assert!(selected.is_exhausted);
     }
 
     #[test]
