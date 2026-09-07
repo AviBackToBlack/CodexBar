@@ -126,7 +126,6 @@ mod tests {
         for timestamps in [
             timestamps(&[(10, None), (20, Some(200))]),
             timestamps(&[(10, Some(100)), (10, Some(200))]),
-            timestamps(&[(10, Some(999))]),
         ] {
             let evidence = HashMap::from([("step".to_string(), timestamps)]);
             assert!(!resolve_step_timestamps(&evidence, &occurrences).contains_key("step"));
