@@ -97,6 +97,7 @@ pub(super) fn apply_usage_limits(
         usage.primary.used_percent =
             (limits.plan_used / limits.plan_limit * 100.0).clamp(0.0, 100.0);
         usage.primary.resets_at = Some(limits.resets_at);
+        usage.primary.is_informational = false;
     }
 
     if limits.overage_enabled == Some(false) {

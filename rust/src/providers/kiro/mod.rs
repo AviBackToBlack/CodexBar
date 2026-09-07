@@ -3,6 +3,8 @@
 //! Fetches usage data from Kiro (Amazon's AI coding assistant)
 //! Uses kiro-cli for authentication and usage fetching
 
+#[cfg(test)]
+mod tests;
 mod usage_limits;
 pub mod version;
 
@@ -35,6 +37,7 @@ pub struct KiroProvider {
 struct KiroCliUsage {
     plan_name: String,
     matched_new_format: bool,
+    is_summary: bool,
     is_managed_plan: bool,
     reset_date: Option<chrono::DateTime<chrono::Utc>>,
     credits_percent: f64,
@@ -184,6 +187,12 @@ impl KiroProvider {
             return Ok(usage);
         }
 
+        if !parsed.matched_percent && !parsed.matched_credits {
+            return Err(ProviderError::Parse(
+                "Kiro CLI output did not include usable usage metrics".to_string(),
+            ));
+        }
+
         let mut usage = Self::usage_with_metrics(&parsed);
         usage = Self::apply_overage_windows(usage, &parsed);
 
@@ -214,7 +223,10 @@ impl KiroProvider {
     }
 
     fn usage_without_metrics(parsed: &KiroCliUsage) -> Option<UsageSnapshot> {
-        if parsed.matched_percent || parsed.matched_credits {
+        if parsed.matched_percent
+            || parsed.matched_credits
+            || !(parsed.is_summary || parsed.is_managed_plan)
+        {
             return None;
         }
 
@@ -224,7 +236,10 @@ impl KiroProvider {
             "Kiro (installed)"
         };
 
-        Some(UsageSnapshot::new(RateWindow::new(0.0)).with_login_method(method))
+        Some(
+            UsageSnapshot::new(RateWindow::informational("Usage unavailable"))
+                .with_login_method(method),
+        )
     }
 
     fn usage_with_metrics(parsed: &KiroCliUsage) -> UsageSnapshot {
@@ -234,7 +249,7 @@ impl KiroProvider {
     }
 
     fn parse_usage_fields(stripped: &str, lowered: &str) -> KiroCliUsage {
-        let (plan_name, matched_new_format) = Self::parse_plan_name(stripped);
+        let (plan_name, matched_new_format, is_summary) = Self::parse_plan_name(stripped);
         let (credits_percent, matched_percent, matched_credits) =
             Self::parse_credit_usage(stripped);
         let (overages_enabled, overage_credits_used, estimated_overage_cost) =
@@ -243,6 +258,7 @@ impl KiroProvider {
         KiroCliUsage {
             plan_name,
             matched_new_format,
+            is_summary,
             is_managed_plan: lowered.contains("managed by admin")
                 || lowered.contains("managed by organization"),
             reset_date: Self::capture_text(stripped, r"resets on (\d{2}/\d{2})")
@@ -258,16 +274,24 @@ impl KiroProvider {
         }
     }
 
-    fn parse_plan_name(stripped: &str) -> (String, bool) {
-        if let Some(plan_line) = Self::capture_text(stripped, r"Plan:\s*(.+)")
-            && let Some(first_line) = plan_line.lines().next()
+    fn parse_plan_name(stripped: &str) -> (String, bool, bool) {
+        if let Some(summary_name) = Self::capture_text(
+            stripped,
+            r"(?m)^[ \t]*Plan:[ \t]*([^|\r\n]+?)[ \t]*\|[ \t]*[0-9]+[ \t]+usage breakdowns?[ \t]*\r?$",
+        ) && !summary_name.trim().is_empty()
         {
-            return (first_line.trim().to_string(), true);
+            return (summary_name.trim().to_string(), true, true);
+        }
+
+        if let Some(plan_line) =
+            Self::capture_text(stripped, r"(?m)^[ \t]*Plan:[ \t]*([^\r\n]+?)[ \t]*\r?$")
+        {
+            return (plan_line.trim().to_string(), true, false);
         }
 
         let legacy = Self::capture_text(stripped, r"\|\s*(KIRO\s+\w+)")
             .unwrap_or_else(|| "Kiro".to_string());
-        (legacy, false)
+        (legacy, false, false)
     }
 
     fn parse_credit_usage(stripped: &str) -> (f64, bool, bool) {
