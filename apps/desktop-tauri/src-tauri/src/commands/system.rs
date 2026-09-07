@@ -386,10 +386,10 @@ async fn find_existing_copilot_account(
     identity_id: Option<u64>,
     login: Option<&str>,
 ) -> Option<usize> {
-    if let Some(identity_id) = identity_id {
-        if let Some(index) = find_copilot_account_by_identity(accounts, identity_id) {
-            return Some(index);
-        }
+    if let Some(identity_id) = identity_id
+        && let Some(index) = find_copilot_account_by_identity(accounts, identity_id)
+    {
+        return Some(index);
     }
 
     let mut label_fallback = None;
