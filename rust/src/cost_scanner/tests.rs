@@ -2475,11 +2475,11 @@ fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
     let buffered_sessions = buffered_root.path().join("sessions");
     let buffered_cache_root = buffered_root.path().join("cache");
     let buffered_path = write_codex_session_fixture(&buffered_sessions, "buffered.jsonl", 100);
-    std::fs::write(&buffered_path, b"\n").unwrap();
+    std::fs::write(&buffered_path, b"\nnot-yet-read").unwrap();
     let buffered_key = buffered_path.to_string_lossy().to_string();
     let mut options = CostScanOptions::app_driven();
-    options.codex_max_session_file_bytes = 0;
-    options.codex_max_scan_bytes_per_refresh = 0;
+    options.codex_max_session_file_bytes = 1;
+    options.codex_max_scan_bytes_per_refresh = 1;
     let buffered_scanner = CostScanner::new(7)
         .with_options(options)
         .with_cache_root(&buffered_cache_root)

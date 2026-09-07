@@ -54,7 +54,9 @@ pub(super) fn embedded_timestamps_agree(
             };
             if step_scan.ambiguous_bot_ids.contains(bot_id)
                 || exact.step_uuid != *step_uuid
-                || occurrence.timestamp_ms != Some(exact.timestamp_ms)
+                || occurrence
+                    .timestamp_ms
+                    .is_some_and(|ts| ts != exact.timestamp_ms)
             {
                 return false;
             }
