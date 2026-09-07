@@ -316,7 +316,7 @@ describe("MenuCard", () => {
     otherProvider.providerId = "synthetic";
     otherProvider.extraRateWindows = [snapshot.extraRateWindows[0]];
     renderCard(otherProvider);
-    expect(screen.getByText("Fable only")).toBeInTheDocument();
+    expect(await screen.findByText("Fable only")).toBeInTheDocument();
   });
 
   it("renders informational metrics without quota percentages", async () => {
