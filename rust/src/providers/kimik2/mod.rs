@@ -624,12 +624,14 @@ mod tests {
         );
         assert_eq!(
             international.extra_rate_windows[0]
+                .window
                 .reset_description
                 .as_deref(),
             Some("Voucher $3.25")
         );
         assert_eq!(
             international.extra_rate_windows[1]
+                .window
                 .reset_description
                 .as_deref(),
             Some("Cash $-5.00")
@@ -647,11 +649,17 @@ mod tests {
             Some("Balance: 12.50 CNY · 5.00 CNY in deficit")
         );
         assert_eq!(
-            china.extra_rate_windows[0].reset_description.as_deref(),
+            china.extra_rate_windows[0]
+                .window
+                .reset_description
+                .as_deref(),
             Some("Voucher 3.25 CNY")
         );
         assert_eq!(
-            china.extra_rate_windows[1].reset_description.as_deref(),
+            china.extra_rate_windows[1]
+                .window
+                .reset_description
+                .as_deref(),
             Some("Cash -5.00 CNY")
         );
     }
