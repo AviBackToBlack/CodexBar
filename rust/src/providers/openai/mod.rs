@@ -4,6 +4,7 @@
 
 pub mod friendly_errors;
 pub mod scraper;
+pub mod subscription;
 
 // Re-exports for error handling and dashboard scraping
 #[allow(
@@ -20,4 +21,7 @@ pub use friendly_errors::{
 pub use scraper::{
     CreditsHistoryEntry, OPENAI_DASHBOARD_SCRAPE_SCRIPT, OpenAIDashboardData, UsageBreakdown,
     parse_dashboard_json,
+};
+pub use subscription::{
+    OPENAI_SUBSCRIPTION_CAPTURE_SCRIPT, OpenAISubscriptionFetchResult, parse_subscription_json,
 };
