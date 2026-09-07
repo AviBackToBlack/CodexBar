@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 
 use super::{KiroProvider, usage_limits};
-use crate::core::{ProviderFetchResult, ProviderId};
+use crate::core::{ProviderError, ProviderFetchResult, ProviderId};
 
 fn parse(output: &str) -> crate::core::UsageSnapshot {
     KiroProvider::new()
@@ -159,4 +159,22 @@ fn zero_api_allowance_preserves_unknown_or_cli_metrics() {
     assert!(!known.primary.is_informational);
     assert_eq!(known.primary.used_percent, 40.0);
     assert!(known.primary.resets_at.is_some());
+}
+
+#[test]
+fn cli_presence_maps_to_local_runtime_offline_but_state_db_stays_default() {
+    assert_eq!(
+        KiroProvider::new().error_state_kind(&ProviderError::NotInstalled(
+            "kiro-cli not found. Install from https://kiro.dev".to_string(),
+        )),
+        crate::core::ProviderStateKind::LocalRuntimeOffline
+    );
+    // The state-database token lookup is auth-flavored and keeps the
+    // default mapping.
+    assert_eq!(
+        KiroProvider::new().error_state_kind(&ProviderError::NotInstalled(
+            "Kiro CLI state database not found at C:\\Users\\x\\Kiro-Cli\\data.sqlite3".to_string(),
+        )),
+        crate::core::ProviderStateKind::NeedsAuthentication
+    );
 }

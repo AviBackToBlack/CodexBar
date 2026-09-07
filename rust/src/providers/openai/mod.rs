@@ -23,5 +23,6 @@ pub use scraper::{
     parse_dashboard_json,
 };
 pub use subscription::{
-    OPENAI_SUBSCRIPTION_CAPTURE_SCRIPT, OpenAISubscriptionFetchResult, parse_subscription_json,
+    OPENAI_SUBSCRIPTION_CAPTURE_SCRIPT, OpenAISubscriptionFetchResult, account_identity_matches,
+    parse_subscription_http_response, parse_subscription_json,
 };

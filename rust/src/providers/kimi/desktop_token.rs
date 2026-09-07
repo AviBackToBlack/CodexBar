@@ -87,7 +87,7 @@ impl KimiDesktopAuthToken {
             })
             .ok()
             .and_then(|row| decode_cookie_value(row, aes_key))
-            .filter(|token| !is_expired_jwt(token, unix_now_secs()));
+            .filter(|token| !is_expired_jwt(token, unix_now_secs()))
     }
 }
 

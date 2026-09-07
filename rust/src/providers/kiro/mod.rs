@@ -33,7 +33,6 @@ use crate::core::{
 pub struct KiroProvider {
     metadata: ProviderMetadata,
 }
-
 struct KiroCliUsage {
     plan_name: String,
     matched_new_format: bool,
@@ -516,29 +515,5 @@ impl Provider for KiroProvider {
             }
             _ => error.state_kind(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cli_presence_maps_to_local_runtime_offline_but_state_db_stays_default() {
-        assert_eq!(
-            KiroProvider::new().error_state_kind(&ProviderError::NotInstalled(
-                "kiro-cli not found. Install from https://kiro.dev".to_string(),
-            )),
-            crate::core::ProviderStateKind::LocalRuntimeOffline
-        );
-        // The state-database token lookup is auth-flavored and keeps the
-        // default mapping.
-        assert_eq!(
-            KiroProvider::new().error_state_kind(&ProviderError::NotInstalled(
-                "Kiro CLI state database not found at C:\\Users\\x\\Kiro-Cli\\data.sqlite3"
-                    .to_string(),
-            )),
-            crate::core::ProviderStateKind::NeedsAuthentication
-        );
     }
 }

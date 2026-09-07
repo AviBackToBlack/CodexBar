@@ -4,11 +4,11 @@ use crate::providers::openai::{
     OpenAISubscriptionFetchResult, account_identity_matches, parse_subscription_http_response,
 };
 
-use super::models::AccountUsageSnapshot;
 use super::{
     AuthCredentials, CodexAccountApi, identity_from_credentials, normalize_string,
     resolve_usage_url,
 };
+use crate::codex_accounts::models::AccountUsageSnapshot;
 
 const SUBSCRIPTION_PATH: &str = "/subscriptions";
 
