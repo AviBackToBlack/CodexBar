@@ -1466,7 +1466,7 @@ fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
         .to_string();
     let append_line = |total: u64| {
         format!(
-            r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":{}}}}}}}}}}
+            r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":{}}}}}}}}}
 "#,
             total / 10
         )

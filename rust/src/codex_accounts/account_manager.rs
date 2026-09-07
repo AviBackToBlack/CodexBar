@@ -461,6 +461,7 @@ impl CodexAccountManager {
                 .or_else(|| existing.and_then(|account| account.email_hint.clone())),
             identity
                 .auth_subject
+                .clone()
                 .or_else(|| existing.and_then(|account| account.auth_subject.clone())),
             provider_account_id_after_auth(&identity, existing),
             home_path.to_path_buf(),
@@ -572,6 +573,7 @@ fn build_discovered_account(
             .or_else(|| matched.and_then(|account| account.email_hint.clone())),
         identity
             .auth_subject
+            .clone()
             .or_else(|| matched.and_then(|account| account.auth_subject.clone())),
         provider_account_id_after_auth(&identity, matched),
         home_path,

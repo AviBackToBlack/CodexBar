@@ -102,13 +102,13 @@ mod tests {
     fn orders_rows_and_repeats_one_shared_timestamp() {
         let occurrences =
             HashMap::from([("step".to_string(), occurrences(&[(0, None), (1, None)]))]);
-        let timestamps = HashMap::from([(
+        let timestamp_map = HashMap::from([(
             "step".to_string(),
             timestamps(&[(20, Some(200)), (10, Some(100))]),
         )]);
 
         assert_eq!(
-            resolve_step_timestamps(&timestamps, &occurrences)["step"],
+            resolve_step_timestamps(&timestamp_map, &occurrences)["step"],
             vec![100, 200]
         );
 
