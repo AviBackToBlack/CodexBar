@@ -519,7 +519,12 @@ fn load_openai_dashboard_chart_data(
 }
 
 #[cfg(test)]
-pub(crate) use load_openai_dashboard_chart_data as load_openai_dashboard_chart_data_for_test;
+pub(crate) fn load_openai_dashboard_chart_data_for_test(
+    provider_id: &str,
+    account_email: Option<&str>,
+) -> (Vec<DailyCostPoint>, Vec<DailyUsageBreakdown>) {
+    load_openai_dashboard_chart_data(provider_id, account_email)
+}
 
 #[cfg(test)]
 mod tests {
