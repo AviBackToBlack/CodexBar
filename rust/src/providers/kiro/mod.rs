@@ -353,7 +353,7 @@ impl KiroProvider {
             usage = usage.with_extra_rate_window(
                 "kiro-overage-cost",
                 "Overage cost",
-                RateWindow::with_details(0.0, None, None, Some(format!("${cost:.2} USD"))),
+                RateWindow::informational(format!("${cost:.2} USD")),
             );
         }
 

@@ -254,7 +254,9 @@ fn scans_gpt6_astra_usage_with_cached_and_reasoning_tokens() {
     assert_eq!(summary.cached_tokens, 300);
     assert_eq!(summary.output_tokens, 100);
     assert_eq!(summary.reasoning_tokens, Some(7));
-    assert!((summary.total_cost_usd - 0.0103).abs() < 1e-12);
+    // Codex token-count rows expose cache reads, not cache writes. The 700
+    // non-cached input tokens therefore use Astra's standard input rate.
+    assert!((summary.total_cost_usd - 0.0123).abs() < 1e-12);
     assert_eq!(cache.days[&day]["gpt-6-astra"], vec![1000, 300, 100, 7]);
 }
 
@@ -1322,7 +1324,13 @@ fn codex_file_identity_invalidates_same_path_cache_without_eager_history_read() 
     let rotated = path.with_extension("old");
     std::fs::rename(&path, &rotated).unwrap();
     let replacement = write_codex_session_fixture(&sessions, "replacement.jsonl", 200);
-    std::fs::File::open(&replacement)
+    // Windows requires a handle with write-attribute access for set_modified;
+    // keep the replacement's mtime equal to the original without opening it
+    // read-only. The file contents have the same length, so path/mtime/size
+    // remain unchanged while the file identity changes.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&replacement)
         .unwrap()
         .set_modified(old_mtime)
         .unwrap();

@@ -451,7 +451,10 @@ fn gpt6_astra_aliases_use_standard_rates_and_preserve_cached_semantics() {
         "gpt-6-astra-2099-01-01",
     ] {
         let cost = CostUsagePricing::codex_cost_usd(model, 1000, 300, 100).unwrap();
-        let expected = 500.0 * 10e-6 + 300.0 * 1e-6 + 100.0 * 50e-6;
+        // This API receives cache-read tokens only. The remaining 700 input
+        // tokens are standard input; explicit cache-write tokens use the
+        // 1.25x Astra rate in the adjacent cache-write regression.
+        let expected = 700.0 * 10e-6 + 300.0 * 1e-6 + 100.0 * 50e-6;
         assert!(
             (cost - expected).abs() < 1e-12,
             "{model}: expected {expected}, got {cost}"
