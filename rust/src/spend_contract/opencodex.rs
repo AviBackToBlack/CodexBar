@@ -8,8 +8,8 @@ use serde_json::Value;
 use crate::core::CostUsagePricing;
 
 use super::{
-    CostCoverageCounts, CostProvenance, CustomPricing, CustomRates, ImportedSpendSource,
-    SpendActivityCell, SpendDailyPoint, SpendModelRow, SpendTokenMix,
+    CostCoverageCounts, CostProvenance, CustomPricing, ImportedSpendSource, SpendActivityCell,
+    SpendDailyPoint, SpendModelRow, SpendTokenMix,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,6 +502,7 @@ fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::CustomRates;
     use super::cache::{load_entries_with_cache, read_cache};
     use super::*;
     use std::fs;

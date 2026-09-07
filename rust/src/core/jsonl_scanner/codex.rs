@@ -182,6 +182,10 @@ impl JsonlScanner {
     /// already decoded prefix.  A known prefix only pays for the append
     /// boundary and newly read token events; an unknown legacy prefix is
     /// intentionally rejected by the caller and should be parsed from zero.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "resume state mirrors the persisted parser cache"
+    )]
     pub fn parse_codex_file_with_state(
         file_path: &Path,
         range: &CostUsageDayRange,

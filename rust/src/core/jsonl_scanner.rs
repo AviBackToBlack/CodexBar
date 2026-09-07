@@ -9,13 +9,16 @@
 )]
 
 use crate::core::{CostUsagePricing, ProviderId};
-use chrono::{DateTime, FixedOffset, Local, NaiveDate, TimeZone, Utc};
+use chrono::{NaiveDate, Utc};
+
+#[cfg(test)]
+use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -388,11 +391,12 @@ impl JsonlScanner {
             return cache;
         }
 
-        let mut cache = CostUsageCache::default();
         // Track a missing or unreadable baseline separately from a manually
         // constructed cache so a concurrent first writer can invalidate it.
-        cache.loaded_stamp = Some(Self::cache_stamp(&cache_path));
-        cache
+        CostUsageCache {
+            loaded_stamp: Some(Self::cache_stamp(&cache_path)),
+            ..CostUsageCache::default()
+        }
     }
 
     /// Read only the cache metadata needed by presentation surfaces.

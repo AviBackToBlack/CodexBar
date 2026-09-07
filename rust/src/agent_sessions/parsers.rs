@@ -443,14 +443,11 @@ impl ClaudeTranscriptMetadataParser {
     pub fn parse(reader: impl Read) -> Option<ClaudeTranscriptMetadata> {
         let mut session_id = None;
         let mut cwd = None;
-        let mut lines = BufReader::new(reader.take(Self::MAX_BYTES))
+        let lines = BufReader::new(reader.take(Self::MAX_BYTES))
             .lines()
             .take(Self::MAX_LINES);
 
-        loop {
-            let Some(line) = lines.next() else {
-                break;
-            };
+        for line in lines {
             let Ok(line) = line else {
                 break;
             };

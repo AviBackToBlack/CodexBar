@@ -56,8 +56,10 @@ fn explicit_zero_custom_rate_is_known_free_but_missing_rate_is_unknown() {
 
 #[test]
 fn local_spend_contract_exposes_reasoning_tokens_and_preserves_unknown() {
-    let mut known_summary = CostSummary::default();
-    known_summary.reasoning_tokens = Some(7);
+    let known_summary = CostSummary {
+        reasoning_tokens: Some(7),
+        ..CostSummary::default()
+    };
     let known = build_local_spend_contract_from_summary(
         "unknown-provider",
         30,

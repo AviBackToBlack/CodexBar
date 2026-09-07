@@ -278,6 +278,10 @@ impl CodexParserState {
         );
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "record construction mirrors the persisted token fields without changing parser state semantics"
+    )]
     fn record_usage(
         &mut self,
         range: &CostUsageDayRange,

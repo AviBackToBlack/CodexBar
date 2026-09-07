@@ -226,7 +226,6 @@ struct CodexFileScanOutcome {
 }
 
 /// Cost usage scanner
-
 impl CostScanner {
     pub fn scan_codex(&self) -> CostSummary {
         self.scan_codex_with_cancel(None)
@@ -359,9 +358,10 @@ impl CostScanner {
                         pending_next.push(key);
                     }
                 }
-                stats.files_deferred = stats
-                    .files_deferred
-                    .saturating_add((candidates.len() - index).min(u32::MAX as usize) as u32);
+                stats.files_deferred = stats.files_deferred.saturating_add(
+                    u32::try_from((candidates.len() - index).min(u32::MAX as usize))
+                        .unwrap_or(u32::MAX),
+                );
                 break;
             }
 
@@ -374,9 +374,10 @@ impl CostScanner {
                         pending_next.push(key);
                     }
                 }
-                stats.files_deferred = stats
-                    .files_deferred
-                    .saturating_add((candidates.len() - index).min(u32::MAX as usize) as u32);
+                stats.files_deferred = stats.files_deferred.saturating_add(
+                    u32::try_from((candidates.len() - index).min(u32::MAX as usize))
+                        .unwrap_or(u32::MAX),
+                );
                 break;
             }
 
@@ -624,6 +625,7 @@ impl CostScanner {
         (candidates, true)
     }
 
+    #[cfg(test)]
     fn parse_codex_file(
         &self,
         path: &Path,

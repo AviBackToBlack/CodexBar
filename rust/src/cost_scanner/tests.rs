@@ -426,9 +426,10 @@ fn write_codex_session_fixture_with_inputs(
     let base = Utc::now() - Duration::hours(1);
     let mut body = String::new();
     for (index, input) in input_tokens.iter().enumerate() {
-        let timestamp = (base + Duration::seconds(index as i64))
-            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-            .to_string();
+        let timestamp = (base
+            + Duration::seconds(i64::try_from(index).expect("fixture index fits i64")))
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
         body.push_str(&format!(
             r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":5}}}}}}}}
 "#
@@ -462,17 +463,19 @@ fn cached_usage_with_packed(day: &str, model: &str, packed: Vec<i32>) -> CostUsa
 #[test]
 fn rebuild_cache_days_preserves_known_reasoning() {
     let day = Local::now().format("%Y-%m-%d").to_string();
-    let mut cache = CostUsageCache::default();
-    cache.files = HashMap::from([
-        (
-            "a".to_string(),
-            cached_usage_with_packed(&day, "gpt-5", vec![10, 0, 4, 3]),
-        ),
-        (
-            "b".to_string(),
-            cached_usage_with_packed(&day, "gpt-5", vec![5, 0, 2, 1]),
-        ),
-    ]);
+    let mut cache = CostUsageCache {
+        files: HashMap::from([
+            (
+                "a".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![10, 0, 4, 3]),
+            ),
+            (
+                "b".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![5, 0, 2, 1]),
+            ),
+        ]),
+        ..CostUsageCache::default()
+    };
 
     rebuild_cache_days(&mut cache);
 
@@ -483,17 +486,19 @@ fn rebuild_cache_days_preserves_known_reasoning() {
 fn rebuild_cache_days_reasoning_unknown_is_order_independent() {
     let run = |first: Vec<i32>, second: Vec<i32>| {
         let day = Local::now().format("%Y-%m-%d").to_string();
-        let mut cache = CostUsageCache::default();
-        cache.files = HashMap::from([
-            (
-                "a".to_string(),
-                cached_usage_with_packed(&day, "gpt-5", first),
-            ),
-            (
-                "b".to_string(),
-                cached_usage_with_packed(&day, "gpt-5", second),
-            ),
-        ]);
+        let mut cache = CostUsageCache {
+            files: HashMap::from([
+                (
+                    "a".to_string(),
+                    cached_usage_with_packed(&day, "gpt-5", first),
+                ),
+                (
+                    "b".to_string(),
+                    cached_usage_with_packed(&day, "gpt-5", second),
+                ),
+            ]),
+            ..CostUsageCache::default()
+        };
 
         rebuild_cache_days(&mut cache);
         cache.days[&day]["gpt-5"].clone()
@@ -506,17 +511,19 @@ fn rebuild_cache_days_reasoning_unknown_is_order_independent() {
 #[test]
 fn rebuild_cache_days_zero_row_does_not_poison_reasoning() {
     let day = Local::now().format("%Y-%m-%d").to_string();
-    let mut cache = CostUsageCache::default();
-    cache.files = HashMap::from([
-        (
-            "a".to_string(),
-            cached_usage_with_packed(&day, "gpt-5", vec![10, 0, 4, 3]),
-        ),
-        (
-            "b".to_string(),
-            cached_usage_with_packed(&day, "gpt-5", vec![0, 0, 0]),
-        ),
-    ]);
+    let mut cache = CostUsageCache {
+        files: HashMap::from([
+            (
+                "a".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![10, 0, 4, 3]),
+            ),
+            (
+                "b".to_string(),
+                cached_usage_with_packed(&day, "gpt-5", vec![0, 0, 0]),
+            ),
+        ]),
+        ..CostUsageCache::default()
+    };
 
     rebuild_cache_days(&mut cache);
 
@@ -650,7 +657,9 @@ fn write_codex_fork_session_fixture(
     body.push_str("}}\n");
 
     for (index, total) in totals.iter().enumerate() {
-        let timestamp = (token_start + Duration::seconds(index as i64)).to_rfc3339();
+        let timestamp = (token_start
+            + Duration::seconds(i64::try_from(index).expect("fixture index fits i64")))
+        .to_rfc3339();
         let line = serde_json::json!({
             "timestamp": timestamp,
             "type": "event_msg",
@@ -1537,12 +1546,15 @@ fn tiny_byte_limit_resumes_and_drains_to_unbounded_totals() {
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("bounded-cache");
     let path = write_codex_session_fixture_with_inputs(&sessions, "multi.jsonl", &[100, 200, 300]);
-    let first_line_bytes = std::fs::read(&path)
-        .unwrap()
-        .split(|byte| *byte == b'\n')
-        .next()
-        .unwrap()
-        .len() as i64
+    let first_line_bytes = i64::try_from(
+        std::fs::read(&path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap()
+            .len(),
+    )
+    .expect("fixture line length fits i64")
         + 1;
 
     let mut bounded_options = CostScanOptions::app_driven();
@@ -1564,7 +1576,8 @@ fn tiny_byte_limit_resumes_and_drains_to_unbounded_totals() {
             .expect("partial cache entry")
             .parsed_bytes
             .unwrap_or(0)
-            < std::fs::metadata(&path).unwrap().len() as i64
+            < i64::try_from(std::fs::metadata(&path).unwrap().len())
+                .expect("fixture file length fits i64")
     );
     assert!(!first.history_coverage_established);
 
@@ -1612,9 +1625,11 @@ fn incomplete_summary_preserves_previous_report_and_marks_it_non_authoritative()
         updated_at: Some("2026-09-06T00:00:00Z".to_string()),
         partial: false,
     };
-    let mut cache = CostUsageCache::default();
-    cache.previous_report = Some(report.clone());
-    cache.codex_scan_incomplete = true;
+    let mut cache = CostUsageCache {
+        previous_report: Some(report.clone()),
+        codex_scan_incomplete: true,
+        ..Default::default()
+    };
     JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
 
     let scanner = CostScanner::new(7)
@@ -1642,9 +1657,11 @@ fn incomplete_summary_preserves_previous_report_and_marks_it_non_authoritative()
 
 #[test]
 fn pending_and_incomplete_round_trip_through_cache_json() {
-    let mut cache = CostUsageCache::default();
-    cache.codex_pending_paths = vec!["C:\\sessions\\pending.jsonl".to_string()];
-    cache.codex_scan_incomplete = true;
+    let cache = CostUsageCache {
+        codex_pending_paths: vec!["C:\\sessions\\pending.jsonl".to_string()],
+        codex_scan_incomplete: true,
+        ..Default::default()
+    };
 
     let encoded = serde_json::to_string(&cache).unwrap();
     let decoded: CostUsageCache = serde_json::from_str(&encoded).unwrap();
@@ -1658,12 +1675,15 @@ fn deleted_pending_path_is_pruned_after_complete_discovery() {
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
     let path = write_codex_session_fixture_with_inputs(&sessions, "partial.jsonl", &[100, 200]);
-    let first_line_bytes = std::fs::read(&path)
-        .unwrap()
-        .split(|byte| *byte == b'\n')
-        .next()
-        .unwrap()
-        .len() as i64
+    let first_line_bytes = i64::try_from(
+        std::fs::read(&path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap()
+            .len(),
+    )
+    .expect("fixture line length fits i64")
         + 1;
     let mut options = CostScanOptions::app_driven();
     options.codex_max_session_file_bytes = first_line_bytes;
