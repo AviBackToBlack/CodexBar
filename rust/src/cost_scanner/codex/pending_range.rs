@@ -58,10 +58,7 @@ impl CodexPendingScanContext {
         cache: &CostUsageCache,
         is_app_driven: bool,
     ) -> bool {
-        cache.codex_scan_incomplete
-            && cache.codex_scan_pause_reason.is_some()
-            && !is_app_driven
-            && !self.is_incompatible
+        cache.codex_scan_incomplete && cache.codex_scan_pause_reason.is_some() && !is_app_driven
     }
 }
 
