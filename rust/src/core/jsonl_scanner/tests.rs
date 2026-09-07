@@ -472,7 +472,7 @@ fn codex_append_timestamp_state_is_output_equivalent_and_boundary_only() {
 
     writeln!(
         file,
-        r#"{{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5.5","total_token_usage":{{"input_tokens":30,"cached_input_tokens":0,"output_tokens":3}}}}}}}}}"#
+        r#"{{"timestamp":"2026-05-31T10:00:03.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5.5","total_token_usage":{{"input_tokens":30,"cached_input_tokens":0,"output_tokens":3}}}}}}}}"#
     )
     .unwrap();
 

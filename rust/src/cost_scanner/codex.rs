@@ -551,7 +551,7 @@ impl CostScanner {
                     .join(date.format("%Y").to_string())
                     .join(date.format("%m").to_string())
                     .join(date.format("%d").to_string());
-                let Ok(entries) = fs::read_dir(day_dir) else {
+                let Ok(entries) = fs::read_dir(&day_dir) else {
                     continue;
                 };
                 for entry in entries.flatten() {

@@ -62,7 +62,7 @@ mod pi_family_tests {
         let mut clock = || started_at;
         let mut enriched = Vec::new();
 
-        let results = budget.compact_map_while_time_remains_with_clock(
+        let results = budget.compact_map_while_time_remaining_with_clock(
             values,
             &mut clock,
             |path| {
@@ -92,7 +92,7 @@ mod pi_family_tests {
         let values = vec![PathBuf::from("first.jsonl"), PathBuf::from("last.jsonl")];
         let mut enriched = Vec::new();
 
-        let results = budget.compact_map_while_time_remains_with_clock(
+        let results = budget.compact_map_while_time_remaining_with_clock(
             values,
             &mut clock,
             |path| {
@@ -126,7 +126,7 @@ mod pi_family_tests {
             .collect::<Vec<_>>();
         let mut clock = || started_at;
 
-        let actual = budget.compact_map_while_time_remains_with_clock(
+        let actual = budget.compact_map_while_time_remaining_with_clock(
             values,
             &mut clock,
             |path| {
