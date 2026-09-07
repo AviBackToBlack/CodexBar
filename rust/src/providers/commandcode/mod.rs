@@ -335,9 +335,7 @@ fn resolve_subscription_payload_with_cache(
             let entry = cache
                 .entry(fingerprint, now)
                 .map(|entry| (entry.plan_id.clone(), entry.period_end));
-            let Some((plan_id, period_end)) = entry else {
-                return None;
-            };
+            let (plan_id, period_end) = entry?;
             if find_plan(&plan_id).is_none() {
                 cache.clear(fingerprint, now);
                 return None;
