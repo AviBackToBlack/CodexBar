@@ -451,11 +451,13 @@ async fn refresh_provider(
 
 /// F6 (upstream 0.48.0 UsageStore+CodexResetBackfill): backfill missing
 /// `resets_at` / `reset_description` on fresh Codex windows from the cached
-/// lane data when the cached reset is still future. Fresh `used_percent` is
-/// untouched; only the reset timestamp/description are backfilled.
+/// lane data when the cached reset is still future. z.ai five-hour cached
+/// resets use the same plausibility bound as the provider parser, so an
+/// impossible rejected reset cannot be restored from the cache. Fresh
+/// `used_percent` is untouched; only reset metadata is backfilled.
 ///
-/// This is Codex-scoped by design (upstream: "Provider-specific by design"):
-/// other providers do not carry bounded resume state.
+/// This remains provider-scoped by design (upstream: "Provider-specific by
+/// design"): only Codex and z.ai carry the relevant bounded reset semantics.
 ///
 /// Applies to the bridge snapshot before publishing so every surface (tray,
 /// CLI, frontend) sees the backfilled reset instead of a missing one.
@@ -464,19 +466,23 @@ pub(super) fn codex_reset_backfill(
     cached: Option<&ProviderUsageSnapshot>,
 ) {
     let Some(cached) = cached else { return };
-    if snapshot.provider_id != "codex" {
+    if !matches!(snapshot.provider_id.as_str(), "codex" | "zai") {
         return;
     }
 
     // Backfill each slot from the corresponding cached slot.
-    backfill_slot_window(&mut snapshot.primary, &cached.primary);
+    backfill_slot_window(
+        &snapshot.provider_id,
+        &mut snapshot.primary,
+        &cached.primary,
+    );
     if let (Some(fresh), Some(cached_sec)) = (&mut snapshot.secondary, &cached.secondary) {
-        backfill_slot_window(fresh, cached_sec);
+        backfill_slot_window(&snapshot.provider_id, fresh, cached_sec);
     }
     // Tertiary (monthly/other): the Codex bridge doesn't normally populate this,
     // but the slot exists for forward-compat. Backfill when available.
     if let (Some(fresh), Some(cached_ter)) = (&mut snapshot.tertiary, &cached.tertiary) {
-        backfill_slot_window(fresh, cached_ter);
+        backfill_slot_window(&snapshot.provider_id, fresh, cached_ter);
     }
 }
 
@@ -484,6 +490,7 @@ pub(super) fn codex_reset_backfill(
 /// cached window whose reset is still in the future. `used_percent` is never
 /// overwritten (upstream: "fresh used_percent untouched").
 fn backfill_slot_window(
+    provider_id: &str,
     fresh: &mut bridge::RateWindowSnapshot,
     cached: &bridge::RateWindowSnapshot,
 ) {
@@ -495,11 +502,20 @@ fn backfill_slot_window(
     };
     // Only backfill when the cached reset is still future — a stale reset is
     // worse than a missing one.
-    if let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) {
-        if cached_dt <= chrono::Utc::now() {
-            return;
-        }
-    } else {
+    let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) else {
+        return;
+    };
+    let now = chrono::Utc::now();
+    if cached_dt <= now {
+        return;
+    }
+    // A missing z.ai five-hour reset can mean the provider rejected an
+    // impossible future timestamp. Do not let equally impossible cached
+    // evidence undo that rejection, but preserve a plausible cached reset.
+    if provider_id == "zai"
+        && fresh.window_minutes == Some(300)
+        && cached_dt > now + chrono::Duration::minutes(5 * 60 + 1)
+    {
         return;
     }
     fresh.resets_at = Some(cached_reset.clone());
@@ -1259,6 +1275,24 @@ mod reset_backfill_tests {
         fresh.provider_id = "claude".into();
         codex_reset_backfill(&mut fresh, Some(&cached));
         assert!(fresh.primary.resets_at.is_none(), "non-codex skip");
+    }
+
+    #[test]
+    fn zai_five_hour_backfill_rejects_impossible_cached_reset() {
+        for (offset, should_backfill) in [
+            (chrono::Duration::hours(1), true),
+            (chrono::Duration::hours(10), false),
+        ] {
+            let future = (chrono::Utc::now() + offset).to_rfc3339();
+            let mut cached = codex_snapshot(win(50.0, Some(&future)));
+            cached.provider_id = "zai".into();
+            let mut fresh = codex_snapshot(win(30.0, None));
+            fresh.provider_id = "zai".into();
+            fresh.primary.reset_description = Some("5-hour".into());
+            codex_reset_backfill(&mut fresh, Some(&cached));
+            assert_eq!(fresh.primary.resets_at.is_some(), should_backfill);
+            assert!((fresh.primary.used_percent - 30.0).abs() < f64::EPSILON);
+        }
     }
 
     #[test]

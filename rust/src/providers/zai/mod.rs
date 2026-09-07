@@ -397,16 +397,8 @@ impl ZaiProvider {
         // windows keep duration minutes; TIME_LIMIT (MCP) carries the "MCP"
         // label and no window duration; 5-hour token windows are labeled
         // "5-hour"; otherwise the explicit window label is used.
-        fn make_window(l: &ZaiLimit) -> RateWindow {
-            let resets_at = l
-                .next_reset_time
-                .and_then(DateTime::<Utc>::from_timestamp_millis)
-                .or_else(|| {
-                    l.reset_at
-                        .as_deref()
-                        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                        .map(|timestamp| timestamp.with_timezone(&Utc))
-                });
+        let now = Utc::now();
+        let make_window = |l: &ZaiLimit| -> RateWindow {
             let is_tokens = matches!(
                 l.limit_type.as_deref(),
                 Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
@@ -416,13 +408,24 @@ impl ZaiProvider {
             } else {
                 None
             };
+            let resets_at = l
+                .next_reset_time
+                .and_then(DateTime::<Utc>::from_timestamp_millis)
+                .or_else(|| {
+                    l.reset_at
+                        .as_deref()
+                        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                        .map(|timestamp| timestamp.with_timezone(&Utc))
+                });
+            let resets_at =
+                resets_at.filter(|reset| is_plausible_five_hour_reset(window_mins, *reset, now));
             RateWindow::with_details(
                 compute_percent(l),
                 window_mins,
                 resets_at,
                 rate_window_reset_description(l, window_mins),
             )
-        }
+        };
 
         // Upstream 0.48.0 bucket split: with 2+ token limits, the shortest
         // window → session (5-hour GLM Coding Plan window) and the longest →
@@ -472,6 +475,20 @@ impl ZaiProvider {
         };
         Some(number * minutes_per_unit)
     }
+}
+
+const ZAI_FIVE_HOUR_WINDOW_MINUTES: u32 = 300;
+
+/// Five-hour Coding Plan resets cannot be more than five hours away, plus one
+/// minute for clock skew. Past resets remain valid because the API may report
+/// a boundary that has just elapsed.
+fn is_plausible_five_hour_reset(
+    window_minutes: Option<u32>,
+    reset: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> bool {
+    window_minutes != Some(ZAI_FIVE_HOUR_WINDOW_MINUTES)
+        || reset <= now + chrono::Duration::minutes(5 * 60 + 1)
 }
 
 /// Upstream 0.48.0 `resetDescription`: MCP (TIME_LIMIT) → "MCP"; 5-hour
@@ -723,6 +740,67 @@ mod tests {
         assert_eq!(usage.primary.used_percent, 75.0);
         assert_eq!(usage.primary.window_minutes, Some(300));
         assert!(usage.primary.resets_at.is_some());
+    }
+
+    #[test]
+    fn five_hour_reset_plausibility_drops_impossible_timestamp() {
+        let now = Utc::now();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {"limits": [
+                {
+                    "type": "TOKENS_LIMIT",
+                    "unit": 3,
+                    "number": 5,
+                    "percentage": 25,
+                    "nextResetTime": (now + chrono::Duration::hours(10)).timestamp_millis()
+                },
+                {
+                    "type": "TOKENS_LIMIT",
+                    "unit": 6,
+                    "number": 1,
+                    "percentage": 9,
+                    "nextResetTime": (now + chrono::Duration::days(6)).timestamp_millis()
+                },
+                {
+                    "type": "TIME_LIMIT",
+                    "unit": 5,
+                    "number": 1,
+                    "percentage": 22,
+                    "nextResetTime": (now + chrono::Duration::days(20)).timestamp_millis()
+                }
+            ]}
+        }))
+        .unwrap();
+
+        let usage = ZaiProvider::new().parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.primary.used_percent, 25.0);
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert_eq!(usage.primary.reset_description.as_deref(), Some("5-hour"));
+        assert!(usage.primary.resets_at.is_none());
+        assert!(usage.secondary.as_ref().is_some_and(|window| {
+            window.window_minutes == Some(10080) && window.resets_at.is_some()
+        }));
+        let mcp = usage
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.id == "zai-mcp")
+            .expect("MCP extra window");
+        assert!(mcp.window.resets_at.is_some());
+    }
+
+    #[test]
+    fn five_hour_reset_horizon_allows_one_minute_clock_skew() {
+        let now = Utc::now();
+        let edge = now + chrono::Duration::minutes(5 * 60 + 1);
+        assert!(is_plausible_five_hour_reset(Some(300), edge, now));
+        assert!(!is_plausible_five_hour_reset(
+            Some(300),
+            edge + chrono::Duration::milliseconds(1),
+            now
+        ));
+        assert!(is_plausible_five_hour_reset(Some(10080), edge, now));
+        assert!(is_plausible_five_hour_reset(None, edge, now));
     }
 
     #[test]
