@@ -410,10 +410,12 @@ pub fn get_codex_accounts_state(
 ) -> Result<CodexAccountsStateBridge, String> {
     let _guard = state.lock().map_err(|e| e.to_string())?;
     let accounts = load_codex_accounts()?;
+    let display_names = display_names_by_id(&accounts);
+    let snapshots = snapshots_for_accounts(&accounts, codex_account_snapshots()?);
     Ok(CodexAccountsStateBridge {
-        display_names: display_names_by_id(&accounts),
         accounts,
-        snapshots: snapshots_for_accounts(&accounts, codex_account_snapshots()?),
+        display_names,
+        snapshots,
     })
 }
 
