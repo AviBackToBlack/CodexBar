@@ -315,10 +315,7 @@ fn read_database(path: &Path, budget: &mut Budget) -> rusqlite::Result<(Vec<Even
         return Ok((rows.events, false));
     }
 
-    let has_steps = match supported_steps_schema(&tx, budget) {
-        Ok(value) => value,
-        Err(_) => false,
-    };
+    let has_steps = supported_steps_schema(&tx, budget).unwrap_or_default();
     if !has_steps {
         return Ok((rows.events, false));
     }
@@ -377,7 +374,7 @@ fn read_generation_rows(
     let mut complete = true;
     let mut events = Vec::new();
     let mut pending = Vec::new();
-    let mut occurrences = HashMap::new();
+    let mut occurrences: HashMap<String, Vec<StepOccurrence>> = HashMap::new();
 
     while let Some(row) = query.next()? {
         if !budget.check() {
@@ -445,7 +442,7 @@ fn read_generation_rows(
         if let Some(step_uuid) = step_uuid.as_deref() {
             occurrences
                 .entry(step_uuid.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(StepOccurrence {
                     row: idx,
                     timestamp_ms: turn.timestamp_ms,
@@ -561,7 +558,7 @@ fn read_step_timestamps(
         if needed_occurrences.contains_key(&step_uuid) {
             timestamps
                 .entry(step_uuid)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(StepTimestamp {
                     row: idx,
                     timestamp_ms,

@@ -1434,13 +1434,17 @@ fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
     let cache_root = root.path().join("cache");
     let path =
         write_codex_session_fixture_with_inputs(&sessions, "growing.jsonl", &[100, 200, 300]);
-    let initial_size = std::fs::metadata(&path).unwrap().len() as i64;
-    let first_line_bytes = std::fs::read(&path)
-        .unwrap()
-        .split(|byte| *byte == b'\n')
-        .next()
-        .unwrap()
-        .len() as i64
+    let initial_size = i64::try_from(std::fs::metadata(&path).unwrap().len())
+        .expect("fixture file length fits i64");
+    let first_line_bytes = i64::try_from(
+        std::fs::read(&path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap()
+            .len(),
+    )
+    .expect("fixture line length fits i64")
         + 1;
 
     let mut options = CostScanOptions::app_driven();
@@ -1516,7 +1520,8 @@ fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
     }
     assert!(!bounded_cache.codex_scan_incomplete);
     let stable_summary = bounded_summary.clone();
-    let stable_size = std::fs::metadata(&path).unwrap().len() as i64;
+    let stable_size = i64::try_from(std::fs::metadata(&path).unwrap().len())
+        .expect("fixture file length fits i64");
 
     let partial_line = append_line(next_total);
     let split = partial_line.len() / 2;
@@ -1524,7 +1529,7 @@ fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
         .append(true)
         .open(&path)
         .unwrap();
-    file.write_all(partial_line[..split].as_bytes()).unwrap();
+    file.write_all(&partial_line.as_bytes()[..split]).unwrap();
     drop(file);
     let (partial_summary, _, partial_cache) = scanner.scan_codex_detailed_with_cache(None);
     let partial_usage = partial_cache
@@ -1540,7 +1545,7 @@ fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
         .append(true)
         .open(&path)
         .unwrap();
-    file.write_all(partial_line[split..].as_bytes()).unwrap();
+    file.write_all(&partial_line.as_bytes()[split..]).unwrap();
     drop(file);
     next_total += 100;
     let (resumed_summary, _, resumed_cache) = scanner.scan_codex_detailed_with_cache(None);
@@ -1552,7 +1557,10 @@ fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
         .unwrap();
     assert_eq!(
         resumed_usage.parsed_bytes,
-        Some(std::fs::metadata(&path).unwrap().len() as i64)
+        Some(
+            i64::try_from(std::fs::metadata(&path).unwrap().len())
+                .expect("fixture file length fits i64"),
+        )
     );
     assert_eq!(
         resumed_usage.codex_scan_target_size,

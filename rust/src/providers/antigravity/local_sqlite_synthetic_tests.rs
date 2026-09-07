@@ -86,11 +86,13 @@ fn malformed_step_metadata(step_uuid: &str) -> Vec<u8> {
     metadata
 }
 
+type SyntheticStepRows<'a> = &'a [(i64, Option<Vec<u8>>)];
+
 fn database(
     dir: &TempDir,
     session: &str,
     generation_rows: &[(i64, Vec<u8>)],
-    step_rows: Option<&[(i64, Option<Vec<u8>>)]>,
+    step_rows: Option<SyntheticStepRows<'_>>,
 ) -> PathBuf {
     let root = dir.path().join("conversations");
     fs::create_dir_all(&root).unwrap();

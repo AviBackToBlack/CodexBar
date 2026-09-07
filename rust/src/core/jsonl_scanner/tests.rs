@@ -508,7 +508,8 @@ fn codex_parse_publishes_only_the_committed_prefix_before_an_incomplete_tail() {
     let range = CostUsageDayRange::new(day, day);
     let committed_line = r#"{"timestamp":"2026-05-31T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1}}}}"#;
     writeln!(file, "{committed_line}").unwrap();
-    let committed_bytes = (committed_line.len() + 1) as i64;
+    let committed_bytes =
+        i64::try_from(committed_line.len() + 1).expect("fixture line length fits i64");
 
     let complete_tail = r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.5","total_token_usage":{"input_tokens":20,"cached_input_tokens":0,"output_tokens":2}}}}"#;
     let split = complete_tail.len() / 2;
@@ -539,7 +540,8 @@ fn codex_parse_publishes_only_the_committed_prefix_before_an_incomplete_tail() {
     assert_eq!(resumed.records[0].input, 10);
     assert_eq!(
         resumed.parsed_bytes,
-        std::fs::metadata(file.path()).unwrap().len() as i64
+        i64::try_from(std::fs::metadata(file.path()).unwrap().len())
+            .expect("fixture file length fits i64")
     );
     assert_eq!(resumed.scan_target_size, resumed.parsed_bytes);
     assert!(resumed.is_complete);
