@@ -99,6 +99,10 @@ pub struct CostSnapshotBridge {
     #[serde(default)]
     pub balance: Option<f64>,
     #[serde(default)]
+    pub balance_updated_at: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
     pub formatted_balance: Option<String>,
     #[serde(default)]
     pub daily: Vec<CostDailyPointBridge>,
@@ -396,6 +400,8 @@ impl ProviderUsageSnapshot {
                 formatted_used: c.format_used(),
                 formatted_limit: c.format_limit(),
                 balance: c.balance,
+                balance_updated_at: c.balance_updated_at.map(|dt| dt.to_rfc3339()),
+                account_id: c.account_id.clone(),
                 formatted_balance: c.format_balance(),
                 daily: c
                     .daily

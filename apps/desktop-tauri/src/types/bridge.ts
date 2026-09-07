@@ -549,6 +549,10 @@ export interface CostSnapshotBridge {
   formattedUsed: string;
   formattedLimit: string | null;
   balance?: number | null;
+  /** Successful balance observation time; independent from the usage-cap age. */
+  balanceUpdatedAt?: string | null;
+  /** Stable provider account scope for reconciling paired observations. */
+  accountId?: string | null;
   formattedBalance?: string | null;
   daily?: CostDailyPoint[];
   /** Provider-metered spend that is itself a primary usage signal. */
@@ -940,6 +944,8 @@ export interface CodexAccountUsageSnapshot {
   primaryWindow: CodexUsageWindow | null;
   secondaryWindow: CodexUsageWindow | null;
   credits: CodexCreditsBalance | null;
+  /** Persisted account-scoped extra-usage cost, when available. */
+  cost?: CostSnapshotBridge | null;
   updatedAt: string;
 }
 
