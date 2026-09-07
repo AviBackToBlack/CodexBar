@@ -302,7 +302,7 @@ impl CostScanner {
         cache.codex_pending_scan_timezone = Some(pending_scan.timezone.clone());
 
         let (mut candidates, discovery_complete) =
-            self.collect_codex_candidates(&sessions_dirs, &scan_range, &cache, cancel, &mut stats);
+            self.collect_codex_candidates(&sessions_dirs, scan_range, &cache, cancel, &mut stats);
         let candidate_limit = if self.options.codex_candidate_limit == 0 {
             usize::MAX
         } else {
@@ -324,7 +324,7 @@ impl CostScanner {
         prioritize_codex_pending_candidates(&mut candidates, &pending_paths_before_pass);
         if discovery_complete && !is_cancelled(cancel) {
             pending_next
-                .retain(|path| !cached_codex_file_is_complete_for_range(&cache, path, &scan_range));
+                .retain(|path| !cached_codex_file_is_complete_for_range(&cache, path, scan_range));
         }
 
         let mut incomplete_processed = Vec::new();
@@ -364,7 +364,7 @@ impl CostScanner {
 
             let outcome = self.parse_codex_file_bounded(
                 &candidate.path,
-                &scan_range,
+                scan_range,
                 &mut summary,
                 &mut cache,
                 cancel,
@@ -401,9 +401,9 @@ impl CostScanner {
 
         let mut pruned_paths_pending = Vec::new();
         if discovery_complete && !is_cancelled(cancel) {
-            pruned_paths_pending = missing_codex_cache_paths(&cache, &sessions_dirs, &scan_range);
+            pruned_paths_pending = missing_codex_cache_paths(&cache, &sessions_dirs, scan_range);
             if self.options.is_app_driven() {
-                reconcile_missing_codex_cache_files(&mut cache, &sessions_dirs, &scan_range);
+                reconcile_missing_codex_cache_files(&mut cache, &sessions_dirs, scan_range);
                 for path in &pending_paths_before_pass {
                     if !Path::new(path).exists() {
                         cache.files.remove(path);
@@ -429,7 +429,7 @@ impl CostScanner {
                 return true;
             }
             Path::new(path).exists()
-                && is_codex_path_in_scan_window(Path::new(path), &sessions_dirs, &scan_range)
+                && is_codex_path_in_scan_window(Path::new(path), &sessions_dirs, scan_range)
         });
         if discovery_complete
             && !is_cancelled(cancel)

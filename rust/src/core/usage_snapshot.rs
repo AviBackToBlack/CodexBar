@@ -392,8 +392,7 @@ impl CostSnapshot {
         let attached_balance_date = balance_date(attached);
         let balance_source = match live_balance_date {
             Some(live_date)
-                if attached_balance_date
-                    .map_or(true, |attached_date| live_date >= attached_date) =>
+                if attached_balance_date.is_none_or(|attached_date| live_date >= attached_date) =>
             {
                 live
             }
