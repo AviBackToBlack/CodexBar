@@ -735,6 +735,20 @@ fn fork_child_counts_only_growth_above_parent_baseline() {
         &[1_000_000, 1_000_140],
     );
 
+    let now = std::time::SystemTime::now();
+    File::options()
+        .write(true)
+        .open(&parent)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(10))
+        .unwrap();
+    File::options()
+        .write(true)
+        .open(&child)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(5))
+        .unwrap();
+
     let mut options = CostScanOptions::app_driven();
     options.prefer_newest_codex_sessions_first = false;
     let scanner = CostScanner::new(7)

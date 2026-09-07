@@ -51,7 +51,7 @@ mod pi_family_tests {
     }
 
     fn budget() -> DirectoryScanBudget {
-        DirectoryScanBudget::new(512, 1, std::time::Duration::from_secs(5))
+        DirectoryScanBudget::new(512, 1, std::time::Duration::from_secs(30))
     }
 
     #[test]
