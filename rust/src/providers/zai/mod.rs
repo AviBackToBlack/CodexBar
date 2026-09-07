@@ -6,6 +6,7 @@
 mod balance;
 pub mod mcp_details;
 pub mod region;
+mod reset_plausibility;
 pub mod settings;
 
 // Re-exports for MCP details menu
@@ -29,6 +30,7 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
+use reset_plausibility::is_plausible_five_hour_reset;
 use settings::ZaiSettingsReader;
 
 const ZAI_USAGE_SCOPE_ENV: &str = "Z_AI_USAGE_SCOPE";
@@ -475,20 +477,6 @@ impl ZaiProvider {
         };
         Some(number * minutes_per_unit)
     }
-}
-
-const ZAI_FIVE_HOUR_WINDOW_MINUTES: u32 = 300;
-
-/// Five-hour Coding Plan resets cannot be more than five hours away, plus one
-/// minute for clock skew. Past resets remain valid because the API may report
-/// a boundary that has just elapsed.
-fn is_plausible_five_hour_reset(
-    window_minutes: Option<u32>,
-    reset: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> bool {
-    window_minutes != Some(ZAI_FIVE_HOUR_WINDOW_MINUTES)
-        || reset <= now + chrono::Duration::minutes(5 * 60 + 1)
 }
 
 /// Upstream 0.48.0 `resetDescription`: MCP (TIME_LIMIT) → "MCP"; 5-hour
