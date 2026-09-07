@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 
 use super::{KiroProvider, usage_limits};
-use crate::core::{ProviderError, ProviderFetchResult, ProviderId};
+use crate::core::{Provider, ProviderError, ProviderFetchResult, ProviderId};
 
 fn parse(output: &str) -> crate::core::UsageSnapshot {
     KiroProvider::new()
