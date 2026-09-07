@@ -588,7 +588,7 @@ fn for_each_claude_usage_record<F>(
     cutoff: &DateTime<Utc>,
     seen: &mut HashSet<String>,
     cancel: Option<&AtomicBool>,
-    mut on_record: F,
+    on_record: F,
 ) -> usize
 where
     F: FnMut(&ClaudeUsageRecord),

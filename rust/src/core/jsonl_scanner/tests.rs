@@ -587,12 +587,8 @@ fn codex_parser_discards_a_line_at_limit_plus_one_and_keeps_following_record() {
     );
     assert_eq!(oversized.len(), CODEX_JSONL_MAX_LINE_BYTES + 1);
     writeln!(file, "{oversized}").unwrap();
-    writeln!(
-        file,
-        "{}",
-        r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":9,"cached_input_tokens":2,"output_tokens":1}}}}"#
-    )
-    .unwrap();
+    let valid = r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":9,"cached_input_tokens":2,"output_tokens":1}}}}"#;
+    writeln!(file, "{valid}").unwrap();
 
     let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
     let parsed = JsonlScanner::parse_codex_file(

@@ -682,16 +682,18 @@ mod tests {
     fn varint(mut value: u64) -> Vec<u8> {
         let mut encoded = Vec::new();
         while value >= 0x80 {
-            encoded.push((value as u8 & 0x7f) | 0x80);
+            encoded.push(u8::try_from(value & 0x7f).expect("masked varint byte fits u8") | 0x80);
             value >>= 7;
         }
-        encoded.push(value as u8);
+        encoded.push(u8::try_from(value).expect("terminal varint byte fits u8"));
         encoded
     }
 
     fn hex_bytes(hex: String) -> Vec<u8> {
-        hex.as_bytes()
-            .chunks_exact(2)
+        let (pairs, remainder) = hex.as_bytes().as_chunks::<2>();
+        assert!(remainder.is_empty(), "hex fixture length must be even");
+        pairs
+            .iter()
             .map(|chunk| {
                 let text = std::str::from_utf8(chunk).unwrap();
                 u8::from_str_radix(text, 16).unwrap()

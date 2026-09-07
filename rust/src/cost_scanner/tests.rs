@@ -1739,10 +1739,12 @@ fn failed_catch_up_pause_preserves_cursor_and_report_until_explicit_refresh() {
         updated_at: Some("2026-09-06T00:00:00Z".to_string()),
         partial: false,
     };
-    let mut cache = CostUsageCache::default();
-    cache.previous_report = Some(report.clone());
-    cache.codex_pending_paths = vec![pending.to_string_lossy().to_string()];
-    cache.codex_scan_incomplete = true;
+    let mut cache = CostUsageCache {
+        previous_report: Some(report.clone()),
+        codex_pending_paths: vec![pending.to_string_lossy().to_string()],
+        codex_scan_incomplete: true,
+        ..Default::default()
+    };
     JsonlScanner::save_cache(ProviderId::Codex, &mut cache, Some(&cache_root));
 
     let failed = CostScanner::new(7)
@@ -1933,11 +1935,13 @@ fn paused_catch_up_round_trips_without_retrying_in_background() {
         updated_at: Some("2026-09-06T00:00:00Z".to_string()),
         partial: true,
     };
-    let mut cache = CostUsageCache::default();
-    cache.previous_report = Some(report.clone());
-    cache.codex_pending_paths = vec![pending.to_string_lossy().to_string()];
-    cache.codex_scan_incomplete = true;
-    cache.codex_scan_pause_reason = Some(CodexScanPauseReason::NoProgress);
+    let mut cache = CostUsageCache {
+        previous_report: Some(report.clone()),
+        codex_pending_paths: vec![pending.to_string_lossy().to_string()],
+        codex_scan_incomplete: true,
+        codex_scan_pause_reason: Some(CodexScanPauseReason::NoProgress),
+        ..Default::default()
+    };
 
     let encoded = serde_json::to_string(&cache).unwrap();
     let decoded: CostUsageCache = serde_json::from_str(&encoded).unwrap();

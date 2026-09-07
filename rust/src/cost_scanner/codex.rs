@@ -445,9 +445,9 @@ impl CostScanner {
                     Some(CodexScanPauseReason::Error(
                         "Codex session source unavailable".to_string(),
                     ))
-                } else if !pruned_paths_pending.is_empty() {
-                    Some(CodexScanPauseReason::NoProgress)
-                } else if bytes_read_this_refresh == 0 && !cache.codex_pending_paths.is_empty() {
+                } else if !pruned_paths_pending.is_empty()
+                    || (bytes_read_this_refresh == 0 && !cache.codex_pending_paths.is_empty())
+                {
                     Some(CodexScanPauseReason::NoProgress)
                 } else {
                     None
@@ -578,7 +578,7 @@ impl CostScanner {
 
         for sessions_dir in sessions_dirs {
             if !sessions_dir.is_dir() {
-                if cache_has_codex_path_under(cache, &sessions_dir)
+                if cache_has_codex_path_under(cache, sessions_dir)
                     || (sessions_dirs.len() == 1 && cache_has_validated_state)
                 {
                     discovery_complete = false;

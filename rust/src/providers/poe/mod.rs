@@ -262,6 +262,10 @@ fn timestamp_to_date(value: f64) -> Option<DateTime<Utc>> {
     if !millis.is_finite() || millis < i64::MIN as f64 || millis > i64::MAX as f64 {
         return None;
     }
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "millis is finite and bounds-checked immediately above"
+    )]
     DateTime::from_timestamp_millis(millis.round() as i64)
 }
 

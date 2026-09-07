@@ -7,7 +7,7 @@ mod billing;
 pub mod local_sessions;
 
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde_json::Value;
 use std::path::PathBuf;
