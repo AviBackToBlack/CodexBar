@@ -303,7 +303,7 @@ pub(super) async fn fetch_subscription_for_enrichment_result(
             Err(ProviderError::AuthRequired)
         }
         Ok(_) => Ok(None),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error),
     }
 }
 

@@ -32,7 +32,7 @@ pub(super) async fn enrich_subscription_metadata(
     }
     let account_id = workspace_account_id
         .and_then(|id| normalize_string(Some(id)))
-        .or_else(|| identity.provider_account_id);
+        .or(identity.provider_account_id);
     match api
         .fetch_subscription_metadata(codex_home_path, credentials, account_id.as_deref())
         .await

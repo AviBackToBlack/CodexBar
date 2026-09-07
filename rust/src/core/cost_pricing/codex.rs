@@ -20,6 +20,10 @@ pub(super) fn codex_cost_from_rates(
         + (output_tokens as f64) * output_rate
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Arguments mirror independent token classes and their corresponding pricing rates."
+)]
 fn codex_cost_from_rates_with_cache_write(
     input_tokens: u64,
     cached_input_tokens: u64,
