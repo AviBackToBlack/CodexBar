@@ -243,6 +243,7 @@ Plan = Plan
 Account = Hesap
 ProviderSessionLabel = Oturum
 ProviderWeeklyLabel = Haftalık
+ClaudeScopedWeeklyLabel = { "{}" } haftalık
 ProviderCodeReviewLabel = Kod incelemesi
 ResetsInShort = Sıfırlanmaya kalan
 ResetsInDaysHours = Sıfırlanmaya { "{}" } g { "{}" } sa

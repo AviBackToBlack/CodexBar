@@ -237,6 +237,7 @@ Plan = Plan
 Account = Cuenta
 ProviderSessionLabel = Sesión
 ProviderWeeklyLabel = Semanal
+ClaudeScopedWeeklyLabel = { "{}" } semanal
 ProviderCodeReviewLabel = Revisión de código
 ResetsInShort = Reinicia en
 ResetsInDaysHours = Reinicia en { "{}" }d { "{}" }h

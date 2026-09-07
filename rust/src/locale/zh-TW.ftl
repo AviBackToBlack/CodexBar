@@ -237,6 +237,7 @@ Plan = 套餐
 Account = 賬號
 ProviderSessionLabel = 本次會話
 ProviderWeeklyLabel = 本週
+ClaudeScopedWeeklyLabel = { "{}" } 每週
 ProviderCodeReviewLabel = 程式碼審查
 ResetsInShort = 重置於
 ResetsInDaysHours = { "{}" } 天 { "{}" } 小時後重置

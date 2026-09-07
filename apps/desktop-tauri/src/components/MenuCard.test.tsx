@@ -290,6 +290,35 @@ describe("MenuCard", () => {
     expect(screen.getByText("58% left")).toBeInTheDocument();
   });
 
+  it("localizes Claude scoped weekly extra-window labels", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({ ClaudeScopedWeeklyLabel: "{} weekly" }));
+    const snapshot = provider(null, 20);
+    snapshot.extraRateWindows = [
+      {
+        id: "claude-weekly-scoped-fable",
+        title: "Fable only",
+        window: rateWindow(42, { windowMinutes: 7 * 24 * 60 }),
+      },
+      {
+        id: "custom",
+        title: "Custom only",
+        window: rateWindow(10),
+      },
+    ];
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("Fable weekly")).toBeInTheDocument();
+    expect(screen.getByText("Custom only")).toBeInTheDocument();
+    expect(screen.queryByText("Fable only")).not.toBeInTheDocument();
+
+    const otherProvider = provider(null, 20);
+    otherProvider.providerId = "synthetic";
+    otherProvider.extraRateWindows = [snapshot.extraRateWindows[0]];
+    renderCard(otherProvider);
+    expect(screen.getByText("Fable only")).toBeInTheDocument();
+  });
+
   it("renders informational metrics without quota percentages", async () => {
     const snapshot = provider(null, 20);
     snapshot.extraRateWindows = [

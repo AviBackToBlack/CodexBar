@@ -74,8 +74,14 @@ function localizeWindowLabel(
   t: (key: LocaleKey) => string,
   language?: string,
   windowMinutes?: number | null,
+  windowId?: string,
 ): string {
   const normalized = raw?.trim().toLowerCase();
+  if (windowId?.startsWith("claude-weekly-scoped-")) {
+    const modelName = raw?.trim().replace(/\s+only\s*$/i, "").trim();
+    const template = t("ClaudeScopedWeeklyLabel");
+    return modelName ? template.replace("{}", modelName) : template.replace("{}", "");
+  }
   // Upstream 0.55.0 #3070: quota windows in Simplified Chinese use their
   // actual duration instead of the conversational Session wording.
   if (language === "chinese" && normalized === "session" && windowMinutes != null) {
@@ -218,7 +224,9 @@ export default function MenuCard({
   for (const extra of provider.extraRateWindows ?? []) {
     metrics.push({
       id: `extra-${extra.id}`,
-      label: extra.title,
+      label: provider.providerId === "claude"
+        ? localizeWindowLabel(extra.title, t, language, extra.window.windowMinutes, extra.id)
+        : extra.title,
       snap: extra.window,
       resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });
