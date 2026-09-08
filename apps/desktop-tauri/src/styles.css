@@ -5353,12 +5353,6 @@ html:has(.menu-surface--tray) {
   border: 1px solid rgba(0, 0, 0, 0.12);
   box-shadow: none;
 }
-[data-theme="light"] .select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238e8e93'/%3E%3C/svg%3E");
-  background-size: 10px 6px;
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-}
 [data-theme="light"] .select option {
   background: #fff;
   color: var(--text-primary);
@@ -6011,59 +6005,11 @@ html:has(.menu-surface--tray) {
   font-weight: 500;
 }
 
-/* Shared Windows typography and Settings control spacing. */
+/* Shared Windows typography and control sizing. */
 button, input, select, textarea {
   font-family: var(--font-ui);
 }
 
-.settings-section {
-  gap: 4px;
-  padding-bottom: 12px;
-}
-.settings-section + .settings-section {
-  padding-top: 12px;
-}
-.settings-section > .settings-section__title {
-  margin: 0;
-}
-.settings-section__title,
-.provider-detail-section h4 {
-  font-size: 13px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-  color: var(--text-primary);
-}
-.settings-field {
-  padding: 8px 0;
-}
-.settings-field__label,
-.settings-field__desc,
-.settings-section__hint {
-  line-height: 1.4;
-}
-.settings-section__hint {
-  margin: 6px 0 0;
-}
-.provider-detail-section {
-  padding: 16px 0;
-  margin-bottom: 0;
-}
-.credential-card {
-  padding: 12px;
-}
-.codex-accounts .credential-card__header {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-.codex-accounts .credential-card__actions {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-.codex-accounts .credential-card__badge {
-  align-self: flex-start;
-}
 .select, .number-input, .text-input {
   min-height: 28px;
 }
