@@ -505,10 +505,8 @@ mod tests {
 
     #[test]
     fn antigravity_json_keeps_unknown_cost_distinct_from_zero() {
-        use crate::providers::antigravity::local_sessions::{
-            LocalHistoryCoverage, LocalSessionSummary,
-        };
-        let payload = antigravity_token_history_json(
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let payload = crate::spend_contract::local_token_history_json(
             "antigravity",
             LocalTokenHistorySummary {
                 total_tokens: 12_345,
@@ -522,7 +520,7 @@ mod tests {
         assert_eq!(payload["historyCoverage"], "complete");
         assert_eq!(payload["knownZero"], false);
 
-        let partial = antigravity_token_history_json(
+        let partial = crate::spend_contract::local_token_history_json(
             "antigravity",
             LocalTokenHistorySummary {
                 total_tokens: 999,

@@ -145,9 +145,7 @@ mod tests {
 
     #[test]
     fn antigravity_cost_payload_is_token_only_and_preserves_partial_unknown() {
-        use crate::providers::antigravity::local_sessions::{
-            LocalHistoryCoverage, LocalSessionSummary,
-        };
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
         let complete = crate::spend_contract::local_token_history_json(
             "antigravity",
             LocalTokenHistorySummary {
