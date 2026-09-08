@@ -109,6 +109,46 @@ describe("AdvancedTab", () => {
     });
   });
 
+
+  it("keeps proxy text edits local until blur or Enter", () => {
+    const set = vi.fn();
+    render(
+      <AdvancedTab
+        settings={{
+          ...settings,
+          httpProxyEnabled: true,
+          httpProxyUrl: "http://old-proxy:8080",
+          httpProxyUsername: "old-user",
+          httpProxyPassword: "old-pass",
+        }}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    const url = screen.getByLabelText("NetworkProxyUrlLabel");
+    fireEvent.change(url, { target: { value: "  http://127.0.0.1:7890  " } });
+    expect(url).toHaveValue("  http://127.0.0.1:7890  ");
+    expect(set).not.toHaveBeenCalled();
+    fireEvent.blur(url);
+    expect(set).toHaveBeenCalledWith({ httpProxyUrl: "http://127.0.0.1:7890" });
+
+    set.mockClear();
+    const user = screen.getByDisplayValue("old-user");
+    fireEvent.focus(user);
+    fireEvent.change(user, { target: { value: "  alice  " } });
+    expect(set).not.toHaveBeenCalled();
+    fireEvent.blur(user);
+    expect(set).toHaveBeenCalledWith({ httpProxyUsername: "alice" });
+
+    set.mockClear();
+    const password = screen.getByDisplayValue("old-pass");
+    fireEvent.change(password, { target: { value: "secret with spaces" } });
+    expect(set).not.toHaveBeenCalled();
+    fireEvent.blur(password);
+    expect(set).toHaveBeenCalledWith({ httpProxyPassword: "secret with spaces" });
+  });
+
   it("shows an error when copying diagnostics fails", async () => {
     tauriMocks.getSafeDiagnostics.mockRejectedValue(new Error("invoke failed"));
     render(<AdvancedTab settings={settings} set={vi.fn()} saving={false} />);

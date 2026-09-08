@@ -687,6 +687,11 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Whether an explicitly selected manual cookie outranks a token-account override.
+    fn manual_cookie_precedes_token_account(&self) -> bool {
+        false
+    }
+
     /// Whether Automatic metric selection should prefer an exhausted quota lane.
     fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
         true

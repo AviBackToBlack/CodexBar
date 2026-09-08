@@ -433,6 +433,10 @@ fn last_good_failure_policy_for_error(error: &str) -> LastGoodFailurePolicy {
 
 #[async_trait]
 impl Provider for ClaudeProvider {
+    fn manual_cookie_precedes_token_account(&self) -> bool {
+        true
+    }
+
     fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
         false
     }

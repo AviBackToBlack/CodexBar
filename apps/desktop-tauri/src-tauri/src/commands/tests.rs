@@ -595,6 +595,34 @@ fn fetch_context_token_account_uses_web_cookie_header() {
 }
 
 #[test]
+fn fetch_context_claude_manual_cookie_beats_active_oauth_token_account() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Claude, "manual");
+    settings.set_usage_source(ProviderId::Claude, "auto");
+    let mut cookies = ManualCookies::default();
+    cookies.set("claude", "sessionKey=manual-session");
+    let api_keys = ApiKeys::default();
+    let mut token_accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Claude OAuth", "[REDACTED_SECRET]"));
+    token_accounts.insert(ProviderId::Claude, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Claude,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("sessionKey=manual-session")
+    );
+}
+
+#[test]
 fn fetch_context_claude_oauth_token_account_uses_oauth() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
