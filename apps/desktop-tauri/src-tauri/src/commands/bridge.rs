@@ -1,3 +1,6 @@
+mod pace;
+pub(crate) use pace::stage_str as pace_stage_str;
+
 use super::*;
 
 // ── Bridge snapshot types ────────────────────────────────────────────
@@ -254,28 +257,6 @@ pub(crate) fn filter_hidden_codex_spark_rows(
     }
 }
 
-pub(crate) fn pace_stage_str(stage: codexbar::core::PaceStage) -> &'static str {
-    use codexbar::core::PaceStage;
-    match stage {
-        PaceStage::OnTrack => "on_track",
-        PaceStage::SlightlyAhead => "slightly_ahead",
-        PaceStage::Ahead => "ahead",
-        PaceStage::FarAhead => "far_ahead",
-        PaceStage::SlightlyBehind => "slightly_behind",
-        PaceStage::Behind => "behind",
-        PaceStage::FarBehind => "far_behind",
-    }
-}
-
-/// Local OpenCode Go quota reconstruction has useful percentages and reset
-/// estimates, but it cannot establish account-wide pace or run-out advice.
-pub(super) fn provider_allows_pace(provider: ProviderId, source_label: &str) -> bool {
-    provider != ProviderId::OpenCodeGo
-        || !source_label
-            .trim()
-            .eq_ignore_ascii_case(codexbar::providers::opencodego::LOCAL_ESTIMATE_SOURCE_LABEL)
-}
-
 impl ProviderUsageSnapshot {
     pub(super) fn from_fetch_result(
         id: ProviderId,
@@ -284,7 +265,7 @@ impl ProviderUsageSnapshot {
         token_account_id: Option<uuid::Uuid>,
     ) -> Self {
         let usage = &result.usage;
-        let allows_pace = provider_allows_pace(id, &result.source_label);
+        let allows_pace = result.pace_authoritative;
 
         // A missing session is represented by an informational primary so the
         // weekly lane keeps its canonical role. Use that weekly lane for the
@@ -301,7 +282,7 @@ impl ProviderUsageSnapshot {
         let primary_pace = primary_pace.flatten();
 
         let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
-            stage: pace_stage_str(p.stage).to_string(),
+            stage: pace::stage_str(p.stage).to_string(),
             delta_percent: p.delta_percent,
             will_last_to_reset: p.will_last_to_reset,
             eta_seconds: p.eta_seconds,
