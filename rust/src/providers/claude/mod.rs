@@ -390,7 +390,6 @@ async fn run_claude_pty_probe(
     })
 }
 
-#[async_trait]
 fn last_good_failure_policy_for_error(error: &str) -> LastGoodFailurePolicy {
     let lower = error.to_ascii_lowercase();
     if lower.contains("credentials not found")
@@ -426,6 +425,7 @@ fn last_good_failure_policy_for_error(error: &str) -> LastGoodFailurePolicy {
     LastGoodFailurePolicy::Replace
 }
 
+#[async_trait]
 impl Provider for ClaudeProvider {
     fn id(&self) -> ProviderId {
         ProviderId::Claude
