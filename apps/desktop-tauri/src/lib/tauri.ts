@@ -514,14 +514,10 @@ export function codexAccountSnapshots(): Promise<
 }
 
 export function codexAccountRestartDesktop(
-  sessionRoot?: string | null,
-  backupDestination?: string | null,
-  restoreSource?: string | null,
+  switchId: string,
 ): Promise<void> {
   return invoke<void>("codex_account_restart_desktop", {
-    sessionRoot,
-    backupDestination,
-    restoreSource,
+    switchId,
   });
 }
 

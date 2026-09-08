@@ -136,11 +136,8 @@ export function CodexAccountsSection({ t }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await codexAccountRestartDesktop(
-        null,
-        switchResult.desktopSessionBackupPath ?? null,
-        switchResult.desktopSessionRestorePath ?? null,
-      );
+      await codexAccountRestartDesktop(switchResult.switchId);
+      setSwitchResult(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -178,7 +175,7 @@ export function CodexAccountsSection({ t }: Props) {
       {switchResult && (
         <div className="provider-detail-note" role="status">
           {t("CodexSwitchSuccess")}
-          {switchResult.desktopSessionRestoreExists && (
+          {switchResult.desktopSessionRestorePath && (
             <>
               {" "}
               {t("CodexSwitchRestartPrompt")}{" "}

@@ -4,7 +4,9 @@
 //! refreshes tokens via the OpenAI OAuth endpoint, fetches `wham/usage` (or a
 //! configured custom base URL) and normalizes the quota windows.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -20,6 +22,28 @@ pub const USAGE_DEFAULT_BASE: &str = "https://chatgpt.com/backend-api";
 pub const REFRESH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const REQUEST_TIMEOUT_SECONDS: u64 = 30;
 const UNAUTHORIZED_MESSAGE: &str = "The Codex usage API request returned unauthorized.";
+
+type CredentialLane = tokio::sync::Mutex<()>;
+static CREDENTIAL_LANES: LazyLock<Mutex<HashMap<PathBuf, Weak<CredentialLane>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn credential_lane(home: &Path) -> Result<Arc<CredentialLane>, CodexApiError> {
+    let path = home.join("auth.json").canonicalize().map_err(|error| {
+        CodexApiError::Message(format!(
+            "Could not resolve the account's auth file: {error}"
+        ))
+    })?;
+    let mut lanes = CREDENTIAL_LANES
+        .lock()
+        .map_err(|error| CodexApiError::Message(error.to_string()))?;
+    lanes.retain(|_, lane| lane.strong_count() > 0);
+    if let Some(lane) = lanes.get(&path).and_then(Weak::upgrade) {
+        return Ok(lane);
+    }
+    let lane = Arc::new(CredentialLane::new(()));
+    lanes.insert(path, Arc::downgrade(&lane));
+    Ok(lane)
+}
 
 /// Friendly error surfaced to callers.
 #[derive(Debug, Error)]
@@ -178,7 +202,71 @@ pub fn save_credentials(
             serde_json::json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
         );
     }
-    std::fs::write(&auth_path, serde_json::to_vec_pretty(&payload)?)
+    write_auth_contents(codex_home_path, &serde_json::to_vec_pretty(&payload)?)
+}
+
+fn write_auth_contents(home: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let auth_path = home.join("auth.json");
+    // Preserve an existing auth-file symlink by replacing its resolved target.
+    let destination = auth_path.canonicalize().unwrap_or(auth_path);
+    let staged = destination.with_file_name(format!(".auth-{}.tmp", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&staged)?;
+    let written = file.write_all(contents);
+    drop(file);
+    let result = written.and_then(|()| std::fs::rename(&staged, &destination));
+    if result.is_err() {
+        let _cleanup = std::fs::remove_file(staged);
+    }
+    result
+}
+
+fn synchronize_active_copy(ambient_home: &Path, managed_home: &Path) -> std::io::Result<()> {
+    let ambient_path = ambient_home.join("auth.json").canonicalize()?;
+    let managed_path = managed_home.join("auth.json").canonicalize()?;
+    if ambient_path == managed_path {
+        return Ok(());
+    }
+    let ambient_json = std::fs::read_to_string(ambient_path)?;
+    let managed_json = std::fs::read_to_string(managed_path)?;
+    if ambient_json == managed_json {
+        return Ok(());
+    }
+    let ambient = parse_credentials_json(&ambient_json).map_err(std::io::Error::other)?;
+    let managed = parse_credentials_json(&managed_json).map_err(std::io::Error::other)?;
+    let account = |credentials: &AuthCredentials, home: &Path, source| {
+        super::account_manager::candidate_account(
+            identity_from_credentials(credentials),
+            home,
+            source,
+        )
+    };
+    if !account(
+        &ambient,
+        ambient_home,
+        super::models::CodexAccountSource::Ambient,
+    )
+    .matches(&account(
+        &managed,
+        managed_home,
+        super::models::CodexAccountSource::ManagedByApp,
+    )) {
+        return Ok(());
+    }
+    // Older builds may already have refreshed only the managed copy. Recover
+    // its newer chain before making the ambient home authoritative for fetches.
+    if managed.last_refresh > ambient.last_refresh {
+        write_auth_contents(ambient_home, managed_json.as_bytes())
+    } else {
+        write_auth_contents(managed_home, ambient_json.as_bytes())
+    }
 }
 
 fn identity_from_credentials(credentials: &AuthCredentials) -> AuthBackedIdentity {
@@ -277,6 +365,64 @@ impl CodexAccountApi {
     /// Fetch a verified (or single) quota snapshot for the account at
     /// `codex_home_path`, refreshing credentials when needed.
     pub async fn fetch_snapshot(
+        &self,
+        codex_home_path: &Path,
+        email_hint: Option<&str>,
+        verify_live_data: bool,
+    ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        let _credentials = super::CREDENTIAL_OPERATIONS.read().await;
+        let target = super::account_manager::candidate_account(
+            load_identity(codex_home_path)?,
+            codex_home_path,
+            super::models::CodexAccountSource::ManagedByApp,
+        );
+        let ambient = super::CodexAccountManager::new().discover_ambient_account(&[]);
+        if let Some(ambient) = ambient.filter(|ambient| ambient.matches(&target)) {
+            // The Desktop/CLI consumes the ambient token chain. All fetches
+            // for its managed copies must share that lane and refresh it first.
+            self.fetch_home_snapshot(
+                &ambient.codex_home_path,
+                email_hint,
+                verify_live_data,
+                Some(codex_home_path),
+            )
+            .await
+        } else {
+            self.fetch_home_snapshot(codex_home_path, email_hint, verify_live_data, None)
+                .await
+        }
+    }
+
+    async fn fetch_home_snapshot(
+        &self,
+        codex_home_path: &Path,
+        email_hint: Option<&str>,
+        verify_live_data: bool,
+        managed_copy: Option<&Path>,
+    ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        // Read only after earlier fetches for this auth path have persisted any
+        // rotated tokens. Distinct homes retain independent fetch lanes.
+        let _home = credential_lane(codex_home_path)?.lock_owned().await;
+        let synchronize = || {
+            if let Some(managed) = managed_copy
+                && let Err(error) = synchronize_active_copy(codex_home_path, managed)
+            {
+                tracing::warn!(
+                    "Could not synchronize the active Codex account's managed credentials: {error}"
+                );
+            }
+        };
+        synchronize();
+        let result = self
+            .fetch_locked_snapshot(codex_home_path, email_hint, verify_live_data)
+            .await;
+        // A refresh can have rotated credentials even when the usage request
+        // fails. Synchronize before releasing the shared ambient lane.
+        synchronize();
+        result
+    }
+
+    async fn fetch_locked_snapshot(
         &self,
         codex_home_path: &Path,
         email_hint: Option<&str>,
@@ -752,6 +898,200 @@ fn credits_equivalent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn active_fetches_use_and_sync_ambient_credentials_even_when_usage_fails() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        for (target_id, managed_newer, expected_token) in [
+            ("active", false, "ambient-token"),
+            ("active", true, "managed-token"),
+            ("other", true, "managed-token"),
+        ] {
+            let ambient = tempfile::tempdir().unwrap();
+            let managed = tempfile::tempdir().unwrap();
+            let credentials = |account: &str, token: &str| AuthCredentials {
+                access_token: token.into(),
+                refresh_token: format!("refresh-{token}"),
+                id_token: None,
+                account_id: Some(account.into()),
+                last_refresh: Some(Utc::now()),
+            };
+            save_credentials(ambient.path(), &credentials("active", "ambient-token")).unwrap();
+            save_credentials(managed.path(), &credentials(target_id, "managed-token")).unwrap();
+            let now = Utc::now();
+            for (home, refreshed) in [
+                (ambient.path(), now - chrono::TimeDelta::hours(1)),
+                (
+                    managed.path(),
+                    if managed_newer {
+                        now
+                    } else {
+                        now - chrono::TimeDelta::hours(2)
+                    },
+                ),
+            ] {
+                let path = home.join("auth.json");
+                let mut json: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                json["last_refresh"] = serde_json::json!(refreshed.to_rfc3339());
+                std::fs::write(path, json.to_string()).unwrap();
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = format!(
+                "chatgpt_base_url = \"http://{}\"\n",
+                listener.local_addr().unwrap()
+            );
+            for home in [ambient.path(), managed.path()] {
+                std::fs::write(home.join("config.toml"), &config).unwrap();
+            }
+            super::super::file_locations::with_ambient_codex_home(ambient.path().to_owned());
+            let api = CodexAccountApi {
+                client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            };
+            let server = async {
+                let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(
+                        timeout(Duration::from_secs(5), stream.read_u8())
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                    );
+                }
+                stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+                String::from_utf8(headers).unwrap().to_lowercase()
+            };
+            let (result, headers) =
+                tokio::join!(api.fetch_snapshot(managed.path(), None, false), server);
+            super::super::file_locations::clear_ambient_codex_home_override();
+            assert!(result.is_err());
+            assert!(headers.contains(&format!("authorization: bearer {expected_token}")));
+            let saved = load_credentials(managed.path()).unwrap();
+            assert_eq!(saved.access_token, expected_token);
+            assert_eq!(saved.refresh_token, format!("refresh-{expected_token}"));
+            assert_eq!(
+                load_credentials(ambient.path()).unwrap().access_token,
+                if target_id == "active" {
+                    expected_token
+                } else {
+                    "ambient-token"
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_fetches_reload_credentials_and_keep_other_homes_parallel() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::time::{Duration, timeout};
+
+        async fn request(listener: &TcpListener) -> (TcpStream, String) {
+            let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(
+                    timeout(Duration::from_secs(5), stream.read_u8())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                );
+            }
+            (stream, String::from_utf8(headers).unwrap().to_lowercase())
+        }
+        async fn respond(mut stream: TcpStream) {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        }
+        fn configure(home: &Path, address: std::net::SocketAddr, token: &str) {
+            std::fs::write(
+                home.join("config.toml"),
+                format!("chatgpt_base_url = \"http://{address}\"\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                home.join("auth.json"),
+                serde_json::json!({"OPENAI_API_KEY":token}).to_string(),
+            )
+            .unwrap();
+        }
+        fn fetch(
+            home: PathBuf,
+        ) -> tokio::task::JoinHandle<Result<AccountUsageSnapshot, CodexApiError>> {
+            tokio::spawn(async move {
+                let api = CodexAccountApi {
+                    client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                };
+                // Exercise per-home concurrency independently of other tests
+                // that intentionally take the global account-switch write lock.
+                api.fetch_home_snapshot(&home, None, false, None).await
+            })
+        }
+
+        let first_home = tempfile::tempdir().unwrap();
+        let other_home = tempfile::tempdir().unwrap();
+        let first_server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        configure(
+            first_home.path(),
+            first_server.local_addr().unwrap(),
+            "old-token",
+        );
+        configure(
+            other_home.path(),
+            other_server.local_addr().unwrap(),
+            "other-token",
+        );
+        let first = fetch(first_home.path().to_owned());
+        let (first_stream, headers) = request(&first_server).await;
+        assert!(headers.contains("authorization: bearer old-token"));
+        // A lexical alias of the same auth path must share the first lane.
+        let second = fetch(first_home.path().join("."));
+        let other = fetch(other_home.path().to_owned());
+        let (other_stream, headers) = request(&other_server).await;
+        assert!(headers.contains("authorization: bearer other-token"));
+        respond(other_stream).await;
+        timeout(Duration::from_secs(5), other)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), first_server.accept())
+                .await
+                .is_err()
+        );
+
+        // Model a rotated token being persisted by the first in-flight fetch.
+        configure(
+            first_home.path(),
+            first_server.local_addr().unwrap(),
+            "rotated-token",
+        );
+        respond(first_stream).await;
+        timeout(Duration::from_secs(5), first)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let (second_stream, headers) = request(&first_server).await;
+        assert!(headers.contains("authorization: bearer rotated-token"));
+        respond(second_stream).await;
+        timeout(Duration::from_secs(5), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 
     #[test]
     fn parse_credentials_accepts_api_key() {

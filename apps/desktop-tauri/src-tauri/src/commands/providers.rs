@@ -5,6 +5,28 @@ use std::sync::Arc;
 
 const MAX_CONCURRENT_PROVIDER_FETCHES: usize = 8;
 
+/// Account changes supersede the old identity's cache and any in-flight batch.
+pub(crate) fn invalidate_account_usage(
+    state: &mut AppState,
+    id: ProviderId,
+) -> ProviderUsageSnapshot {
+    state.provider_refresh_generation = state.provider_refresh_generation.wrapping_add(1);
+    state.is_refreshing = false;
+    state.provider_refresh_started_at = None;
+    state.transient_provider_failure_counts.remove(&id);
+    state
+        .provider_cache
+        .retain(|snapshot| snapshot.provider_id != id.cli_name());
+    let pending = ProviderUsageSnapshot::from_error(
+        id,
+        instantiate_provider(id).metadata(),
+        format!("Account changed. Refreshing {} usage…", id.display_name()),
+        codexbar::core::ProviderStateKind::Unknown,
+    );
+    state.provider_cache.push(pending.clone());
+    pending
+}
+
 // ── Provider refresh commands ────────────────────────────────────────
 
 /// Build a `FetchContext` for a provider using persisted cookies/keys.
@@ -391,7 +413,12 @@ fn spawn_provider_refreshes(
         let app_handle = app.clone();
         let fetch_permits = Arc::clone(&fetch_permits);
         handles.push(tokio::spawn(async move {
-            super::codex_accounts::refresh_codex_account_lanes(app_handle, fetch_permits).await;
+            super::codex_accounts::refresh_codex_account_lanes(
+                app_handle,
+                fetch_permits,
+                generation,
+            )
+            .await;
         }));
     }
 

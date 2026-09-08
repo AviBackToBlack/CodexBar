@@ -19,6 +19,11 @@ pub mod login_runner;
 pub mod models;
 pub mod stores;
 
+// Refreshes may rotate auth.json. Keep account replacement exclusive with
+// those reads/writes while allowing different account lanes to fetch together.
+pub(crate) static CREDENTIAL_OPERATIONS: tokio::sync::RwLock<()> =
+    tokio::sync::RwLock::const_new(());
+
 pub use account_manager::{CodexAccountManager, CodexAccountManagerError, CodexSwitchResult};
 pub use api::{AuthBackedIdentity, AuthCredentials, CodexAccountApi, CodexApiError, load_identity};
 pub use codex_desktop::{
