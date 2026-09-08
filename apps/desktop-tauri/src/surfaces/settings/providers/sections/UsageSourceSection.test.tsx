@@ -8,6 +8,26 @@ const tauriMocks = vi.hoisted(() => ({
 vi.mock("../../../../lib/tauri", () => tauriMocks);
 
 import { UsageSourceSection } from "./UsageSourceSection";
+import { shouldShowCookieSource, usageSourcePolicy } from "./usageSourcePolicy";
+
+describe("usage source policy", () => {
+  it("owns provider options and cookie visibility in one policy table", () => {
+    expect(usageSourcePolicy("grok")?.options.map((option) => option.value)).toEqual([
+      "auto",
+      "cli",
+      "oauth",
+      "web",
+    ]);
+    expect(usageSourcePolicy("alibabatokenplan")?.options.map((option) => option.value)).toEqual([
+      "auto",
+      "cli",
+      "web",
+    ]);
+    expect(shouldShowCookieSource("alibabatokenplan", "cli")).toBe(false);
+    expect(shouldShowCookieSource("alibabatokenplan", "auto")).toBe(true);
+    expect(shouldShowCookieSource("codex", "cli")).toBe(true);
+  });
+});
 
 describe("UsageSourceSection", () => {
   it("offers Bailian Auto, CLI, and Web and persists explicit CLI selection", async () => {
