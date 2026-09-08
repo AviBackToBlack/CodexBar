@@ -6013,3 +6013,16 @@ html:has(.menu-surface--tray) {
   margin-top: 4px;
   font-weight: 500;
 }
+
+.codex-accounts .credential-card__header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.codex-accounts .credential-card__actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.codex-accounts .credential-card__badge {
+  align-self: flex-start;
+}
