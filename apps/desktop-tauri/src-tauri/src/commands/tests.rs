@@ -789,18 +789,27 @@ fn provider_detail_roundtrips_through_serde() {
 #[test]
 fn pace_stage_serializes_to_snake_case_string() {
     use codexbar::core::PaceStage;
-    assert_eq!(super::bridge::pace::stage_str(PaceStage::OnTrack), "on_track");
+    assert_eq!(
+        super::bridge::pace::stage_str(PaceStage::OnTrack),
+        "on_track"
+    );
     assert_eq!(
         super::bridge::pace::stage_str(PaceStage::SlightlyAhead),
         "slightly_ahead"
     );
-    assert_eq!(super::bridge::pace::stage_str(PaceStage::FarAhead), "far_ahead");
+    assert_eq!(
+        super::bridge::pace::stage_str(PaceStage::FarAhead),
+        "far_ahead"
+    );
     assert_eq!(
         super::bridge::pace::stage_str(PaceStage::SlightlyBehind),
         "slightly_behind"
     );
     assert_eq!(super::bridge::pace::stage_str(PaceStage::Behind), "behind");
-    assert_eq!(super::bridge::pace::stage_str(PaceStage::FarBehind), "far_behind");
+    assert_eq!(
+        super::bridge::pace::stage_str(PaceStage::FarBehind),
+        "far_behind"
+    );
 }
 
 #[test]
