@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct CachedCostReadStatus {
     pub has_days: bool,
     pub previous_report: Option<CachedCostReport>,
+    pub codex_scan_pause_reason: Option<CodexScanPauseReason>,
 }
 
 #[derive(Deserialize, Default)]
@@ -38,6 +39,8 @@ struct CachedCostReadStatusProjection {
     has_days: bool,
     #[serde(default)]
     previous_report: Option<CachedCostReport>,
+    #[serde(default)]
+    codex_scan_pause_reason: Option<CodexScanPauseReason>,
 }
 
 fn deserialize_nonempty_object<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -202,6 +205,22 @@ pub struct CostUsageCache {
     /// True while bounded Codex catch-up has not completed for this window.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub codex_scan_incomplete: bool,
+    /// Earliest scan start retained for the active Codex catch-up cycle.
+    ///
+    /// This is deliberately separate from `scan_since_key`: that field is the
+    /// last successfully completed scan and must not change merely because a
+    /// narrower report was requested while catch-up is pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_pending_scan_since_key: Option<String>,
+    /// Scan end and source identity for the active Codex catch-up cycle.
+    /// Requests may retain the pending start only when all of these remain
+    /// compatible with the persisted work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_pending_scan_until_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_pending_scan_root_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_pending_scan_timezone: Option<String>,
     /// Terminal catch-up pause attached to the existing incomplete state. A
     /// background scan must not clear or retry this state; an app-driven
     /// refresh clears it before starting the next pass.
@@ -220,10 +239,19 @@ pub struct CostUsageFileUsage {
     pub mtime_unix_ms: i64,
     /// File size in bytes
     pub size: i64,
+    /// Stable source identity used to detect same-path replacement without
+    /// opening the raw token history. Legacy entries may omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_file_identity: Option<String>,
     /// Daily usage data extracted from this file
     pub days: HashMap<String, HashMap<String, Vec<i32>>>,
     /// Bytes parsed so far (for incremental parsing)
     pub parsed_bytes: Option<i64>,
+    /// Frozen logical end of the scan target. A growing rollout may have a
+    /// physical tail beyond this boundary; that tail remains queued until a
+    /// later pass can consume complete records from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_scan_target_size: Option<i64>,
     /// Last model seen (for delta calculations)
     pub last_model: Option<String>,
     /// Last token totals (for delta calculations)
@@ -305,6 +333,9 @@ pub struct CodexParseResult {
     pub records: Vec<CodexUsageRecord>,
     /// Bytes parsed
     pub parsed_bytes: i64,
+    /// Stable logical target reached by this parse. This may be behind the
+    /// physical EOF when the tail ended inside an incomplete JSONL record.
+    pub scan_target_size: i64,
     /// Last model seen
     pub last_model: Option<String>,
     /// Last totals seen
@@ -452,6 +483,7 @@ impl JsonlScanner {
         CachedCostReadStatus {
             has_days: projection.has_days,
             previous_report: projection.previous_report,
+            codex_scan_pause_reason: projection.codex_scan_pause_reason,
         }
     }
     pub(crate) fn cached_cost_report_from_days(cache: &CostUsageCache) -> CachedCostReport {

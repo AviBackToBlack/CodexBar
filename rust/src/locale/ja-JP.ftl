@@ -237,6 +237,7 @@ Plan = プラン
 Account = アカウント
 ProviderSessionLabel = セッション
 ProviderWeeklyLabel = 週間
+ClaudeScopedWeeklyLabel = { "{}" } （週間）
 ProviderCodeReviewLabel = コードレビュー
 ResetsInShort = リセットまで
 ResetsInDaysHours = リセットまで { "{}" }日 { "{}" }時間

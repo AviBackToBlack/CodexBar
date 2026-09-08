@@ -6,12 +6,16 @@ use super::{pat, weekly_reset};
 use crate::core::{
     CostSnapshot, NamedRateWindow, ProviderError, RateWindow, RateWindowCadence, UsageSnapshot,
 };
+use crate::providers::openai::OpenAISubscriptionFetchResult;
 use base64::Engine;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
+
+#[path = "subscription.rs"]
+mod subscription;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const USAGE_PATH: &str = "/wham/usage";
@@ -79,6 +83,7 @@ impl CodexApi {
         let token = pat::load_token(&self.get_auth_path())?;
         let (json, whoami) =
             pat::fetch_usage(&self.client, &self.resolve_base_url(), &token, cli_version).await?;
+        let account_id = whoami.account_id.clone();
         let (mut usage, cost) = self.build_result_from_json(&json)?;
         if let Some(email) = whoami.email {
             usage = usage.with_email(email);
@@ -88,6 +93,14 @@ impl CodexApi {
         {
             usage = usage.with_login_method(format_plan_type(&plan_type));
         }
+        let usage = self
+            .enrich_subscription_metadata(
+                &self.resolve_base_url(),
+                &token,
+                account_id.as_deref(),
+                usage,
+            )
+            .await;
         Ok((usage, cost))
     }
 
@@ -111,7 +124,7 @@ impl CodexApi {
             self.fetch_usage_once(&creds, &base_url).await?;
         let observed_at = Utc::now();
         let first_inventory = weekly_reset::inventory(first_credits.as_ref(), observed_at);
-        match weekly_reset::initial_decision(
+        let (usage, cost) = match weekly_reset::initial_decision(
             &mut state,
             &first_usage,
             first_inventory.as_ref(),
@@ -121,12 +134,12 @@ impl CodexApi {
             weekly_reset::InitialDecision::Publish => {
                 weekly_reset::commit_publication(&mut state, &first_usage, first_inventory);
                 weekly_reset::save(&scope, &state);
-                Ok((first_usage, first_cost))
+                (first_usage, first_cost)
             }
             weekly_reset::InitialDecision::Preserve => {
                 let usage = weekly_reset::preserve_weekly(&state, first_usage);
                 weekly_reset::save(&scope, &state);
-                Ok((usage, first_cost))
+                (usage, first_cost)
             }
             weekly_reset::InitialDecision::RequiresConfirmation => {
                 let confirmation = self.fetch_usage_once(&creds, &base_url).await;
@@ -144,7 +157,16 @@ impl CodexApi {
                                 first_cost,
                             );
                             weekly_reset::save(&scope, &state);
-                            return Ok(result);
+                            let (usage, cost) = result;
+                            let usage = self
+                                .enrich_subscription_metadata(
+                                    &base_url,
+                                    &creds.access_token,
+                                    creds.account_id.as_deref(),
+                                    usage,
+                                )
+                                .await;
+                            return Ok((usage, cost));
                         }
                     };
                 let confirmation_inventory =
@@ -165,16 +187,49 @@ impl CodexApi {
                             confirmation_inventory,
                         );
                         weekly_reset::save(&scope, &state);
-                        Ok((confirmation_usage, confirmation_cost))
+                        (confirmation_usage, confirmation_cost)
                     }
                     weekly_reset::ConfirmationDecision::Preserve => {
                         let usage = weekly_reset::preserve_weekly(&state, first_usage);
                         weekly_reset::save(&scope, &state);
-                        Ok((usage, first_cost))
+                        (usage, first_cost)
                     }
                 }
             }
-        }
+        };
+        let usage = self
+            .enrich_subscription_metadata(
+                &base_url,
+                &creds.access_token,
+                creds.account_id.as_deref(),
+                usage,
+            )
+            .await;
+        Ok((usage, cost))
+    }
+
+    /// Subscription metadata is optional enrichment. Usage remains usable when
+    /// the endpoint is unavailable, malformed, unauthorized, or points at a
+    /// custom backend. A successful empty cancellation response is the only
+    /// result allowed to clear dates on the fresh snapshot.
+    async fn enrich_subscription_metadata(
+        &self,
+        base_url: &str,
+        access_token: &str,
+        account_id: Option<&str>,
+        usage: UsageSnapshot,
+    ) -> UsageSnapshot {
+        subscription::enrich_subscription_metadata(self, base_url, access_token, account_id, usage)
+            .await
+    }
+
+    async fn fetch_subscription_metadata(
+        &self,
+        base_url: &str,
+        access_token: &str,
+        account_id: Option<&str>,
+    ) -> OpenAISubscriptionFetchResult {
+        subscription::fetch_subscription_metadata(self, base_url, access_token, account_id).await
     }
 
     fn preserve_after_confirmation_failure(
@@ -207,14 +262,8 @@ impl CodexApi {
             request = request.header("ChatGPT-Account-Id", account_id);
         }
         let response = request.send().await?;
-        if response.status() == 401 || response.status() == 403 {
-            return Err(ProviderError::AuthRequired);
-        }
         if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "Codex API returned {}",
-                response.status()
-            )));
+            return Err(super::authenticated_http_error(response, "Codex API").await);
         }
         let json: serde_json::Value = response
             .json()
@@ -252,10 +301,7 @@ impl CodexApi {
         }
         let response = request.send().await?;
         if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "Codex reset credits returned {}",
-                response.status()
-            )));
+            return Err(super::authenticated_http_error(response, "Codex reset credits").await);
         }
         decode_reset_credits(&response.bytes().await?)
     }
@@ -1536,6 +1582,36 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         assert_eq!(extra.window.resets_at, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn authenticated_codex_http_distinguishes_401_from_403() {
+        for (status, expects_authentication) in [(401, true), (403, false)] {
+            let mut server = mockito::Server::new_async().await;
+            let mock = server
+                .mock("GET", "/wham/usage")
+                .with_status(status)
+                .with_body("fixture refusal")
+                .create_async()
+                .await;
+
+            let home = write_codex_home(&server.url());
+            let api = CodexApi::new().with_codex_home(home.path());
+            let error = match api.fetch_usage().await {
+                Ok(_) => panic!("expected HTTP {status} to fail"),
+                Err(error) => error,
+            };
+
+            if expects_authentication {
+                assert!(matches!(error, ProviderError::AuthRequired));
+            } else {
+                let message = error.to_string();
+                assert!(message.contains("403"));
+                assert!(message.contains("fixture refusal"));
+                assert!(!matches!(error, ProviderError::AuthRequired));
+            }
+            mock.assert_async().await;
+        }
     }
 
     #[tokio::test]

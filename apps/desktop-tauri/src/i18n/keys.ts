@@ -260,6 +260,7 @@ export const ALL_LOCALE_KEYS = [
   "Account",
   "ProviderSessionLabel",
   "ProviderWeeklyLabel",
+  "ClaudeScopedWeeklyLabel",
   "ProviderCodeReviewLabel",
   "ResetsInShort",
   "ResetsInDaysHours",

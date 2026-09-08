@@ -237,6 +237,7 @@ Plan = 套餐
 Account = 账号
 ProviderSessionLabel = 本次会话
 ProviderWeeklyLabel = 本周
+ClaudeScopedWeeklyLabel = { "{}" } 每周
 ProviderCodeReviewLabel = 代码审查
 ResetsInShort = 重置于
 ResetsInDaysHours = { "{}" } 天 { "{}" } 小时后重置

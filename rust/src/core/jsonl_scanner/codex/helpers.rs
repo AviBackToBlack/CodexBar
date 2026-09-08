@@ -149,8 +149,15 @@ pub(super) fn cumulative_reasoning_delta(
 /// Keeping the discarded case separate prevents callers from accidentally
 /// treating an oversized prefix as a parseable empty line.
 pub(super) enum BoundedJsonlLine {
-    Retained { bytes: Vec<u8>, consumed: usize },
-    Discarded { consumed: usize },
+    Retained {
+        bytes: Vec<u8>,
+        consumed: usize,
+        terminated_by_newline: bool,
+    },
+    Discarded {
+        consumed: usize,
+        terminated_by_newline: bool,
+    },
 }
 
 /// Read one JSONL line, discarding content when it exceeds `max_bytes`.
@@ -158,28 +165,78 @@ pub(super) fn read_bounded_jsonl_line<R: BufRead>(
     reader: &mut R,
     max_bytes: usize,
 ) -> std::io::Result<Option<BoundedJsonlLine>> {
+    read_bounded_jsonl_line_until(reader, max_bytes, None)
+}
+
+/// Read one JSONL line without consuming past a frozen logical target.
+///
+/// A target can end in the middle of a record while Codex is writing it. The
+/// caller can then retain the last committed line boundary and retry the tail
+/// after a later append, instead of publishing a partial record.
+pub(super) fn read_bounded_jsonl_line_until<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+    max_total_bytes: Option<usize>,
+) -> std::io::Result<Option<BoundedJsonlLine>> {
     let mut line = Vec::new();
     let mut saw_bytes = false;
     let mut discarding = false;
     let mut consumed_total = 0;
+    let mut remaining_total = max_total_bytes;
 
     loop {
-        let chunk = reader.fill_buf()?;
-        if chunk.is_empty() {
+        if remaining_total == Some(0) {
             return Ok(saw_bytes.then_some(if discarding {
                 BoundedJsonlLine::Discarded {
                     consumed: consumed_total,
+                    terminated_by_newline: false,
                 }
             } else {
                 BoundedJsonlLine::Retained {
                     bytes: line,
                     consumed: consumed_total,
+                    terminated_by_newline: false,
                 }
             }));
         }
-        let newline = chunk.iter().position(|byte| *byte == b'\n');
-        let segment_end = newline.unwrap_or(chunk.len());
-        let segment = &chunk[..segment_end];
+
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(saw_bytes.then_some(if discarding {
+                BoundedJsonlLine::Discarded {
+                    consumed: consumed_total,
+                    terminated_by_newline: false,
+                }
+            } else {
+                BoundedJsonlLine::Retained {
+                    bytes: line,
+                    consumed: consumed_total,
+                    terminated_by_newline: false,
+                }
+            }));
+        }
+
+        let visible_len =
+            remaining_total.map_or(chunk.len(), |remaining| remaining.min(chunk.len()));
+        if visible_len == 0 {
+            return Ok(saw_bytes.then_some(if discarding {
+                BoundedJsonlLine::Discarded {
+                    consumed: consumed_total,
+                    terminated_by_newline: false,
+                }
+            } else {
+                BoundedJsonlLine::Retained {
+                    bytes: line,
+                    consumed: consumed_total,
+                    terminated_by_newline: false,
+                }
+            }));
+        }
+
+        let visible_chunk = &chunk[..visible_len];
+        let newline = visible_chunk.iter().position(|byte| *byte == b'\n');
+        let segment_end = newline.unwrap_or(visible_len);
+        let segment = &visible_chunk[..segment_end];
         saw_bytes = true;
 
         if !discarding {
@@ -195,15 +252,35 @@ pub(super) fn read_bounded_jsonl_line<R: BufRead>(
         let consumed = segment_end + usize::from(newline.is_some());
         reader.consume(consumed);
         consumed_total += consumed;
+        if let Some(remaining) = remaining_total.as_mut() {
+            *remaining = remaining.saturating_sub(consumed);
+        }
         if newline.is_some() {
             return Ok(Some(if discarding {
                 BoundedJsonlLine::Discarded {
                     consumed: consumed_total,
+                    terminated_by_newline: true,
                 }
             } else {
                 BoundedJsonlLine::Retained {
                     bytes: line,
                     consumed: consumed_total,
+                    terminated_by_newline: true,
+                }
+            }));
+        }
+
+        if remaining_total == Some(0) {
+            return Ok(Some(if discarding {
+                BoundedJsonlLine::Discarded {
+                    consumed: consumed_total,
+                    terminated_by_newline: false,
+                }
+            } else {
+                BoundedJsonlLine::Retained {
+                    bytes: line,
+                    consumed: consumed_total,
+                    terminated_by_newline: false,
                 }
             }));
         }

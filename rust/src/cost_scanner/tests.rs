@@ -215,6 +215,52 @@ fn parses_current_codex_payload_token_count_events() {
 }
 
 #[test]
+fn scans_gpt6_astra_usage_with_cached_and_reasoning_tokens() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let today = Local::now().date_naive();
+    let day = today.format("%Y-%m-%d").to_string();
+    let day_dir = sessions
+        .join(today.format("%Y").to_string())
+        .join(today.format("%m").to_string())
+        .join(today.format("%d").to_string());
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let line = serde_json::json!({
+        "timestamp": Local::now().to_rfc3339(),
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "model": "gpt-6-astra",
+                "total_token_usage": {
+                    "input_tokens": 1000,
+                    "cached_input_tokens": 300,
+                    "output_tokens": 100,
+                    "reasoning_output_tokens": 7
+                }
+            }
+        }
+    });
+    std::fs::write(day_dir.join("astra.jsonl"), format!("{line}\n")).unwrap();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 1000);
+    assert_eq!(summary.cached_tokens, 300);
+    assert_eq!(summary.output_tokens, 100);
+    assert_eq!(summary.reasoning_tokens, Some(7));
+    // Codex token-count rows expose cache reads, not cache writes. The 700
+    // non-cached input tokens therefore use Astra's standard input rate.
+    assert!((summary.total_cost_usd - 0.0123).abs() < 1e-12);
+    assert_eq!(cache.days[&day]["gpt-6-astra"], vec![1000, 300, 100, 7]);
+}
+
+#[test]
 fn derives_claude_dedup_key_from_message_and_request_ids() {
     assert_eq!(
         claude_usage_dedup_key(Some("msg_1"), Some("req_1")).as_deref(),
@@ -512,11 +558,13 @@ fn cached_usage_with_packed(day: &str, model: &str, packed: Vec<i32>) -> CostUsa
     CostUsageFileUsage {
         mtime_unix_ms: 0,
         size: 1,
+        codex_file_identity: None,
         days: HashMap::from([(
             day.to_string(),
             HashMap::from([(model.to_string(), packed)]),
         )]),
         parsed_bytes: Some(1),
+        codex_scan_target_size: None,
         last_model: None,
         last_totals: None,
         codex_token_timestamps_monotonic: None,
@@ -1158,6 +1206,10 @@ fn cost_scan_second_pass_skips_unchanged_files_via_cache() {
     let (summary1, stats1) = scanner.scan_codex_detailed(None);
     assert_eq!(stats1.files_parsed, 2, "first pass parses both files");
     assert_eq!(stats1.files_skipped, 0);
+    assert_eq!(stats1.codex_metadata_read_paths.len(), 2);
+    assert_eq!(stats1.codex_history_read_paths.len(), 2);
+    assert_eq!(stats1.codex_read_receipt.metadata_reads, 2);
+    assert_eq!(stats1.codex_read_receipt.history_reads, 2);
     assert!(summary1.total_cost_usd > 0.0);
     assert_eq!(summary1.sessions_count, 2);
 
@@ -1167,6 +1219,9 @@ fn cost_scan_second_pass_skips_unchanged_files_via_cache() {
     assert_eq!(stats2.files_seen, 2);
     assert_eq!(stats2.files_skipped, 2, "cache hit skips re-parse");
     assert_eq!(stats2.files_parsed, 0);
+    assert!(stats2.codex_metadata_read_paths.is_empty());
+    assert!(stats2.codex_history_read_paths.is_empty());
+    assert_eq!(stats2.codex_read_receipt, Default::default());
     assert_eq!(summary2.input_tokens, summary1.input_tokens);
     assert!((summary2.total_cost_usd - summary1.total_cost_usd).abs() < 1e-9);
 
@@ -1192,6 +1247,101 @@ fn cost_scan_second_pass_skips_unchanged_files_via_cache() {
     assert!(!stats4.used_cache_debounce);
     assert_eq!(stats4.files_skipped, 2);
     assert_eq!(stats4.files_parsed, 0);
+    assert!(stats4.codex_history_read_paths.is_empty());
+}
+
+#[test]
+fn codex_lazy_history_receipt_reads_only_changed_file_and_matches_fresh_parse() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let first_path = write_codex_session_fixture_with_inputs(&sessions, "first.jsonl", &[100]);
+    let second_path = write_codex_session_fixture_with_inputs(&sessions, "second.jsonl", &[200]);
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+
+    let (initial, _, _) = scanner.scan_codex_detailed_with_cache(None);
+    let (unchanged, unchanged_stats, _) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(unchanged.input_tokens, initial.input_tokens);
+    assert!(unchanged_stats.codex_metadata_read_paths.is_empty());
+    assert!(unchanged_stats.codex_history_read_paths.is_empty());
+    assert_eq!(unchanged_stats.codex_read_receipt, Default::default());
+
+    use std::io::Write as _;
+    let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let extra = format!(
+        r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":150,"cached_input_tokens":0,"output_tokens":5}}}}}}}}
+"#
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&first_path)
+        .unwrap()
+        .write_all(extra.as_bytes())
+        .unwrap();
+
+    let (incremental, incremental_stats, _) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(
+        incremental_stats.codex_metadata_read_paths,
+        vec![first_path.to_string_lossy().to_string()]
+    );
+    assert_eq!(
+        incremental_stats.codex_history_read_paths,
+        vec![first_path.to_string_lossy().to_string()]
+    );
+    assert_eq!(incremental_stats.codex_read_receipt.metadata_reads, 1);
+    assert_eq!(incremental_stats.codex_read_receipt.history_reads, 1);
+    assert_eq!(incremental.input_tokens, 350);
+
+    let fresh = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(root.path().join("fresh-cache"))
+        .with_sessions_dirs(vec![sessions]);
+    let (full, full_stats) = fresh.scan_codex_detailed(None);
+    assert_eq!(full_stats.codex_history_read_paths.len(), 2);
+    assert_eq!(incremental.input_tokens, full.input_tokens);
+    assert_eq!(incremental.output_tokens, full.output_tokens);
+    assert_eq!(incremental.cached_tokens, full.cached_tokens);
+    assert_eq!(incremental.by_model_tokens, full.by_model_tokens);
+    assert!((incremental.total_cost_usd - full.total_cost_usd).abs() < 1e-12);
+    assert!(second_path.exists());
+}
+
+#[test]
+fn codex_file_identity_invalidates_same_path_cache_without_eager_history_read() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "replacement.jsonl", 100);
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, _) = scanner.scan_codex_detailed_with_cache(None);
+    let old_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let rotated = path.with_extension("old");
+    std::fs::rename(&path, &rotated).unwrap();
+    let replacement = write_codex_session_fixture(&sessions, "replacement.jsonl", 200);
+    // Windows requires a handle with write-attribute access for set_modified;
+    // keep the replacement's mtime equal to the original without opening it
+    // read-only. The file contents have the same length, so path/mtime/size
+    // remain unchanged while the file identity changes.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&replacement)
+        .unwrap()
+        .set_modified(old_mtime)
+        .unwrap();
+
+    let (summary, stats) = scanner.scan_codex_detailed(None);
+    assert_eq!(summary.input_tokens, 200);
+    assert_eq!(
+        stats.codex_history_read_paths,
+        vec![replacement.to_string_lossy().to_string()]
+    );
+    assert_eq!(stats.codex_read_receipt.history_reads, 1);
 }
 
 #[test]
@@ -1210,8 +1360,10 @@ fn cancelled_fresh_cache_hit_is_not_authoritative() {
             CostUsageFileUsage {
                 mtime_unix_ms: 0,
                 size: 100,
+                codex_file_identity: None,
                 days: usage.clone(),
                 parsed_bytes: Some(100),
+                codex_scan_target_size: None,
                 last_model: Some("gpt-5.6-sol".to_string()),
                 last_totals: None,
                 codex_token_timestamps_monotonic: Some(true),
@@ -1423,6 +1575,147 @@ fn cost_scan_resumes_appended_bytes() {
         .expect("resumed file cache entry");
     assert_eq!(cached_file.codex_token_timestamps_monotonic, Some(true));
     assert!(cached_file.codex_last_token_timestamp.is_some());
+}
+
+#[test]
+fn bounded_growing_rollout_freezes_target_and_resumes_a_retained_tail() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path =
+        write_codex_session_fixture_with_inputs(&sessions, "growing.jsonl", &[100, 200, 300]);
+    let initial_size = i64::try_from(std::fs::metadata(&path).unwrap().len())
+        .expect("fixture file length fits i64");
+    let first_line_bytes = i64::try_from(
+        std::fs::read(&path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap()
+            .len(),
+    )
+    .expect("fixture line length fits i64")
+        + 1;
+
+    let mut options = CostScanOptions::app_driven();
+    options.codex_max_session_file_bytes = first_line_bytes;
+    options.codex_max_scan_bytes_per_refresh = first_line_bytes;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+
+    let (first, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert_eq!(first.input_tokens, 100);
+    let first_usage = first_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(first_usage.codex_scan_target_size, Some(initial_size));
+    assert_eq!(first_usage.parsed_bytes, Some(first_line_bytes));
+    assert!(first_cache.codex_scan_incomplete);
+
+    let timestamp = (Utc::now() - Duration::minutes(10))
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    let append_line = |total: u64| {
+        format!(
+            r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":{}}}}}}}}}
+"#,
+            total / 10
+        )
+    };
+    let mut next_total = 400_u64;
+    let mut bounded_summary = first;
+    let mut bounded_cache = first_cache;
+    for _ in 0..8 {
+        let line = append_line(next_total);
+        next_total += 100;
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(line.as_bytes()).unwrap();
+        drop(file);
+
+        (bounded_summary, _, bounded_cache) = scanner.scan_codex_detailed_with_cache(None);
+        let usage = bounded_cache
+            .files
+            .get(&path.to_string_lossy().to_string())
+            .unwrap();
+        assert_eq!(usage.codex_scan_target_size, Some(initial_size));
+        assert!(usage.parsed_bytes.unwrap_or_default() <= initial_size);
+        if usage.parsed_bytes == Some(initial_size) {
+            break;
+        }
+    }
+
+    assert_eq!(bounded_summary.input_tokens, 300);
+    let bounded_usage = bounded_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(bounded_usage.parsed_bytes, Some(initial_size));
+    assert_eq!(bounded_usage.codex_scan_target_size, Some(initial_size));
+    assert!(
+        bounded_cache.codex_scan_incomplete,
+        "the appended tail stays queued"
+    );
+
+    for _ in 0..32 {
+        if !bounded_cache.codex_scan_incomplete {
+            break;
+        }
+        (bounded_summary, _, bounded_cache) = scanner.scan_codex_detailed_with_cache(None);
+    }
+    assert!(!bounded_cache.codex_scan_incomplete);
+    let stable_summary = bounded_summary.clone();
+    let stable_size = i64::try_from(std::fs::metadata(&path).unwrap().len())
+        .expect("fixture file length fits i64");
+
+    let partial_line = append_line(next_total);
+    let split = partial_line.len() / 2;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(&partial_line.as_bytes()[..split]).unwrap();
+    drop(file);
+    let (partial_summary, _, partial_cache) = scanner.scan_codex_detailed_with_cache(None);
+    let partial_usage = partial_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(partial_summary.input_tokens, stable_summary.input_tokens);
+    assert_eq!(partial_usage.parsed_bytes, Some(stable_size));
+    assert_eq!(partial_usage.codex_scan_target_size, Some(stable_size));
+    assert!(partial_cache.codex_scan_incomplete);
+
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    file.write_all(&partial_line.as_bytes()[split..]).unwrap();
+    drop(file);
+    next_total += 100;
+    let (resumed_summary, _, resumed_cache) = scanner.scan_codex_detailed_with_cache(None);
+    assert!(!resumed_cache.codex_scan_incomplete);
+    assert_eq!(resumed_summary.input_tokens, next_total - 100);
+    let resumed_usage = resumed_cache
+        .files
+        .get(&path.to_string_lossy().to_string())
+        .unwrap();
+    assert_eq!(
+        resumed_usage.parsed_bytes,
+        Some(
+            i64::try_from(std::fs::metadata(&path).unwrap().len())
+                .expect("fixture file length fits i64"),
+        )
+    );
+    assert_eq!(
+        resumed_usage.codex_scan_target_size,
+        resumed_usage.parsed_bytes
+    );
 }
 
 #[test]
@@ -1874,6 +2167,228 @@ fn trace_pruning_preserves_cursor_and_validated_history_until_refresh() {
     assert!(resumed_cache.previous_report.is_none());
 }
 
+fn expected_codex_scan_start(days: u32) -> String {
+    let today = Local::now().date_naive();
+    let report_start = today - Duration::days(i64::from(days.saturating_sub(1)));
+    CostUsageDayRange::new(report_start, today).scan_since_key
+}
+
+fn pending_codex_options(force: bool) -> CostScanOptions {
+    let mut options = if force {
+        CostScanOptions::app_driven()
+    } else {
+        CostScanOptions::default()
+    };
+    options.codex_candidate_limit = 1;
+    options
+}
+
+#[test]
+fn pending_codex_scan_30_to_7_keeps_wide_start_and_narrow_report() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    for index in 0..3 {
+        write_codex_session_fixture(&sessions, &format!("pending-{index}.jsonl"), 100 + index);
+    }
+
+    let first = CostScanner::new(30)
+        .with_options(pending_codex_options(true))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = first.scan_codex_detailed_with_cache(None);
+    assert!(first_cache.codex_scan_incomplete);
+
+    let second = CostScanner::new(7)
+        .with_options(pending_codex_options(false))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (summary, _, second_cache) = second.scan_codex_detailed_with_cache(None);
+    let today = Local::now().date_naive();
+    assert!(second_cache.codex_scan_incomplete);
+    assert_eq!(
+        second_cache.codex_pending_scan_since_key.as_deref(),
+        Some(expected_codex_scan_start(30).as_str())
+    );
+    assert_eq!(summary.period_start, Some(today - Duration::days(6)));
+    assert_eq!(summary.period_end, Some(today));
+}
+
+#[test]
+fn pending_codex_scan_7_to_30_expands_to_earliest_start() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    for index in 0..3 {
+        write_codex_session_fixture(&sessions, &format!("pending-{index}.jsonl"), 100 + index);
+    }
+
+    let first = CostScanner::new(7)
+        .with_options(pending_codex_options(true))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = first.scan_codex_detailed_with_cache(None);
+    assert!(first_cache.codex_scan_incomplete);
+
+    let second = CostScanner::new(30)
+        .with_options(pending_codex_options(false))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (_, _, second_cache) = second.scan_codex_detailed_with_cache(None);
+    assert!(second_cache.codex_scan_incomplete);
+    assert_eq!(
+        second_cache.codex_pending_scan_since_key.as_deref(),
+        Some(expected_codex_scan_start(30).as_str())
+    );
+}
+
+#[test]
+fn pending_codex_scan_repeated_narrow_wide_alternation_is_monotonic() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    for index in 0..8 {
+        write_codex_session_fixture(&sessions, &format!("pending-{index}.jsonl"), 100 + index);
+    }
+
+    let first = CostScanner::new(30)
+        .with_options(pending_codex_options(true))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = first.scan_codex_detailed_with_cache(None);
+    assert!(first_cache.codex_scan_incomplete);
+
+    for days in [7, 30, 7, 30, 7] {
+        let scanner = CostScanner::new(days)
+            .with_options(pending_codex_options(false))
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let (_, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+        assert!(cache.codex_scan_incomplete);
+        assert_eq!(
+            cache.codex_pending_scan_since_key.as_deref(),
+            Some(expected_codex_scan_start(30).as_str())
+        );
+    }
+}
+
+#[test]
+fn pending_codex_scan_incompatible_root_timezone_or_end_resets_start() {
+    for incompatibility in ["root", "timezone", "end"] {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        let alternate_sessions = root.path().join("alternate-sessions");
+        let cache_root = root.path().join("cache");
+        for index in 0..3 {
+            write_codex_session_fixture(&sessions, &format!("pending-{index}.jsonl"), 100 + index);
+            write_codex_session_fixture(
+                &alternate_sessions,
+                &format!("alternate-{index}.jsonl"),
+                200 + index,
+            );
+        }
+
+        let first = CostScanner::new(30)
+            .with_options(pending_codex_options(true))
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(vec![sessions.clone()]);
+        let (_, _, first_cache) = first.scan_codex_detailed_with_cache(None);
+        assert!(first_cache.codex_scan_incomplete);
+
+        let mut persisted = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+        match incompatibility {
+            "root" => {}
+            "timezone" => {
+                persisted.codex_pending_scan_timezone = Some("not-the-local-zone".to_string())
+            }
+            "end" => persisted.codex_pending_scan_until_key = Some("2099-01-01".to_string()),
+            _ => unreachable!(),
+        }
+        JsonlScanner::save_cache(ProviderId::Codex, &mut persisted, Some(&cache_root));
+
+        let roots = if incompatibility == "root" {
+            vec![alternate_sessions]
+        } else {
+            vec![sessions]
+        };
+        let second = CostScanner::new(7)
+            .with_options(pending_codex_options(false))
+            .with_cache_root(&cache_root)
+            .with_sessions_dirs(roots);
+        let (_, _, second_cache) = second.scan_codex_detailed_with_cache(None);
+        assert!(second_cache.codex_scan_incomplete);
+        assert_eq!(
+            second_cache.codex_pending_scan_since_key.as_deref(),
+            Some(expected_codex_scan_start(7).as_str()),
+            "{incompatibility} context must reset the pending start"
+        );
+    }
+}
+
+#[test]
+fn pending_codex_scan_force_rescan_resets_start() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    for index in 0..3 {
+        write_codex_session_fixture(&sessions, &format!("pending-{index}.jsonl"), 100 + index);
+    }
+
+    let first = CostScanner::new(30)
+        .with_options(pending_codex_options(true))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = first.scan_codex_detailed_with_cache(None);
+    assert!(first_cache.codex_scan_incomplete);
+
+    let forced = CostScanner::new(7)
+        .with_options(pending_codex_options(true))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (_, _, forced_cache) = forced.scan_codex_detailed_with_cache(None);
+    assert!(forced_cache.codex_scan_incomplete);
+    assert_eq!(
+        forced_cache.codex_pending_scan_since_key.as_deref(),
+        Some(expected_codex_scan_start(7).as_str())
+    );
+}
+
+#[test]
+fn pending_codex_scan_start_survives_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    for index in 0..3 {
+        write_codex_session_fixture(&sessions, &format!("pending-{index}.jsonl"), 100 + index);
+    }
+
+    let first = CostScanner::new(30)
+        .with_options(pending_codex_options(true))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = first.scan_codex_detailed_with_cache(None);
+    assert_eq!(
+        first_cache.codex_pending_scan_since_key.as_deref(),
+        Some(expected_codex_scan_start(30).as_str())
+    );
+
+    let persisted = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    assert_eq!(
+        persisted.codex_pending_scan_since_key.as_deref(),
+        Some(expected_codex_scan_start(30).as_str())
+    );
+
+    let restarted = CostScanner::new(7)
+        .with_options(pending_codex_options(false))
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (_, _, restarted_cache) = restarted.scan_codex_detailed_with_cache(None);
+    assert_eq!(
+        restarted_cache.codex_pending_scan_since_key.as_deref(),
+        Some(expected_codex_scan_start(30).as_str())
+    );
+}
+
 #[test]
 fn disappeared_trace_path_waits_for_explicit_validation() {
     let root = tempfile::tempdir().unwrap();
@@ -2029,4 +2544,104 @@ fn legacy_cache_json_defaults_bounded_scan_state() {
     let cache: CostUsageCache = serde_json::from_str(legacy).unwrap();
     assert!(cache.codex_pending_paths.is_empty());
     assert!(!cache.codex_scan_incomplete);
+}
+
+#[test]
+fn complete_empty_codex_fragment_persists_in_cache() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "empty.jsonl", 100);
+    std::fs::write(&path, b"\n").unwrap();
+    let key = path.to_string_lossy().to_string();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(summary.input_tokens, 0);
+    let entry = cache.files.get(&key).expect("empty fragment is cached");
+    assert!(entry.days.is_empty());
+    assert_eq!(entry.parsed_bytes, Some(1));
+    assert_eq!(entry.codex_scan_target_size, Some(1));
+
+    let persisted = JsonlScanner::load_cache(ProviderId::Codex, Some(&cache_root));
+    assert!(persisted.files.contains_key(&key));
+}
+
+#[test]
+fn complete_empty_codex_fragment_reparses_from_start_after_growth() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "empty.jsonl", 100);
+    std::fs::write(&path, b"\n").unwrap();
+    let key = path.to_string_lossy().to_string();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions.clone()]);
+    let (_, _, first_cache) = scanner.scan_codex_detailed_with_cache(None);
+    let first = first_cache.files.get(&key).expect("initial empty fragment");
+    assert_eq!(first.parsed_bytes, Some(1));
+    assert_eq!(first.codex_scan_target_size, Some(1));
+
+    write_codex_session_fixture(&sessions, "empty.jsonl", 100);
+    let (grown_summary, stats, grown_cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    assert_eq!(grown_summary.input_tokens, 100);
+    assert_eq!(stats.files_resumed, 0);
+    assert!(!grown_cache.files[&key].days.is_empty());
+}
+
+#[test]
+fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let cache_root = root.path().join("cache");
+    let path = write_codex_session_fixture(&sessions, "incomplete.jsonl", 100);
+    std::fs::write(&path, br#"{"timestamp":"2026-09-07T00:00:00Z""#).unwrap();
+    let key = path.to_string_lossy().to_string();
+
+    let scanner = CostScanner::new(7)
+        .with_options(CostScanOptions::app_driven())
+        .with_cache_root(&cache_root)
+        .with_sessions_dirs(vec![sessions]);
+    let (_, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+
+    let entry = cache
+        .files
+        .get(&key)
+        .expect("incomplete fragment is tracked");
+    assert!(entry.days.is_empty());
+    assert_ne!(entry.parsed_bytes, Some(entry.size));
+    assert!(cache.codex_scan_incomplete);
+    assert!(cache.codex_pending_paths.contains(&key));
+
+    let buffered_root = tempfile::tempdir().unwrap();
+    let buffered_sessions = buffered_root.path().join("sessions");
+    let buffered_cache_root = buffered_root.path().join("cache");
+    let buffered_path = write_codex_session_fixture(&buffered_sessions, "buffered.jsonl", 100);
+    std::fs::write(&buffered_path, b"\nnot-yet-read").unwrap();
+    let buffered_key = buffered_path.to_string_lossy().to_string();
+    let mut options = CostScanOptions::app_driven();
+    options.codex_max_session_file_bytes = 1;
+    options.codex_max_scan_bytes_per_refresh = 1;
+    let buffered_scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(&buffered_cache_root)
+        .with_sessions_dirs(vec![buffered_sessions]);
+    let (_, _, buffered_cache) = buffered_scanner.scan_codex_detailed_with_cache(None);
+
+    let buffered_entry = buffered_cache
+        .files
+        .get(&buffered_key)
+        .expect("buffered fragment is tracked");
+    assert!(buffered_entry.days.is_empty());
+    assert_ne!(buffered_entry.parsed_bytes, Some(buffered_entry.size));
+    assert!(buffered_cache.codex_scan_incomplete);
+    assert!(buffered_cache.codex_pending_paths.contains(&buffered_key));
 }

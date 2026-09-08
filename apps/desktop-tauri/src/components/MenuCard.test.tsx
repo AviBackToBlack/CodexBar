@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -287,6 +288,35 @@ describe("MenuCard", () => {
 
     expect(await screen.findByText("Additional Budget")).toBeInTheDocument();
     expect(screen.getByText("58% left")).toBeInTheDocument();
+  });
+
+  it("localizes Claude scoped weekly extra-window labels", async () => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({ ClaudeScopedWeeklyLabel: "{} weekly" }));
+    const snapshot = provider(null, 20);
+    snapshot.extraRateWindows = [
+      {
+        id: "claude-weekly-scoped-fable",
+        title: "Fable only",
+        window: rateWindow(42, { windowMinutes: 7 * 24 * 60 }),
+      },
+      {
+        id: "custom",
+        title: "Custom only",
+        window: rateWindow(10),
+      },
+    ];
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("Fable weekly")).toBeInTheDocument();
+    expect(screen.getByText("Custom only")).toBeInTheDocument();
+    expect(screen.queryByText("Fable only")).not.toBeInTheDocument();
+
+    const otherProvider = provider(null, 20);
+    otherProvider.providerId = "synthetic";
+    otherProvider.extraRateWindows = [{ ...snapshot.extraRateWindows[0], id: "synthetic-weekly" }];
+    renderCard(otherProvider);
+    expect(await screen.findByText("Fable only")).toBeInTheDocument();
   });
 
   it("renders informational metrics without quota percentages", async () => {
@@ -682,5 +712,64 @@ describe("MenuCard", () => {
     renderCard(snapshot);
 
     expect(await screen.findByText("3分前")).toBeInTheDocument();
+  });
+});
+
+// The SwiftUI fix this regression came from protecting a cached native
+// measurement. The Windows card has no cached measurement layer: its live
+// forecast is a normal flex row whose width is recomputed by WebView2.
+if (!import.meta.dirname) {
+  throw new Error("import.meta.dirname unavailable to vitest runner");
+}
+const stylesSource = readFileSync(import.meta.dirname + "/../styles.css", "utf8");
+
+function ruleBlock(source: string, selector: string): string {
+  const escaped = selector.replace(/[^\w-]/g, "\\$&");
+  const match = source.match(
+    new RegExp("(?:^|\\r?\\n)" + escaped + "\\s*\\{([^}]*)\\}"),
+  );
+  expect(match).not.toBeNull();
+  return match![1];
+}
+
+describe("MenuCard live forecast layout", () => {
+  it("renders the changing forecast in the current full-width flex row", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.secondary = rateWindow(35, { windowMinutes: 7 * 24 * 60 });
+    snapshot.secondaryLabel = "Weekly";
+    snapshot.sessionEquivalentForecast = {
+      estimatedWindowsToExhaustWeekly: 123,
+      windowsUntilReset: 4,
+      availableWindowsUntilReset: 4,
+      sampleCount: 8,
+      weeklyResetsAt: "2026-06-01T00:00:00Z",
+      weeklyUsedPercent: 35,
+    };
+
+    const { container } = renderCard(snapshot);
+    const forecast = await screen.findByText("Estimated: 123 session quotas left");
+    const row = forecast.closest(".menu-metric__forecast");
+
+    expect(row).toBeInTheDocument();
+    expect(row).toHaveClass("menu-metric__row");
+    expect(row?.parentElement).toHaveClass("menu-metric");
+    expect(container.querySelector(".menu-card__content")).toBeInTheDocument();
+
+    const card = ruleBlock(stylesSource, ".menu-card");
+    expect(card).toContain("align-items: stretch");
+    const content = ruleBlock(stylesSource, ".menu-card__content");
+    expect(content).toContain("display: flex");
+    expect(content).toContain("flex-direction: column");
+    const metricRow = ruleBlock(stylesSource, ".menu-metric__row");
+    expect(metricRow).toContain("min-width: 0");
+    const forecastLabel = ruleBlock(
+      stylesSource,
+      ".menu-metric__forecast .menu-metric__pct",
+    );
+    expect(forecastLabel).toContain("flex: 1 1 auto");
+    expect(forecastLabel).toContain("min-width: 0");
+    expect(forecastLabel).toContain("overflow: hidden");
+    expect(forecastLabel).toContain("text-overflow: ellipsis");
+    expect(forecastLabel).toContain("white-space: nowrap");
   });
 });
