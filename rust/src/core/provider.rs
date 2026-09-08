@@ -641,8 +641,7 @@ impl Default for FetchContext {
     }
 }
 
-/// Trait that all providers must implement
-#[async_trait]
+/// How the shell should treat a failed refresh when a prior good snapshot exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LastGoodFailurePolicy {
     Replace,
@@ -651,6 +650,8 @@ pub enum LastGoodFailurePolicy {
     PreserveOnceThenSurface,
 }
 
+/// Trait that all providers must implement
+#[async_trait]
 pub trait Provider: Send + Sync {
     /// Get the provider's unique identifier
     fn id(&self) -> ProviderId;
