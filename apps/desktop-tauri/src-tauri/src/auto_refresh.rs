@@ -180,11 +180,7 @@ fn next_fixed_tick(
     scheduled_at
 }
 
-fn powertoys_local_usage_provider_ids(settings: &Settings) -> Vec<String> {
-    if !settings.powertoys_status_pipe_enabled {
-        return Vec::new();
-    }
-
+fn local_usage_provider_ids(settings: &Settings) -> Vec<String> {
     settings
         .get_enabled_provider_ids()
         .into_iter()
@@ -194,7 +190,9 @@ fn powertoys_local_usage_provider_ids(settings: &Settings) -> Vec<String> {
 }
 
 pub(crate) fn schedule_refresh_enrichment(settings: &Settings) {
-    let provider_ids = powertoys_local_usage_provider_ids(settings);
+    // Unknown-model pricing is shared by Usage & Spend, not just the optional
+    // PowerToys status pipe. Refresh it even when that integration is disabled.
+    let provider_ids = local_usage_provider_ids(settings);
     if provider_ids.is_empty() {
         return;
     }
@@ -291,19 +289,38 @@ mod tests {
     }
 
     #[test]
-    fn powertoys_local_usage_refresh_only_includes_supported_enabled_providers() {
-        let mut settings = Settings::default();
-        assert!(powertoys_local_usage_provider_ids(&settings).is_empty());
+    fn local_usage_refresh_includes_codex_without_powertoys() {
+        let settings = Settings {
+            powertoys_status_pipe_enabled: false,
+            enabled_providers: ["codex".to_string(), "cursor".to_string()]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
 
-        settings.powertoys_status_pipe_enabled = true;
-        settings.enabled_providers = ["codex".to_string(), "cursor".to_string()]
-            .into_iter()
-            .collect();
+        assert_eq!(local_usage_provider_ids(&settings), vec!["codex"]);
+        assert!(!settings.powertoys_status_pipe_enabled);
+    }
 
-        assert_eq!(
-            powertoys_local_usage_provider_ids(&settings),
-            vec!["codex".to_string()]
-        );
+    #[test]
+    fn local_usage_refresh_only_includes_supported_enabled_providers() {
+        for pipe_enabled in [false, true] {
+            let mut settings = Settings {
+                powertoys_status_pipe_enabled: pipe_enabled,
+                enabled_providers: ["claude".to_string(), "cursor".to_string()]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            };
+
+            assert_eq!(local_usage_provider_ids(&settings), vec!["claude"]);
+
+            settings.enabled_providers = ["cursor".to_string()].into_iter().collect();
+            assert!(local_usage_provider_ids(&settings).is_empty());
+
+            settings.enabled_providers.clear();
+            assert!(local_usage_provider_ids(&settings).is_empty());
+        }
     }
 
     #[test]

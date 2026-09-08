@@ -70,6 +70,45 @@ impl CostProvenance {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalHistoryCoverage {
+    Complete,
+    Partial,
+    #[default]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LocalTokenHistorySummary {
+    pub total_tokens: u64,
+    pub session_count: usize,
+    pub coverage: LocalHistoryCoverage,
+}
+
+pub fn local_token_history_json(
+    provider: &str,
+    history: LocalTokenHistorySummary,
+    days: u32,
+) -> serde_json::Value {
+    let complete = history.coverage == LocalHistoryCoverage::Complete;
+    serde_json::json!({
+        "provider": provider,
+        "supported": true,
+        "days_scanned": days,
+        "cost": {"total_usd": serde_json::Value::Null, "currency": serde_json::Value::Null},
+        "daily": [],
+        "tokens": {"total": complete.then_some(history.total_tokens)},
+        "sessions_count": complete.then_some(history.session_count),
+        "historyCoverage": match history.coverage {
+            LocalHistoryCoverage::Complete => "complete",
+            LocalHistoryCoverage::Partial => "partial",
+            LocalHistoryCoverage::Unavailable => "unavailable",
+        },
+        "knownZero": complete && history.total_tokens == 0,
+        "note": "Local token history; dollar costs unavailable"
+    })
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CostCoverageCounts {

@@ -11,20 +11,8 @@ const MAX_SESSION_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SESSION_FILE_BYTES_U64: u64 = 32 * 1024 * 1024;
 const MAX_JSONL_LINE_BYTES: usize = 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum LocalHistoryCoverage {
-    Complete,
-    Partial,
-    #[default]
-    Unavailable,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct LocalSessionSummary {
-    pub total_tokens: u64,
-    pub session_count: usize,
-    pub coverage: LocalHistoryCoverage,
-}
+pub use crate::spend_contract::LocalHistoryCoverage;
+pub type LocalSessionSummary = crate::spend_contract::LocalTokenHistorySummary;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ScanContext {

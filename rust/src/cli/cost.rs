@@ -157,7 +157,7 @@ struct CostResult {
     display_name: String,
     summary: CostSummary,
     supported: bool,
-    token_history: Option<crate::providers::antigravity::local_sessions::LocalSessionSummary>,
+    token_history: Option<crate::spend_contract::LocalTokenHistorySummary>,
 }
 
 /// Print text output
@@ -260,11 +260,8 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
     }
 }
 
-fn print_local_token_history(
-    history: crate::providers::antigravity::local_sessions::LocalSessionSummary,
-    days: u32,
-) {
-    use crate::providers::antigravity::local_sessions::LocalHistoryCoverage;
+fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySummary, days: u32) {
+    use crate::spend_contract::LocalHistoryCoverage;
     match history.coverage {
         LocalHistoryCoverage::Complete if history.total_tokens == 0 => {
             println!("  No token usage in the last {days} days (scan complete)");
@@ -351,7 +348,7 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
         .iter()
         .map(|r| {
             if let Some(history) = r.token_history {
-                return antigravity_token_history_json(&r.provider, history, days);
+                return crate::spend_contract::local_token_history_json(&r.provider, history, days);
             }
             if !r.supported {
                 serde_json::json!({
@@ -393,33 +390,6 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
             }
         })
         .collect()
-}
-
-fn antigravity_token_history_json(
-    provider: &str,
-    history: crate::providers::antigravity::local_sessions::LocalSessionSummary,
-    days: u32,
-) -> serde_json::Value {
-    use crate::providers::antigravity::local_sessions::LocalHistoryCoverage;
-    let coverage = match history.coverage {
-        LocalHistoryCoverage::Complete => "complete",
-        LocalHistoryCoverage::Partial => "partial",
-        LocalHistoryCoverage::Unavailable => "unavailable",
-    };
-    let total_tokens =
-        matches!(history.coverage, LocalHistoryCoverage::Complete).then_some(history.total_tokens);
-    serde_json::json!({
-        "provider": provider,
-        "supported": true,
-        "days_scanned": days,
-        "cost": {"total_usd": serde_json::Value::Null, "currency": serde_json::Value::Null},
-        "tokens": {"total": total_tokens},
-        "sessions_count": matches!(history.coverage, LocalHistoryCoverage::Complete)
-            .then_some(history.session_count),
-        "historyCoverage": coverage,
-        "knownZero": matches!(history.coverage, LocalHistoryCoverage::Complete) && history.total_tokens == 0,
-        "note": "Local token history; dollar costs unavailable"
-    })
 }
 
 fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
@@ -535,12 +505,10 @@ mod tests {
 
     #[test]
     fn antigravity_json_keeps_unknown_cost_distinct_from_zero() {
-        use crate::providers::antigravity::local_sessions::{
-            LocalHistoryCoverage, LocalSessionSummary,
-        };
-        let payload = antigravity_token_history_json(
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let payload = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalSessionSummary {
+            LocalTokenHistorySummary {
                 total_tokens: 12_345,
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
@@ -552,9 +520,9 @@ mod tests {
         assert_eq!(payload["historyCoverage"], "complete");
         assert_eq!(payload["knownZero"], false);
 
-        let partial = antigravity_token_history_json(
+        let partial = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalSessionSummary {
+            LocalTokenHistorySummary {
                 total_tokens: 999,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
