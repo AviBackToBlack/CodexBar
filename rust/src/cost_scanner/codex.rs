@@ -1,5 +1,8 @@
 use super::*;
 
+mod reconciliation;
+use reconciliation::*;
+
 fn rebuild_cache_days(cache: &mut CostUsageCache) {
     cache.days.clear();
     for usage in cache.files.values() {
@@ -84,42 +87,6 @@ fn summary_from_cached_report(
         period_end: Some(period_end),
         ..CostSummary::default()
     }
-}
-
-/// Remove cached Codex files that are provably gone from the portion of the
-/// sessions tree covered by this scan. Entries outside the current roots or
-/// date directories are intentionally retained for a later scan.
-fn reconcile_missing_codex_cache_files(
-    cache: &mut CostUsageCache,
-    sessions_dirs: &[PathBuf],
-    range: &CostUsageDayRange,
-) {
-    let scanned_date_dirs: Vec<PathBuf> = sessions_dirs
-        .iter()
-        .flat_map(|sessions_dir| {
-            codex_scan_dates(range).into_iter().map(|date| {
-                sessions_dir
-                    .join(date.format("%Y").to_string())
-                    .join(date.format("%m").to_string())
-                    .join(date.format("%d").to_string())
-            })
-        })
-        .collect();
-
-    cache.files.retain(|path_key, _| {
-        let path = Path::new(path_key);
-        let in_scanned_root = sessions_dirs
-            .iter()
-            .any(|sessions_dir| path.starts_with(sessions_dir));
-        let in_scanned_date = scanned_date_dirs
-            .iter()
-            .any(|date_dir| path.starts_with(date_dir));
-
-        !(in_scanned_root && in_scanned_date && !path.exists())
-    });
-    cache
-        .codex_pending_paths
-        .retain(|path| Path::new(path).exists());
 }
 
 fn cached_codex_file_is_complete_for_range(
@@ -265,6 +232,23 @@ impl CostScanner {
         let cache_root = self.cache_root.as_deref();
         let mut cache = JsonlScanner::load_cache(ProviderId::Codex, cache_root);
 
+        // A no-progress or source-error catch-up is terminal for background
+        // synchronization. Keep the resumable queue and last validated report
+        // intact until the user explicitly requests an app-driven refresh.
+        if cache.codex_scan_incomplete
+            && cache.codex_scan_pause_reason.is_some()
+            && !self.options.is_app_driven()
+        {
+            return (
+                paused_codex_summary(&cache, start_date, today),
+                stats,
+                cache,
+            );
+        }
+        if self.options.is_app_driven() {
+            cache.codex_scan_pause_reason = None;
+        }
+
         // Debounce: rebuild from disk cache without re-walking session files.
         if JsonlScanner::should_skip_cached_scan(&cache, self.options, now_ms)
             && !cache.codex_scan_incomplete
@@ -403,22 +387,50 @@ impl CostScanner {
             }
         }
 
+        let mut pruned_paths_pending = Vec::new();
         if discovery_complete && !is_cancelled(cancel) {
-            reconcile_missing_codex_cache_files(&mut cache, &sessions_dirs, &range);
-            for path in &pending_paths_before_pass {
-                if !Path::new(path).exists() {
-                    cache.files.remove(path);
+            pruned_paths_pending = missing_codex_cache_paths(&cache, &sessions_dirs, &range);
+            if self.options.is_app_driven() {
+                reconcile_missing_codex_cache_files(&mut cache, &sessions_dirs, &range);
+                for path in &pending_paths_before_pass {
+                    if !Path::new(path).exists() {
+                        cache.files.remove(path);
+                    }
+                }
+            } else {
+                for path in &pruned_paths_pending {
+                    if !pending_next.contains(path) {
+                        pending_next.push(path.clone());
+                    }
                 }
             }
         }
         pending_next.retain(|path| {
+            // An incomplete discovery is a source failure, not proof that a
+            // queued path was pruned. Preserve the priority cursor verbatim so
+            // the next explicit refresh can validate the source and resume it.
+            if !discovery_complete
+                || is_cancelled(cancel)
+                || (!self.options.is_app_driven()
+                    && pruned_paths_pending.iter().any(|pending| pending == path))
+            {
+                return true;
+            }
             Path::new(path).exists()
-                && (!discovery_complete
-                    || is_cancelled(cancel)
-                    || is_codex_path_in_scan_window(Path::new(path), &sessions_dirs, &range))
+                && is_codex_path_in_scan_window(Path::new(path), &sessions_dirs, &range)
         });
-        pending_next.sort();
-        pending_next.dedup();
+        if discovery_complete
+            && !is_cancelled(cancel)
+            && (pruned_paths_pending.is_empty() || self.options.is_app_driven())
+        {
+            pending_next.sort();
+            pending_next.dedup();
+        } else {
+            // Preserve queue order while the source is unavailable or the
+            // pass is cancelled; this is the durable priority cursor.
+            let mut seen_pending = HashSet::new();
+            pending_next.retain(|path| seen_pending.insert(path.clone()));
+        }
         cache.codex_pending_paths = pending_next;
         cache.codex_scan_incomplete =
             !discovery_complete || is_cancelled(cancel) || !cache.codex_pending_paths.is_empty();
@@ -428,10 +440,24 @@ impl CostScanner {
             if cache.previous_report.is_none() {
                 cache.previous_report = established_report_before_scan;
             }
+            if !is_cancelled(cancel) {
+                cache.codex_scan_pause_reason = if !discovery_complete {
+                    Some(CodexScanPauseReason::Error(
+                        "Codex session source unavailable".to_string(),
+                    ))
+                } else if !pruned_paths_pending.is_empty()
+                    || (bytes_read_this_refresh == 0 && !cache.codex_pending_paths.is_empty())
+                {
+                    Some(CodexScanPauseReason::NoProgress)
+                } else {
+                    None
+                };
+            }
         } else {
             cache.scan_since_key = Some(range.since_key.clone());
             cache.scan_until_key = Some(range.until_key.clone());
             cache.previous_report = None;
+            cache.codex_scan_pause_reason = None;
         }
         JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
 
@@ -538,12 +564,27 @@ impl CostScanner {
     ) -> (Vec<CodexScanCandidate>, bool) {
         let mut candidates = Vec::new();
         let mut seen = HashSet::new();
+        let mut discovery_complete = true;
+        let cache_has_validated_state = cache.scan_since_key.is_some()
+            || cache.scan_until_key.is_some()
+            || cache.previous_report.is_some()
+            || !cache.files.is_empty()
+            || !cache.days.is_empty()
+            || !cache.codex_pending_paths.is_empty();
         let mut dates = codex_scan_dates(range);
         if self.options.prefer_newest_codex_sessions_first {
             dates.reverse();
         }
 
         for sessions_dir in sessions_dirs {
+            if !sessions_dir.is_dir() {
+                if cache_has_codex_path_under(cache, sessions_dir)
+                    || (sessions_dirs.len() == 1 && cache_has_validated_state)
+                {
+                    discovery_complete = false;
+                }
+                continue;
+            }
             for date in &dates {
                 if is_cancelled(cancel) {
                     return (candidates, false);
@@ -552,7 +593,16 @@ impl CostScanner {
                     .join(date.format("%Y").to_string())
                     .join(date.format("%m").to_string())
                     .join(date.format("%d").to_string());
+                if !day_dir.exists() {
+                    if cache_has_codex_path_under(cache, &day_dir) {
+                        discovery_complete = false;
+                    }
+                    continue;
+                }
                 let Ok(entries) = fs::read_dir(&day_dir) else {
+                    if cache_has_codex_path_under(cache, &day_dir) {
+                        discovery_complete = false;
+                    }
                     continue;
                 };
                 for entry in entries.flatten() {
@@ -622,7 +672,7 @@ impl CostScanner {
                     .then_with(|| lhs.path.cmp(&rhs.path))
             });
         }
-        (candidates, true)
+        (candidates, discovery_complete)
     }
 
     #[cfg(test)]
@@ -670,6 +720,18 @@ impl CostScanner {
         let path_key = path.to_string_lossy().to_string();
         let cached = cache.files.get(&path_key).cloned();
         let cache_covers_range = JsonlScanner::cache_covers_range(cache, range);
+        let trace_was_pruned = cached
+            .as_ref()
+            .is_some_and(|entry| entry.size > size && entry.parsed_bytes.unwrap_or(0) > size);
+        if trace_was_pruned && !self.options.is_app_driven() {
+            // A shrinking trace invalidates the append cursor. Preserve the
+            // validated cache and queue the path for an explicit cold refresh
+            // instead of silently replacing history during synchronization.
+            return CodexFileScanOutcome {
+                bytes_read: 0,
+                is_complete: false,
+            };
+        }
         let session_metadata = JsonlScanner::read_codex_session_metadata(path).unwrap_or_default();
         let cached_identity_matches = cached
             .as_ref()

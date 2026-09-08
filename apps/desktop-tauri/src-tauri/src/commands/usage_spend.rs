@@ -126,7 +126,7 @@ fn build_usage_spend_summary_cached(
     }
     // Hold the cache mutex while building: callers for the same app revision
     // coalesce behind this single scan instead of starting parallel rescans.
-    let summary = build_usage_spend_summary(cached, selected_days, &settings);
+    let summary = build_usage_spend_summary(cached, selected_days, &settings, force_refresh);
     *guard = Some(CachedUsageSpendSummary {
         key,
         summary: summary.clone(),
@@ -196,6 +196,7 @@ fn build_usage_spend_summary(
     cached: &[ProviderUsageSnapshot],
     selected_days: u32,
     settings: &codexbar::settings::Settings,
+    force_refresh: bool,
 ) -> UsageSpendSummary {
     let include_opencodex = settings.open_codex_usage_logs_enabled;
     let hide_native = settings.hide_native_codex_cost_when_open_codex_present;
@@ -203,12 +204,21 @@ fn build_usage_spend_summary(
     // Upstream 0.55.0 #3105: independent provider baselines load in parallel.
     // Keep each provider's 7d/30d scans serial so they can safely share that
     // provider's incremental cache, while Codex and Claude run concurrently.
+    let codex_scan_options = if force_refresh {
+        codexbar::core::CostScanOptions::app_driven()
+    } else {
+        codexbar::core::CostScanOptions::default()
+    };
     let ((codex_7_summary, codex_30_summary), (claude_7_summary, claude_30_summary)) =
         std::thread::scope(|scope| {
-            let codex = scope.spawn(|| {
+            let codex = scope.spawn(move || {
                 (
-                    CostScanner::new(7).scan_codex(),
-                    CostScanner::new(30).scan_codex(),
+                    CostScanner::new(7)
+                        .with_options(codex_scan_options)
+                        .scan_codex(),
+                    CostScanner::new(30)
+                        .with_options(codex_scan_options)
+                        .scan_codex(),
                 )
             });
             let claude = scope.spawn(|| {
@@ -428,7 +438,9 @@ fn build_usage_spend_summary(
     let selected_summary: CostSummary = match history_days {
         7 => codex_7_summary,
         30 => codex_30_summary,
-        days => CostScanner::new(days).scan_codex(),
+        days => CostScanner::new(days)
+            .with_options(codex_scan_options)
+            .scan_codex(),
     };
     let contract = build_local_spend_contract_from_summary(
         "codex",

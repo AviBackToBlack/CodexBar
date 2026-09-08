@@ -4,7 +4,7 @@ mod helpers;
 mod parser;
 
 use helpers::{
-    CODEX_JSONL_MAX_LINE_BYTES, nonempty_json_string, parse_rfc3339_timestamp,
+    BoundedJsonlLine, CODEX_JSONL_MAX_LINE_BYTES, nonempty_json_string, parse_rfc3339_timestamp,
     read_bounded_jsonl_line, session_meta_field,
 };
 use parser::CodexParserState;
@@ -104,10 +104,16 @@ impl JsonlScanner {
         let mut bytes_examined = 0_usize;
 
         while bytes_examined < CODEX_JSONL_MAX_LINE_BYTES {
-            let Some((line_bytes, consumed)) =
-                read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
+            let Some(line) = read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
             else {
                 break;
+            };
+            let (line_bytes, consumed) = match line {
+                BoundedJsonlLine::Retained { bytes, consumed } => (bytes, consumed),
+                BoundedJsonlLine::Discarded { consumed } => {
+                    bytes_examined = bytes_examined.saturating_add(consumed);
+                    continue;
+                }
             };
             bytes_examined = bytes_examined.saturating_add(consumed);
             if line_bytes.is_empty() {
@@ -320,8 +326,7 @@ impl JsonlScanner {
                 cancelled = true;
                 break;
             }
-            let Some((line_bytes, consumed)) =
-                read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
+            let Some(line) = read_bounded_jsonl_line(&mut reader, CODEX_JSONL_MAX_LINE_BYTES)?
             else {
                 break;
             };
@@ -329,13 +334,15 @@ impl JsonlScanner {
                 cancelled = true;
                 break;
             }
-            // Per-line byte counts are capped at 256 KiB, far inside i64::MAX.
-            #[allow(
-                clippy::cast_possible_wrap,
-                reason = "per-line consumed bytes are capped at CODEX_JSONL_MAX_LINE_BYTES"
-            )]
-            let consumed_i64 = consumed as i64;
-            parsed_bytes += consumed_i64;
+            let (line_bytes, consumed) = match line {
+                BoundedJsonlLine::Retained { bytes, consumed } => (Some(bytes), consumed),
+                BoundedJsonlLine::Discarded { consumed } => (None, consumed),
+            };
+            let consumed_i64 = i64::try_from(consumed).unwrap_or(i64::MAX);
+            parsed_bytes = parsed_bytes.saturating_add(consumed_i64);
+            let Some(line_bytes) = line_bytes else {
+                continue;
+            };
             if line_bytes.is_empty() {
                 continue;
             }

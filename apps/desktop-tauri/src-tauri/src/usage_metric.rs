@@ -260,6 +260,21 @@ mod tests {
     }
 
     #[test]
+    fn single_meaningful_quota_omits_the_companion_icon_lane() {
+        let mut snapshot = snapshot();
+        snapshot
+            .secondary
+            .as_mut()
+            .expect("fixture has a secondary window")
+            .is_informational = true;
+
+        let (selected, companion) = selected_usage_icon_windows(&snapshot, &Settings::default());
+
+        assert_eq!(selected.used_percent, 20.0);
+        assert!(companion.is_none());
+    }
+
+    #[test]
     fn average_preference_derives_the_combined_percentage() {
         let mut snapshot = snapshot();
         snapshot.provider_id = "gemini".to_string();

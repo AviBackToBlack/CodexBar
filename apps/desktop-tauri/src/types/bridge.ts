@@ -954,5 +954,7 @@ export interface CodexSwitchResult {
 
 export interface CodexAccountsStateBridge {
   accounts: CodexAccount[];
+  /** Canonical privacy-safe account labels, keyed by stable account id. */
+  displayNames?: Record<string, string>;
   snapshots: Record<string, CodexAccountUsageSnapshot>;
 }

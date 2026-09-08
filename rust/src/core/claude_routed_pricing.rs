@@ -71,6 +71,20 @@ fn models_dev_targets(model: &str, normalized: String) -> Vec<(&'static str, Str
     targets
 }
 
+/// Resolve a routed Claude model against one invocation-owned models.dev snapshot.
+///
+/// Keeping this separate from the arithmetic lets a local scan memoize both positive and
+/// negative model resolution without changing the provider-routing rules.
+pub fn resolve_with_snapshot(
+    model: &str,
+    normalized: &str,
+    snapshot: &models_dev_pricing::ModelsDevPricingSnapshot,
+) -> Option<models_dev_pricing::DynamicModelPricing> {
+    models_dev_targets(model, normalized.to_string())
+        .into_iter()
+        .find_map(|(provider, lookup_model)| snapshot.lookup(provider, &lookup_model))
+}
+
 pub fn cost_usd(
     model: &str,
     normalized: String,
@@ -82,6 +96,23 @@ pub fn cost_usd(
     let pricing = models_dev_targets(model, normalized)
         .into_iter()
         .find_map(|(provider, lookup_model)| models_dev_pricing::lookup(provider, &lookup_model))?;
+    Some(cost_usd_from_pricing(
+        pricing,
+        input,
+        cache_read,
+        cache_write,
+        output,
+    ))
+}
+
+/// Calculate routed cost after the models.dev resolution has already been memoized.
+pub fn cost_usd_from_pricing(
+    pricing: models_dev_pricing::DynamicModelPricing,
+    input: i32,
+    cache_read: i32,
+    cache_write: i32,
+    output: i32,
+) -> f64 {
     let input = input.max(0);
     let cache_read = cache_read.max(0);
     let cache_write = cache_write.max(0);
@@ -125,12 +156,10 @@ pub fn cost_usd(
         pricing.output_cost_per_token_above_threshold,
     );
 
-    Some(
-        (input as f64) * input_rate
-            + (cache_read as f64) * cache_read_rate
-            + (cache_write as f64) * cache_write_rate
-            + (output as f64) * output_rate,
-    )
+    (input as f64) * input_rate
+        + (cache_read as f64) * cache_read_rate
+        + (cache_write as f64) * cache_write_rate
+        + (output as f64) * output_rate
 }
 
 pub fn input_cost_per_token(model: &str, normalized: String) -> Option<f64> {

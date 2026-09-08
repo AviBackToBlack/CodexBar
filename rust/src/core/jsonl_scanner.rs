@@ -128,6 +128,13 @@ impl CostScanOptions {
         }
     }
 
+    /// Whether this pass was requested by an explicit/app-driven refresh.
+    /// The zero debounce used by app-driven scans is the existing refresh
+    /// state, so no second force/resume flag is needed.
+    pub fn is_app_driven(&self) -> bool {
+        self.refresh_min_interval_secs == 0
+    }
+
     /// Whether a prior scan at `last_scan_unix_ms` is still within the debounce window.
     pub fn should_skip_scan(&self, last_scan_unix_ms: i64, now_unix_ms: i64) -> bool {
         // Debounce intervals are seconds-scale config values, far below i64::MAX.
@@ -159,6 +166,16 @@ impl CacheStamp {
     }
 }
 
+/// Terminal reason for a bounded Codex catch-up pause.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexScanPauseReason {
+    /// A bounded pass left work queued without consuming any new source data.
+    NoProgress,
+    /// The source could not be inspected reliably; keep the validated report until retry.
+    Error(String),
+}
+
 /// Cache for scanned file data
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CostUsageCache {
@@ -185,6 +202,11 @@ pub struct CostUsageCache {
     /// True while bounded Codex catch-up has not completed for this window.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub codex_scan_incomplete: bool,
+    /// Terminal catch-up pause attached to the existing incomplete state. A
+    /// background scan must not clear or retry this state; an app-driven
+    /// refresh clears it before starting the next pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_scan_pause_reason: Option<CodexScanPauseReason>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]

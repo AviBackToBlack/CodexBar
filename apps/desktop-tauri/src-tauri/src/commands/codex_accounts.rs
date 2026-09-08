@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use codexbar::codex_accounts::{
     AccountStore, CodexAccount, CodexAccountApi, CodexAccountManager, CodexAccountManagerError,
-    CodexApiError, CodexSwitchResult, SnapshotStore, restart_codex_desktop,
+    CodexApiError, CodexSwitchResult, SnapshotStore, display_names_by_id, restart_codex_desktop,
 };
 
 use crate::state::AppState;
@@ -310,6 +310,7 @@ fn into_api_message(error: CodexApiError) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct CodexAccountsStateBridge {
     pub accounts: Vec<CodexAccount>,
+    pub display_names: HashMap<Uuid, String>,
     pub snapshots: HashMap<Uuid, codexbar::codex_accounts::AccountUsageSnapshot>,
 }
 
@@ -318,8 +319,10 @@ pub fn get_codex_accounts_state(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<CodexAccountsStateBridge, String> {
     let _guard = state.lock().map_err(|e| e.to_string())?;
+    let accounts = load_codex_accounts()?;
     Ok(CodexAccountsStateBridge {
-        accounts: load_codex_accounts()?,
+        display_names: display_names_by_id(&accounts),
+        accounts,
         snapshots: codex_account_snapshots()?,
     })
 }
