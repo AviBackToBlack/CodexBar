@@ -385,6 +385,10 @@ async fn run_claude_pty_probe(
 
 #[async_trait]
 impl Provider for ClaudeProvider {
+    fn manual_cookie_precedes_token_account(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> ProviderId {
         ProviderId::Claude
     }

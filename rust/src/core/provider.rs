@@ -678,6 +678,11 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Whether an explicitly selected manual cookie outranks a token-account override.
+    fn manual_cookie_precedes_token_account(&self) -> bool {
+        false
+    }
+
     /// Presentation-safe availability state for a refresh error. The default
     /// maps `ProviderError` variants, treating `NotInstalled` as a missing
     /// credential (most providers raise it for a missing API key or auth

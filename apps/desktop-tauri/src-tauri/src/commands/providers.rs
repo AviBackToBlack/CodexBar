@@ -15,6 +15,7 @@ pub(crate) fn build_fetch_context(
     api_keys: &ApiKeys,
     token_accounts: &HashMap<ProviderId, ProviderAccountData>,
 ) -> FetchContext {
+    let provider = instantiate_provider(id);
     let cookie_source = settings.cookie_source(id);
     let stored_cookie = cookies.get(id.cli_name()).map(|s| s.to_string());
     let stored_api_key = api_keys.get(id.cli_name()).map(|s| s.to_string());
@@ -52,7 +53,7 @@ pub(crate) fn build_fetch_context(
             // replace it; this keeps tray refresh behavior aligned with diagnose,
             // whose Claude Auto path tries the supplied Web cookie before OAuth.
             "manual"
-                if id == ProviderId::Claude
+                if provider.manual_cookie_precedes_token_account()
                     && stored_cookie
                         .as_deref()
                         .is_some_and(|cookie| !cookie.trim().is_empty()) =>
