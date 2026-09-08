@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use crate::cli::tty_runner::{TtyCommandOptions, TtyCommandRunner};
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, LastGoodFailurePolicy, Provider, ProviderError, ProviderFetchResult, ProviderId,
+    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 use admin_api::ClaudeAdminApiFetcher;
@@ -396,8 +396,47 @@ async fn run_claude_pty_probe(
     })
 }
 
+fn last_good_failure_policy_for_error(error: &str) -> LastGoodFailurePolicy {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("credentials not found")
+        || (lower.contains("run") && lower.contains("claude") && lower.contains("authenticate"))
+        || (lower.contains("not installed") && lower.contains("claude"))
+        || (lower.contains("subscription") && lower.contains("unavailable"))
+    {
+        return LastGoodFailurePolicy::Replace;
+    }
+    if lower.contains(&CLOUDFLARE_CHALLENGE_MESSAGE.to_ascii_lowercase()) {
+        return LastGoodFailurePolicy::PreserveOnceThenSurface;
+    }
+    if lower.contains("parse error")
+        || lower.contains("empty output")
+        || lower.contains("missing current session")
+        || lower.contains("treated /usage as a normal prompt")
+        || lower.contains("local activity stats")
+        || lower.contains("could not parse")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("ratelimited")
+        || error.eq_ignore_ascii_case("timeout")
+        || lower.contains("timed out")
+    {
+        return LastGoodFailurePolicy::Preserve;
+    }
+    if lower.contains("unauthorized")
+        || lower.contains("authentication required")
+        || lower.contains("auth required")
+    {
+        return LastGoodFailurePolicy::PreserveOnce;
+    }
+    LastGoodFailurePolicy::Replace
+}
+
 #[async_trait]
 impl Provider for ClaudeProvider {
+    fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
+        false
+    }
+
     fn id(&self) -> ProviderId {
         ProviderId::Claude
     }
@@ -444,6 +483,14 @@ impl Provider for ClaudeProvider {
 
     fn supports_cli(&self) -> bool {
         true
+    }
+
+    fn owns_browser_cookie_resolution(&self) -> bool {
+        true
+    }
+
+    fn last_good_failure_policy(&self, error: &str) -> LastGoodFailurePolicy {
+        last_good_failure_policy_for_error(error)
     }
 
     fn detect_version(&self) -> Option<String> {

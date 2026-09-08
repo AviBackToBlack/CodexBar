@@ -15,6 +15,7 @@ pub(crate) fn build_fetch_context(
     api_keys: &ApiKeys,
     token_accounts: &HashMap<ProviderId, ProviderAccountData>,
 ) -> FetchContext {
+    let provider = instantiate_provider(id);
     let cookie_source = settings.cookie_source(id);
     let stored_cookie = cookies.get(id.cli_name()).map(|s| s.to_string());
     let stored_api_key = api_keys.get(id.cli_name()).map(|s| s.to_string());
@@ -26,11 +27,9 @@ pub(crate) fn build_fetch_context(
     let active_token_cookie = token_override
         .as_ref()
         .and_then(|override_data| override_data.cookie_header.clone());
-    // Claude's web fetcher owns cached-cookie validation and browser recovery.
-    // Keep token/manual overrides on the direct path, but defer an automatic
-    // browser lookup so a Cloudflare challenge cannot replace a valid cache.
-    let defer_claude_browser_cookie_lookup =
-        id == ProviderId::Claude && active_token_cookie.is_none() && stored_cookie.is_none();
+    let defer_provider_browser_cookie_lookup = provider.owns_browser_cookie_resolution()
+        && active_token_cookie.is_none()
+        && stored_cookie.is_none();
     let active_token_env = token_override
         .as_ref()
         .and_then(|override_data| override_data.env_override.as_ref());
@@ -86,7 +85,7 @@ pub(crate) fn build_fetch_context(
                 // Claude resolves its cached cookie and browser fallback inside
                 // the provider; other providers retain the shell fallback.
                 let cookie_header = active_token_cookie.or(stored_cookie).or_else(|| {
-                    if defer_claude_browser_cookie_lookup {
+                    if defer_provider_browser_cookie_lookup {
                         None
                     } else {
                         provider_cookie_domain(id, settings).and_then(|domain| {
@@ -106,10 +105,7 @@ pub(crate) fn build_fetch_context(
     // historically mapped "manual + no cookie" to Cli, which surfaces as
     // "Source mode 'Cli' not supported". Remap to Web and try browser cookies
     // unless the user explicitly disabled cookies ("off").
-    if source_mode == SourceMode::Cli
-        && cookie_source != "off"
-        && !instantiate_provider(id).supports_cli()
-    {
+    if source_mode == SourceMode::Cli && cookie_source != "off" && !provider.supports_cli() {
         if cookie_header
             .as_deref()
             .map(str::trim)
@@ -530,30 +526,13 @@ pub(super) fn preserve_last_good_transient_failure(
     id: ProviderId,
     snapshot: ProviderUsageSnapshot,
 ) -> ProviderUsageSnapshot {
-    if snapshot.error.is_none() {
+    let Some(error) = snapshot.error.as_deref() else {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
-    }
+    };
 
-    if id != ProviderId::Claude {
-        guard.transient_provider_failure_counts.remove(&id);
-        return snapshot;
-    }
-
-    let error = snapshot.error.as_deref();
-    let cloudflare_challenge = is_claude_cloudflare_challenge(error);
-    // Hard auth loss / subscription-unavailable answers should not keep stale bars.
-    if is_hard_claude_auth_loss(error) {
-        guard.transient_provider_failure_counts.remove(&id);
-        return snapshot;
-    }
-
-    let preservable = cloudflare_challenge
-        || is_transient_claude_auth_error(error)
-        || is_claude_cli_usage_parse_failure(error)
-        || is_claude_cli_rate_limit_failure(error)
-        || is_claude_timeout_failure(error);
-    if !preservable {
+    let policy = instantiate_provider(id).last_good_failure_policy(error);
+    if policy == codexbar::core::LastGoodFailurePolicy::Replace {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
     }
@@ -570,99 +549,51 @@ pub(super) fn preserve_last_good_transient_failure(
     // attempt cannot prove that Claude CLI is available for account actions.
     previous.has_successful_claude_cli_quota = false;
 
-    // Parse / rate-limit / timeout: keep last-good every time (upstream #2247).
-    // Transient auth (unauthorized-ish) still only preserves once so real logout surfaces.
-    let parse_or_rate = is_claude_cli_usage_parse_failure(error)
-        || is_claude_cli_rate_limit_failure(error)
-        || is_claude_timeout_failure(error);
-
     let count = guard
         .transient_provider_failure_counts
         .entry(id)
         .or_insert(0);
-    if parse_or_rate || *count == 0 {
-        if !parse_or_rate {
-            *count = 1;
+    match policy {
+        codexbar::core::LastGoodFailurePolicy::Preserve => {
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
+            previous
         }
-        tracing::warn!(
-            provider = id.cli_name(),
-            error = error.unwrap_or(""),
-            "preserving last good Claude snapshot after transient failure"
-        );
-        previous
-    } else {
-        *count = count.saturating_add(1);
-        if cloudflare_challenge {
-            // A Cloudflare interstitial is not evidence that the prior web
-            // session or quota data is invalid. Surface the guidance while
-            // retaining the last known usage and its observation timestamp.
+        codexbar::core::LastGoodFailurePolicy::PreserveOnce if *count == 0 => {
+            *count = 1;
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
+            previous
+        }
+        codexbar::core::LastGoodFailurePolicy::PreserveOnce => {
+            *count = count.saturating_add(1);
+            snapshot
+        }
+        codexbar::core::LastGoodFailurePolicy::PreserveOnceThenSurface if *count == 0 => {
+            *count = 1;
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
+            previous
+        }
+        codexbar::core::LastGoodFailurePolicy::PreserveOnceThenSurface => {
+            *count = count.saturating_add(1);
             let mut surfaced = previous;
             surfaced.error = snapshot.error;
             surfaced.error_state = snapshot.error_state;
             surfaced.fetch_duration_ms = snapshot.fetch_duration_ms;
             surfaced
-        } else {
-            snapshot
         }
+        codexbar::core::LastGoodFailurePolicy::Replace => snapshot,
     }
-}
-
-fn is_claude_cloudflare_challenge(error: Option<&str>) -> bool {
-    error.is_some_and(|error| {
-        error.to_ascii_lowercase().contains(
-            &codexbar::providers::claude::CLOUDFLARE_CHALLENGE_MESSAGE.to_ascii_lowercase(),
-        )
-    })
-}
-
-fn is_transient_claude_auth_error(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("unauthorized")
-        || lower.contains("authentication required")
-        || lower.contains("auth required")
-}
-
-fn is_hard_claude_auth_loss(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    // Credentials truly missing / login required — clear stale usage.
-    lower.contains("credentials not found")
-        || lower.contains("run `claude` to authenticate")
-        || (lower.contains("not installed") && lower.contains("claude"))
-        || (lower.contains("subscription") && lower.contains("unavailable"))
-}
-
-fn is_claude_cli_usage_parse_failure(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("parse error")
-        || lower.contains("empty output")
-        || lower.contains("missing current session")
-        || lower.contains("treated /usage as a normal prompt")
-        || lower.contains("local activity stats")
-        || lower.contains("could not parse")
-}
-
-fn is_claude_cli_rate_limit_failure(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("rate limit") || lower.contains("rate_limit") || lower.contains("ratelimited")
-}
-
-fn is_claude_timeout_failure(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    error.eq_ignore_ascii_case("timeout") || error.to_ascii_lowercase().contains("timed out")
 }
 
 async fn fetch_provider_snapshot(
