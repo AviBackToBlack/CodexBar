@@ -2,7 +2,7 @@
 //! timeouts, and combined output capture. Split out of `account_manager.rs`
 //! (port of the login-running slice of `windows/.../account_manager.py`, MIT).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -85,14 +85,9 @@ impl ManagedLoginProcess {
 pub struct CodexLoginRunner;
 
 impl CodexLoginRunner {
-    /// Resolve the `codex` executable, falling back to known install paths.
-    pub fn locate_codex_binary() -> Option<PathBuf> {
-        if let Ok(found) = which::which("codex") {
-            return Some(found);
-        }
-        path_candidates()
-            .into_iter()
-            .find(|candidate| candidate.is_file())
+    /// Resolve the `codex` executable through the crate-wide canonical locator.
+    pub fn locate_codex_binary() -> Option<std::path::PathBuf> {
+        crate::codex_cli::locate_codex_binary()
     }
 
     pub fn run(
@@ -108,7 +103,13 @@ impl CodexLoginRunner {
         };
 
         let mut command = Command::new(binary);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
         command
+            .args(["-c", "cli_auth_credentials_store=\"file\""])
             .arg("login")
             .env("CODEX_HOME", home_path)
             .stdout(Stdio::piped())
@@ -152,30 +153,6 @@ impl CodexLoginRunner {
     }
 }
 
-fn path_candidates() -> Vec<PathBuf> {
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("AppData")
-                .join("Local")
-        });
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    vec![
-        local_app_data
-            .join("OpenAI")
-            .join("Codex")
-            .join("bin")
-            .join("codex.exe"),
-        home.join(".bun").join("bin").join("codex.exe"),
-        local_app_data
-            .join("Microsoft")
-            .join("WindowsApps")
-            .join("codex.exe"),
-    ]
-}
-
 fn wait_for_child(handle: &ManagedLoginProcess, timeout: Duration) -> Option<std::process::Output> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -183,16 +160,16 @@ fn wait_for_child(handle: &ManagedLoginProcess, timeout: Duration) -> Option<std
             let output = take_child(handle)?.wait_with_output().ok();
             return output;
         }
-        let polled = {
+        let finished = {
             let mut guard = handle.inner.lock().expect("login process lock");
-            match guard.as_mut().map(|child| child.try_wait()) {
-                Some(Ok(Some(_status))) => take_child(handle)?.wait_with_output().ok(),
-                Some(Err(_)) => take_child(handle)?.wait_with_output().ok(),
-                _ => None,
-            }
+            matches!(
+                guard.as_mut().map(|child| child.try_wait()),
+                Some(Ok(Some(_))) | Some(Err(_))
+            )
         };
-        if polled.is_some() {
-            return polled;
+        // Drop the polling lock before taking ownership of the child.
+        if finished {
+            return take_child(handle)?.wait_with_output().ok();
         }
         if Instant::now() >= deadline {
             return None;
@@ -233,5 +210,42 @@ fn combine_output(output: &std::process::Output) -> String {
         "No output captured.".to_string()
     } else {
         merged.chars().take(4000).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_child_is_collected_without_locking_twice() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            #[cfg(windows)]
+            let child = Command::new("cmd.exe")
+                .args(["/d", "/c", "echo login-complete"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            #[cfg(not(windows))]
+            let child = Command::new("sh")
+                .args(["-c", "echo login-complete"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let handle = ManagedLoginProcess::default();
+            handle.bind(child);
+            sender
+                .send(wait_for_child(&handle, Duration::from_secs(2)))
+                .unwrap();
+        });
+        let output = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("completed login must not deadlock")
+            .expect("child output");
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("login-complete"));
     }
 }
