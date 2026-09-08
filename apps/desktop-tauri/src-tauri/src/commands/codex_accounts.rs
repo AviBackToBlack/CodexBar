@@ -417,6 +417,8 @@ fn refresh_persisted_accounts(app: tauri::AppHandle) -> Result<(), String> {
 
 fn accounts_changed(app: &tauri::AppHandle) {
     events::emit_codex_accounts_updated(app);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || crate::tray_bridge::rebuild_tray_menu(&handle));
 }
 
 fn into_user_message(error: CodexAccountManagerError) -> String {
