@@ -10,6 +10,7 @@ import type {
   SessionEquivalentForecastSnapshot,
 } from "../types/bridge";
 import { useLocale } from "../hooks/useLocale";
+import { providerAllowsPace } from "../lib/providerPace";
 import {
   useFormattedResetTime,
   type ResetTimeFormatMode,
@@ -108,10 +109,11 @@ function LocalUsageBlock({
 }) {
   const { t } = useLocale();
   const isCodex = providerId === "codex";
-  const visibleHistory = costHistory
-    .slice(-30)
-    .filter((point) => point.value > 0);
-  const maxCost = Math.max(...visibleHistory.map((point) => point.value), 0);
+  const visibleHistory = costHistory.slice(-30);
+  const maxCost = Math.max(
+    ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
+    0,
+  );
 
   return (
     <section className="menu-card__group menu-card__local-usage">
@@ -148,9 +150,10 @@ function LocalUsageBlock({
             <span
               key={`${point.date}-${index}`}
               style={{
-                height: `${Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
+                height: `${point.value == null || maxCost <= 0 ? 1 : Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
+                opacity: point.value == null ? 0 : undefined,
               }}
-              title={`${point.date}: ${formatCurrency(point.value, "USD")}`}
+              title={point.value == null ? point.date : `${point.date}: ${formatCurrency(point.value, "USD")}`}
             />
           ))}
         </div>
@@ -443,7 +446,7 @@ export function describeCard(
   showPace = true,
 ): MenuCardPresence {
   const hasCostHistory =
-    chartData !== null && chartData.costHistory.some((point) => point.value > 0);
+    chartData !== null && chartData.costHistory.some((point) => point.value != null);
   const hasCreditsHistory =
     chartData !== null && chartData.creditsHistory.length > 0;
   const hasUsageBreakdown =
@@ -456,7 +459,10 @@ export function describeCard(
   const hasCost =
     !!provider.cost &&
     (costSummaryDisplayStyle !== "hidden" || provider.cost.alwaysVisible === true);
-  const hasPace = showPace && !!provider.pace;
+  const hasPace =
+    showPace &&
+    providerAllowsPace(provider.providerId, provider.sourceLabel) &&
+    !!provider.pace;
   const hasDetails =
     !provider.error &&
     (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage || !!wayfinderUsage);
@@ -484,6 +490,10 @@ export default function MenuCardDetails({
   onLayoutChange,
 }: MenuCardDetailsProps) {
   const { t } = useLocale();
+  const paceEnabled =
+    display.showPace !== false &&
+    providerAllowsPace(provider.providerId, provider.sourceLabel);
+  const metricDisplay = paceEnabled ? display : { ...display, showPace: false };
   const [expandedPaceWindow, setExpandedPaceWindow] = useState<string | null>(null);
   const formattedCostReset = useFormattedResetTime(
     provider.cost?.resetsAt ?? null,
@@ -515,7 +525,7 @@ export default function MenuCardDetails({
               title={m.label}
               snap={m.snap}
               exhaustedLabel={t("DetailWindowExhausted")}
-              display={display}
+              display={metricDisplay}
               expanded={expandedPaceWindow === m.id}
               resetFormatMode={m.resetFormatMode}
               sessionEquivalentForecast={m.sessionEquivalentForecast}
@@ -618,7 +628,7 @@ export default function MenuCardDetails({
 
       {(hasMetrics || hasCost) && hasPace && <div className="menu-card__divider" />}
 
-      {hasPace && provider.pace && (
+      {paceEnabled && hasPace && provider.pace && (
         <section className="menu-card__group menu-card__pace">
           <div className="menu-card__pace-header">
             <span className="menu-card__group-title">{t("DetailPaceTitle")}</span>

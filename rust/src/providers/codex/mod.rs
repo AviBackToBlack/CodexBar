@@ -49,8 +49,17 @@ fn fetch_result(
     cost: Option<crate::core::CostSnapshot>,
     source: &str,
 ) -> ProviderFetchResult {
+    let account_email = usage.account_email.clone();
     let mut result = ProviderFetchResult::new(usage, source);
-    if let Some(cost) = cost {
+    if let Some(cost) = cost.map(|cost| {
+        if cost.account_id.is_none()
+            && let Some(account) = account_email.as_deref()
+        {
+            cost.with_account_id(account)
+        } else {
+            cost
+        }
+    }) {
         result = result.with_cost(cost);
     }
     result
@@ -63,6 +72,20 @@ fn pat_allows_auto_fallback(error: &ProviderError) -> bool {
     )
 }
 
+async fn authenticated_http_error(response: reqwest::Response, endpoint: &str) -> ProviderError {
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return ProviderError::AuthRequired;
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    if body.is_empty() {
+        ProviderError::Other(format!("{endpoint} returned {status}"))
+    } else {
+        ProviderError::Other(format!("{endpoint} returned {status}: {body}"))
+    }
+}
+
 impl Default for CodexProvider {
     fn default() -> Self {
         Self::new()
@@ -71,6 +94,10 @@ impl Default for CodexProvider {
 
 #[async_trait]
 impl Provider for CodexProvider {
+    fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
+        false
+    }
+
     fn id(&self) -> ProviderId {
         ProviderId::Codex
     }

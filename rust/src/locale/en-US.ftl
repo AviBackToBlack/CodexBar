@@ -245,6 +245,7 @@ Plan = Plan
 Account = Account
 ProviderSessionLabel = Session
 ProviderWeeklyLabel = Weekly
+ClaudeScopedWeeklyLabel = { "{}" } weekly
 ProviderCodeReviewLabel = Code review
 ResetsInShort = Resets in
 ResetsInDaysHours = Resets in { "{}" }d { "{}" }h

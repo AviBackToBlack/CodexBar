@@ -6,6 +6,7 @@
 mod local_proto;
 pub mod local_sessions;
 mod local_sqlite;
+mod local_step_resolver;
 mod quota_summary;
 
 use async_trait::async_trait;
@@ -609,6 +610,10 @@ impl Default for AntigravityProvider {
 
 #[async_trait]
 impl Provider for AntigravityProvider {
+    fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
+        false
+    }
+
     fn id(&self) -> ProviderId {
         ProviderId::Antigravity
     }

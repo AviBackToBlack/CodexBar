@@ -93,6 +93,9 @@ pub(super) enum DelayedDecision {
     Discard,
 }
 
+mod diagnostics;
+use diagnostics::{ResetDiagnosticReason, log_reset_diagnostic};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResetCreditEvidence {
     None,
@@ -128,6 +131,11 @@ pub(super) fn load(scope: &str) -> AccountState {
 
 pub(super) fn save(scope: &str, state: &AccountState) {
     let Some(path) = state_path() else {
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "skipped",
+            ResetDiagnosticReason::StoreUnavailable,
+        );
         return;
     };
     let mut file = crate::secure_file::read_string(&path)
@@ -140,13 +148,28 @@ pub(super) fn save(scope: &str, state: &AccountState) {
         });
     file.accounts.insert(scope.to_string(), state.clone());
     let Some(parent) = path.parent() else {
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "skipped",
+            ResetDiagnosticReason::StoreUnavailable,
+        );
         return;
     };
     if std::fs::create_dir_all(parent).is_err() {
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "skipped",
+            ResetDiagnosticReason::StoreUnavailable,
+        );
         return;
     }
     if let Ok(raw) = serde_json::to_string_pretty(&file) {
         let _written = crate::secure_file::write_string(&path, &raw);
+        log_reset_diagnostic(
+            "candidatePersistence",
+            "requested",
+            ResetDiagnosticReason::StoreRequested,
+        );
     }
 }
 
@@ -359,32 +382,88 @@ fn maybe_store_delayed_candidate(
     exact_oauth: bool,
     observed_at: DateTime<Utc>,
 ) {
-    if !exact_oauth || !plans_match(state.plan.as_deref(), initial, confirmation) {
+    if !exact_oauth {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::SourceNotExactOAuth,
+        );
+        return;
+    }
+    if !plans_match(state.plan.as_deref(), initial, confirmation) {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::PlanMismatch,
+        );
         return;
     }
     let Some(previous_weekly) = state.published_weekly.as_ref() else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingPreviousSnapshot,
+        );
         return;
     };
     let Some(initial_weekly) = weekly(initial) else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingWeeklyWindow,
+        );
         return;
     };
     let Some(confirmation_weekly) = weekly(confirmation) else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingWeeklyWindow,
+        );
         return;
     };
     let Some(previous_inventory) = state.credit_inventory.as_ref() else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingCreditInventory,
+        );
         return;
     };
     let Some(confirmation_inventory) = confirmation_inventory else {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::MissingCreditInventory,
+        );
         return;
     };
     if previous_inventory.available_count == 0 || previous_inventory != confirmation_inventory {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::ChangedCreditInventory,
+        );
         return;
     }
     if !supported_delayed_boundary(previous_weekly, initial_weekly)
         || !supported_delayed_boundary(previous_weekly, confirmation_weekly)
-        || boundary_distance_seconds(initial_weekly, confirmation_weekly).abs()
-            >= RESET_TOLERANCE_SECONDS
     {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::UnsupportedResetBoundary,
+        );
+        return;
+    }
+    if boundary_distance_seconds(initial_weekly, confirmation_weekly).abs()
+        >= RESET_TOLERANCE_SECONDS
+    {
+        log_reset_diagnostic(
+            "candidateCreation",
+            "rejected",
+            ResetDiagnosticReason::InconsistentResetBoundary,
+        );
         return;
     }
     state.candidate = Some(DelayedCandidate {
@@ -396,6 +475,11 @@ fn maybe_store_delayed_candidate(
         plan: confirmation.login_method.clone(),
         inventory: confirmation_inventory.clone(),
     });
+    log_reset_diagnostic(
+        "candidateCreation",
+        "created",
+        ResetDiagnosticReason::CandidateCreated,
+    );
 }
 
 fn delayed_candidate_decision(
@@ -409,36 +493,129 @@ fn delayed_candidate_decision(
     let age = observed_at
         .signed_duration_since(candidate.created_at)
         .num_seconds();
-    if candidate.evidence_version != EVIDENCE_VERSION
-        || !(0..=CANDIDATE_MAXIMUM_AGE_SECONDS).contains(&age)
-    {
+    if candidate.evidence_version != EVIDENCE_VERSION {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::EvidenceVersionMismatch,
+        );
         return DelayedDecision::Discard;
     }
-    if !exact_oauth || !plans_match(state.plan.as_deref(), current, current) {
+    if age < 0 {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::FutureCandidate,
+        );
+        return DelayedDecision::Discard;
+    }
+    if age > CANDIDATE_MAXIMUM_AGE_SECONDS {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::ExpiredCandidate,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !exact_oauth {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::SourceNotExactOAuth,
+        );
         return DelayedDecision::Discard;
     }
     let Some(previous_weekly) = state.published_weekly.as_ref() else {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::MissingPreviousSnapshot,
+        );
         return DelayedDecision::Discard;
     };
     let Some(current_weekly) = weekly(current) else {
-        // Later v0.56.2 explicitly protects candidate evidence through credits-only
-        // refreshes. Keeping it here makes that follow-up an invariant, not a fork.
+        // Credits-only refreshes do not carry the weekly window (or necessarily
+        // the plan/inventory fields). Preserve the candidate and let the next
+        // complete usage observation validate it.
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "retain",
+            ResetDiagnosticReason::MissingWeeklyWindow,
+        );
         return DelayedDecision::Retain;
     };
+    if !plans_match(state.plan.as_deref(), current, current) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::PlanMismatch,
+        );
+        return DelayedDecision::Discard;
+    }
     if previous_weekly.used_percent <= RESET_THRESHOLD
         || current_weekly.used_percent > RESET_THRESHOLD
-        || current.updated_at <= candidate.snapshot_updated_at
-        || !is_valid_boundary(current_weekly, current.updated_at)
-        || boundary_distance_seconds(&candidate.weekly, current_weekly).abs()
-            >= RESET_TOLERANCE_SECONDS
-        || !supported_delayed_boundary(previous_weekly, current_weekly)
-        || current_inventory != Some(&candidate.inventory)
     {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::ResetThresholdMismatch,
+        );
+        return DelayedDecision::Discard;
+    }
+    if current.updated_at <= candidate.snapshot_updated_at {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::StaleObservation,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !is_valid_boundary(current_weekly, current.updated_at) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::InvalidResetBoundary,
+        );
+        return DelayedDecision::Discard;
+    }
+    if boundary_distance_seconds(&candidate.weekly, current_weekly).abs() >= RESET_TOLERANCE_SECONDS
+    {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::InconsistentResetBoundary,
+        );
+        return DelayedDecision::Discard;
+    }
+    if !supported_delayed_boundary(previous_weekly, current_weekly) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::UnsupportedResetBoundary,
+        );
+        return DelayedDecision::Discard;
+    }
+    if current_inventory != Some(&candidate.inventory) {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "discard",
+            ResetDiagnosticReason::ChangedCreditInventory,
+        );
         return DelayedDecision::Discard;
     }
     if age >= CANDIDATE_MINIMUM_AGE_SECONDS {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "publish",
+            ResetDiagnosticReason::ConfirmedObservation,
+        );
         DelayedDecision::Publish
     } else {
+        log_reset_diagnostic(
+            "delayedCandidate",
+            "retain",
+            ResetDiagnosticReason::MinimumDelay,
+        );
         DelayedDecision::Retain
     }
 }
@@ -533,226 +710,4 @@ fn reset_credit_evidence(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::TimeZone;
-
-    fn now() -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 8, 25, 12, 0, 0).unwrap()
-    }
-
-    fn snapshot(used: f64, reset_days: i64, captured_minutes: i64) -> UsageSnapshot {
-        let captured = now() + chrono::Duration::minutes(captured_minutes);
-        let weekly = RateWindow::with_details(
-            used,
-            Some(7 * 24 * 60),
-            Some(now() + chrono::Duration::days(reset_days)),
-            None,
-        );
-        let mut snapshot = UsageSnapshot::new(RateWindow::new(20.0)).with_secondary(weekly);
-        snapshot.updated_at = captured;
-        snapshot.login_method = Some("ChatGPT Pro".to_string());
-        snapshot
-    }
-
-    fn inventory(id: &str) -> CreditInventory {
-        CreditInventory {
-            available_count: 1,
-            credits: vec![CreditIdentity {
-                id: id.to_string(),
-                reset_type: "weekly".to_string(),
-                status: "available".to_string(),
-                expires_at: Some(now() + chrono::Duration::days(3)),
-            }],
-        }
-    }
-
-    fn baseline() -> AccountState {
-        let previous = snapshot(45.0, 2, 0);
-        AccountState {
-            published_weekly: previous.secondary.clone(),
-            published_at: previous.updated_at,
-            plan: previous.login_method.clone(),
-            credit_inventory: Some(inventory("credit-a")),
-            candidate: None,
-        }
-    }
-
-    #[test]
-    fn inventory_retains_consumed_status_rows_but_counts_only_available_credits() {
-        let reset = ResetCredits {
-            available_count: 1,
-            credits: vec![
-                ResetCredit {
-                    id: Some("available-a".into()),
-                    reset_type: Some("weekly".into()),
-                    status: Some("available".into()),
-                    expires_at: None,
-                },
-                ResetCredit {
-                    id: Some("redeeming-b".into()),
-                    reset_type: Some("weekly".into()),
-                    status: Some("redeeming".into()),
-                    expires_at: None,
-                },
-                ResetCredit {
-                    id: Some("redeemed-c".into()),
-                    reset_type: Some("weekly".into()),
-                    status: Some("redeemed".into()),
-                    expires_at: None,
-                },
-            ],
-        };
-        let inventory = super::inventory(Some(&reset), now()).expect("credit inventory");
-        assert_eq!(inventory.available_count, 1);
-        assert_eq!(inventory.credits.len(), 3);
-        assert!(
-            inventory
-                .credits
-                .iter()
-                .any(|credit| credit.status == "redeeming")
-        );
-        assert!(
-            inventory
-                .credits
-                .iter()
-                .any(|credit| credit.status == "redeemed")
-        );
-    }
-    #[test]
-    fn early_low_usage_requires_confirmation_without_spending_credit() {
-        let mut state = baseline();
-        let initial = snapshot(0.0, 9, 1);
-        let inv = inventory("credit-a");
-        assert_eq!(
-            initial_decision(&mut state, &initial, Some(&inv), true, now()),
-            InitialDecision::RequiresConfirmation
-        );
-        let confirmation = snapshot(0.0, 9, 2);
-        assert_eq!(
-            confirmation_decision(
-                &mut state,
-                &initial,
-                Some(&inv),
-                &confirmation,
-                Some(&inv),
-                true,
-                now(),
-            ),
-            ConfirmationDecision::Preserve
-        );
-        assert!(state.candidate.is_some());
-        assert_eq!(state.credit_inventory.as_ref().unwrap().available_count, 1);
-    }
-
-    #[test]
-    fn delayed_candidate_publishes_after_sixty_seconds_and_expires_after_thirty_minutes() {
-        let mut state = baseline();
-        let initial = snapshot(0.0, 9, 1);
-        let confirmation = snapshot(0.0, 9, 2);
-        let inv = inventory("credit-a");
-        assert_eq!(
-            confirmation_decision(
-                &mut state,
-                &initial,
-                Some(&inv),
-                &confirmation,
-                Some(&inv),
-                true,
-                now(),
-            ),
-            ConfirmationDecision::Preserve
-        );
-        let current = snapshot(0.0, 9, 3);
-        let candidate = state.candidate.clone().unwrap();
-        assert_eq!(
-            delayed_candidate_decision(
-                &state,
-                &candidate,
-                &current,
-                Some(&inv),
-                true,
-                now() + chrono::Duration::seconds(59),
-            ),
-            DelayedDecision::Retain
-        );
-        assert_eq!(
-            delayed_candidate_decision(
-                &state,
-                &candidate,
-                &current,
-                Some(&inv),
-                true,
-                now() + chrono::Duration::seconds(60),
-            ),
-            DelayedDecision::Publish
-        );
-        assert_eq!(
-            delayed_candidate_decision(
-                &state,
-                &candidate,
-                &current,
-                Some(&inv),
-                true,
-                now() + chrono::Duration::minutes(31),
-            ),
-            DelayedDecision::Discard
-        );
-    }
-
-    #[test]
-    fn credits_only_refresh_retains_candidate_and_account_scope_hashes_differ() {
-        let mut state = baseline();
-        state.candidate = Some(DelayedCandidate {
-            evidence_version: EVIDENCE_VERSION,
-            first_observed_at: now(),
-            created_at: now(),
-            snapshot_updated_at: now(),
-            weekly: snapshot(0.0, 9, 1).secondary.unwrap(),
-            plan: Some("ChatGPT Pro".to_string()),
-            inventory: inventory("credit-a"),
-        });
-        let mut credits_only = UsageSnapshot::new(RateWindow::new(20.0));
-        credits_only.updated_at = now() + chrono::Duration::minutes(1);
-        credits_only.login_method = Some("ChatGPT Pro".to_string());
-        let candidate = state.candidate.clone().unwrap();
-        assert_eq!(
-            delayed_candidate_decision(
-                &state,
-                &candidate,
-                &credits_only,
-                Some(&inventory("credit-a")),
-                true,
-                now() + chrono::Duration::minutes(1),
-            ),
-            DelayedDecision::Retain
-        );
-        assert_ne!(
-            scope_key(Some("account-a"), Path::new("C:/a/auth.json")),
-            scope_key(Some("account-b"), Path::new("C:/b/auth.json"))
-        );
-    }
-
-    #[test]
-    fn consumed_credit_allows_immediate_confirmation() {
-        let mut state = baseline();
-        let initial = snapshot(0.0, 2, 1);
-        let confirmation = snapshot(0.0, 2, 2);
-        let consumed = CreditInventory {
-            available_count: 0,
-            credits: Vec::new(),
-        };
-        assert_eq!(
-            confirmation_decision(
-                &mut state,
-                &initial,
-                Some(&consumed),
-                &confirmation,
-                Some(&consumed),
-                true,
-                now(),
-            ),
-            ConfirmationDecision::Publish
-        );
-    }
-}
+mod tests;

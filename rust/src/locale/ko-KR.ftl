@@ -237,6 +237,7 @@ Plan = 요금제
 Account = 계정
 ProviderSessionLabel = 세션
 ProviderWeeklyLabel = 주간
+ClaudeScopedWeeklyLabel = { "{}" } 주간
 ProviderCodeReviewLabel = 코드 리뷰
 ResetsInShort = 초기화까지
 ResetsInDaysHours = 초기화까지 { "{}" }일 { "{}" }시간

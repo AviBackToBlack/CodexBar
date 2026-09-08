@@ -221,6 +221,7 @@ Plan = План
 Account = Аккаунт
 ProviderSessionLabel = Сессия
 ProviderWeeklyLabel = Еженедельно
+ClaudeScopedWeeklyLabel = { "{}" } за неделю
 ProviderCodeReviewLabel = Обзор кода
 ResetsInShort = Сбрасывается через
 ResetsInDaysHours = Сброс в { "{}" }d { "{}" }h
