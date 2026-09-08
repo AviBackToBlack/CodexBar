@@ -91,7 +91,10 @@ struct UsageSpendCoordinator {
 impl UsageSpendCoordinator {
     fn begin(&mut self, scope: String) -> UsageSpendRefreshOwner {
         self.next_generation = self.next_generation.wrapping_add(1).max(1);
-        let owner = UsageSpendRefreshOwner { generation: self.next_generation, scope };
+        let owner = UsageSpendRefreshOwner {
+            generation: self.next_generation,
+            scope,
+        };
         self.current = Some((owner.clone(), UsageSpendRefreshPhase::Indexing));
         owner
     }
@@ -106,12 +109,18 @@ impl UsageSpendCoordinator {
     }
 
     fn is_current(&self, owner: &UsageSpendRefreshOwner) -> bool {
-        self.current.as_ref().is_some_and(|(current, _)| current == owner)
+        self.current
+            .as_ref()
+            .is_some_and(|(current, _)| current == owner)
     }
 
     fn clear_if_indexing(&mut self, owner: &UsageSpendRefreshOwner) -> bool {
-        let Some((current, phase)) = self.current.as_ref() else { return false; };
-        if current != owner || *phase != UsageSpendRefreshPhase::Indexing { return false; }
+        let Some((current, phase)) = self.current.as_ref() else {
+            return false;
+        };
+        if current != owner || *phase != UsageSpendRefreshPhase::Indexing {
+            return false;
+        }
         self.current = None;
         true
     }
@@ -147,8 +156,12 @@ fn mark_refresh_paused_if_codex_scan_paused(
 
 /// Retire an invalidated owner without allowing it to clear a replacement.
 fn clear_usage_spend_refresh_if_owned(owner: &UsageSpendRefreshOwner) {
-    let Ok(mut coordinator) = usage_spend_coordinator().lock() else { return; };
-    if !coordinator.clear_if_indexing(owner) { return; }
+    let Ok(mut coordinator) = usage_spend_coordinator().lock() else {
+        return;
+    };
+    if !coordinator.clear_if_indexing(owner) {
+        return;
+    }
     if let Some(existing) = coordinator.cache.as_mut()
         && existing.refresh_owner.as_ref() == Some(owner)
     {
