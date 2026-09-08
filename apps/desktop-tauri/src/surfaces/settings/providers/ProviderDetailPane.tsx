@@ -31,6 +31,7 @@ import { CookieSourceSection } from "./sections/CookieSourceSection";
 import { GrokUsageSourceSection } from "./sections/GrokUsageSourceSection";
 import { RegionSection } from "./sections/RegionSection";
 import { CodexUsageOptions } from "./sections/credentials/CodexUsageOptions";
+import { ClaudeAccountsSection } from "./sections/credentials/ClaudeAccountsSection";
 import { CodexAccountsSection } from "./sections/credentials/CodexAccountsSection";
 import { TokenAccountsPanel } from "../tokens/TokenAccountsPanel";
 import { ApiKeySection } from "./ApiKeySection";
@@ -325,6 +326,7 @@ export function ProviderDetailPane({
       <CredentialsDispatcher providerId={detail.id} t={t} />
       {detail.id === "codex" && <CodexUsageOptions t={t} />}
       {detail.id === "codex" && <CodexAccountsSection t={t} />}
+      {detail.id === "claude" && <ClaudeAccountsSection t={t} />}
       <CredentialStorageSection
         status={credentialStatus}
         busy={busy}
