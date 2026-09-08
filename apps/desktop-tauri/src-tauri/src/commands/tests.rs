@@ -789,18 +789,18 @@ fn provider_detail_roundtrips_through_serde() {
 #[test]
 fn pace_stage_serializes_to_snake_case_string() {
     use codexbar::core::PaceStage;
-    assert_eq!(super::pace_stage_str(PaceStage::OnTrack), "on_track");
+    assert_eq!(super::bridge::pace::stage_str(PaceStage::OnTrack), "on_track");
     assert_eq!(
-        super::pace_stage_str(PaceStage::SlightlyAhead),
+        super::bridge::pace::stage_str(PaceStage::SlightlyAhead),
         "slightly_ahead"
     );
-    assert_eq!(super::pace_stage_str(PaceStage::FarAhead), "far_ahead");
+    assert_eq!(super::bridge::pace::stage_str(PaceStage::FarAhead), "far_ahead");
     assert_eq!(
-        super::pace_stage_str(PaceStage::SlightlyBehind),
+        super::bridge::pace::stage_str(PaceStage::SlightlyBehind),
         "slightly_behind"
     );
-    assert_eq!(super::pace_stage_str(PaceStage::Behind), "behind");
-    assert_eq!(super::pace_stage_str(PaceStage::FarBehind), "far_behind");
+    assert_eq!(super::bridge::pace::stage_str(PaceStage::Behind), "behind");
+    assert_eq!(super::bridge::pace::stage_str(PaceStage::FarBehind), "far_behind");
 }
 
 #[test]
@@ -850,16 +850,6 @@ fn local_opencodego_estimates_keep_quota_windows_but_drop_derived_pace() {
             .reserve_percent
             .is_none()
     );
-}
-
-#[test]
-fn authoritative_opencodego_sources_still_allow_derived_pace() {
-    assert!(super::provider_allows_pace(ProviderId::OpenCodeGo, "api"));
-    assert!(super::provider_allows_pace(ProviderId::OpenCodeGo, "web"));
-    assert!(!super::provider_allows_pace(
-        ProviderId::OpenCodeGo,
-        " LOCAL ESTIMATE "
-    ));
 }
 
 #[test]
@@ -939,6 +929,7 @@ fn provider_cache_upsert_replaces_existing_provider() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        pace_authoritative: true,
     };
     let mut first =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -962,6 +953,7 @@ fn provider_cache_prunes_disabled_providers() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        pace_authoritative: true,
     };
     let codex =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -992,6 +984,7 @@ fn hiding_codex_spark_rows_preserves_other_extra_usage() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        pace_authoritative: true,
     };
     let mut snapshot =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -1022,6 +1015,7 @@ fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1052,6 +1046,7 @@ fn claude_repeated_auth_failure_surfaces_error() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1175,6 +1170,7 @@ fn claude_cli_parse_failure_keeps_last_good_every_time() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        pace_authoritative: true,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1210,6 +1206,7 @@ fn claude_hard_credentials_missing_does_not_preserve_stale() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1370,6 +1367,7 @@ fn japanese_provider_snapshot_localizes_weekly_label() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
 
     let snapshot =
@@ -1399,6 +1397,7 @@ fn japanese_provider_snapshot_localizes_pace_reserve_description() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
 
     let snapshot =
