@@ -641,7 +641,7 @@ impl ModelsDevCache {
         let Ok(contents) = serde_json::to_vec(&*artifact) else {
             return false;
         };
-        if crate::cli::dashboard::write_atomic(&cache_path, &contents).is_err() {
+        if crate::atomic_file::write_atomic(&cache_path, &contents).is_err() {
             return false;
         }
         let (modified_at, size) = file_identity(&cache_path);
@@ -673,13 +673,13 @@ mod models_dev_cache_atomic_tests {
         let parent = cache_path.parent().unwrap();
         std::fs::create_dir_all(parent).unwrap();
 
-        crate::cli::dashboard::write_atomic(&cache_path, b"old-cache").unwrap();
+        crate::atomic_file::write_atomic(&cache_path, b"old-cache").unwrap();
 
         let mut temp_name = cache_path.as_os_str().to_os_string();
         temp_name.push(format!(".tmp-{}", std::process::id()));
         std::fs::create_dir(PathBuf::from(temp_name)).unwrap();
 
-        assert!(crate::cli::dashboard::write_atomic(&cache_path, b"new-cache").is_err());
+        assert!(crate::atomic_file::write_atomic(&cache_path, b"new-cache").is_err());
         assert_eq!(std::fs::read(cache_path).unwrap(), b"old-cache");
     }
 }
