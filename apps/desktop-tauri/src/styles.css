@@ -807,6 +807,10 @@ html {
 }
 
 .credential-card__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   font-size: 0.78rem;
   color: var(--text-eyebrow);
   text-decoration: none;
@@ -4292,6 +4296,17 @@ html:has(.menu-surface--tray) {
   flex: 0 0 auto;
 }
 
+/* A live forecast is its own full-width row. Release the base percent label's
+   no-shrink rule so refreshed text is constrained by the row and tail-truncated
+   inside the fixed tray width instead of painting past it. */
+.menu-metric__forecast .menu-metric__pct {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .menu-metric__reset {
   font-size: 11px;
   color: var(--text-secondary);
@@ -5349,7 +5364,7 @@ html:has(.menu-surface--tray) {
 [data-theme="light"] .select,
 [data-theme="light"] .number-input,
 [data-theme="light"] .text-input {
-  background: #fff;
+  background-color: #fff;
   border: 1px solid rgba(0, 0, 0, 0.12);
   box-shadow: none;
 }
@@ -6004,7 +6019,6 @@ html:has(.menu-surface--tray) {
   margin-top: 4px;
   font-weight: 500;
 }
-
 /* Shared Windows typography and control sizing. */
 button, input, select, textarea {
   font-family: var(--font-ui);
