@@ -15,6 +15,7 @@ mod shortcut_bridge;
 mod state;
 mod surface;
 mod surface_target;
+mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
 mod tray_visibility;

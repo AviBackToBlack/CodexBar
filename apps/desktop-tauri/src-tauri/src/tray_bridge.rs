@@ -130,13 +130,14 @@ fn build_native_tray_menu(
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let settings = Settings::load();
     let enabled = settings.enabled_providers.clone();
-    let spec = build_tray_menu_with(
+    let mut spec = build_tray_menu_with(
         providers,
         status_labels,
         &enabled,
         settings.float_bar_enabled,
         settings.ui_language,
     );
+    crate::tray_accounts::prepend_account_menus(&mut spec, &settings);
     let entries = spec
         .iter()
         .map(|entry| build_native_menu_entry(app, entry))
@@ -184,6 +185,7 @@ enum MenuAction {
     ToggleProvider(String),
     /// Toggle the floating bar window on/off.
     ToggleFloatBar,
+    Account(crate::tray_accounts::AccountMenuAction),
     Quit,
 }
 
@@ -193,6 +195,9 @@ enum MenuTransitionDispatch {
 }
 
 fn resolve_menu_action(id: &str) -> Option<MenuAction> {
+    if let Some(action) = crate::tray_accounts::resolve_action(id) {
+        return Some(MenuAction::Account(action));
+    }
     match id {
         "refresh" => Some(MenuAction::Refresh),
         "check_for_updates" => Some(MenuAction::CheckForUpdates),
@@ -328,6 +333,7 @@ fn schedule_tray_promotion_retries(app_handle: AppHandle) {
 /// Route a native menu-item click to the corresponding shell action.
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match resolve_menu_action(id) {
+        Some(MenuAction::Account(action)) => crate::tray_accounts::handle_action(app, action),
         Some(MenuAction::Transition(request)) => {
             crate::auto_refresh::note_menu_open();
             match resolve_menu_transition_dispatch(id, request) {

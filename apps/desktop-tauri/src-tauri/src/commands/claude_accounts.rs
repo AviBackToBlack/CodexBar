@@ -17,6 +17,8 @@ pub fn claude_accounts_list() -> Result<Vec<ClaudeAccount>, String> {
 
 fn changed(app: &tauri::AppHandle) {
     let _emit = app.emit("claude-accounts-updated", ());
+    let handle = app.clone();
+    let _dispatch = app.run_on_main_thread(move || crate::tray_bridge::rebuild_tray_menu(&handle));
 }
 
 #[tauri::command]
