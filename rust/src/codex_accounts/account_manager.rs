@@ -420,7 +420,7 @@ impl CodexAccountManager {
             }
             CodexLoginOutcome::MissingBinary => {
                 return Err(CodexAccountManagerError::Message(
-                    "The `codex` command could not be found.".to_string(),
+                    "Codex CLI could not be found. Install Codex Desktop or the Codex CLI, then restart CodexBar.".to_string(),
                 ));
             }
             CodexLoginOutcome::TimedOut(_) => {
