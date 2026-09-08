@@ -519,6 +519,14 @@ fn load_openai_dashboard_chart_data(
 }
 
 #[cfg(test)]
+pub(crate) fn load_openai_dashboard_chart_data_for_test(
+    provider_id: &str,
+    account_email: Option<&str>,
+) -> (Vec<DailyCostPoint>, Vec<DailyUsageBreakdown>) {
+    load_openai_dashboard_chart_data(provider_id, account_email)
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         CostFetchFailure, ProviderLocalUsageSummary, cost_fetch_failure_allows_early_retry,

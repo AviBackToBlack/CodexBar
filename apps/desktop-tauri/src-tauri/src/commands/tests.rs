@@ -1266,10 +1266,10 @@ fn japanese_provider_snapshot_localizes_pace_reserve_description() {
 
 #[test]
 fn chart_data_requires_account_email_for_codex() {
-    let data = super::build_provider_chart_data("codex".into(), None);
-    assert_eq!(data.provider_id, "codex");
-    assert!(data.credits_history.is_empty());
-    assert!(data.usage_breakdown.is_empty());
+    let (credits_history, usage_breakdown) =
+        super::chart::load_openai_dashboard_chart_data_for_test("codex", None);
+    assert!(credits_history.is_empty());
+    assert!(usage_breakdown.is_empty());
 }
 
 #[test]

@@ -508,6 +508,7 @@ DetailPaceFarBehind = Çok geride
 DetailPaceRunsOutIn = Tükenmesine kalan
 DetailPaceWillLastToReset = Sıfırlamaya kadar yeter
 DetailCostTitle = Maliyet
+ApiSpendTitle = API harcaması
 DetailCostUsed = Kullanılan
 DetailCostLimit = Sınır
 DetailCostRemaining = Kalan
