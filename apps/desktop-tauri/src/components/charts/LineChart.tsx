@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useChartAnimation } from "./useChartAnimation";
+import { WIDTH, getLineX, shouldRenderCenterMax } from "./chartGeometry";
 
 /**
  * LineChart — dependency-free SVG line chart with optional area fill,
@@ -28,7 +29,6 @@ export interface LineChartProps {
 }
 
 const DEFAULT_COLOR = "var(--chart-credits)";
-const SVG_WIDTH = 280;
 
 export function LineChart({
   data,
@@ -66,15 +66,13 @@ export function LineChart({
 
   const plotHeight = Math.max(1, height - 4);
   const pad = 2;
-  const usableWidth = SVG_WIDTH - pad * 2;
 
   // Baseline target Y (plot bottom) — the line animates from the
   // baseline up to its final Y, mirroring the bar entrance.
   const baselineY = pad + plotHeight;
 
-  const step = data.length > 1 ? usableWidth / (data.length - 1) : 0;
   const coords = data.map((p, i) => {
-    const x = pad + i * step;
+    const x = getLineX(i, data.length);
     if (p.value == null) return null;
     const finalY = pad + plotHeight - ((p.value - min) / range) * plotHeight;
     const t = anim.barProgress(i);
@@ -96,7 +94,7 @@ export function LineChart({
 
   if (data.length === 1 && segments[0]?.length === 1) {
     const point = segments[0][0];
-    segments[0].push({ x: pad + usableWidth, y: point.y });
+    segments[0].push({ x: getLineX(1, 2), y: point.y });
   }
 
   const onPointMove = (e: React.MouseEvent<SVGCircleElement>, i: number) => {
@@ -111,9 +109,9 @@ export function LineChart({
   return (
     <div className="chart chart--line" ref={containerRef}>
       <svg
-        width={SVG_WIDTH}
+        width={WIDTH}
         height={height}
-        viewBox={`0 0 ${SVG_WIDTH} ${height}`}
+        viewBox={`0 0 ${WIDTH} ${height}`}
         className="chart__svg"
         role="img"
         aria-label={ariaLabel}
@@ -174,11 +172,17 @@ export function LineChart({
         })}
       </svg>
       <div className="chart__axis">
-        <span style={{ left: `${pad}px` }}>{data[0].label.slice(-5)}</span>
-        <span className="chart__axis-max" style={{ left: `${SVG_WIDTH / 2}px` }}>
-          {hasKnownValues ? fmt(max) : ""}
+        <span className="chart__axis-start" style={{ left: `${getLineX(0, data.length)}px` }}>
+          {data[0].label}
         </span>
-        <span style={{ left: `${SVG_WIDTH - pad}px` }}>{data[data.length - 1].label.slice(-5)}</span>
+        {shouldRenderCenterMax(data.length) && (
+          <span className="chart__axis-max" style={{ left: `${WIDTH / 2}px` }}>
+            {hasKnownValues ? fmt(max) : ""}
+          </span>
+        )}
+        <span className="chart__axis-end" style={{ left: `${getLineX(data.length - 1, data.length)}px` }}>
+          {data[data.length - 1].label}
+        </span>
       </div>
       {hover && hoveredPoint?.value != null && !anim.running && (
         <div
