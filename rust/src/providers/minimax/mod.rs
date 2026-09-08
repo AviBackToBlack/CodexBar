@@ -6,6 +6,7 @@
 mod coding_plan;
 mod coding_plan_html;
 mod local_storage;
+mod remains_api;
 mod token_plan;
 
 // Re-exports for local storage import
@@ -281,7 +282,7 @@ impl MiniMaxProvider {
         // the dual group_id+api_key credential the legacy billing endpoint
         // below requires.
         if let Some(key) = Self::read_plain_api_key(ctx)
-            && let Ok(result) = self.fetch_remains_via_api_key(&key, region).await
+            && let Ok(result) = remains_api::fetch_remains_via_api_key(&key, region).await
         {
             return Ok(result);
         }
@@ -297,86 +298,9 @@ impl MiniMaxProvider {
         }
     }
 
-    /// A plain MiniMax API key from Settings (GUI-stored, via `ctx.api_key`)
-    /// or the `MINIMAX_API_KEY` environment variable. Unlike `read_api_key`,
-    /// this does not require a paired group_id.
+    /// A plain MiniMax API key from Settings or `MINIMAX_API_KEY`.
     fn read_plain_api_key(ctx: &FetchContext) -> Option<String> {
-        ctx.api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                std::env::var("MINIMAX_API_KEY")
-                    .ok()
-                    .map(|key| key.trim().to_string())
-                    .filter(|key| !key.is_empty())
-            })
-    }
-
-    /// Fetch coding-plan quota from the remains endpoint using a Bearer API
-    /// key instead of a browser cookie. Tries the platform-host URL, then the
-    /// www-host URL, mirroring the cookie-based fallback chain.
-    async fn fetch_remains_via_api_key(
-        &self,
-        api_key: &str,
-        region: MiniMaxRegion,
-    ) -> Result<ProviderFetchResult, ProviderError> {
-        let now = Utc::now();
-        let urls = [region.coding_plan_remains_url(), region.www_remains_url()];
-        let mut last_err: Option<ProviderError> = None;
-        for url in urls {
-            match self.fetch_remains_once_via_api_key(api_key, &url).await {
-                Ok(snapshot) => {
-                    let usage = coding_plan_html::to_usage_snapshot(&snapshot, now)?;
-                    return Ok(ProviderFetchResult::new(usage, "api"));
-                }
-                Err(err @ ProviderError::Parse(_)) => {
-                    last_err = Some(err);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        Err(last_err.unwrap_or_else(|| ProviderError::Parse("Missing MiniMax remains URL.".into())))
-    }
-
-    /// One Bearer-authenticated remains-API request, returning the parsed snapshot.
-    async fn fetch_remains_once_via_api_key(
-        &self,
-        api_key: &str,
-        url: &str,
-    ) -> Result<coding_plan::MiniMaxCodingPlanSnapshot, ProviderError> {
-        let client = crate::core::credentialed_http_client_builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| ProviderError::Other(e.to_string()))?;
-
-        let response = client
-            .get(url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .header("Accept", "application/json, text/plain, */*")
-            .send()
-            .await?;
-
-        let status = response.status();
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            return Err(ProviderError::AuthRequired);
-        }
-        if !status.is_success() {
-            let msg = format!("MiniMax remains (api key) returned status {status}");
-            if status == reqwest::StatusCode::NOT_FOUND
-                || status == reqwest::StatusCode::METHOD_NOT_ALLOWED
-            {
-                return Err(ProviderError::Parse(msg));
-            }
-            return Err(ProviderError::Other(msg));
-        }
-
-        let json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| ProviderError::Parse(format!("Failed to parse remains JSON: {e}")))?;
-        coding_plan::parse_coding_plan_value(&json, Utc::now())
+        remains_api::read_plain_api_key(ctx)
     }
 
     /// Fetch from a specific region endpoint
