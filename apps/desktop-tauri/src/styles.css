@@ -5354,7 +5354,7 @@ html:has(.menu-surface--tray) {
 [data-theme="light"] .select,
 [data-theme="light"] .number-input,
 [data-theme="light"] .text-input {
-  background: #fff;
+  background-color: #fff;
   border: 1px solid rgba(0, 0, 0, 0.12);
   box-shadow: none;
 }
@@ -6009,7 +6009,6 @@ html:has(.menu-surface--tray) {
   margin-top: 4px;
   font-weight: 500;
 }
-
 /* Shared Windows typography and control sizing. */
 button, input, select, textarea {
   font-family: var(--font-ui);
