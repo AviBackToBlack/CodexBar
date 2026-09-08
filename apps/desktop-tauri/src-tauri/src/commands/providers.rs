@@ -47,6 +47,18 @@ pub(crate) fn build_fetch_context(
         (source_mode, None)
     } else {
         match cookie_source {
+            // #433: an explicitly selected, non-empty Claude manual cookie is
+            // authoritative. Do not let an active OAuth token account silently
+            // replace it; this keeps tray refresh behavior aligned with diagnose,
+            // whose Claude Auto path tries the supplied Web cookie before OAuth.
+            "manual"
+                if id == ProviderId::Claude
+                    && stored_cookie
+                        .as_deref()
+                        .is_some_and(|cookie| !cookie.trim().is_empty()) =>
+            {
+                (SourceMode::Web, stored_cookie.clone())
+            }
             _ if active_token_env.is_some() => (SourceMode::OAuth, None),
             "off" if provider_uses_oauth_without_cookies(id, usage_source) => {
                 (SourceMode::OAuth, None)
