@@ -21,6 +21,8 @@ use crate::core::{
 
 const BASE_URL: &str = "https://opencode.ai";
 const SERVER_URL: &str = "https://opencode.ai/_server";
+/// Source label for quota values reconstructed from the device-local SQLite history.
+pub const LOCAL_ESTIMATE_SOURCE_LABEL: &str = "local estimate";
 const WORKSPACES_SERVER_ID: &str =
     "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
 const BILLING_SERVER_ID: &str = "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d";

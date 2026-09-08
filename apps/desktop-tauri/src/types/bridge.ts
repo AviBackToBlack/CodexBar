@@ -549,8 +549,14 @@ export interface CostSnapshotBridge {
   formattedUsed: string;
   formattedLimit: string | null;
   balance?: number | null;
+  /** Successful balance observation time; independent from the usage-cap age. */
+  balanceUpdatedAt?: string | null;
+  /** Stable provider account scope for reconciling paired observations. */
+  accountId?: string | null;
   formattedBalance?: string | null;
   daily?: CostDailyPoint[];
+  /** Provider-metered spend that is itself a primary usage signal. */
+  alwaysVisible?: boolean;
 }
 
 export interface PaceSnapshot {
@@ -569,6 +575,12 @@ export interface SessionEquivalentForecastSnapshot {
   sampleCount: number;
   weeklyResetsAt: string;
   weeklyUsedPercent: number;
+}
+
+export interface SubscriptionMetadataSnapshot {
+  startsAt: string | null;
+  expiresAt: string | null;
+  renewsAt: string | null;
 }
 
 /** Backend-classified provider availability state (camelCase serde on the bridge). */
@@ -600,7 +612,10 @@ export interface ProviderUsageSnapshot {
   cost: CostSnapshotBridge | null;
   planName: string | null;
   accountEmail: string | null;
+  subscription?: SubscriptionMetadataSnapshot | null;
   sourceLabel: string;
+  /** Backend proof of a live successful Claude CLI quota fetch; only true is proof. */
+  hasSuccessfulClaudeCliQuota?: boolean;
   updatedAt: string;
   error: string | null;
   errorState: ProviderStateKind;
@@ -721,7 +736,7 @@ export interface AppInfoBridge {
 
 export interface DailyCostPoint {
   date: string;
-  value: number;
+  value: number | null;
 }
 
 /** Exact local token totals per day (upstream 0.50.0 #2930). */
@@ -938,6 +953,9 @@ export interface CodexAccountUsageSnapshot {
   primaryWindow: CodexUsageWindow | null;
   secondaryWindow: CodexUsageWindow | null;
   credits: CodexCreditsBalance | null;
+  /** Persisted account-scoped extra-usage cost, when available. */
+  cost?: CostSnapshotBridge | null;
+  subscription?: SubscriptionMetadataSnapshot | null;
   updatedAt: string;
 }
 
@@ -952,5 +970,7 @@ export interface CodexSwitchResult {
 
 export interface CodexAccountsStateBridge {
   accounts: CodexAccount[];
+  /** Canonical privacy-safe account labels, keyed by stable account id. */
+  displayNames?: Record<string, string>;
   snapshots: Record<string, CodexAccountUsageSnapshot>;
 }

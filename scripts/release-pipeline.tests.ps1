@@ -34,7 +34,12 @@ Assert-Throws { Assert-NodeMajor 'v23.11.0' 24 } 'non-24 Node major rejected by 
 
 $prerequisiteText = Get-Content -Raw -LiteralPath (Join-Path $scriptRoot 'install-release-prerequisites.ps1')
 Assert-True ($prerequisiteText -match '\$requiredNodeMajor\s*=\s*24') 'release prerequisite pins Node major 24'
-Assert-True ($prerequisiteText -match '11\\.24\\.0') 'release prerequisite keeps pnpm 11.24.0 pinned'
+$packageJson = Get-Content -Raw -LiteralPath (Join-Path $scriptRoot '..\apps\desktop-tauri\package.json') | ConvertFrom-Json
+$expectedPnpm = [string]$packageJson.packageManager -replace '^pnpm@', ''
+Assert-True ($packageJson.packageManager -match '^pnpm@\d+\.\d+\.\d+$') 'package metadata pins an exact pnpm semver'
+Assert-True ($prerequisiteText -match '\$expectedPnpm\s*=') 'release prerequisite derives pnpm from package metadata'
+Assert-True ($prerequisiteText -match 'pnpm@\$expectedPnpm') 'release prerequisite activates the derived pnpm version'
+Assert-True ($prerequisiteText -notmatch [regex]::Escape("pnpm $expectedPnpm,")) 'release prerequisite does not duplicate the pnpm version in status text'
 
 Assert-Equal (Normalize-GitHubRepository 'https://github.com/nesszer/Win-CodexBar.git') 'nesszer/win-codexbar' 'HTTPS canonical URL'
 Assert-Equal (Normalize-GitHubRepository 'git@github.com:nesszer/Win-CodexBar.git') 'nesszer/win-codexbar' 'SSH canonical URL'

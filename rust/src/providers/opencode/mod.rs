@@ -568,6 +568,32 @@ impl OpenCodeProvider {
         }
         result
     }
+
+    async fn fetch_web_with_cookie_resolver<F>(
+        &self,
+        ctx: &FetchContext,
+        resolve_browser_cookie: F,
+    ) -> Result<ProviderFetchResult, ProviderError>
+    where
+        F: FnOnce() -> Result<String, ProviderError>,
+    {
+        if let Some(ref cookie_header) = ctx.manual_cookie_header {
+            let usage = self.fetch_with_cookies(cookie_header).await?;
+            return Ok(ProviderFetchResult::new(usage, "web"));
+        }
+
+        match resolve_browser_cookie() {
+            Ok(cookie_header) => match self.fetch_with_cookies(&cookie_header).await {
+                Ok(usage) => return Ok(ProviderFetchResult::new(usage, "web")),
+                Err(ProviderError::AuthRequired) => {}
+                Err(e) => return Err(e),
+            },
+            Err(ProviderError::NoCookies) => {}
+            Err(e) => return Err(e),
+        }
+
+        Err(ProviderError::AuthRequired)
+    }
 }
 
 impl Default for OpenCodeProvider {
@@ -591,23 +617,10 @@ impl Provider for OpenCodeProvider {
 
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::Web => {
-                // Check for manual cookie header first
-                if let Some(ref cookie_header) = ctx.manual_cookie_header {
-                    let usage = self.fetch_with_cookies(cookie_header).await?;
-                    return Ok(ProviderFetchResult::new(usage, "web"));
-                }
-
-                match crate::providers::browser_cookie_header(&["opencode.ai"]) {
-                    Ok(cookie_header) => match self.fetch_with_cookies(&cookie_header).await {
-                        Ok(usage) => return Ok(ProviderFetchResult::new(usage, "web")),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(e) => return Err(e),
-                    },
-                    Err(ProviderError::NoCookies) => {}
-                    Err(e) => return Err(e),
-                }
-
-                Err(ProviderError::AuthRequired)
+                self.fetch_web_with_cookie_resolver(ctx, || {
+                    crate::providers::browser_cookie_header(&["opencode.ai"])
+                })
+                .await
             }
             SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
             SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
@@ -803,7 +816,7 @@ mod tests {
             ..FetchContext::default()
         };
         let err = provider
-            .fetch_usage(&ctx)
+            .fetch_web_with_cookie_resolver(&ctx, || Err(ProviderError::NoCookies))
             .await
             .expect_err("no cookies available");
         assert!(
