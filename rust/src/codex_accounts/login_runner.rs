@@ -2,7 +2,7 @@
 //! timeouts, and combined output capture. Split out of `account_manager.rs`
 //! (port of the login-running slice of `windows/.../account_manager.py`, MIT).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -85,15 +85,9 @@ impl ManagedLoginProcess {
 pub struct CodexLoginRunner;
 
 impl CodexLoginRunner {
-    /// Resolve the `codex` executable, falling back to known install paths.
-    pub fn locate_codex_binary() -> Option<PathBuf> {
-        if let Ok(found) = which::which("codex") {
-            return Some(found);
-        }
-        path_candidates()
-            .into_iter()
-            .find(|candidate| candidate.is_file())
-            .or_else(desktop_package_binary)
+    /// Resolve the `codex` executable through the crate-wide canonical locator.
+    pub fn locate_codex_binary() -> Option<std::path::PathBuf> {
+        crate::codex_cli::locate_codex_binary()
     }
 
     pub fn run(
@@ -159,81 +153,6 @@ impl CodexLoginRunner {
     }
 }
 
-fn path_candidates() -> Vec<PathBuf> {
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("AppData")
-                .join("Local")
-        });
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let mut candidates = vec![
-        local_app_data
-            .join("OpenAI")
-            .join("Codex")
-            .join("bin")
-            .join("codex.exe"),
-        home.join(".bun").join("bin").join("codex.exe"),
-        local_app_data
-            .join("Microsoft")
-            .join("WindowsApps")
-            .join("codex.exe"),
-    ];
-    // Desktop updates keep the bundled CLI in a version/hash subdirectory.
-    candidates.extend(versioned_binaries(
-        &local_app_data.join("OpenAI").join("Codex").join("bin"),
-    ));
-    if let Some(roaming) = dirs::config_dir() {
-        candidates.push(roaming.join("npm").join("codex.cmd"));
-        candidates.push(
-            roaming
-                .join("fnm")
-                .join("aliases")
-                .join("default")
-                .join("codex.cmd"),
-        );
-    }
-    candidates
-}
-
-fn versioned_binaries(root: &Path) -> Vec<PathBuf> {
-    let mut binaries: Vec<_> = std::fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path().join("codex.exe"))
-        .filter(|path| path.is_file())
-        .collect();
-    binaries.sort_by_key(|path| {
-        std::cmp::Reverse(path.metadata().and_then(|meta| meta.modified()).ok())
-    });
-    binaries
-}
-
-#[cfg(windows)]
-fn desktop_package_binary() -> Option<PathBuf> {
-    use std::os::windows::process::CommandExt;
-    let powershell = PathBuf::from(std::env::var_os("WINDIR")?)
-        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let output = Command::new(powershell)
-        .args(["-NoProfile", "-NonInteractive", "-Command",
-            "Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | ForEach-Object { Join-Path $_.InstallLocation 'app\\resources\\codex.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1"])
-        .creation_flags(0x0800_0000)
-        .output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
-    path.is_file().then_some(path)
-}
-
-#[cfg(not(windows))]
-fn desktop_package_binary() -> Option<PathBuf> {
-    None
-}
-
 fn wait_for_child(handle: &ManagedLoginProcess, timeout: Duration) -> Option<std::process::Output> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -297,21 +216,6 @@ fn combine_output(output: &std::process::Output) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn discovers_versioned_desktop_cli_and_ignores_incomplete_updates() {
-        let root = tempfile::tempdir().unwrap();
-        let installed = root.path().join("hash with spaces");
-        std::fs::create_dir(&installed).unwrap();
-        std::fs::write(installed.join("codex.exe"), b"fixture").unwrap();
-        std::fs::create_dir(root.path().join("incomplete")).unwrap();
-        std::fs::write(root.path().join("unrelated"), b"fixture").unwrap();
-        assert_eq!(
-            versioned_binaries(root.path()),
-            vec![installed.join("codex.exe")]
-        );
-        assert!(versioned_binaries(&root.path().join("missing")).is_empty());
-    }
 
     #[test]
     fn completed_child_is_collected_without_locking_twice() {
