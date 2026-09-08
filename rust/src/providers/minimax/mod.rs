@@ -991,6 +991,10 @@ impl Default for MiniMaxProvider {
 
 #[async_trait]
 impl Provider for MiniMaxProvider {
+    fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
+        false
+    }
+
     fn id(&self) -> ProviderId {
         ProviderId::MiniMax
     }

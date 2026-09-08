@@ -118,29 +118,16 @@ fn automatic_window(
                 .map(|extra| &extra.window),
         )
         .filter(|window| !window.is_informational);
-    let selected = if automatic_selection_prioritizes_exhausted_window(provider) {
+    let prioritize_exhausted = provider
+        .map(|id| codexbar::core::instantiate_provider(id).automatic_metric_prioritizes_exhausted_window())
+        .unwrap_or(true);
+    let selected = if prioritize_exhausted {
         highest_automatic_window(windows)
     } else {
         highest_window(windows)
     };
 
     selected.cloned()
-}
-
-fn automatic_selection_prioritizes_exhausted_window(provider: Option<ProviderId>) -> bool {
-    !matches!(
-        provider,
-        Some(
-            ProviderId::Antigravity
-                | ProviderId::Claude
-                | ProviderId::Codex
-                | ProviderId::Copilot
-                | ProviderId::Cursor
-                | ProviderId::MiniMax
-                | ProviderId::Perplexity
-                | ProviderId::Zai
-        )
-    )
 }
 
 fn average_window(snapshot: &ProviderUsageSnapshot) -> Option<RateWindowSnapshot> {

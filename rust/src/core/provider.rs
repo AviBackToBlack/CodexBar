@@ -678,6 +678,11 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Whether Automatic metric selection should prefer an exhausted quota lane.
+    fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
+        true
+    }
+
     /// Presentation-safe availability state for a refresh error. The default
     /// maps `ProviderError` variants, treating `NotInstalled` as a missing
     /// credential (most providers raise it for a missing API key or auth
