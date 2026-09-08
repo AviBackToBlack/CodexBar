@@ -1,5 +1,4 @@
-mod pace;
-pub(crate) use pace::stage_str as pace_stage_str;
+pub(crate) mod pace;
 
 use super::*;
 
