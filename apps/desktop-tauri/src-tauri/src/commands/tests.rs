@@ -818,7 +818,8 @@ fn local_opencodego_estimates_keep_quota_windows_but_drop_derived_pace() {
     let result = ProviderFetchResult::new(
         usage,
         codexbar::providers::opencodego::LOCAL_ESTIMATE_SOURCE_LABEL,
-    );
+    )
+    .with_non_authoritative_pace();
     let metadata = instantiate_provider(ProviderId::OpenCodeGo)
         .metadata()
         .clone();
