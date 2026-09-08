@@ -430,7 +430,12 @@ fn spawn_provider_refreshes(
         let app_handle = app.clone();
         let fetch_permits = Arc::clone(&fetch_permits);
         handles.push(tokio::spawn(async move {
-            super::codex_accounts::refresh_codex_account_lanes(app_handle, fetch_permits).await;
+            super::codex_accounts::refresh_codex_account_lanes(
+                app_handle,
+                fetch_permits,
+                generation,
+            )
+            .await;
         }));
     }
 

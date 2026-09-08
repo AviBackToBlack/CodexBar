@@ -239,9 +239,6 @@ impl CodexAccount {
 
     /// Whether two accounts refer to the same identity.
     pub fn matches(&self, other: &CodexAccount) -> bool {
-        if self.standardized_home_path() == other.standardized_home_path() {
-            return true;
-        }
         if let (Some(a), Some(b)) = (
             self.effective_workspace_account_id(),
             other.effective_workspace_account_id(),
@@ -257,16 +254,18 @@ impl CodexAccount {
         if let (Some(a), Some(b)) = (
             self.normalized_auth_subject(),
             other.normalized_auth_subject(),
-        ) && a == b
-        {
-            return true;
+        ) {
+            return a == b;
         }
-        if let (Some(a), Some(b)) = (self.normalized_email_hint(), other.normalized_email_hint())
-            && a == b
-        {
-            return true;
+        if let (Some(a), Some(b)) = (self.normalized_email_hint(), other.normalized_email_hint()) {
+            return a == b;
         }
-        false
+        // Path fallback is only safe when neither record identifies its owner.
+        self.normalized_auth_subject().is_none()
+            && other.normalized_auth_subject().is_none()
+            && self.normalized_email_hint().is_none()
+            && other.normalized_email_hint().is_none()
+            && self.standardized_home_path() == other.standardized_home_path()
     }
 
     /// Merge a fresher discovery into this account, preferring managed/recency.
@@ -692,6 +691,36 @@ mod tests {
             CodexAccountSource::ManagedByApp,
             Some("acct-2"),
         );
+        assert!(!a.matches(&b));
+        let mut same_home = b.clone();
+        same_home.codex_home_path = a.codex_home_path.clone();
+        assert!(
+            !a.matches(&same_home),
+            "switching auth.json changes the identity at the same home"
+        );
+    }
+
+    #[test]
+    fn different_fallback_identities_do_not_match_the_same_home() {
+        let mut a = account(
+            "11111111-1111-1111-1111-111111111111",
+            "/x/a",
+            CodexAccountSource::ManagedByApp,
+            None,
+        );
+        let mut b = a.clone();
+        a.email_hint = Some("old@example.com".into());
+        b.email_hint = Some("new@example.com".into());
+        assert!(!a.matches(&b));
+        b.email_hint = a.email_hint.clone();
+        assert!(a.matches(&b));
+        a.auth_subject = Some("old-subject".into());
+        b.auth_subject = Some("new-subject".into());
+        assert!(!a.matches(&b));
+        b.auth_subject = a.auth_subject.clone();
+        assert!(a.matches(&b));
+        b.auth_subject = None;
+        b.email_hint = None;
         assert!(!a.matches(&b));
     }
 

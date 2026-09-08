@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
 use codexbar::codex_accounts::{
     AccountStore, CodexAccount, CodexAccountApi, CodexAccountManager, CodexAccountManagerError,
-    CodexApiError, CodexSwitchResult, SnapshotStore, display_names_by_id, restart_codex_desktop,
+    CodexAccountRuntime, CodexApiError, CodexSwitchResult, SnapshotStore, display_names_by_id,
+    restart_codex_desktop,
 };
 
 use crate::state::AppState;
@@ -28,7 +28,15 @@ pub(crate) fn load_codex_accounts() -> Result<Vec<CodexAccount>, String> {
         .map_err(|e| e.to_string())?;
     let ambient = manager.discover_ambient_account(&existing);
 
-    let mut merged: Vec<CodexAccount> = managed.clone();
+    Ok(reconcile_codex_accounts(&existing, &managed, ambient))
+}
+
+fn reconcile_codex_accounts(
+    existing: &[CodexAccount],
+    managed: &[CodexAccount],
+    ambient: Option<CodexAccount>,
+) -> Vec<CodexAccount> {
+    let mut merged: Vec<CodexAccount> = managed.to_vec();
     if let Some(ambient) = ambient {
         if let Some(entry) = merged.iter_mut().find(|account| account.matches(&ambient)) {
             entry.merge_from(&ambient);
@@ -40,6 +48,17 @@ pub(crate) fn load_codex_accounts() -> Result<Vec<CodexAccount>, String> {
     // Reconcile persisted metadata (nickname, stored timestamps) for managed homes.
     let mut reconciled: Vec<CodexAccount> = existing
         .iter()
+        // The ambient home can change identity outside this app. Always use
+        // its fresh discovery instead of retaining an old record for that path.
+        .filter(|account| account.source.owns_files())
+        // A managed home can also be reauthenticated outside the app. Do not
+        // retain its former identity alongside the account now owning its auth.
+        .filter(|account| {
+            !managed.iter().any(|fresh| {
+                fresh.standardized_home_path() == account.standardized_home_path()
+                    && !fresh.matches(account)
+            })
+        })
         .map(|account| {
             let mut account = account.clone();
             if let Some(fresh) = managed.iter().find(|fresh| fresh.matches(&account)) {
@@ -56,7 +75,7 @@ pub(crate) fn load_codex_accounts() -> Result<Vec<CodexAccount>, String> {
         }
     }
 
-    Ok(reconciled)
+    reconciled
 }
 
 /// Persist the given accounts to the account store.
@@ -83,6 +102,7 @@ pub(crate) fn persist_codex_accounts(accounts: &[CodexAccount]) -> Result<(), St
 pub(crate) async fn refresh_codex_account_lanes(
     app: tauri::AppHandle,
     fetch_permits: Arc<tokio::sync::Semaphore>,
+    generation: u64,
 ) {
     let accounts = match load_codex_accounts() {
         Ok(accounts) => accounts,
@@ -134,34 +154,51 @@ pub(crate) async fn refresh_codex_account_lanes(
         }));
     }
 
-    let current_accounts = load_codex_accounts().unwrap_or_default();
-    let current_by_id: HashMap<Uuid, CodexAccount> = current_accounts
+    let mut updates = Vec::new();
+    for handle in handles {
+        if let Ok(Some((fetched_account, snapshot))) = handle.await {
+            updates.push((fetched_account, snapshot));
+        }
+    }
+    // Hold the generation owner through the read/merge/write so an invalidated
+    // batch cannot overwrite a replacement batch's account snapshots.
+    let state = app.state::<Mutex<AppState>>();
+    let Ok(state) = state.lock() else { return };
+    match save_codex_lane_results(&state, generation, updates) {
+        Ok(false) => return,
+        Err(e) => tracing::warn!("codex account lanes: failed to persist snapshots: {e}"),
+        Ok(true) => {}
+    }
+    events::emit_codex_accounts_updated(&app);
+}
+
+fn save_codex_lane_results(
+    state: &AppState,
+    generation: u64,
+    updates: Vec<(CodexAccount, codexbar::codex_accounts::AccountUsageSnapshot)>,
+) -> Result<bool, std::io::Error> {
+    if !is_current_provider_refresh_generation(state, generation) {
+        return Ok(false);
+    }
+    let current_accounts = load_codex_accounts().map_err(std::io::Error::other)?;
+    let current_by_id: HashMap<Uuid, &CodexAccount> = current_accounts
         .iter()
-        .cloned()
         .map(|account| (account.id, account))
         .collect();
-    let mut snapshots = SnapshotStore::new().load().unwrap_or_default();
-    snapshots.retain(|id, snapshot| {
-        current_by_id
-            .get(id)
-            .is_some_and(|account| account_snapshot_belongs_to(account, snapshot))
-    });
-    for handle in handles {
-        if let Ok(Some((fetched_account, snapshot))) = handle.await
-            && current_by_id
-                .get(&fetched_account.id)
-                .is_some_and(|current| {
-                    account_lane_is_current(&fetched_account, current)
-                        && account_snapshot_belongs_to(current, &snapshot)
-                })
+    let mut snapshots = snapshots_for_accounts(&current_accounts, SnapshotStore::new().load()?);
+    for (fetched_account, snapshot) in updates {
+        if current_by_id
+            .get(&fetched_account.id)
+            .is_some_and(|current| {
+                account_lane_is_current(&fetched_account, current)
+                    && account_snapshot_belongs_to(current, &snapshot)
+            })
         {
             snapshots.insert(fetched_account.id, snapshot);
         }
     }
-    if let Err(e) = SnapshotStore::new().save(&snapshots) {
-        tracing::warn!("codex account lanes: failed to persist snapshots: {e}");
-    }
-    events::emit_codex_accounts_updated(&app);
+    SnapshotStore::new().save(&snapshots)?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -171,6 +208,8 @@ pub fn codex_accounts_list() -> Result<Vec<CodexAccount>, String> {
 
 #[tauri::command]
 pub async fn codex_account_add(app: tauri::AppHandle) -> Result<CodexAccount, String> {
+    let runtime = CodexAccountRuntime::new();
+    let _mutation = runtime.try_begin_mutation().map_err(into_user_message)?;
     let manager = CodexAccountManager::new();
     let account = tauri::async_runtime::spawn_blocking(move || manager.add_managed_account(None))
         .await
@@ -185,6 +224,8 @@ pub async fn codex_account_add(app: tauri::AppHandle) -> Result<CodexAccount, St
 
 #[tauri::command]
 pub fn codex_account_remove(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let runtime = CodexAccountRuntime::new();
+    let _mutation = runtime.try_begin_mutation().map_err(into_user_message)?;
     let manager = CodexAccountManager::new();
     let accounts = load_codex_accounts()?;
     let target = accounts
@@ -195,6 +236,9 @@ pub fn codex_account_remove(app: tauri::AppHandle, id: String) -> Result<(), Str
     manager
         .remove_managed_files_if_owned(target)
         .map_err(into_user_message)?;
+    runtime
+        .invalidate_restart_for_removed_account(target)
+        .map_err(into_user_message)?;
 
     let remaining: Vec<CodexAccount> = accounts
         .into_iter()
@@ -202,6 +246,7 @@ pub fn codex_account_remove(app: tauri::AppHandle, id: String) -> Result<(), Str
         .collect();
     persist_codex_accounts(&remaining)?;
     events::emit_settings_changed(&app);
+    accounts_changed(&app);
     Ok(())
 }
 
@@ -210,6 +255,8 @@ pub async fn codex_account_switch(
     app: tauri::AppHandle,
     id: String,
 ) -> Result<CodexSwitchResult, String> {
+    let runtime = CodexAccountRuntime::new();
+    let _mutation = runtime.try_begin_mutation().map_err(into_user_message)?;
     let manager = CodexAccountManager::new();
     let accounts = load_codex_accounts()?;
     let target = accounts
@@ -227,18 +274,46 @@ pub async fn codex_account_switch(
     .map_err(into_user_message)?;
 
     // Materialized ambient account may need persisting.
-    if let Some(materialized) = &result.materialized_account {
+    runtime
+        .remember_restart(&result)
+        .map_err(into_user_message)?;
+    let pending = {
+        let state = app.state::<Mutex<AppState>>();
+        let mut state = state.lock().map_err(|e| e.to_string())?;
+        invalidate_account_usage(&mut state, ProviderId::Codex)
+    };
+    events::emit_provider_updated(&app, &pending);
+    persist_materialized_account(result.materialized_account.as_ref());
+
+    // Discovery must see the persisted account ID before a lane fetch starts.
+    // Credential replacement is already committed. Even if optional account
+    // metadata cannot be saved, refresh and notify all surfaces of that switch.
+    let refresh_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = do_refresh_providers(&refresh_app).await;
+    });
+
+    events::emit_settings_changed(&app);
+    accounts_changed(&app);
+    Ok(result)
+}
+
+fn persist_materialized_account(materialized: Option<&CodexAccount>) {
+    let Some(materialized) = materialized else {
+        return;
+    };
+    let persist = || -> Result<(), String> {
         let mut accounts = load_codex_accounts()?;
         if let Some(entry) = accounts.iter_mut().find(|a| a.matches(materialized)) {
             entry.merge_from(materialized);
         } else {
             accounts.push(materialized.clone());
         }
-        persist_codex_accounts(&accounts)?;
+        persist_codex_accounts(&accounts)
+    };
+    if let Err(error) = persist() {
+        tracing::warn!("Codex account switched but account metadata could not be saved: {error}");
     }
-
-    events::emit_settings_changed(&app);
-    Ok(result)
 }
 
 #[tauri::command]
@@ -299,24 +374,28 @@ pub fn codex_account_snapshots()
 #[tauri::command]
 pub async fn codex_account_restart_desktop(
     _app: tauri::AppHandle,
-    session_root: Option<String>,
-    backup_destination: Option<String>,
-    restore_source: Option<String>,
+    switch_id: String,
 ) -> Result<(), String> {
+    let runtime = CodexAccountRuntime::new();
+    let _mutation = runtime.try_begin_mutation().map_err(into_user_message)?;
+    let active = CodexAccountManager::new().discover_ambient_account(&[]);
+    let pending = runtime
+        .pending_restart_for(&switch_id, active.as_ref())
+        .map_err(into_user_message)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let session_root = session_root.map(PathBuf::from);
-        let backup_destination = backup_destination.map(PathBuf::from);
-        let restore_source = restore_source.map(PathBuf::from);
         restart_codex_desktop(
             0.8,
-            session_root.as_deref(),
-            backup_destination.as_deref(),
-            restore_source.as_deref(),
+            None,
+            pending.desktop_session_backup_path.as_deref(),
+            pending.desktop_session_restore_path.as_deref(),
         )
     })
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
+    // The outgoing session backup is single-use. Replaying it after relaunch
+    // would overwrite that backup with the newly active account's session.
+    runtime.clear_pending_restart().map_err(into_user_message)?;
     Ok(())
 }
 
@@ -326,7 +405,12 @@ fn refresh_persisted_accounts(app: tauri::AppHandle) -> Result<(), String> {
     let accounts = load_codex_accounts()?;
     persist_codex_accounts(&accounts)?;
     events::emit_settings_changed(&app);
+    accounts_changed(&app);
     Ok(())
+}
+
+fn accounts_changed(app: &tauri::AppHandle) {
+    events::emit_codex_accounts_updated(app);
 }
 
 fn into_user_message(error: CodexAccountManagerError) -> String {
@@ -422,6 +506,127 @@ pub fn get_codex_accounts_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_switch_tolerates_unreadable_account_metadata() {
+        use codexbar::codex_accounts::file_locations;
+        let root = std::env::temp_dir().join(format!("codex-switch-metadata-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        file_locations::with_app_support_directory(root.clone());
+        let account_file = file_locations::accounts_file();
+        std::fs::write(&account_file, "invalid account metadata").unwrap();
+        // This post-commit operation cannot propagate an error to the switch
+        // command and skip the refresh/events that follow it.
+        persist_materialized_account(Some(&sample_account()));
+        assert_eq!(
+            std::fs::read_to_string(&account_file).unwrap(),
+            "invalid account metadata"
+        );
+        file_locations::clear_app_support_directory_override();
+        assert!(root.starts_with(std::env::temp_dir()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn superseded_lanes_cannot_overwrite_newer_snapshots() {
+        use codexbar::codex_accounts::{AccountUsageSnapshot, file_locations};
+        let root = std::env::temp_dir().join(format!("codex-lane-generation-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        file_locations::with_app_support_directory(root.clone());
+        let mut state = AppState::new();
+        let old_generation = state.provider_refresh_generation;
+        invalidate_account_usage(&mut state, ProviderId::Codex);
+        let id = Uuid::new_v4();
+        let mut account = sample_account();
+        account.id = id;
+        account.provider_account_id = Some("new".into());
+        persist_codex_accounts(&[account.clone()]).unwrap();
+        let snapshot = AccountUsageSnapshot {
+            email: Some("new@example.com".into()),
+            provider_account_id: Some("new".into()),
+            plan: None,
+            allowed: None,
+            limit_reached: None,
+            primary_window: None,
+            secondary_window: None,
+            credits: None,
+            cost: None,
+            subscription: None,
+            updated_at: codexbar::codex_accounts::utc_now(),
+        };
+        assert!(
+            save_codex_lane_results(
+                &state,
+                state.provider_refresh_generation,
+                vec![(account.clone(), snapshot.clone())]
+            )
+            .unwrap()
+        );
+        let before = std::fs::read(file_locations::snapshots_file()).unwrap();
+        let stale = AccountUsageSnapshot {
+            email: Some("old@example.com".into()),
+            ..snapshot
+        };
+        assert!(!save_codex_lane_results(&state, old_generation, vec![(account, stale)]).unwrap());
+        assert_eq!(
+            std::fs::read(file_locations::snapshots_file()).unwrap(),
+            before
+        );
+        file_locations::clear_app_support_directory_override();
+        assert!(root.starts_with(std::env::temp_dir()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_switch_supersedes_inflight_usage_and_keeps_other_providers() {
+        let mut state = AppState::new();
+        let other = invalidate_account_usage(&mut state, ProviderId::Claude);
+        let mut old = invalidate_account_usage(&mut state, ProviderId::Codex);
+        old.account_email = Some("old@example.com".into());
+        old.primary.used_percent = 80.0;
+        old.error = None;
+        state.provider_cache = vec![other, old];
+        state.is_refreshing = true;
+        let generation = state.provider_refresh_generation;
+        let pending = invalidate_account_usage(&mut state, ProviderId::Codex);
+        assert!(!is_current_provider_refresh_generation(&state, generation));
+        assert!(!state.is_refreshing);
+        assert_eq!(state.provider_cache.len(), 2);
+        assert!(
+            state
+                .provider_cache
+                .iter()
+                .any(|s| s.provider_id == "claude")
+        );
+        assert!(pending.account_email.is_none() && pending.error.is_some());
+        assert_eq!(pending.primary.used_percent, 0.0);
+    }
+
+    #[test]
+    fn reconciliation_replaces_changed_managed_identity_without_inheriting_metadata() {
+        let mut stale = sample_account();
+        stale.nickname = Some("Former account".into());
+        let mut fresh = sample_account();
+        fresh.provider_account_id = Some("replacement".into());
+        fresh.email_hint = Some("replacement@example.com".into());
+        let accounts = reconcile_codex_accounts(&[stale.clone()], &[fresh.clone()], None);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, fresh.id);
+        assert_ne!(accounts[0].id, stale.id);
+        assert_eq!(accounts[0].nickname, None);
+        assert_eq!(accounts[0].email_hint, fresh.email_hint);
+    }
+
+    #[test]
+    fn reconciliation_preserves_metadata_for_unchanged_managed_identity() {
+        let mut stored = sample_account();
+        stored.nickname = Some("Work".into());
+        let fresh = sample_account();
+        let accounts = reconcile_codex_accounts(&[stored.clone()], &[fresh], None);
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, stored.id);
+        assert_eq!(accounts[0].nickname, stored.nickname);
+    }
 
     fn sample_account() -> CodexAccount {
         CodexAccount::new(

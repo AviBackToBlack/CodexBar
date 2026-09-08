@@ -960,6 +960,7 @@ export interface CodexAccountUsageSnapshot {
 }
 
 export interface CodexSwitchResult {
+  switchId: string;
   materializedAccount: CodexAccount | null;
   backupPath: string | null;
   ambientAccount: CodexAccount | null;
