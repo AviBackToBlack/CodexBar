@@ -166,12 +166,26 @@ pub(super) fn resolve_browser_cookie_header(
     use crate::browser::cookies::CookieExtractor;
     use crate::browser::detection::BrowserDetector;
 
-    let cookie_sets = BrowserDetector::detect_all()
-        .into_iter()
-        .filter_map(|browser| {
-            CookieExtractor::extract_for_domain(&browser, OLLAMA_COOKIE_DOMAIN).ok()
-        });
-    Ok(first_recognized_cookie_header(cookie_sets, &url))
+    let mut first_error = None;
+    for browser in BrowserDetector::detect_all() {
+        match CookieExtractor::extract_for_domain(&browser, OLLAMA_COOKIE_DOMAIN) {
+            Ok(cookies) => {
+                if let Some(header) = ollama_cookie_header_for_url(&cookies, &url) {
+                    return Ok(Some(header));
+                }
+            }
+            Err(error) => {
+                let error = crate::providers::map_browser_cookie_error(error);
+                if !matches!(error, ProviderError::NoCookies) && first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    Ok(None)
 }
 
 /// Return the header for the first cookie set (in order) that contains a

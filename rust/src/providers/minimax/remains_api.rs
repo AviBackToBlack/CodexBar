@@ -9,25 +9,19 @@ use crate::core::{FetchContext, ProviderError, ProviderFetchResult};
 
 use super::{MiniMaxRegion, coding_plan, coding_plan_html};
 
-/// A plain MiniMax API key from Settings (`ctx.api_key`) or the environment.
-/// Unlike the legacy billing API, the coding-plan remains endpoint does not
-/// require a paired `group_id`.
-pub(super) fn read_plain_api_key(ctx: &FetchContext) -> Option<String> {
-    ctx.api_key
-        .as_deref()
+fn resolve_plain_api_key(explicit: Option<&str>, environment: Option<&str>) -> Option<String> {
+    explicit
         .map(str::trim)
         .filter(|key| !key.is_empty())
+        .or_else(|| environment.map(str::trim).filter(|key| !key.is_empty()))
         .map(str::to_string)
-        .or_else(|| {
-            std::env::var("MINIMAX_API_KEY")
-                .ok()
-                .map(|key| key.trim().to_string())
-                .filter(|key| !key.is_empty())
-        })
 }
 
-/// Fetch coding-plan quota using a Bearer API key. Try the platform host, then
-/// the www host, matching the existing cookie-based fallback chain.
+pub(super) fn read_plain_api_key(ctx: &FetchContext) -> Option<String> {
+    let environment = std::env::var("MINIMAX_API_KEY").ok();
+    resolve_plain_api_key(ctx.api_key.as_deref(), environment.as_deref())
+}
+
 pub(super) async fn fetch_remains_via_api_key(
     api_key: &str,
     region: MiniMaxRegion,
@@ -83,4 +77,23 @@ async fn fetch_remains_once_via_api_key(
         .await
         .map_err(|e| ProviderError::Parse(format!("Failed to parse remains JSON: {e}")))?;
     coding_plan::parse_coding_plan_value(&json, Utc::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_plain_api_key;
+
+    #[test]
+    fn plain_api_key_prefers_explicit_then_environment_without_mutating_process_env() {
+        assert_eq!(
+            resolve_plain_api_key(Some("  ctx-key  "), Some("env-key")).as_deref(),
+            Some("ctx-key")
+        );
+        assert_eq!(
+            resolve_plain_api_key(Some("   "), Some("  env-key  ")).as_deref(),
+            Some("env-key")
+        );
+        assert_eq!(resolve_plain_api_key(Some("   "), Some("   ")), None);
+        assert_eq!(resolve_plain_api_key(None, None), None);
+    }
 }

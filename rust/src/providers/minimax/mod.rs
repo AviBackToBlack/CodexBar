@@ -281,10 +281,14 @@ impl MiniMaxProvider {
         // come from Settings (GUI-stored) or the environment, independent of
         // the dual group_id+api_key credential the legacy billing endpoint
         // below requires.
-        if let Some(key) = Self::read_plain_api_key(ctx)
-            && let Ok(result) = remains_api::fetch_remains_via_api_key(&key, region).await
-        {
-            return Ok(result);
+        if let Some(key) = Self::read_plain_api_key(ctx) {
+            match remains_api::fetch_remains_via_api_key(&key, region).await {
+                Ok(result) => return Ok(result),
+                // Endpoint/shape incompatibility may still use the legacy
+                // group-id path. Auth and transport failures are authoritative.
+                Err(ProviderError::Parse(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
 
         let (group_id, api_key) = self.read_api_key().await?;
@@ -1075,47 +1079,6 @@ impl Provider for MiniMaxProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn read_plain_api_key_prefers_ctx_then_env_then_none() {
-        let ctx_with_key = FetchContext {
-            api_key: Some("  ctx-key  ".to_string()),
-            ..FetchContext::default()
-        };
-        assert_eq!(
-            MiniMaxProvider::read_plain_api_key(&ctx_with_key).as_deref(),
-            Some("ctx-key")
-        );
-
-        // Isolate from any MINIMAX_API_KEY already set in the ambient
-        // environment (e.g. a developer's own shell), and restore it after.
-        let previous = std::env::var("MINIMAX_API_KEY").ok();
-        // SAFETY: test-only env var; saved above and restored below within
-        // this single test, with no other test reading MINIMAX_API_KEY.
-        unsafe { std::env::remove_var("MINIMAX_API_KEY") };
-
-        let ctx_empty = FetchContext {
-            api_key: Some("   ".to_string()),
-            ..FetchContext::default()
-        };
-        assert_eq!(MiniMaxProvider::read_plain_api_key(&ctx_empty), None);
-
-        // SAFETY: see above.
-        unsafe { std::env::set_var("MINIMAX_API_KEY", "env-key") };
-        let result = MiniMaxProvider::read_plain_api_key(&FetchContext::default());
-        assert_eq!(result.as_deref(), Some("env-key"));
-
-        match previous {
-            Some(value) => {
-                // SAFETY: see above.
-                unsafe { std::env::set_var("MINIMAX_API_KEY", value) }
-            }
-            None => {
-                // SAFETY: see above.
-                unsafe { std::env::remove_var("MINIMAX_API_KEY") }
-            }
-        }
-    }
 
     #[test]
     fn minimax_region_defaults_to_global_io_urls() {
