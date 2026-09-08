@@ -27,10 +27,9 @@ pub(crate) fn build_fetch_context(
     let active_token_cookie = token_override
         .as_ref()
         .and_then(|override_data| override_data.cookie_header.clone());
-    let defer_provider_browser_cookie_lookup =
-        provider.owns_browser_cookie_resolution()
-            && active_token_cookie.is_none()
-            && stored_cookie.is_none();
+    let defer_provider_browser_cookie_lookup = provider.owns_browser_cookie_resolution()
+        && active_token_cookie.is_none()
+        && stored_cookie.is_none();
     let active_token_env = token_override
         .as_ref()
         .and_then(|override_data| override_data.env_override.as_ref());
@@ -106,10 +105,7 @@ pub(crate) fn build_fetch_context(
     // historically mapped "manual + no cookie" to Cli, which surfaces as
     // "Source mode 'Cli' not supported". Remap to Web and try browser cookies
     // unless the user explicitly disabled cookies ("off").
-    if source_mode == SourceMode::Cli
-        && cookie_source != "off"
-        && !provider.supports_cli()
-    {
+    if source_mode == SourceMode::Cli && cookie_source != "off" && !provider.supports_cli() {
         if cookie_header
             .as_deref()
             .map(str::trim)
@@ -534,15 +530,26 @@ pub(super) fn preserve_last_good_transient_failure(
         return snapshot;
     };
 
-    let count = guard.transient_provider_failure_counts.entry(id).or_insert(0);
+    let count = guard
+        .transient_provider_failure_counts
+        .entry(id)
+        .or_insert(0);
     match policy {
         codexbar::core::LastGoodFailurePolicy::Preserve => {
-            tracing::warn!(provider = id.cli_name(), error, "preserving last good provider snapshot after transient failure");
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
             previous
         }
         codexbar::core::LastGoodFailurePolicy::PreserveOnce if *count == 0 => {
             *count = 1;
-            tracing::warn!(provider = id.cli_name(), error, "preserving last good provider snapshot after transient failure");
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
             previous
         }
         codexbar::core::LastGoodFailurePolicy::PreserveOnce => {
@@ -551,7 +558,11 @@ pub(super) fn preserve_last_good_transient_failure(
         }
         codexbar::core::LastGoodFailurePolicy::PreserveOnceThenSurface if *count == 0 => {
             *count = 1;
-            tracing::warn!(provider = id.cli_name(), error, "preserving last good provider snapshot after transient failure");
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
             previous
         }
         codexbar::core::LastGoodFailurePolicy::PreserveOnceThenSurface => {
