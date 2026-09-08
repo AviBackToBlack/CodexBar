@@ -228,7 +228,7 @@ impl CodexAccountManager {
         self.sync_ambient_global_state(
             ambient_account
                 .as_ref()
-                .and_then(|account| account.provider_account_id.clone()),
+                .and_then(CodexAccount::effective_workspace_account_id),
             self.target_account_id(target)?,
         );
 
@@ -261,7 +261,7 @@ impl CodexAccountManager {
         fs::copy(&source_auth_path, destination_home.join("auth.json"))?;
 
         let now = utc_now();
-        Ok(CodexAccount::new(
+        let mut materialized = CodexAccount::new(
             account.id,
             account.nickname.clone(),
             account.email_hint.clone(),
@@ -272,7 +272,9 @@ impl CodexAccountManager {
             account.created_at,
             now,
             Some(account.last_authenticated_at.unwrap_or(now)),
-        ))
+        );
+        materialized.workspace_account_id = account.workspace_account_id.clone();
+        Ok(materialized)
     }
 
     fn backup_ambient_auth(&self) -> Result<Option<PathBuf>, CodexAccountManagerError> {
@@ -288,8 +290,8 @@ impl CodexAccountManager {
     }
 
     fn target_account_id(&self, target: &CodexAccount) -> Result<Option<String>, CodexApiError> {
-        if let Some(account_id) = &target.provider_account_id {
-            return Ok(Some(account_id.clone()));
+        if let Some(account_id) = target.effective_workspace_account_id() {
+            return Ok(Some(account_id));
         }
         let identity = load_identity(&target.codex_home_path)?;
         Ok(identity.provider_account_id)
@@ -449,26 +451,29 @@ impl CodexAccountManager {
         }
 
         let now = utc_now();
-        Ok(CodexAccount::new(
+        let mut authenticated = CodexAccount::new(
             existing
                 .map(|account| account.id)
                 .unwrap_or_else(Uuid::new_v4),
             existing.and_then(|account| account.nickname.clone()),
             identity
                 .email
+                .clone()
                 .or_else(|| existing.and_then(|account| account.email_hint.clone())),
             identity
                 .auth_subject
+                .clone()
                 .or_else(|| existing.and_then(|account| account.auth_subject.clone())),
-            identity
-                .provider_account_id
-                .or_else(|| existing.and_then(|account| account.provider_account_id.clone())),
+            provider_account_id_after_auth(&identity, existing),
             home_path.to_path_buf(),
             source,
             existing.map(|account| account.created_at).unwrap_or(now),
             now,
             Some(now),
-        ))
+        );
+        authenticated.workspace_account_id =
+            existing.and_then(|account| account.workspace_account_id.clone());
+        Ok(authenticated)
     }
 
     fn discovered_managed_account(
@@ -524,6 +529,34 @@ fn candidate_account(
     )
 }
 
+/// Keep a v0.56.3 provider id when it is the legacy selected workspace. A
+/// fresh auth read may report the auth-file default instead; that value must
+/// not silently replace the app-owned selection.
+fn provider_account_id_after_auth(
+    identity: &AuthBackedIdentity,
+    existing: Option<&CodexAccount>,
+) -> Option<String> {
+    if let Some(existing) = existing
+        && existing.workspace_account_id.is_none()
+        && existing.provider_account_id.is_some()
+        && identity
+            .provider_account_id
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(|auth_id| {
+                existing
+                    .normalized_provider_account_id()
+                    .is_some_and(|selected_id| selected_id != auth_id.to_lowercase())
+            })
+    {
+        return existing.provider_account_id.clone();
+    }
+    identity
+        .provider_account_id
+        .clone()
+        .or_else(|| existing.and_then(|account| account.provider_account_id.clone()))
+}
+
 fn build_discovered_account(
     matched: Option<&CodexAccount>,
     identity: AuthBackedIdentity,
@@ -531,20 +564,20 @@ fn build_discovered_account(
     source: CodexAccountSource,
     discovered_at: DateTime<Utc>,
 ) -> CodexAccount {
-    CodexAccount::new(
+    let mut discovered = CodexAccount::new(
         matched
             .map(|account| account.id)
             .unwrap_or_else(Uuid::new_v4),
         matched.and_then(|account| account.nickname.clone()),
         identity
             .email
+            .clone()
             .or_else(|| matched.and_then(|account| account.email_hint.clone())),
         identity
             .auth_subject
+            .clone()
             .or_else(|| matched.and_then(|account| account.auth_subject.clone())),
-        identity
-            .provider_account_id
-            .or_else(|| matched.and_then(|account| account.provider_account_id.clone())),
+        provider_account_id_after_auth(&identity, matched),
         home_path,
         source,
         matched
@@ -556,7 +589,10 @@ fn build_discovered_account(
         matched
             .and_then(|account| account.last_authenticated_at)
             .or(Some(discovered_at)),
-    )
+    );
+    discovered.workspace_account_id =
+        matched.and_then(|account| account.workspace_account_id.clone());
+    discovered
 }
 
 fn directory_timestamp(path: &Path) -> DateTime<Utc> {

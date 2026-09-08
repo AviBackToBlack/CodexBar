@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use codexbar::codex_accounts::{
     AccountStore, CodexAccount, CodexAccountApi, CodexAccountManager, CodexAccountManagerError,
-    CodexApiError, CodexSwitchResult, SnapshotStore, restart_codex_desktop,
+    CodexApiError, CodexSwitchResult, SnapshotStore, display_names_by_id, restart_codex_desktop,
 };
 
 use crate::state::AppState;
@@ -105,13 +105,19 @@ pub(crate) async fn refresh_codex_account_lanes(
             let api = CodexAccountApi::new();
             let home_path = account.codex_home_path.clone();
             let email_hint = account.email_hint.clone();
+            let workspace_account_id = account.effective_workspace_account_id();
             match tokio::time::timeout(
                 std::time::Duration::from_secs(DEFAULT_FETCH_TIMEOUT_SECONDS),
-                api.fetch_snapshot(&home_path, email_hint.as_deref(), true),
+                api.fetch_snapshot_for_workspace(
+                    &home_path,
+                    email_hint.as_deref(),
+                    workspace_account_id.as_deref(),
+                    true,
+                ),
             )
             .await
             {
-                Ok(Ok(snapshot)) => Some((account.id, snapshot)),
+                Ok(Ok(snapshot)) => Some((account, snapshot)),
                 Ok(Err(e)) => {
                     tracing::debug!(
                         "codex account lane {} failed: {}",
@@ -128,10 +134,28 @@ pub(crate) async fn refresh_codex_account_lanes(
         }));
     }
 
+    let current_accounts = load_codex_accounts().unwrap_or_default();
+    let current_by_id: HashMap<Uuid, CodexAccount> = current_accounts
+        .iter()
+        .cloned()
+        .map(|account| (account.id, account))
+        .collect();
     let mut snapshots = SnapshotStore::new().load().unwrap_or_default();
+    snapshots.retain(|id, snapshot| {
+        current_by_id
+            .get(id)
+            .is_some_and(|account| account_snapshot_belongs_to(account, snapshot))
+    });
     for handle in handles {
-        if let Ok(Some((id, snapshot))) = handle.await {
-            snapshots.insert(id, snapshot);
+        if let Ok(Some((fetched_account, snapshot))) = handle.await
+            && current_by_id
+                .get(&fetched_account.id)
+                .is_some_and(|current| {
+                    account_lane_is_current(&fetched_account, current)
+                        && account_snapshot_belongs_to(current, &snapshot)
+                })
+        {
+            snapshots.insert(fetched_account.id, snapshot);
         }
     }
     if let Err(e) = SnapshotStore::new().save(&snapshots) {
@@ -232,16 +256,30 @@ pub async fn codex_account_fetch(
     let api = CodexAccountApi::new();
     let home_path = target.codex_home_path.clone();
     let email_hint = target.email_hint.clone();
+    let workspace_account_id = target.effective_workspace_account_id();
     let snapshot = tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_FETCH_TIMEOUT_SECONDS),
-        api.fetch_snapshot(&home_path, email_hint.as_deref(), true),
+        api.fetch_snapshot_for_workspace(
+            &home_path,
+            email_hint.as_deref(),
+            workspace_account_id.as_deref(),
+            true,
+        ),
     )
     .await
     .map_err(|_| "Timed out waiting for the Codex usage API.".to_string())?
     .map_err(into_api_message)?;
 
     // Persist snapshot to the snapshot store, keyed by account id.
-    if let Ok(mut snapshots) = SnapshotStore::new().load() {
+    if let Ok(mut snapshots) = SnapshotStore::new().load()
+        && load_codex_accounts().ok().is_some_and(|accounts| {
+            accounts.iter().any(|account| {
+                account.id == target.id
+                    && account_lane_is_current(&target, account)
+                    && account_snapshot_belongs_to(account, &snapshot)
+            })
+        })
+    {
         snapshots.insert(target.id, snapshot.clone());
         let _ = SnapshotStore::new().save(&snapshots);
     }
@@ -306,10 +344,63 @@ fn into_api_message(error: CodexApiError) -> String {
     }
 }
 
+fn account_home_key(account: &CodexAccount) -> String {
+    std::path::absolute(&account.codex_home_path)
+        .unwrap_or_else(|_| account.codex_home_path.clone())
+        .to_string_lossy()
+        .to_lowercase()
+}
+
+/// In-flight results are only authoritative for the selected workspace and
+/// managed home that started the request.
+fn account_lane_is_current(started: &CodexAccount, current: &CodexAccount) -> bool {
+    started.id == current.id
+        && account_home_key(started) == account_home_key(current)
+        && started.effective_workspace_account_id() == current.effective_workspace_account_id()
+}
+
+fn account_snapshot_belongs_to(
+    account: &CodexAccount,
+    snapshot: &codexbar::codex_accounts::AccountUsageSnapshot,
+) -> bool {
+    let snapshot_workspace = snapshot
+        .provider_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_lowercase);
+    match (account.effective_workspace_account_id(), snapshot_workspace) {
+        (Some(account_workspace), Some(snapshot_workspace)) => {
+            account_workspace == snapshot_workspace
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn snapshots_for_accounts(
+    accounts: &[CodexAccount],
+    snapshots: HashMap<Uuid, codexbar::codex_accounts::AccountUsageSnapshot>,
+) -> HashMap<Uuid, codexbar::codex_accounts::AccountUsageSnapshot> {
+    let accounts_by_id: HashMap<Uuid, &CodexAccount> = accounts
+        .iter()
+        .map(|account| (account.id, account))
+        .collect();
+    snapshots
+        .into_iter()
+        .filter(|(id, snapshot)| {
+            accounts_by_id
+                .get(id)
+                .is_some_and(|account| account_snapshot_belongs_to(account, snapshot))
+        })
+        .collect()
+}
+
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexAccountsStateBridge {
     pub accounts: Vec<CodexAccount>,
+    pub display_names: HashMap<Uuid, String>,
     pub snapshots: HashMap<Uuid, codexbar::codex_accounts::AccountUsageSnapshot>,
 }
 
@@ -318,9 +409,13 @@ pub fn get_codex_accounts_state(
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<CodexAccountsStateBridge, String> {
     let _guard = state.lock().map_err(|e| e.to_string())?;
+    let accounts = load_codex_accounts()?;
+    let display_names = display_names_by_id(&accounts);
+    let snapshots = snapshots_for_accounts(&accounts, codex_account_snapshots()?);
     Ok(CodexAccountsStateBridge {
-        accounts: load_codex_accounts()?,
-        snapshots: codex_account_snapshots()?,
+        accounts,
+        display_names,
+        snapshots,
     })
 }
 

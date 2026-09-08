@@ -3,7 +3,7 @@ use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{self, File};
+use std::fs::File;
 use std::future::Future;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -338,6 +338,7 @@ pub struct AgentSessionDiscovery {
     remote: RemoteSessionFetcher,
 }
 
+mod claude_desktop;
 mod focus;
 mod parsers;
 pub mod pi_family;
@@ -501,16 +502,21 @@ impl LocalAgentSessionScanner {
         let (pi_processes, agents): (Vec<_>, Vec<_>) = agents
             .into_iter()
             .partition(|process| process.provider == Some(AgentSessionProvider::Pi));
+        let mut metadata_budget = pi_family::budget_for(&self.config);
         let mut rollouts = VecDeque::from(Self::codex_rollouts(
             codex_root,
             now.with_timezone(&Local).date_naive(),
+            &mut metadata_budget,
         ));
         let claude_count = agents
             .iter()
             .filter(|process| process.provider == Some(AgentSessionProvider::Claude))
             .count();
-        let mut claude_transcripts =
-            VecDeque::from(Self::claude_transcripts(claude_roots, claude_count));
+        let mut claude_transcripts = VecDeque::from(Self::claude_transcripts(
+            claude_roots,
+            claude_count,
+            &mut metadata_budget,
+        ));
         let mut sessions = Vec::new();
 
         for process in agents {
@@ -737,41 +743,57 @@ impl LocalAgentSessionScanner {
             .collect()
     }
 
-    fn codex_rollouts(root: &Path, today: NaiveDate) -> Vec<CodexRollout> {
-        let mut rollouts = Vec::new();
+    fn codex_rollouts(
+        root: &Path,
+        today: NaiveDate,
+        budget: &mut pi_family::DirectoryScanBudget,
+    ) -> Vec<CodexRollout> {
+        if !budget.has_time_remaining() {
+            return Vec::new();
+        }
+
+        let mut candidates = Vec::new();
         for directory in Self::codex_day_directories(root, today) {
-            let Ok(entries) = fs::read_dir(directory) else {
-                continue;
-            };
-            for entry in entries.flatten() {
+            if !budget.has_time_remaining() {
+                break;
+            }
+            let entries = budget.files(&directory);
+            let day_candidates = budget.compact_map_while_time_remaining(entries, |entry| {
                 let path = entry.path();
                 let is_rollout = path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| name.starts_with("rollout-"));
                 if !is_rollout || path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                    continue;
+                    return None;
                 }
-                let Some(line) = CodexRolloutFirstLineParser::read_first_line(&path) else {
-                    continue;
-                };
-                let Some(metadata) = CodexRolloutFirstLineParser::parse(&line) else {
-                    continue;
-                };
-                let Some(modified_at) = entry
+                let modified_at = entry
                     .metadata()
                     .ok()
                     .and_then(|metadata| metadata.modified().ok())
-                    .map(DateTime::<Utc>::from)
-                else {
-                    continue;
-                };
-                rollouts.push(CodexRollout {
-                    path,
-                    modified_at,
-                    metadata,
-                });
+                    .map(DateTime::<Utc>::from)?;
+                Some((path, modified_at))
+            });
+            candidates.extend(day_candidates);
+        }
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.1));
+
+        let mut rollouts = Vec::new();
+        for (path, modified_at) in candidates {
+            if !budget.has_time_remaining() {
+                break;
             }
+            let Some(line) = CodexRolloutFirstLineParser::read_first_line(&path) else {
+                continue;
+            };
+            let Some(metadata) = CodexRolloutFirstLineParser::parse(&line) else {
+                continue;
+            };
+            rollouts.push(CodexRollout {
+                path,
+                modified_at,
+                metadata,
+            });
         }
         rollouts.sort_by_key(|rollout| std::cmp::Reverse(rollout.modified_at));
         rollouts
@@ -780,50 +802,78 @@ impl LocalAgentSessionScanner {
     fn claude_transcripts(
         roots: &[PathBuf],
         live_process_count: usize,
+        budget: &mut pi_family::DirectoryScanBudget,
     ) -> Vec<ClaudeTranscriptCandidate> {
-        if live_process_count == 0 {
+        if live_process_count == 0 || !budget.has_time_remaining() {
             return Vec::new();
         }
+        let desktop_roots = claude_desktop::ClaudeDesktopProjectsLocator::roots(budget);
+        Self::claude_transcripts_from_roots(roots, desktop_roots, live_process_count, budget)
+    }
+
+    fn claude_transcripts_from_roots(
+        roots: &[PathBuf],
+        additional_roots: Vec<PathBuf>,
+        live_process_count: usize,
+        budget: &mut pi_family::DirectoryScanBudget,
+    ) -> Vec<ClaudeTranscriptCandidate> {
+        if live_process_count == 0 || !budget.has_time_remaining() {
+            return Vec::new();
+        }
+
+        let mut roots = roots.to_vec();
+        roots.extend(additional_roots);
+        roots.sort();
+        roots.dedup();
+
         let mut files = Vec::new();
         for root in roots {
-            let Ok(projects) = fs::read_dir(root) else {
-                continue;
-            };
-            for project in projects.flatten() {
-                let Ok(entries) = fs::read_dir(project.path()) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
+            let projects = budget.child_directories(&root);
+            for project in projects {
+                if !budget.has_time_remaining() {
+                    break;
+                }
+                let entries = budget.files(&project.path());
+                let candidates = budget.compact_map_while_time_remaining(entries, |entry| {
                     let path = entry.path();
                     if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                        continue;
+                        return None;
                     }
-                    let Some(modified_at) = entry
+                    let modified_at = entry
                         .metadata()
                         .ok()
                         .and_then(|metadata| metadata.modified().ok())
-                        .map(DateTime::<Utc>::from)
-                    else {
-                        continue;
-                    };
-                    files.push((path, modified_at));
-                }
+                        .map(DateTime::<Utc>::from)?;
+                    Some((path, modified_at))
+                });
+                files.extend(candidates);
+            }
+            if !budget.has_time_remaining() {
+                break;
             }
         }
         files.sort_by(|lhs, rhs| rhs.1.cmp(&lhs.1).then_with(|| rhs.0.cmp(&lhs.0)));
-        files
-            .into_iter()
-            .take(live_process_count)
-            .filter_map(|(path, modified_at)| {
-                let file = File::open(&path).ok()?;
-                let metadata = ClaudeTranscriptMetadataParser::parse(file)?;
-                Some(ClaudeTranscriptCandidate {
-                    path,
-                    modified_at,
-                    metadata,
-                })
-            })
-            .collect()
+        let mut transcripts = Vec::new();
+        for (path, modified_at) in files.into_iter().take(live_process_count) {
+            if !budget.has_time_remaining() {
+                break;
+            }
+            let Ok(file) = File::open(&path) else {
+                continue;
+            };
+            if !budget.has_time_remaining() {
+                break;
+            }
+            let Some(metadata) = ClaudeTranscriptMetadataParser::parse(file) else {
+                continue;
+            };
+            transcripts.push(ClaudeTranscriptCandidate {
+                path,
+                modified_at,
+                metadata,
+            });
+        }
+        transcripts
     }
 }
 
