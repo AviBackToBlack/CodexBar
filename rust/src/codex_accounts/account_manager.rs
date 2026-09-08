@@ -14,7 +14,8 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::api::{AuthBackedIdentity, CodexApiError, load_identity};
+use super::api::CodexApiError;
+use super::credentials::{AuthBackedIdentity, load_identity};
 use super::file_locations::{
     ambient_codex_home, auth_backups_directory, codex_desktop_session_root,
     desktop_session_snapshot_path, ensure_directories, managed_homes_directory,
