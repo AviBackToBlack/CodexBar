@@ -224,9 +224,9 @@ export default function MenuCard({
   for (const extra of provider.extraRateWindows ?? []) {
     metrics.push({
       id: `extra-${extra.id}`,
-      label: provider.providerId === "claude"
-        ? localizeWindowLabel(extra.title, t, language, extra.window.windowMinutes, extra.id)
-        : extra.title,
+      label:
+        localizeWindowLabel(extra.title, t, language, extra.window.windowMinutes, extra.id) ||
+        extra.title,
       snap: extra.window,
       resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });

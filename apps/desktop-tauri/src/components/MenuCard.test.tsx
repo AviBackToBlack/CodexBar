@@ -314,7 +314,7 @@ describe("MenuCard", () => {
 
     const otherProvider = provider(null, 20);
     otherProvider.providerId = "synthetic";
-    otherProvider.extraRateWindows = [snapshot.extraRateWindows[0]];
+    otherProvider.extraRateWindows = [{ ...snapshot.extraRateWindows[0], id: "synthetic-weekly" }];
     renderCard(otherProvider);
     expect(await screen.findByText("Fable only")).toBeInTheDocument();
   });
