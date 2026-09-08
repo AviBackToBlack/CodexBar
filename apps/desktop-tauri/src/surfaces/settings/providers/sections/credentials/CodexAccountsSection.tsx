@@ -15,6 +15,7 @@ import {
   codexAccountSwitch,
   getCodexAccountsState,
 } from "../../../../../lib/tauri";
+import { buildCodexAccountDisplayNames } from "../../../../../components/codexAccountDisplay";
 
 interface Props {
   t: (key: LocaleKey) => string;
@@ -36,6 +37,7 @@ export function CodexAccountsSection({ t }: Props) {
   const [snapshots, setSnapshots] = useState<
     Record<string, CodexAccountUsageSnapshot>
   >({});
+  const [displayNames, setDisplayNames] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +51,7 @@ export function CodexAccountsSection({ t }: Props) {
     try {
       const next: CodexAccountsStateBridge = await getCodexAccountsState();
       setAccounts(next.accounts);
+      setDisplayNames(next.displayNames ?? {});
       setSnapshots(next.snapshots);
       setLoaded(true);
     } catch (err: unknown) {
@@ -149,6 +152,11 @@ export function CodexAccountsSection({ t }: Props) {
     return null;
   }
 
+  const accountDisplayNames = buildCodexAccountDisplayNames(
+    accounts,
+    displayNames,
+  );
+
   return (
     <section className="provider-detail-section codex-accounts">
       <div className="provider-detail-section__header">
@@ -207,10 +215,7 @@ export function CodexAccountsSection({ t }: Props) {
                   <div className="credential-card__header">
                     <div className="credential-card__info">
                       <strong>
-                        {account.nickname ??
-                          account.emailHint ??
-                          account.authSubject ??
-                          shrink(account.id)}
+                        {accountDisplayNames[account.id]}
                       </strong>
                       <span className="credential-card__meta">
                         <span className="credential-card__badge credential-card__badge--set">
@@ -272,10 +277,6 @@ export function CodexAccountsSection({ t }: Props) {
       )}
     </section>
   );
-}
-
-function shrink(id: string): string {
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
 }
 
 function CodexUsagePill({

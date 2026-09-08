@@ -37,6 +37,7 @@ pub(crate) fn build_fetch_context(
     api_keys: &ApiKeys,
     token_accounts: &HashMap<ProviderId, ProviderAccountData>,
 ) -> FetchContext {
+    let provider = instantiate_provider(id);
     let cookie_source = settings.cookie_source(id);
     let stored_cookie = cookies.get(id.cli_name()).map(|s| s.to_string());
     let stored_api_key = api_keys.get(id.cli_name()).map(|s| s.to_string());
@@ -48,6 +49,9 @@ pub(crate) fn build_fetch_context(
     let active_token_cookie = token_override
         .as_ref()
         .and_then(|override_data| override_data.cookie_header.clone());
+    let defer_provider_browser_cookie_lookup = provider.owns_browser_cookie_resolution()
+        && active_token_cookie.is_none()
+        && stored_cookie.is_none();
     let active_token_env = token_override
         .as_ref()
         .and_then(|override_data| override_data.env_override.as_ref());
@@ -69,6 +73,18 @@ pub(crate) fn build_fetch_context(
         (source_mode, None)
     } else {
         match cookie_source {
+            // #433: an explicitly selected, non-empty Claude manual cookie is
+            // authoritative. Do not let an active OAuth token account silently
+            // replace it; this keeps tray refresh behavior aligned with diagnose,
+            // whose Claude Auto path tries the supplied Web cookie before OAuth.
+            "manual"
+                if provider.manual_cookie_precedes_token_account()
+                    && stored_cookie
+                        .as_deref()
+                        .is_some_and(|cookie| !cookie.trim().is_empty()) =>
+            {
+                (SourceMode::Web, stored_cookie.clone())
+            }
             _ if active_token_env.is_some() => (SourceMode::OAuth, None),
             "off" if provider_uses_oauth_without_cookies(id, usage_source) => {
                 (SourceMode::OAuth, None)
@@ -100,14 +116,18 @@ pub(crate) fn build_fetch_context(
             }
             // `browser` is accepted as a legacy alias from older settings.
             "auto" | "browser" | "web" => {
-                // Try browser cookie extraction as fallback when no manual cookie is set.
-                // On non-Windows this is a harmless no-op that returns an error.
+                // Claude resolves its cached cookie and browser fallback inside
+                // the provider; other providers retain the shell fallback.
                 let cookie_header = active_token_cookie.or(stored_cookie).or_else(|| {
-                    provider_cookie_domain(id, settings).and_then(|domain| {
-                        codexbar::browser::cookies::get_cookie_header(domain)
-                            .ok()
-                            .filter(|h| !h.is_empty())
-                    })
+                    if defer_provider_browser_cookie_lookup {
+                        None
+                    } else {
+                        provider_cookie_domain(id, settings).and_then(|domain| {
+                            codexbar::browser::cookies::get_cookie_header(domain)
+                                .ok()
+                                .filter(|h| !h.is_empty())
+                        })
+                    }
                 });
                 (usage_source, cookie_header)
             }
@@ -119,10 +139,7 @@ pub(crate) fn build_fetch_context(
     // historically mapped "manual + no cookie" to Cli, which surfaces as
     // "Source mode 'Cli' not supported". Remap to Web and try browser cookies
     // unless the user explicitly disabled cookies ("off").
-    if source_mode == SourceMode::Cli
-        && cookie_source != "off"
-        && !instantiate_provider(id).supports_cli()
-    {
+    if source_mode == SourceMode::Cli && cookie_source != "off" && !provider.supports_cli() {
         if cookie_header
             .as_deref()
             .map(str::trim)
@@ -469,11 +486,13 @@ async fn refresh_provider(
 
 /// F6 (upstream 0.48.0 UsageStore+CodexResetBackfill): backfill missing
 /// `resets_at` / `reset_description` on fresh Codex windows from the cached
-/// lane data when the cached reset is still future. Fresh `used_percent` is
-/// untouched; only the reset timestamp/description are backfilled.
+/// lane data when the cached reset is still future. z.ai five-hour cached
+/// resets use the same plausibility bound as the provider parser, so an
+/// impossible rejected reset cannot be restored from the cache. Fresh
+/// `used_percent` is untouched; only reset metadata is backfilled.
 ///
-/// This is Codex-scoped by design (upstream: "Provider-specific by design"):
-/// other providers do not carry bounded resume state.
+/// This remains provider-scoped by design (upstream: "Provider-specific by
+/// design"): only Codex and z.ai carry the relevant bounded reset semantics.
 ///
 /// Applies to the bridge snapshot before publishing so every surface (tray,
 /// CLI, frontend) sees the backfilled reset instead of a missing one.
@@ -482,19 +501,23 @@ pub(super) fn codex_reset_backfill(
     cached: Option<&ProviderUsageSnapshot>,
 ) {
     let Some(cached) = cached else { return };
-    if snapshot.provider_id != "codex" {
+    if !matches!(snapshot.provider_id.as_str(), "codex" | "zai") {
         return;
     }
 
     // Backfill each slot from the corresponding cached slot.
-    backfill_slot_window(&mut snapshot.primary, &cached.primary);
+    backfill_slot_window(
+        &snapshot.provider_id,
+        &mut snapshot.primary,
+        &cached.primary,
+    );
     if let (Some(fresh), Some(cached_sec)) = (&mut snapshot.secondary, &cached.secondary) {
-        backfill_slot_window(fresh, cached_sec);
+        backfill_slot_window(&snapshot.provider_id, fresh, cached_sec);
     }
     // Tertiary (monthly/other): the Codex bridge doesn't normally populate this,
     // but the slot exists for forward-compat. Backfill when available.
     if let (Some(fresh), Some(cached_ter)) = (&mut snapshot.tertiary, &cached.tertiary) {
-        backfill_slot_window(fresh, cached_ter);
+        backfill_slot_window(&snapshot.provider_id, fresh, cached_ter);
     }
 }
 
@@ -502,6 +525,7 @@ pub(super) fn codex_reset_backfill(
 /// cached window whose reset is still in the future. `used_percent` is never
 /// overwritten (upstream: "fresh used_percent untouched").
 fn backfill_slot_window(
+    provider_id: &str,
     fresh: &mut bridge::RateWindowSnapshot,
     cached: &bridge::RateWindowSnapshot,
 ) {
@@ -513,11 +537,20 @@ fn backfill_slot_window(
     };
     // Only backfill when the cached reset is still future — a stale reset is
     // worse than a missing one.
-    if let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) {
-        if cached_dt <= chrono::Utc::now() {
-            return;
-        }
-    } else {
+    let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) else {
+        return;
+    };
+    let now = chrono::Utc::now();
+    if cached_dt <= now {
+        return;
+    }
+    // A missing z.ai five-hour reset can mean the provider rejected an
+    // impossible future timestamp. Do not let equally impossible cached
+    // evidence undo that rejection, but preserve a plausible cached reset.
+    if provider_id == "zai"
+        && fresh.window_minutes == Some(300)
+        && cached_dt > now + chrono::Duration::minutes(5 * 60 + 1)
+    {
         return;
     }
     fresh.resets_at = Some(cached_reset.clone());
@@ -532,33 +565,18 @@ pub(super) fn preserve_last_good_transient_failure(
     id: ProviderId,
     snapshot: ProviderUsageSnapshot,
 ) -> ProviderUsageSnapshot {
-    if snapshot.error.is_none() {
+    let Some(error) = snapshot.error.as_deref() else {
+        guard.transient_provider_failure_counts.remove(&id);
+        return snapshot;
+    };
+
+    let policy = instantiate_provider(id).last_good_failure_policy(error);
+    if policy == codexbar::core::LastGoodFailurePolicy::Replace {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
     }
 
-    if id != ProviderId::Claude {
-        guard.transient_provider_failure_counts.remove(&id);
-        return snapshot;
-    }
-
-    let error = snapshot.error.as_deref();
-    // Hard auth loss / subscription-unavailable answers should not keep stale bars.
-    if is_hard_claude_auth_loss(error) {
-        guard.transient_provider_failure_counts.remove(&id);
-        return snapshot;
-    }
-
-    let preservable = is_transient_claude_auth_error(error)
-        || is_claude_cli_usage_parse_failure(error)
-        || is_claude_cli_rate_limit_failure(error)
-        || is_claude_timeout_failure(error);
-    if !preservable {
-        guard.transient_provider_failure_counts.remove(&id);
-        return snapshot;
-    }
-
-    let Some(previous) = guard
+    let Some(mut previous) = guard
         .provider_cache
         .iter()
         .find(|cached| cached.provider_id == id.cli_name() && cached.error.is_none())
@@ -566,81 +584,55 @@ pub(super) fn preserve_last_good_transient_failure(
     else {
         return snapshot;
     };
-
-    // Parse / rate-limit / timeout: keep last-good every time (upstream #2247).
-    // Transient auth (unauthorized-ish) still only preserves once so real logout surfaces.
-    let parse_or_rate = is_claude_cli_usage_parse_failure(error)
-        || is_claude_cli_rate_limit_failure(error)
-        || is_claude_timeout_failure(error);
+    // Preserved quota remains useful for display, but the failed current
+    // attempt cannot prove that Claude CLI is available for account actions.
+    previous.has_successful_claude_cli_quota = false;
 
     let count = guard
         .transient_provider_failure_counts
         .entry(id)
         .or_insert(0);
-    if parse_or_rate || *count == 0 {
-        if !parse_or_rate {
-            *count = 1;
+    match policy {
+        codexbar::core::LastGoodFailurePolicy::Preserve => {
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
+            previous
         }
-        tracing::warn!(
-            provider = id.cli_name(),
-            error = error.unwrap_or(""),
-            "preserving last good Claude snapshot after transient failure"
-        );
-        previous
-    } else {
-        *count = count.saturating_add(1);
-        snapshot
+        codexbar::core::LastGoodFailurePolicy::PreserveOnce if *count == 0 => {
+            *count = 1;
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
+            previous
+        }
+        codexbar::core::LastGoodFailurePolicy::PreserveOnce => {
+            *count = count.saturating_add(1);
+            snapshot
+        }
+        codexbar::core::LastGoodFailurePolicy::PreserveOnceThenSurface if *count == 0 => {
+            *count = 1;
+            tracing::warn!(
+                provider = id.cli_name(),
+                error,
+                "preserving last good provider snapshot after transient failure"
+            );
+            previous
+        }
+        codexbar::core::LastGoodFailurePolicy::PreserveOnceThenSurface => {
+            *count = count.saturating_add(1);
+            let mut surfaced = previous;
+            surfaced.error = snapshot.error;
+            surfaced.error_state = snapshot.error_state;
+            surfaced.fetch_duration_ms = snapshot.fetch_duration_ms;
+            surfaced
+        }
+        codexbar::core::LastGoodFailurePolicy::Replace => snapshot,
     }
-}
-
-fn is_transient_claude_auth_error(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("unauthorized")
-        || lower.contains("authentication required")
-        || lower.contains("auth required")
-}
-
-fn is_hard_claude_auth_loss(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    // Credentials truly missing / login required — clear stale usage.
-    lower.contains("credentials not found")
-        || lower.contains("run `claude` to authenticate")
-        || (lower.contains("not installed") && lower.contains("claude"))
-        || (lower.contains("subscription") && lower.contains("unavailable"))
-}
-
-fn is_claude_cli_usage_parse_failure(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("parse error")
-        || lower.contains("empty output")
-        || lower.contains("missing current session")
-        || lower.contains("treated /usage as a normal prompt")
-        || lower.contains("local activity stats")
-        || lower.contains("could not parse")
-}
-
-fn is_claude_cli_rate_limit_failure(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    let lower = error.to_ascii_lowercase();
-    lower.contains("rate limit") || lower.contains("rate_limit") || lower.contains("ratelimited")
-}
-
-fn is_claude_timeout_failure(error: Option<&str>) -> bool {
-    let Some(error) = error else {
-        return false;
-    };
-    error.eq_ignore_ascii_case("timeout") || error.to_ascii_lowercase().contains("timed out")
 }
 
 async fn fetch_provider_snapshot(
@@ -1198,7 +1190,9 @@ mod reset_backfill_tests {
             cost: None,
             plan_name: None,
             account_email: None,
+            subscription: None,
             source_label: String::new(),
+            has_successful_claude_cli_quota: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
             error: None,
             error_state: codexbar::core::ProviderStateKind::Ready,
@@ -1256,6 +1250,24 @@ mod reset_backfill_tests {
         fresh.provider_id = "claude".into();
         codex_reset_backfill(&mut fresh, Some(&cached));
         assert!(fresh.primary.resets_at.is_none(), "non-codex skip");
+    }
+
+    #[test]
+    fn zai_five_hour_backfill_rejects_impossible_cached_reset() {
+        for (offset, should_backfill) in [
+            (chrono::Duration::hours(1), true),
+            (chrono::Duration::hours(10), false),
+        ] {
+            let future = (chrono::Utc::now() + offset).to_rfc3339();
+            let mut cached = codex_snapshot(win(50.0, Some(&future)));
+            cached.provider_id = "zai".into();
+            let mut fresh = codex_snapshot(win(30.0, None));
+            fresh.provider_id = "zai".into();
+            fresh.primary.reset_description = Some("5-hour".into());
+            codex_reset_backfill(&mut fresh, Some(&cached));
+            assert_eq!(fresh.primary.resets_at.is_some(), should_backfill);
+            assert!((fresh.primary.used_percent - 30.0).abs() < f64::EPSILON);
+        }
     }
 
     #[test]
