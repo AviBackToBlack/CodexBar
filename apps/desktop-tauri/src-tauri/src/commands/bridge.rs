@@ -335,10 +335,12 @@ impl ProviderUsageSnapshot {
                     .unwrap_or_else(|| metadata.session_label.to_string()),
             ),
             secondary: secondary_snap,
-            secondary_label: usage
-                .secondary
-                .as_ref()
-                .map(|_| metadata.weekly_label.to_string()),
+            secondary_label: usage.secondary.as_ref().map(|_| {
+                usage
+                    .secondary_label
+                    .clone()
+                    .unwrap_or_else(|| metadata.weekly_label.to_string())
+            }),
             model_specific: usage
                 .model_specific
                 .as_ref()
