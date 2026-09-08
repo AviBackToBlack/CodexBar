@@ -12,16 +12,8 @@
  */
 :root {
   color-scheme: dark;
-  /* SF-system stack first so the rendered text matches macOS upstream
-     when the host font is available; Inter / Segoe UI remain as the
-     Windows fallbacks. */
-  font-family:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro",
-    "Segoe UI Variable", Inter, "Segoe UI", system-ui, sans-serif;
-  /* Force macOS-style thin font rendering instead of Windows ClearType
-     heavy strokes. WebView2 (Chromium) respects this. */
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui);
   text-rendering: optimizeLegibility;
   background: var(--app-bg, #1c1c1e);
   color: var(--text-primary, #f5f5f7);
@@ -5338,7 +5330,11 @@ html:has(.menu-surface--tray) {
 .select {
   appearance: none;
   -webkit-appearance: none;
-  padding: 0 10px;
+  padding: 0 28px 0 10px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238e8e93'/%3E%3C/svg%3E");
+  background-size: 10px 6px;
+  background-repeat: no-repeat;
+  background-position: right 10px center;
   line-height: 20px;
   color-scheme: light;
 }
@@ -5368,14 +5364,9 @@ html:has(.menu-surface--tray) {
 [data-theme="light"] .select,
 [data-theme="light"] .number-input,
 [data-theme="light"] .text-input {
-  background: #fff;
+  background-color: #fff;
   border: 1px solid rgba(0, 0, 0, 0.12);
   box-shadow: none;
-}
-[data-theme="light"] .select {
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
-    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
 }
 [data-theme="light"] .select option {
   background: #fff;
@@ -6028,16 +6019,14 @@ html:has(.menu-surface--tray) {
   margin-top: 4px;
   font-weight: 500;
 }
+/* Shared Windows typography and control sizing. */
+button, input, select, textarea {
+  font-family: var(--font-ui);
+}
 
-.codex-accounts .credential-card__header {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
+.select, .number-input, .text-input {
+  min-height: 28px;
 }
-.codex-accounts .credential-card__actions {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-.codex-accounts .credential-card__badge {
-  align-self: flex-start;
+.select {
+  max-width: 240px;
 }

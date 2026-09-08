@@ -174,7 +174,7 @@ describe("GeneralTab language picker", () => {
 
     const select = screen.getByRole("combobox", { name: "NotificationSoundTheme" });
     expect(select.querySelectorAll("option")).toHaveLength(2);
-    expect(select).toHaveStyle({ width: "180px" });
+    expect(select).toHaveStyle({ minWidth: "180px" });
     fireEvent.change(select, {
       target: { value: "codexBar" },
     });
