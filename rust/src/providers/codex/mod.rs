@@ -150,24 +150,9 @@ impl Provider for CodexProvider {
     }
 }
 
-/// Try to find the codex CLI binary
-fn which_codex() -> Option<std::path::PathBuf> {
-    // Check common locations on Windows
-    let possible_paths = [
-        // In PATH
-        which::which("codex").ok(),
-        // npm global install
-        dirs::data_dir().map(|p| p.join("npm").join("codex.cmd")),
-        // AppData locations
-        dirs::data_local_dir().map(|p| p.join("Programs").join("codex").join("codex.exe")),
-    ];
-
-    possible_paths.into_iter().flatten().find(|p| p.exists())
-}
-
 /// Detect the version of the codex CLI
 fn detect_codex_version() -> Option<String> {
-    let codex_path = which_codex()?;
+    let codex_path = crate::codex_cli::locate_codex_binary()?;
 
     #[cfg(windows)]
     const CREATE_NO_WINDOW: u32 = 0x08000000;
