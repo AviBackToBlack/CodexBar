@@ -504,7 +504,18 @@ pub struct ProviderFetchResult {
     /// Label describing the data source (e.g., "oauth", "web", "cli")
     pub source_label: String,
 
-    /// True only for a live Claude CLI fetch with usable quota windows.`n    #[serde(default)]`n    pub has_successful_claude_cli_quota: bool,`n`n    /// Whether quota data is authoritative enough for pace/run-out advice.`n    #[serde(default = "default_pace_authoritative")]`n    pub pace_authoritative: bool,`n}`n`nfn default_pace_authoritative() -> bool {`n    true`n}
+    /// True only for a live Claude CLI fetch with usable quota windows.
+    #[serde(default)]
+    pub has_successful_claude_cli_quota: bool,
+
+    /// Whether quota data is authoritative enough for pace/run-out advice.
+    #[serde(default = "default_pace_authoritative")]
+    pub pace_authoritative: bool,
+}
+
+fn default_pace_authoritative() -> bool {
+    true
+}
 
 impl ProviderFetchResult {
     /// Create a new fetch result
