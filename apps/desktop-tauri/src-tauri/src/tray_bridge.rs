@@ -20,9 +20,7 @@ use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 #[cfg(test)]
 use crate::tray_menu::build_tray_menu;
-use crate::tray_menu::{
-    TrayMenuEntry, build_tray_menu_with, claude_accounts_menu, codex_accounts_menu,
-};
+use crate::tray_menu::{TrayMenuEntry, build_tray_menu_with};
 
 #[derive(Debug, Clone, Copy)]
 struct MonitorScaleInfo {
@@ -139,27 +137,7 @@ fn build_native_tray_menu(
         settings.float_bar_enabled,
         settings.ui_language,
     );
-    let accounts = crate::commands::load_codex_accounts().unwrap_or_default();
-    let active =
-        codexbar::codex_accounts::CodexAccountManager::new().discover_ambient_account(&accounts);
-    spec.insert(
-        0,
-        codex_accounts_menu(
-            &accounts,
-            active.as_ref(),
-            settings.ui_language,
-            settings.hide_personal_info,
-        ),
-    );
-    let claude_accounts = crate::commands::claude_accounts_list().unwrap_or_default();
-    spec.insert(
-        1,
-        claude_accounts_menu(
-            &claude_accounts,
-            settings.ui_language,
-            settings.hide_personal_info,
-        ),
-    );
+    crate::tray_accounts::prepend_account_menus(&mut spec, &settings);
     let entries = spec
         .iter()
         .map(|entry| build_native_menu_entry(app, entry))
@@ -207,12 +185,7 @@ enum MenuAction {
     ToggleProvider(String),
     /// Toggle the floating bar window on/off.
     ToggleFloatBar,
-    AddCodexAccount,
-    AddClaudeAccount,
-    SaveClaudeAccount,
-    CancelClaudeLogin,
-    SwitchClaudeAccount(String),
-    SwitchCodexAccount(String),
+    Account(crate::tray_accounts::AccountMenuAction),
     Quit,
 }
 
@@ -222,6 +195,9 @@ enum MenuTransitionDispatch {
 }
 
 fn resolve_menu_action(id: &str) -> Option<MenuAction> {
+    if let Some(action) = crate::tray_accounts::resolve_action(id) {
+        return Some(MenuAction::Account(action));
+    }
     match id {
         "refresh" => Some(MenuAction::Refresh),
         "check_for_updates" => Some(MenuAction::CheckForUpdates),
@@ -230,19 +206,6 @@ fn resolve_menu_action(id: &str) -> Option<MenuAction> {
         "about" => Some(MenuAction::OpenSettings("about".into())),
         "toggle_float_bar" => Some(MenuAction::ToggleFloatBar),
         "pop_out" => Some(MenuAction::OpenFlyout),
-        "add_codex_account" => Some(MenuAction::AddCodexAccount),
-        "add_claude_account" => Some(MenuAction::AddClaudeAccount),
-        "save_claude_account" => Some(MenuAction::SaveClaudeAccount),
-        "cancel_claude_login" => Some(MenuAction::CancelClaudeLogin),
-        _ if id.starts_with("switch_claude_account:") => {
-            let id = id.strip_prefix("switch_claude_account:")?;
-            (!id.is_empty()).then(|| MenuAction::SwitchClaudeAccount(id.to_string()))
-        }
-        _ if id.starts_with("switch_codex_account:") => {
-            let id = id.strip_prefix("switch_codex_account:")?;
-            uuid::Uuid::parse_str(id).ok()?;
-            Some(MenuAction::SwitchCodexAccount(id.to_string()))
-        }
         _ if id.starts_with("toggle_provider:") => {
             let provider_id = id["toggle_provider:".len()..].to_string();
             Some(MenuAction::ToggleProvider(provider_id))
@@ -370,79 +333,7 @@ fn schedule_tray_promotion_retries(app_handle: AppHandle) {
 /// Route a native menu-item click to the corresponding shell action.
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match resolve_menu_action(id) {
-        Some(MenuAction::AddCodexAccount) => {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                match crate::commands::codex_account_add(handle.clone()).await {
-                    Ok(_) => show_account_message(&handle, "Codex account added."),
-                    Err(error) => show_account_message(&handle, &error),
-                }
-            });
-        }
-        Some(MenuAction::SwitchCodexAccount(id)) => {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                match crate::commands::codex_account_switch(handle.clone(), id).await {
-                    Ok(result) => {
-                        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                        if result.desktop_session_restore_path.is_some() {
-                            let dialog_handle = handle.clone();
-                            let restart = tauri::async_runtime::spawn_blocking(move || {
-                                dialog_handle.dialog()
-                                    .message("Account switched. Restart Codex Desktop to use it? This stops running desktop tasks.")
-                                    .title("Codex Accounts")
-                                    .buttons(MessageDialogButtons::OkCancelCustom("Restart".into(), "Later".into()))
-                                    .blocking_show()
-                            }).await.unwrap_or(false);
-                            if restart {
-                                let result = crate::commands::codex_account_restart_desktop(
-                                    handle.clone(),
-                                    result.switch_id.to_string(),
-                                )
-                                .await;
-                                if let Err(error) = result {
-                                    show_account_message(&handle, &error);
-                                }
-                            }
-                        } else {
-                            show_account_message(&handle, "Codex account switched.");
-                        }
-                    }
-                    Err(error) => show_account_message(&handle, &error),
-                }
-            });
-        }
-        Some(MenuAction::CancelClaudeLogin) => crate::commands::claude_account_cancel_login(),
-        Some(
-            action @ (MenuAction::AddClaudeAccount
-            | MenuAction::SaveClaudeAccount
-            | MenuAction::SwitchClaudeAccount(_)),
-        ) => {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri_plugin_dialog::DialogExt;
-                let (result, message) = match action {
-                    MenuAction::AddClaudeAccount => (
-                        crate::commands::claude_account_add(handle.clone()).await,
-                        "Claude Code account added. Select it to switch.",
-                    ),
-                    MenuAction::SaveClaudeAccount => (
-                        crate::commands::claude_account_save_current(handle.clone()).await,
-                        "Current Claude Code account saved.",
-                    ),
-                    MenuAction::SwitchClaudeAccount(id) => (
-                        crate::commands::claude_account_switch(handle.clone(), id).await,
-                        "Claude Code account switched. Reopen the Claude Code CLI to use it.",
-                    ),
-                    _ => unreachable!(),
-                };
-                handle
-                    .dialog()
-                    .message(result.err().unwrap_or_else(|| message.to_string()))
-                    .title("Claude Code accounts")
-                    .show(|_| {});
-            });
-        }
+        Some(MenuAction::Account(action)) => crate::tray_accounts::handle_action(app, action),
         Some(MenuAction::Transition(request)) => {
             crate::auto_refresh::note_menu_open();
             match resolve_menu_transition_dispatch(id, request) {
@@ -509,14 +400,6 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         None => {}
     }
-}
-
-fn show_account_message(app: &AppHandle, message: &str) {
-    use tauri_plugin_dialog::DialogExt;
-    app.dialog()
-        .message(message)
-        .title("Codex Accounts")
-        .show(|_| {});
 }
 
 /// Rebuild the native tray menu from current provider + settings state.
@@ -962,26 +845,6 @@ mod tests {
         assert!(menu_contains(&menu, "about"));
         assert!(menu_contains(&menu, "toggle_provider:codex"));
         assert!(menu_contains(&menu, "quit"));
-    }
-
-    #[test]
-    fn claude_account_actions_are_distinct_from_codex_and_reject_empty_ids() {
-        assert!(matches!(
-            resolve_menu_action("add_claude_account"),
-            Some(MenuAction::AddClaudeAccount)
-        ));
-        assert!(matches!(
-            resolve_menu_action("save_claude_account"),
-            Some(MenuAction::SaveClaudeAccount)
-        ));
-        assert!(matches!(
-            resolve_menu_action("cancel_claude_login"),
-            Some(MenuAction::CancelClaudeLogin)
-        ));
-        assert!(
-            matches!(resolve_menu_action("switch_claude_account:a:org"), Some(MenuAction::SwitchClaudeAccount(id)) if id == "a:org")
-        );
-        assert!(resolve_menu_action("switch_claude_account:").is_none());
     }
 
     #[test]
