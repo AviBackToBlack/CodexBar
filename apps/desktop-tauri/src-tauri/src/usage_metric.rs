@@ -119,7 +119,9 @@ fn automatic_window(
         )
         .filter(|window| !window.is_informational);
     let prioritize_exhausted = provider
-        .map(|id| codexbar::core::instantiate_provider(id).automatic_metric_prioritizes_exhausted_window())
+        .map(|id| {
+            codexbar::core::instantiate_provider(id).automatic_metric_prioritizes_exhausted_window()
+        })
         .unwrap_or(true);
     let selected = if prioritize_exhausted {
         highest_automatic_window(windows)
