@@ -36,7 +36,6 @@ struct LogIdentity {
 #[derive(Debug)]
 struct ParsedSegment {
     committed: Vec<OpenCodexEntry>,
-    pending: Vec<OpenCodexEntry>,
     next_offset: u64,
 }
 
@@ -68,7 +67,6 @@ pub(super) fn load_entries_with_cache(
                 let parsed = parse_segment(source_path, state.cursor.parsed_offset, identity.size)?;
                 let mut visible = state.entries.clone();
                 visible.extend(parsed.committed.iter().cloned());
-                visible.extend(parsed.pending.iter().cloned());
                 let visible = dedup_entries(visible);
 
                 let next_cursor = ParseCursor {
@@ -90,8 +88,7 @@ pub(super) fn load_entries_with_cache(
         }
 
         let parsed = parse_segment(source_path, 0, identity.size)?;
-        let mut visible = parsed.committed.clone();
-        visible.extend(parsed.pending.iter().cloned());
+        let visible = parsed.committed.clone();
         let visible = dedup_entries(visible);
         let cursor = ParseCursor {
             source_path: identity.source_path.clone(),
@@ -141,16 +138,8 @@ fn parse_segment(
         line_start = index + 1;
         next_offset = start_offset.saturating_add(u64::try_from(line_start).ok()?);
     }
-    let mut pending = Vec::new();
-    if line_start < bytes.len()
-        && let Ok(line) = std::str::from_utf8(&bytes[line_start..])
-        && let Some(entry) = parse_line(line.trim_end_matches('\r'))
-    {
-        pending.push(entry);
-    }
     Some(ParsedSegment {
         committed,
-        pending,
         next_offset,
     })
 }
