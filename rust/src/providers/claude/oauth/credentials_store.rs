@@ -16,7 +16,6 @@ use std::sync::{Mutex, OnceLock};
 use super::ClaudeOAuthCredentials;
 use crate::core::ProviderError;
 
-const CREDENTIALS_PATH: &str = ".claude/.credentials.json";
 const KEYRING_SERVICE: &str = "Claude Code-credentials";
 const ENV_TOKEN_KEY: &str = "CODEXBAR_CLAUDE_OAUTH_TOKEN";
 const ENV_SCOPES_KEY: &str = "CODEXBAR_CLAUDE_OAUTH_SCOPES";
@@ -63,6 +62,12 @@ struct OAuthData {
 
 fn refreshed_cache() -> &'static Mutex<HashMap<CredentialSource, ClaudeOAuthCredentials>> {
     REFRESHED_CREDENTIALS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(super) fn clear_cache() {
+    if let Ok(mut cache) = refreshed_cache().lock() {
+        cache.clear();
+    }
 }
 
 /// Look up a cached refreshed credential for `source`, returning it only if
@@ -359,9 +364,9 @@ fn push_keyring_candidate(candidates: &mut Vec<String>, value: String) {
 
 /// Get the credentials file path
 fn credentials_path() -> Result<PathBuf, ProviderError> {
-    dirs::home_dir()
-        .map(|home| home.join(CREDENTIALS_PATH))
-        .ok_or_else(|| ProviderError::OAuth("Could not find home directory".to_string()))
+    super::super::accounts::config_dir()
+        .map(|home| home.join(".credentials.json"))
+        .map_err(|e| ProviderError::OAuth(e.to_string()))
 }
 
 /// Persist refreshed tokens back to `~/.claude/.credentials.json`, updating

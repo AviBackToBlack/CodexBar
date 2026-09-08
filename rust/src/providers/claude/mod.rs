@@ -1,5 +1,6 @@
 //! Claude provider implementation
 
+pub mod accounts;
 mod admin_api;
 mod cli_reset;
 mod oauth;
@@ -47,6 +48,13 @@ struct CachedCliResult {
 
 static CLI_RESULT_CACHE: LazyLock<Mutex<Option<CachedCliResult>>> =
     LazyLock::new(|| Mutex::new(None));
+
+fn clear_account_caches(credential_path: &std::path::Path) {
+    if let Ok(mut cache) = CLI_RESULT_CACHE.lock() {
+        *cache = None;
+    }
+    oauth::clear_account_cache(credential_path);
+}
 
 /// Store a successful CLI fetch result in the 15-minute cache.
 fn cache_cli_result(result: ProviderFetchResult) {
@@ -365,6 +373,9 @@ async fn run_claude_pty_probe(
     probe: ClaudePtyProbeOptions,
 ) -> Result<String, ProviderError> {
     tokio::task::spawn_blocking(move || {
+        // Keep ownership in the worker: cancelling the async refresh does not
+        // stop spawn_blocking or its CLI process from rotating credentials.
+        let _account_operation = accounts::CREDENTIAL_OPERATION.blocking_lock();
         cleanup_probe_session_jsonl(&working_directory);
         let session_id = load_or_create_probe_session_id(&working_directory);
         let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());

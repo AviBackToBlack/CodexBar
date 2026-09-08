@@ -449,6 +449,24 @@ fn transient_refresh_failure_gets_5min_backoff() {
 }
 
 #[test]
+fn switching_accounts_clears_the_credential_files_transient_cooldown() {
+    let source = unique_source("switch");
+    let super::credentials_store::CredentialSource::File(path) = &source else {
+        panic!("file source")
+    };
+    let now = std::time::Instant::now();
+    super::record_refresh_backoff(
+        &source,
+        super::refresh::RefreshFailureKind::Transient,
+        now,
+        Some("old-token"),
+    );
+    assert!(super::active_refresh_backoff(&source, now, Some("new-token")).is_some());
+    super::clear_account_cache(path);
+    assert!(super::active_refresh_backoff(&source, now, Some("new-token")).is_none());
+}
+
+#[test]
 fn backoff_kinds_have_distinct_user_messages() {
     let terminal = super::terminal_refresh_message();
     assert!(terminal.contains("claude login"), "{terminal}");

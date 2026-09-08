@@ -974,3 +974,11 @@ export interface CodexAccountsStateBridge {
   displayNames?: Record<string, string>;
   snapshots: Record<string, CodexAccountUsageSnapshot>;
 }
+export interface ClaudeAccount {
+  id: string;
+  email: string;
+  organization: string | null;
+  plan: string | null;
+  isActive: boolean;
+  isSaved: boolean;
+}
