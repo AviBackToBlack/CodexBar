@@ -1098,6 +1098,7 @@ fn claude_cloudflare_challenge_retains_prior_usage_while_surfaceing_guidance() {
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
         has_successful_claude_cli_quota: false,
+        pace_authoritative: true,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1145,6 +1146,7 @@ fn claude_cloudflare_challenge_keeps_prior_usage_when_guidance_surfaces() {
         wayfinder_usage: None,
         source_label: "Web".to_string(),
         has_successful_claude_cli_quota: false,
+        pace_authoritative: true,
     };
     let mut good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
