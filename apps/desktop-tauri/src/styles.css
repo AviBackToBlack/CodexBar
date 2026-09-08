@@ -815,6 +815,10 @@ html {
 }
 
 .credential-card__link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   font-size: 0.78rem;
   color: var(--text-eyebrow);
   text-decoration: none;
@@ -4300,6 +4304,17 @@ html:has(.menu-surface--tray) {
   flex: 0 0 auto;
 }
 
+/* A live forecast is its own full-width row. Release the base percent label's
+   no-shrink rule so refreshed text is constrained by the row and tail-truncated
+   inside the fixed tray width instead of painting past it. */
+.menu-metric__forecast .menu-metric__pct {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .menu-metric__reset {
   font-size: 11px;
   color: var(--text-secondary);
@@ -6012,4 +6027,17 @@ html:has(.menu-surface--tray) {
 .menu-card__monthly-spend {
   margin-top: 4px;
   font-weight: 500;
+}
+
+.codex-accounts .credential-card__header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.codex-accounts .credential-card__actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.codex-accounts .credential-card__badge {
+  align-self: flex-start;
 }

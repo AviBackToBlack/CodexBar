@@ -220,6 +220,34 @@ mod tests {
     }
 
     #[test]
+    fn single_quota_uses_one_centered_prominent_meter() {
+        let (single, _, _) = render_bar_icon_rgba(50.0, None, false);
+        let (multiple, _, _) = render_bar_icon_rgba(50.0, Some(25.0), false);
+
+        let pixel = |rgba: &[u8], x: u32, y: u32| {
+            let index = ((y * TRAY_ICON_SIZE + x) * 4) as usize;
+            [
+                rgba[index],
+                rgba[index + 1],
+                rgba[index + 2],
+                rgba[index + 3],
+            ]
+        };
+
+        // The single-quota layout occupies one centered, thick lane.
+        assert_eq!(pixel(&single, 20, 9), [60, 60, 70, 255]);
+        assert_eq!(pixel(&single, 20, 10), [80, 80, 90, 255]);
+        assert_eq!(pixel(&single, 20, 21), [80, 80, 90, 255]);
+        assert_eq!(pixel(&single, 20, 22), [60, 60, 70, 255]);
+
+        // Multiple quotas retain distinct upper and lower lanes.
+        assert_eq!(pixel(&multiple, 20, 8), [80, 80, 90, 255]);
+        assert_eq!(pixel(&multiple, 20, 15), [60, 60, 70, 255]);
+        assert_eq!(pixel(&multiple, 20, 18), [80, 80, 90, 255]);
+        assert_eq!(pixel(&multiple, 20, 23), [60, 60, 70, 255]);
+    }
+
+    #[test]
     fn zero_fill_gives_gray_only_bar() {
         let (rgba, w, _h) = render_bar_icon_rgba(0.0, None, false);
         // Sample a pixel near the centre of the bar track area (y=16, x=8)

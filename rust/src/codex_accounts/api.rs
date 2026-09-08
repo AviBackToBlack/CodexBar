@@ -17,9 +17,14 @@ use super::credentials::{
     account_id_from_id_token, identity_from_credentials, normalize_string, string_value,
 };
 use super::models::{
-    AccountUsageSnapshot, CreditsBalanceSnapshot, UsageWindowSnapshot, WindowRole,
+    AccountUsageSnapshot, CodexExtraUsageCost, CreditsBalanceSnapshot, UsageWindowSnapshot,
+    WindowRole,
 };
 use crate::core::credentialed_http_client_builder;
+use crate::providers::openai::OpenAISubscriptionFetchResult;
+
+#[path = "subscription.rs"]
+mod subscription;
 
 pub const REFRESH_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 pub const USAGE_DEFAULT_BASE: &str = "https://chatgpt.com/backend-api";
@@ -63,10 +68,25 @@ impl CodexAccountApi {
         email_hint: Option<&str>,
         verify_live_data: bool,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        self.fetch_snapshot_for_workspace(codex_home_path, email_hint, None, verify_live_data)
+            .await
+    }
+
+    /// Fetch a snapshot while scoping every usage/credits request to the
+    /// app-selected workspace. The selected id is request metadata only: the
+    /// auth file remains untouched and may retain a different default.
+    pub async fn fetch_snapshot_for_workspace(
+        &self,
+        codex_home_path: &Path,
+        email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
+        verify_live_data: bool,
+    ) -> Result<AccountUsageSnapshot, CodexApiError> {
         super::fetch_coordination::fetch_snapshot(
             self,
             codex_home_path,
             email_hint,
+            workspace_account_id,
             verify_live_data,
         )
         .await
@@ -76,8 +96,10 @@ impl CodexAccountApi {
         &self,
         codex_home_path: &Path,
         email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
         verify_live_data: bool,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        let workspace_account_id = workspace_account_id.and_then(|id| normalize_string(Some(id)));
         let mut credentials = load_credentials(codex_home_path)?;
 
         if credentials.needs_refresh()
@@ -91,7 +113,13 @@ impl CodexAccountApi {
         }
 
         let result = self
-            .fetch_once(codex_home_path, &credentials, email_hint, verify_live_data)
+            .fetch_once(
+                codex_home_path,
+                &credentials,
+                email_hint,
+                workspace_account_id.as_deref(),
+                verify_live_data,
+            )
             .await;
         if !matches!(&result, Err(CodexApiError::Message(msg)) if msg == UNAUTHORIZED_MESSAGE)
             || credentials.refresh_token.is_empty()
@@ -104,7 +132,13 @@ impl CodexAccountApi {
             // cannot block the fetch already in progress.
             let _saved_retry = save_credentials(codex_home_path, &refreshed);
             return self
-                .fetch_once(codex_home_path, &refreshed, email_hint, verify_live_data)
+                .fetch_once(
+                    codex_home_path,
+                    &refreshed,
+                    email_hint,
+                    workspace_account_id.as_deref(),
+                    verify_live_data,
+                )
                 .await;
         }
         result
@@ -115,15 +149,68 @@ impl CodexAccountApi {
         codex_home_path: &Path,
         credentials: &AuthCredentials,
         email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
         verify_live_data: bool,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
-        if verify_live_data {
-            self.fetch_verified(codex_home_path, credentials, email_hint)
-                .await
+        let snapshot = if verify_live_data {
+            self.fetch_verified(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
+            .await?
         } else {
-            self.fetch_single(codex_home_path, credentials, email_hint)
-                .await
-        }
+            self.fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
+            .await?
+        };
+        Ok(self
+            .enrich_subscription_metadata(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+                snapshot,
+            )
+            .await)
+    }
+
+    /// Fetch subscription dates only after the selected account's quota data
+    /// has been obtained. The request is scoped with the same workspace account
+    /// header, and the optional result never turns a successful quota read into
+    /// an error.
+    async fn enrich_subscription_metadata(
+        &self,
+        codex_home_path: &Path,
+        credentials: &AuthCredentials,
+        email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
+        snapshot: AccountUsageSnapshot,
+    ) -> AccountUsageSnapshot {
+        subscription::enrich_subscription_metadata(
+            self,
+            codex_home_path,
+            credentials,
+            email_hint,
+            workspace_account_id,
+            snapshot,
+        )
+        .await
+    }
+
+    async fn fetch_subscription_metadata(
+        &self,
+        codex_home_path: &Path,
+        credentials: &AuthCredentials,
+        account_id: Option<&str>,
+    ) -> OpenAISubscriptionFetchResult {
+        subscription::fetch_subscription_metadata(self, codex_home_path, credentials, account_id)
+            .await
     }
 
     /// Fetch three reads and require equivalence (CodexControl accuracy model).
@@ -132,18 +219,34 @@ impl CodexAccountApi {
         codex_home_path: &Path,
         credentials: &AuthCredentials,
         email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
         let first = self
-            .fetch_single(codex_home_path, credentials, email_hint)
+            .fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
             .await?;
         let second = self
-            .fetch_single(codex_home_path, credentials, email_hint)
+            .fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
             .await?;
         if is_equivalent(&first, &second) {
             return Ok(second);
         }
         let third = self
-            .fetch_single(codex_home_path, credentials, email_hint)
+            .fetch_single(
+                codex_home_path,
+                credentials,
+                email_hint,
+                workspace_account_id,
+            )
             .await?;
         if is_equivalent(&first, &third) || is_equivalent(&second, &third) {
             return Ok(third);
@@ -158,13 +261,18 @@ impl CodexAccountApi {
         codex_home_path: &Path,
         credentials: &AuthCredentials,
         fallback_email: Option<&str>,
+        workspace_account_id: Option<&str>,
     ) -> Result<AccountUsageSnapshot, CodexApiError> {
         let identity = identity_from_credentials(credentials);
+        let remote_account_id = workspace_account_id
+            .and_then(|id| normalize_string(Some(id)))
+            .or_else(|| identity.provider_account_id.clone())
+            .or_else(|| credentials.account_id.clone());
         let response = self
             .fetch_usage(
                 codex_home_path,
                 &credentials.access_token,
-                credentials.account_id.as_deref(),
+                remote_account_id.as_deref(),
             )
             .await?;
         let rate_limit = response.get("rate_limit").and_then(|v| v.as_object());
@@ -174,11 +282,10 @@ impl CodexAccountApi {
             .and_then(|v| v.as_object())
             .map(make_credits);
 
+        let cost_account_id = remote_account_id.clone();
         Ok(AccountUsageSnapshot {
             email: identity.email.or_else(|| normalize_string(fallback_email)),
-            provider_account_id: identity
-                .provider_account_id
-                .or_else(|| credentials.account_id.clone()),
+            provider_account_id: remote_account_id,
             plan: normalize_string(response.get("plan_type").and_then(|v| v.as_str()))
                 .or(identity.plan),
             allowed: rate_limit
@@ -189,8 +296,15 @@ impl CodexAccountApi {
                 .and_then(|v| v.as_bool()),
             primary_window,
             secondary_window,
-            credits,
+            credits: credits.clone(),
+            cost: CodexExtraUsageCost::from_credits(
+                credits.as_ref(),
+                Utc::now(),
+                cost_account_id.as_deref(),
+                None,
+            ),
             updated_at: Utc::now(),
+            subscription: None,
         })
     }
 
@@ -351,6 +465,13 @@ pub fn resolve_usage_url(codex_home_path: &Path) -> String {
         "/api/codex/usage"
     };
     format!("{base}{path}")
+}
+
+/// Resolve the subscription endpoint only for the real OpenAI dashboard host.
+/// Custom Codex backends may reuse the usage URL shape but must never receive
+/// a ChatGPT subscription probe or be treated as its authority.
+pub fn resolve_subscription_url(codex_home_path: &Path) -> Option<String> {
+    subscription::resolve_subscription_url(codex_home_path)
 }
 
 /// Extract `chatgpt_base_url` from a Codex `config.toml`.
@@ -685,7 +806,7 @@ mod tests {
                 // Exercise per-home concurrency independently of other tests
                 // that intentionally take the global account-switch write lock.
                 super::super::fetch_coordination::fetch_home_snapshot(
-                    &api, &home, None, false, None,
+                    &api, &home, None, None, false, None,
                 )
                 .await
             })
@@ -830,6 +951,8 @@ mod tests {
             primary_window: Some(UsageWindowSnapshot::new(12.0, Some(Utc::now()), 18_000)),
             secondary_window: None,
             credits: None,
+            cost: None,
+            subscription: None,
             updated_at: Utc::now(),
         };
         assert!(is_equivalent(&mk(), &mk()));

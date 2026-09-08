@@ -2,8 +2,10 @@
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::fs;
     use std::io;
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn process_parser_filters_helpers_app_server_duplicates_and_malformed_lines() {
@@ -321,6 +323,161 @@ bad line
 
         assert_eq!(metadata.session_id.as_deref(), Some("session-1"));
         assert_eq!(metadata.cwd.as_deref(), Some(r"C:\work\proj"));
+    }
+
+    #[test]
+    fn claude_transcript_discovery_preserves_legacy_order_and_metadata() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let older = root.path().join("older");
+        let newer = root.path().join("newer");
+        fs::create_dir_all(&older).expect("older project");
+        fs::create_dir_all(&newer).expect("newer project");
+        let older_file = older.join("older.jsonl");
+        let newer_file = newer.join("newer.jsonl");
+        fs::write(
+            &older_file,
+            r#"{"type":"user","sessionId":"older-session","cwd":"C:\\work\\older"}
+"#,
+        )
+        .expect("older transcript");
+        fs::write(
+            &newer_file,
+            r#"{"type":"user","sessionId":"newer-session","cwd":"C:\\work\\newer"}
+"#,
+        )
+        .expect("newer transcript");
+
+        let older_time = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
+        let newer_time = std::time::SystemTime::now();
+        fs::File::options()
+            .write(true)
+            .open(&older_file)
+            .expect("older handle")
+            .set_modified(older_time)
+            .expect("older mtime");
+        fs::File::options()
+            .write(true)
+            .open(&newer_file)
+            .expect("newer handle")
+            .set_modified(newer_time)
+            .expect("newer mtime");
+
+        let mut budget = pi_family::DirectoryScanBudget::new(512, 1, Duration::from_secs(5));
+        let transcripts = LocalAgentSessionScanner::claude_transcripts_from_roots(
+            &[root.path().to_path_buf()],
+            Vec::new(),
+            2,
+            &mut budget,
+        );
+
+        assert_eq!(
+            transcripts
+                .iter()
+                .map(|transcript| transcript.metadata.session_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("newer-session"), Some("older-session")]
+        );
+        assert_eq!(
+            transcripts
+                .iter()
+                .map(|transcript| transcript.metadata.cwd.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some(r"C:\work\newer"), Some(r"C:\work\older")]
+        );
+    }
+
+    #[test]
+    fn budgeted_claude_mapper_preserves_legacy_output() {
+        let home = tempfile::tempdir().expect("home");
+        let cwd = r"C:\work\project";
+        let project = home
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(ClaudeSessionProjectMapper::escaped_cwd(cwd));
+        fs::create_dir_all(&project).expect("project");
+        let older = project.join("older.jsonl");
+        let newer = project.join("newer.jsonl");
+        fs::write(&older, b"older").expect("older");
+        fs::write(&newer, b"newer").expect("newer");
+        fs::File::options()
+            .write(true)
+            .open(&older)
+            .expect("older handle")
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(5))
+            .expect("older mtime");
+
+        let legacy = ClaudeSessionProjectMapper::transcripts(cwd, home.path());
+        let mut budget = pi_family::DirectoryScanBudget::new_with_deadline_for_test(
+            512,
+            1,
+            Instant::now() + Duration::from_secs(30),
+        );
+        let budgeted = ClaudeSessionProjectMapper::transcripts_with_budget(
+            cwd,
+            home.path(),
+            &mut budget,
+        );
+
+        assert_eq!(budgeted, legacy);
+    }
+
+    #[test]
+    fn claude_transcript_enrichment_does_not_start_after_deadline() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = root.path().join("project");
+        fs::create_dir_all(&project).expect("project");
+        fs::write(
+            project.join("session.jsonl"),
+            r#"{"type":"user","sessionId":"session-1","cwd":"C:\\work\\proj"}
+"#,
+        )
+        .expect("transcript");
+        let mut budget = pi_family::DirectoryScanBudget::new_with_deadline_for_test(
+            512,
+            1,
+            Instant::now(),
+        );
+
+        let transcripts = LocalAgentSessionScanner::claude_transcripts_from_roots(
+            &[root.path().to_path_buf()],
+            Vec::new(),
+            1,
+            &mut budget,
+        );
+
+        assert!(transcripts.is_empty());
+    }
+
+    #[test]
+    fn claude_desktop_root_discovery_honors_shared_deadline() {
+        let app_data = tempfile::tempdir().expect("tempdir");
+        let projects = app_data
+            .path()
+            .join("claude-code-sessions")
+            .join("account")
+            .join("workspace")
+            .join(".claude")
+            .join("projects");
+        fs::create_dir_all(&projects).expect("desktop projects");
+
+        let mut live_budget = pi_family::DirectoryScanBudget::new(512, 4, Duration::from_secs(5));
+        let roots = claude_desktop::ClaudeDesktopProjectsLocator::roots_under(
+            app_data.path(),
+            &mut live_budget,
+        );
+        assert_eq!(roots, vec![pi_family::canonicalize_for_scan(&projects)]);
+
+        let mut expired_budget = pi_family::DirectoryScanBudget::new_with_deadline_for_test(
+            512,
+            4,
+            Instant::now(),
+        );
+        let expired = claude_desktop::ClaudeDesktopProjectsLocator::roots_under(
+            app_data.path(),
+            &mut expired_budget,
+        );
+        assert!(expired.is_empty());
     }
 
     #[test]

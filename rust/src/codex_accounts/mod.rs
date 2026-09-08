@@ -15,6 +15,7 @@ pub mod account_manager;
 pub mod api;
 pub mod codex_desktop;
 pub(crate) mod credentials;
+mod extra_usage;
 mod fetch_coordination;
 pub mod file_locations;
 pub mod login_runner;
@@ -37,7 +38,7 @@ pub use credentials::{AuthBackedIdentity, AuthCredentials, load_identity};
 pub use login_runner::{CodexLoginOutcome, CodexLoginResult, ManagedLoginProcess};
 pub use models::{
     AccountUsageSnapshot, CodexAccount, CodexAccountSource, CreditsBalanceSnapshot,
-    RemovedAccountIdentity, UsageWindowSnapshot, utc_now,
+    RemovedAccountIdentity, UsageWindowSnapshot, display_names_by_id, utc_now,
 };
 pub use stores::{AccountStore, SnapshotStore};
 pub use switch_runtime::CodexAccountRuntime;

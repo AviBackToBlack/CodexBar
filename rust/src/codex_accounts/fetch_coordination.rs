@@ -96,6 +96,7 @@ pub(super) async fn fetch_snapshot(
     api: &CodexAccountApi,
     codex_home_path: &Path,
     email_hint: Option<&str>,
+    workspace_account_id: Option<&str>,
     verify_live_data: bool,
 ) -> Result<AccountUsageSnapshot, CodexApiError> {
     let _credentials = super::CREDENTIAL_OPERATIONS.read().await;
@@ -104,6 +105,7 @@ pub(super) async fn fetch_snapshot(
         api,
         &route.home,
         email_hint,
+        workspace_account_id,
         verify_live_data,
         route.managed_copy.as_deref(),
     )
@@ -114,6 +116,7 @@ pub(super) async fn fetch_home_snapshot(
     api: &CodexAccountApi,
     codex_home_path: &Path,
     email_hint: Option<&str>,
+    workspace_account_id: Option<&str>,
     verify_live_data: bool,
     managed_copy: Option<&Path>,
 ) -> Result<AccountUsageSnapshot, CodexApiError> {
@@ -129,7 +132,12 @@ pub(super) async fn fetch_home_snapshot(
     };
     synchronize();
     let result = api
-        .fetch_locked_snapshot(codex_home_path, email_hint, verify_live_data)
+        .fetch_locked_snapshot(
+            codex_home_path,
+            email_hint,
+            workspace_account_id,
+            verify_live_data,
+        )
         .await;
     synchronize();
     result

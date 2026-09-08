@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer } from "react";
 import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
+import { providerAllowsPace } from "../../../lib/providerPace";
 import {
   getCredentialStorageStatus,
   getProviderCookieSourceOptions,
@@ -28,9 +29,11 @@ import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { ChartsSection } from "./sections/charts/ChartsSection";
 import { CookieSourceSection } from "./sections/CookieSourceSection";
-import { GrokUsageSourceSection } from "./sections/GrokUsageSourceSection";
+import { UsageSourceSection } from "./sections/UsageSourceSection";
+import { shouldShowCookieSource } from "./sections/usageSourcePolicy";
 import { RegionSection } from "./sections/RegionSection";
 import { CodexUsageOptions } from "./sections/credentials/CodexUsageOptions";
+import { ClaudeAccountsSection } from "./sections/credentials/ClaudeAccountsSection";
 import { CodexAccountsSection } from "./sections/credentials/CodexAccountsSection";
 import { TokenAccountsPanel } from "../tokens/TokenAccountsPanel";
 import { ApiKeySection } from "./ApiKeySection";
@@ -299,22 +302,31 @@ export function ProviderDetailPane({
         t={t}
         onChange={onSettingsChange}
       />
-      <PaceSection pace={detail.pace} t={t} />
+      <PaceSection
+        pace={
+          providerAllowsPace(detail.id, detail.sourceLabel)
+            ? detail.pace
+            : null
+        }
+        t={t}
+      />
       <CostSection cost={detail.cost} t={t} />
 
-      <GrokUsageSourceSection
+      <UsageSourceSection
         providerId={detail.id}
         currentValue={detail.usageSource}
         t={t}
         onChanged={reload}
       />
-      <CookieSourceSection
-        providerId={detail.id}
-        currentValue={detail.cookieSource}
-        options={cookieOptions}
-        t={t}
-        onChanged={reload}
-      />
+      {shouldShowCookieSource(detail.id, detail.usageSource) && (
+        <CookieSourceSection
+          providerId={detail.id}
+          currentValue={detail.cookieSource}
+          options={cookieOptions}
+          t={t}
+          onChanged={reload}
+        />
+      )}
       <RegionSection
         providerId={detail.id}
         currentValue={detail.region}
@@ -325,6 +337,7 @@ export function ProviderDetailPane({
       <CredentialsDispatcher providerId={detail.id} t={t} />
       {detail.id === "codex" && <CodexUsageOptions t={t} />}
       {detail.id === "codex" && <CodexAccountsSection t={t} />}
+      {detail.id === "claude" && <ClaudeAccountsSection t={t} />}
       <CredentialStorageSection
         status={credentialStatus}
         busy={busy}
