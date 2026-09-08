@@ -3786,17 +3786,7 @@ html:has(.menu-surface--tray) {
   margin-top: 0;
   font-size: 10px;
 }
-/* Hide pace section in tray — macOS doesn't show pace in the compact popover */
-.menu-surface--tray .menu-card__pace,
-.menu-surface--tray .menu-card__pace + .menu-card__divider,
-.menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__pace) {
-  display: none;
-}
-/* Hide large charts in tray; keep the compact local token/cost summary visible. */
-.menu-surface--tray .menu-card__charts,
-.menu-surface--tray .menu-card__local-chart {
-  display: none;
-}
+/* Secondary charts and pace are available inside the Usage details disclosure. */
 .menu-surface--tray .menu-card__local-grid {
   gap: 9px 20px;
 }
@@ -6023,6 +6013,7 @@ html:has(.menu-surface--tray) {
 button, input, select, textarea {
   font-family: var(--font-ui);
 }
+
 
 .select, .number-input, .text-input {
   min-height: 28px;

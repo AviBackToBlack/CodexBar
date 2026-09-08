@@ -266,6 +266,7 @@ locale_keys! {
     ProviderDisabled,
     ProviderInfo,
     ProviderUsage,
+    PanelUsageDetails,
     AuthType,
     DataSource,
     ProviderNotDetected,
