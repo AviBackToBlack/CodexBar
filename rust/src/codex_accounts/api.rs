@@ -6,10 +6,16 @@
 
 use std::path::Path;
 
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+pub use super::credentials::{
+    AuthBackedIdentity, AuthCredentials, jwt_payload, load_credentials, load_identity,
+    parse_credentials_json, save_credentials,
+};
+use super::credentials::{
+    account_id_from_id_token, identity_from_credentials, normalize_string, string_value,
+};
 use super::models::{
     AccountUsageSnapshot, CodexExtraUsageCost, CreditsBalanceSnapshot, UsageWindowSnapshot,
     WindowRole,
@@ -35,231 +41,6 @@ pub enum CodexApiError {
     Network(String),
     #[error("failed to parse Codex payload: {0}")]
     Parse(String),
-}
-
-/// Identity derived from a Codex account's credentials.
-#[derive(Debug, Clone)]
-pub struct AuthBackedIdentity {
-    pub email: Option<String>,
-    pub auth_subject: Option<String>,
-    pub plan: Option<String>,
-    pub provider_account_id: Option<String>,
-}
-
-/// Raw auth.json credentials.
-#[derive(Debug, Clone)]
-pub struct AuthCredentials {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub id_token: Option<String>,
-    pub account_id: Option<String>,
-    pub last_refresh: Option<DateTime<Utc>>,
-}
-
-impl AuthCredentials {
-    pub fn needs_refresh(&self) -> bool {
-        self.last_refresh
-            .is_none_or(|last| Utc::now() - last > chrono::TimeDelta::days(8))
-    }
-}
-
-/// Load the account identity from a Codex home's `auth.json`.
-pub fn load_identity(codex_home_path: &Path) -> Result<AuthBackedIdentity, CodexApiError> {
-    Ok(identity_from_credentials(&load_credentials(
-        codex_home_path,
-    )?))
-}
-
-/// Read and parse `auth.json`.
-pub fn load_credentials(codex_home_path: &Path) -> Result<AuthCredentials, CodexApiError> {
-    let auth_path = codex_home_path.join("auth.json");
-    let content = std::fs::read_to_string(&auth_path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            CodexApiError::Message("No `auth.json` was found for this account.".to_string())
-        } else {
-            CodexApiError::Parse(format!("Failed to read the auth file: {e}"))
-        }
-    })?;
-    parse_credentials_json(&content)
-}
-
-/// Parse `auth.json` contents, accepting `OPENAI_API_KEY` or a `tokens` object.
-pub fn parse_credentials_json(content: &str) -> Result<AuthCredentials, CodexApiError> {
-    let json: serde_json::Value = serde_json::from_str(content)
-        .map_err(|e| CodexApiError::Parse(format!("Failed to parse the auth file: {e}")))?;
-
-    if let Some(api_key) = json
-        .get("OPENAI_API_KEY")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(AuthCredentials {
-            access_token: api_key.to_string(),
-            refresh_token: String::new(),
-            id_token: None,
-            account_id: None,
-            last_refresh: None,
-        });
-    }
-
-    let tokens = json
-        .get("tokens")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| {
-            CodexApiError::Message(
-                "The required token fields are missing from `auth.json`.".to_string(),
-            )
-        })?;
-
-    let access_token = tokens
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| {
-            CodexApiError::Message(
-                "The required token fields are missing from `auth.json`.".to_string(),
-            )
-        })?
-        .to_string();
-
-    let id_token = tokens
-        .get("id_token")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let account_id = tokens
-        .get("account_id")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| account_id_from_id_token(id_token.as_deref()));
-
-    Ok(AuthCredentials {
-        access_token,
-        refresh_token: tokens
-            .get("refresh_token")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        id_token,
-        account_id,
-        last_refresh: json
-            .get("last_refresh")
-            .and_then(|v| v.as_str())
-            .and_then(super::models::parse_datetime),
-    })
-}
-
-/// Save (possibly refreshed) credentials back to `auth.json`.
-pub fn save_credentials(
-    codex_home_path: &Path,
-    credentials: &AuthCredentials,
-) -> std::io::Result<()> {
-    let auth_path = codex_home_path.join("auth.json");
-    let mut payload: serde_json::Value = std::fs::read_to_string(&auth_path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-
-    let mut tokens = serde_json::Map::new();
-    tokens.insert(
-        "access_token".to_string(),
-        serde_json::json!(credentials.access_token),
-    );
-    tokens.insert(
-        "refresh_token".to_string(),
-        serde_json::json!(credentials.refresh_token),
-    );
-    if let Some(id_token) = &credentials.id_token {
-        tokens.insert("id_token".to_string(), serde_json::json!(id_token));
-    }
-    if let Some(account_id) = &credentials.account_id {
-        tokens.insert("account_id".to_string(), serde_json::json!(account_id));
-    }
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("tokens".to_string(), serde_json::Value::Object(tokens));
-        obj.insert(
-            "last_refresh".to_string(),
-            serde_json::json!(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)),
-        );
-    }
-    std::fs::write(&auth_path, serde_json::to_vec_pretty(&payload)?)
-}
-
-fn identity_from_credentials(credentials: &AuthCredentials) -> AuthBackedIdentity {
-    let payload = credentials
-        .id_token
-        .as_deref()
-        .and_then(jwt_payload)
-        .unwrap_or_default();
-    let auth = payload
-        .get("https://api.openai.com/auth")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-    let profile = payload
-        .get("https://api.openai.com/profile")
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-
-    let email = normalize_string(payload.get("email").and_then(|v| v.as_str()))
-        .or_else(|| normalize_string(profile.get("email").and_then(|v| v.as_str())));
-    let auth_subject = normalize_string(payload.get("sub").and_then(|v| v.as_str()));
-    let plan = normalize_string(auth.get("chatgpt_plan_type").and_then(|v| v.as_str()))
-        .or_else(|| normalize_string(payload.get("chatgpt_plan_type").and_then(|v| v.as_str())));
-    let provider_account_id = normalize_string(credentials.account_id.as_deref())
-        .or_else(|| normalize_string(auth.get("chatgpt_account_id").and_then(|v| v.as_str())))
-        .or_else(|| normalize_string(payload.get("chatgpt_account_id").and_then(|v| v.as_str())));
-
-    AuthBackedIdentity {
-        email,
-        auth_subject,
-        plan,
-        provider_account_id,
-    }
-}
-
-/// Minimal JWT payload extraction (base64url payload, no signature verification).
-pub fn jwt_payload(token: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let mut parts = token.split('.');
-    let _header = parts.next()?;
-    let payload = parts.next()?;
-    let mut padded = payload.to_string();
-    while padded.len() % 4 != 0 {
-        padded.push('=');
-    }
-    let decoded = base64::engine::general_purpose::URL_SAFE
-        .decode(padded.as_bytes())
-        .ok()?;
-    serde_json::from_slice::<serde_json::Value>(&decoded)
-        .ok()?
-        .as_object()
-        .cloned()
-}
-
-fn account_id_from_id_token(id_token: Option<&str>) -> Option<String> {
-    let payload = id_token.and_then(jwt_payload)?;
-    let auth = payload
-        .get("https://api.openai.com/auth")
-        .and_then(|v| v.as_object())?;
-    normalize_string(auth.get("chatgpt_account_id").and_then(|v| v.as_str()))
-        .or_else(|| normalize_string(payload.get("chatgpt_account_id").and_then(|v| v.as_str())))
-}
-
-fn normalize_string(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-fn string_value(value: &serde_json::Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 // ── Quota fetching ──────────────────────────────────────────────────────────
@@ -295,6 +76,23 @@ impl CodexAccountApi {
     /// app-selected workspace. The selected id is request metadata only: the
     /// auth file remains untouched and may retain a different default.
     pub async fn fetch_snapshot_for_workspace(
+        &self,
+        codex_home_path: &Path,
+        email_hint: Option<&str>,
+        workspace_account_id: Option<&str>,
+        verify_live_data: bool,
+    ) -> Result<AccountUsageSnapshot, CodexApiError> {
+        super::fetch_coordination::fetch_snapshot(
+            self,
+            codex_home_path,
+            email_hint,
+            workspace_account_id,
+            verify_live_data,
+        )
+        .await
+    }
+
+    pub(super) async fn fetch_locked_snapshot(
         &self,
         codex_home_path: &Path,
         email_hint: Option<&str>,
@@ -871,6 +669,204 @@ fn credits_equivalent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+
+    #[tokio::test]
+    async fn active_fetches_use_and_sync_ambient_credentials_even_when_usage_fails() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        for (target_id, managed_newer, expected_token) in [
+            ("active", false, "ambient-token"),
+            ("active", true, "managed-token"),
+            ("other", true, "managed-token"),
+        ] {
+            let ambient = tempfile::tempdir().unwrap();
+            let managed = tempfile::tempdir().unwrap();
+            let credentials = |account: &str, token: &str| AuthCredentials {
+                access_token: token.into(),
+                refresh_token: format!("refresh-{token}"),
+                id_token: None,
+                account_id: Some(account.into()),
+                last_refresh: Some(Utc::now()),
+            };
+            save_credentials(ambient.path(), &credentials("active", "ambient-token")).unwrap();
+            save_credentials(managed.path(), &credentials(target_id, "managed-token")).unwrap();
+            let now = Utc::now();
+            for (home, refreshed) in [
+                (ambient.path(), now - chrono::TimeDelta::hours(1)),
+                (
+                    managed.path(),
+                    if managed_newer {
+                        now
+                    } else {
+                        now - chrono::TimeDelta::hours(2)
+                    },
+                ),
+            ] {
+                let path = home.join("auth.json");
+                let mut json: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                json["last_refresh"] = serde_json::json!(refreshed.to_rfc3339());
+                std::fs::write(path, json.to_string()).unwrap();
+            }
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = format!(
+                "chatgpt_base_url = \"http://{}\"\n",
+                listener.local_addr().unwrap()
+            );
+            for home in [ambient.path(), managed.path()] {
+                std::fs::write(home.join("config.toml"), &config).unwrap();
+            }
+            super::super::file_locations::with_ambient_codex_home(ambient.path().to_owned());
+            let api = CodexAccountApi {
+                client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            };
+            let server = async {
+                let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(
+                        timeout(Duration::from_secs(5), stream.read_u8())
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                    );
+                }
+                stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+                String::from_utf8(headers).unwrap().to_lowercase()
+            };
+            let (result, headers) =
+                tokio::join!(api.fetch_snapshot(managed.path(), None, false), server);
+            super::super::file_locations::clear_ambient_codex_home_override();
+            assert!(result.is_err());
+            assert!(headers.contains(&format!("authorization: bearer {expected_token}")));
+            let saved = load_credentials(managed.path()).unwrap();
+            assert_eq!(saved.access_token, expected_token);
+            assert_eq!(saved.refresh_token, format!("refresh-{expected_token}"));
+            assert_eq!(
+                load_credentials(ambient.path()).unwrap().access_token,
+                if target_id == "active" {
+                    expected_token
+                } else {
+                    "ambient-token"
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn overlapping_fetches_reload_credentials_and_keep_other_homes_parallel() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::time::{Duration, timeout};
+
+        async fn request(listener: &TcpListener) -> (TcpStream, String) {
+            let (mut stream, _) = timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(
+                    timeout(Duration::from_secs(5), stream.read_u8())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                );
+            }
+            (stream, String::from_utf8(headers).unwrap().to_lowercase())
+        }
+        async fn respond(mut stream: TcpStream) {
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        }
+        fn configure(home: &Path, address: std::net::SocketAddr, token: &str) {
+            std::fs::write(
+                home.join("config.toml"),
+                format!("chatgpt_base_url = \"http://{address}\"\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                home.join("auth.json"),
+                serde_json::json!({"OPENAI_API_KEY":token}).to_string(),
+            )
+            .unwrap();
+        }
+        fn fetch(
+            home: std::path::PathBuf,
+        ) -> tokio::task::JoinHandle<Result<AccountUsageSnapshot, CodexApiError>> {
+            tokio::spawn(async move {
+                let api = CodexAccountApi {
+                    client: reqwest::Client::builder().no_proxy().build().unwrap(),
+                };
+                // Exercise per-home concurrency independently of other tests
+                // that intentionally take the global account-switch write lock.
+                super::super::fetch_coordination::fetch_home_snapshot(
+                    &api, &home, None, None, false, None,
+                )
+                .await
+            })
+        }
+
+        let first_home = tempfile::tempdir().unwrap();
+        let other_home = tempfile::tempdir().unwrap();
+        let first_server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other_server = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        configure(
+            first_home.path(),
+            first_server.local_addr().unwrap(),
+            "old-token",
+        );
+        configure(
+            other_home.path(),
+            other_server.local_addr().unwrap(),
+            "other-token",
+        );
+        let first = fetch(first_home.path().to_owned());
+        let (first_stream, headers) = request(&first_server).await;
+        assert!(headers.contains("authorization: bearer old-token"));
+        // A lexical alias of the same auth path must share the first lane.
+        let second = fetch(first_home.path().join("."));
+        let other = fetch(other_home.path().to_owned());
+        let (other_stream, headers) = request(&other_server).await;
+        assert!(headers.contains("authorization: bearer other-token"));
+        respond(other_stream).await;
+        timeout(Duration::from_secs(5), other)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), first_server.accept())
+                .await
+                .is_err()
+        );
+
+        // Model a rotated token being persisted by the first in-flight fetch.
+        configure(
+            first_home.path(),
+            first_server.local_addr().unwrap(),
+            "rotated-token",
+        );
+        respond(first_stream).await;
+        timeout(Duration::from_secs(5), first)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let (second_stream, headers) = request(&first_server).await;
+        assert!(headers.contains("authorization: bearer rotated-token"));
+        respond(second_stream).await;
+        timeout(Duration::from_secs(5), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 
     #[test]
     fn parse_credentials_accepts_api_key() {
