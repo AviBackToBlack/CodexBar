@@ -114,7 +114,8 @@ impl LocalUsageSnapshot {
         // Upstream 0.51 (#2982): local SQLite quota reconstruction is useful
         // but it is not server-confirmed authority. Keep that distinction in
         // the data contract so CLI/React can present it without guessing.
-        ProviderFetchResult::new(snap, "local estimate")
+        ProviderFetchResult::new(snap, super::LOCAL_ESTIMATE_SOURCE_LABEL)
+            .with_non_authoritative_pace()
     }
 }
 
@@ -604,6 +605,30 @@ mod tests {
     use super::*;
     use chrono::Weekday;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn local_fetch_result_keeps_estimate_source_and_reset_windows() {
+        let result = LocalUsageSnapshot {
+            rolling_usage_percent: 12.0,
+            weekly_usage_percent: 23.0,
+            monthly_usage_percent: 34.0,
+            rolling_reset_in_sec: 300,
+            weekly_reset_in_sec: 1_000,
+            monthly_reset_in_sec: 2_000,
+        }
+        .to_fetch_result();
+
+        assert_eq!(
+            result.source_label,
+            super::super::LOCAL_ESTIMATE_SOURCE_LABEL
+        );
+        assert_eq!(result.usage.primary.used_percent, 12.0);
+        assert_eq!(result.usage.secondary.as_ref().unwrap().used_percent, 23.0);
+        assert_eq!(result.usage.tertiary.as_ref().unwrap().used_percent, 34.0);
+        assert!(result.usage.primary.resets_at.is_some());
+        assert!(result.usage.secondary.as_ref().unwrap().resets_at.is_some());
+        assert!(result.usage.tertiary.as_ref().unwrap().resets_at.is_some());
+    }
 
     fn temp_db_path(label: &str) -> PathBuf {
         let nanos = SystemTime::now()

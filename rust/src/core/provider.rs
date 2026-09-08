@@ -641,6 +641,15 @@ impl Default for FetchContext {
     }
 }
 
+/// How the shell should treat a failed refresh when a prior good snapshot exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastGoodFailurePolicy {
+    Replace,
+    Preserve,
+    PreserveOnce,
+    PreserveOnceThenSurface,
+}
+
 /// Trait that all providers must implement
 #[async_trait]
 pub trait Provider: Send + Sync {
@@ -676,6 +685,26 @@ pub trait Provider: Send + Sync {
     /// Detect the version of the CLI tool (if applicable)
     fn detect_version(&self) -> Option<String> {
         None
+    }
+
+    /// Whether an explicitly selected manual cookie outranks a token-account override.
+    fn manual_cookie_precedes_token_account(&self) -> bool {
+        false
+    }
+
+    /// Whether Automatic metric selection should prefer an exhausted quota lane.
+    fn automatic_metric_prioritizes_exhausted_window(&self) -> bool {
+        true
+    }
+
+    /// Whether browser-cookie discovery/recovery is owned by the provider.
+    fn owns_browser_cookie_resolution(&self) -> bool {
+        false
+    }
+
+    /// How the shell should treat a failed refresh when a prior good snapshot exists.
+    fn last_good_failure_policy(&self, _error: &str) -> LastGoodFailurePolicy {
+        LastGoodFailurePolicy::Replace
     }
 
     /// Presentation-safe availability state for a refresh error. The default
