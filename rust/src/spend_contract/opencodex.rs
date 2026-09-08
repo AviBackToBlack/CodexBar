@@ -804,6 +804,39 @@ mod tests {
     }
 
     #[test]
+    fn complete_trailing_opencodex_record_waits_for_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("usage.jsonl");
+        let cache = dir.path().join("cache.sqlite");
+        let first = r#"{"requestId":"a","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
+        let trailing = r#"{"requestId":"b","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
+        fs::write(&log, format!("{first}\n{trailing}")).unwrap();
+
+        let before_newline = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            before_newline
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        use std::io::Write as _;
+        writeln!(file).unwrap();
+        drop(file);
+
+        let after_newline = load_entries_with_cache(&log, &cache).unwrap();
+        assert_eq!(
+            after_newline
+                .iter()
+                .map(|entry| entry.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+    }
+
+    #[test]
     fn later_request_id_replaces_cached_entry_without_full_cache_loss() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("usage.jsonl");

@@ -504,10 +504,7 @@ pub struct ProviderFetchResult {
     /// Label describing the data source (e.g., "oauth", "web", "cli")
     pub source_label: String,
 
-    /// True only for a live Claude CLI fetch with usable quota windows.
-    #[serde(default)]
-    pub has_successful_claude_cli_quota: bool,
-}
+    /// True only for a live Claude CLI fetch with usable quota windows.`n    #[serde(default)]`n    pub has_successful_claude_cli_quota: bool,`n`n    /// Whether quota data is authoritative enough for pace/run-out advice.`n    #[serde(default = "default_pace_authoritative")]`n    pub pace_authoritative: bool,`n}`n`nfn default_pace_authoritative() -> bool {`n    true`n}
 
 impl ProviderFetchResult {
     /// Create a new fetch result
@@ -518,7 +515,14 @@ impl ProviderFetchResult {
             wayfinder_usage: None,
             source_label: source_label.into(),
             has_successful_claude_cli_quota: false,
+            pace_authoritative: true,
         }
+    }
+
+    /// Mark this result as unsuitable for derived pace/run-out advice.
+    pub fn with_non_authoritative_pace(mut self) -> Self {
+        self.pace_authoritative = false;
+        self
     }
 
     /// Builder pattern: set cost
@@ -537,6 +541,17 @@ impl ProviderFetchResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetch_result_pace_authority_defaults_true_and_can_be_disabled() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        assert!(ProviderFetchResult::new(usage.clone(), "api").pace_authoritative);
+        assert!(
+            !ProviderFetchResult::new(usage, "local estimate")
+                .with_non_authoritative_pace()
+                .pace_authoritative
+        );
+    }
 
     #[test]
     fn cost_snapshot_ignores_non_finite_values() {

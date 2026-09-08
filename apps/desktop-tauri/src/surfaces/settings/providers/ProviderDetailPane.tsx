@@ -30,6 +30,7 @@ import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { ChartsSection } from "./sections/charts/ChartsSection";
 import { CookieSourceSection } from "./sections/CookieSourceSection";
 import { UsageSourceSection } from "./sections/UsageSourceSection";
+import { shouldShowCookieSource } from "./sections/usageSourcePolicy";
 import { RegionSection } from "./sections/RegionSection";
 import { CodexUsageOptions } from "./sections/credentials/CodexUsageOptions";
 import { CodexAccountsSection } from "./sections/credentials/CodexAccountsSection";
@@ -316,7 +317,7 @@ export function ProviderDetailPane({
         t={t}
         onChanged={reload}
       />
-      {!(detail.id === "alibabatokenplan" && detail.usageSource === "cli") && (
+      {shouldShowCookieSource(detail.id, detail.usageSource) && (
         <CookieSourceSection
           providerId={detail.id}
           currentValue={detail.cookieSource}
