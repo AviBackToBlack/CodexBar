@@ -1,5 +1,33 @@
 # Changelog
 
+## [Windows] 0.56.8 - 2026-09-08
+
+Windows release aligned to the reviewed upstream CodexBar **0.56.8** behavior baseline, plus Windows-specific reliability, account-switching, UI, browser-import, and release-pipeline improvements landed since 0.55.0.
+
+### Added
+- Saved Codex and Claude accounts with account switching from Settings and the native tray menu.
+- Antigravity local token-history reporting, improved quota selection, and bounded historical scanning.
+- Expanded Codex usage/cost history, reasoning-token accounting, reset diagnostics, and privacy-aware Usage & Spend reporting.
+- Claude Desktop/session discovery and localized model-specific weekly quota labels.
+
+### Changed
+- Codex account switching now separates credential storage, fetch coordination, and restart orchestration from the HTTP API and Tauri command layers.
+- Tray account actions are isolated behind a dedicated tray-account controller instead of growing the shared tray bridge.
+- Windows typography, Settings layout, and tray/pop-out usage-card layout are split into focused surface styles.
+- pnpm is pinned at 11.25.0 from one canonical package-manager declaration used by the release tooling.
+
+### Fixed
+- Codex preserves authenticated HTTP permission failures instead of misclassifying 403 responses as expired credentials, including PAT paths.
+- Claude refresh can adopt changed fresh Windows Credential Manager credentials when the default file credential is expired.
+- Copilot account reuse is identity-first, preventing legacy labels from replacing a different verified GitHub account.
+- Kiro usage enrichment follows the validated profile ARN region and fails closed for unsupported regions.
+- Codex bundled CLI discovery and desktop restart/account-switch flows are more reliable on Windows.
+- Brave App-Bound Encryption cookie import reports the Windows limitation clearly instead of implying a generic cookie failure.
+- Ollama browser-cookie import tries viable browser sources without letting one failed source hide another valid source.
+- Minimax API-key quota retrieval uses the provider API rather than treating browser cookies as the only usable path.
+
+---
+
 ## [Windows] 0.55.0 - 2026-08-25
 
 Windows port of upstream CodexBar **0.54.0 → 0.55.0**, plus the Windows Grok OAuth routing fix from issue #362.
