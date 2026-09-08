@@ -22,7 +22,7 @@ pub(super) enum ResetDiagnosticReason {
 }
 
 impl ResetDiagnosticReason {
-    const fn code(self) -> &'static str {
+    pub(super) const fn code(self) -> &'static str {
         match self {
             Self::CandidateCreated => "candidateCreated",
             Self::SourceNotExactOAuth => "sourceNotExactOAuth",
