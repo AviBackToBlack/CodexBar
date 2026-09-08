@@ -495,6 +495,7 @@ locale_keys! {
     // Provider detail - Usage section
     ProviderSessionLabel,
     ProviderWeeklyLabel,
+    ClaudeScopedWeeklyLabel,
     ProviderCodeReviewLabel,
     ResetsInShort,
     ResetsInDaysHours,
@@ -853,6 +854,7 @@ locale_keys! {
     DetailPaceRunsOutIn,
     DetailPaceWillLastToReset,
     DetailCostTitle,
+    ApiSpendTitle,
     DetailCostUsed,
     DetailCostLimit,
     DetailCostRemaining,

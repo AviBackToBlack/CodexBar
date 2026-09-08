@@ -28,6 +28,15 @@ pub fn parse_session_file(
     modified_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Option<PiFamilySessionRecord> {
+    parse_session_file_inner(path, dialect, modified_at, now)
+}
+
+fn parse_session_file_inner(
+    path: &Path,
+    dialect: PiSessionDialect,
+    modified_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<PiFamilySessionRecord> {
     let prefix = read_prefix(path)?;
     let lines = complete_lines(&prefix)?;
     let mut non_empty: Vec<&[u8]> = lines
