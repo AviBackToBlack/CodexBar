@@ -26,9 +26,11 @@ import {
 export default function CodexAccountsMenu({
   hideEmail,
   resetTimeRelative,
+  onLayoutChange,
 }: {
   hideEmail: boolean;
   resetTimeRelative: boolean;
+  onLayoutChange?: () => void;
 }) {
   const { t } = useLocale();
   const [accounts, setAccounts] = useState<CodexAccount[]>([]);
@@ -55,6 +57,10 @@ export default function CodexAccountsMenu({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    onLayoutChange?.();
+  }, [accounts.length, error, onLayoutChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,7 +93,7 @@ export default function CodexAccountsMenu({
   }
 
   return (
-    <details className="codex-menu-accounts">
+    <details className="codex-menu-accounts" onToggle={onLayoutChange}>
       <summary className="codex-menu-accounts__summary">
         <span className="codex-menu-accounts__title">{t("CodexAccountsTitle")}</span>
         <span className="codex-menu-accounts__count">{accounts.length}</span>

@@ -6,6 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   getDeepSeekPricingStatus: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
+  claudeAccountsList: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -108,6 +109,7 @@ function renderCard(
 describe("MenuCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    tauriMocks.claudeAccountsList.mockResolvedValue([]);
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionCopyError: "Copy error",
@@ -465,6 +467,23 @@ describe("MenuCard", () => {
     expect(screen.getByText("30d tokens")).toBeInTheDocument();
     expect(screen.getByText("584K")).toBeInTheDocument();
     expect(screen.getByText("Estimated from local logs")).toBeInTheDocument();
+    const details = container.querySelector<HTMLDetailsElement>(".menu-card__more")!;
+    expect(details.open).toBe(false);
+    fireEvent.click(details.querySelector("summary")!);
+    expect(details.open).toBe(true);
+  });
+
+  it("places Claude accounts above metrics and the collapsed usage details", async () => {
+    tauriMocks.claudeAccountsList.mockResolvedValue([
+      { id: "a", email: "a@example.com", organization: "Personal", isActive: true, isSaved: true },
+      { id: "b", email: "b@example.com", organization: "Work", isActive: false, isSaved: true },
+    ]);
+    const { container } = renderCard(provider(null));
+    await screen.findByText("ClaudeAccountsTitle");
+    const accounts = container.querySelector(".codex-menu-accounts")!;
+    const metrics = container.querySelector(".menu-card__metrics")!;
+    expect(accounts.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector<HTMLDetailsElement>(".menu-card__more")?.open).toBe(false);
   });
 
   it("shows on-pace budgets and expands projection details", async () => {
@@ -483,12 +502,13 @@ describe("MenuCard", () => {
     renderCard(snapshot, { onLayoutChange });
 
     const toggle = await screen.findByRole("button", { name: /On-pace budget/ });
-    expect(screen.getByText("now 20%")).toBeInTheDocument();
-    expect(screen.getByText("1h 21%")).toBeInTheDocument();
+    expect(screen.queryByText("now 20%")).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /PaceChartAriaLabel/i })).not.toBeInTheDocument();
 
     fireEvent.click(toggle);
 
+    expect(screen.getByText("now 20%")).toBeInTheDocument();
+    expect(screen.getByText("1h 21%")).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("img", { name: /PaceChartAriaLabel/i })).toBeInTheDocument();
     await waitFor(() => {
@@ -506,12 +526,12 @@ describe("MenuCard", () => {
 
     renderCard(snapshot);
 
-    expect(
-      await screen.findByRole("button", { name: /On-pace budget/ }),
-    ).toBeInTheDocument();
-      expect(screen.getByText("now 0%")).toBeInTheDocument();
-      expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
-      expect(screen.queryByText("Lasts until reset")).not.toBeInTheDocument();
+    const toggle = await screen.findByRole("button", { name: /On-pace budget/ });
+    expect(screen.queryByText("now 0%")).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByText("now 0%")).toBeInTheDocument();
+    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Lasts until reset")).not.toBeInTheDocument();
   });
 
   it("does not show pace budgets for a five-hour session window", async () => {

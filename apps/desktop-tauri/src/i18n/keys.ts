@@ -76,6 +76,7 @@ export const ALL_LOCALE_KEYS = [
   "ProviderDisabled",
   "ProviderInfo",
   "ProviderUsage",
+  "PanelUsageDetails",
   "AuthType",
   "DataSource",
   "ProviderNotDetected",

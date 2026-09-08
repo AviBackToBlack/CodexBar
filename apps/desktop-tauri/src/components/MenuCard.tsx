@@ -275,6 +275,17 @@ export default function MenuCard({
         )}
       </header>
 
+      {provider.providerId === "codex" && (
+        <CodexAccountsMenu
+          hideEmail={hideEmail}
+          resetTimeRelative={resetTimeRelative}
+          onLayoutChange={onLayoutChange}
+        />
+      )}
+      {provider.providerId === "claude" && (
+        <ClaudeAccountsMenu hideEmail={hideEmail} onLayoutChange={onLayoutChange} />
+      )}
+
       {hasDetails && <div className="menu-card__divider" />}
 
       {hasDetails && (
@@ -321,15 +332,6 @@ export default function MenuCard({
         </section>
       )}
 
-      {provider.providerId === "codex" && (
-        <CodexAccountsMenu
-          hideEmail={hideEmail}
-          resetTimeRelative={resetTimeRelative}
-        />
-      )}
-      {provider.providerId === "claude" && (
-        <ClaudeAccountsMenu hideEmail={hideEmail} />
-      )}
     </article>
   );
 }
