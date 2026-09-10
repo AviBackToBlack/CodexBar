@@ -573,9 +573,6 @@ export default function MenuCardDetails({
       {hasCost && provider.cost && (
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
-            {hasCost && provider.cost && (
-        <section className="menu-card__group menu-card__cost">
-          <div className="menu-card__group-title">
             {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
               ? t("ApiSpendTitle")
               : balanceOnlyCost
@@ -585,9 +582,12 @@ export default function MenuCardDetails({
           {balanceOnlyCost ? (
             <div className="menu-card__cost-line">
               {provider.cost.formattedBalance ||
-                formatCurrency(costBalance!, provider.cost.currencyCode)}
+                formatCurrency(
+                  provider.cost.balance,
+                  provider.cost.currencyCode,
+                )}
             </div>
-          ) : spendAndBalanceCost ? (
+          ) : (
             <>
               <div className="menu-card__local-grid menu-card__cost-grid">
                 <div>
