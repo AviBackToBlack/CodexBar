@@ -1,0 +1,95 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or commit to build'
+        required: true
+        default: 'windows/devin'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-windows-exe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || 'windows/devin' }}
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      CARGO_TARGET_DIR: ${{ github.workspace }}\target
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Record source revision
+        id: source
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $short = $sha.Substring(0, 12)
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "short=$short" >> $env:GITHUB_OUTPUT
+          "ref=$env:TARGET_REF" >> $env:GITHUB_OUTPUT
+          "Building Windows EXE from $env:TARGET_REF ($sha)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Activate pinned pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.25.0 --activate
+          node --version
+          pnpm --version
+
+      - name: Setup Rust MSVC toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile default
+          rustup default stable-x86_64-pc-windows-msvc
+          rustup target add x86_64-pc-windows-msvc --toolchain stable-x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
+
+      - name: Install desktop dependencies
+        shell: pwsh
+        run: pnpm --dir apps\desktop-tauri install --frozen-lockfile
+
+      - name: Build Tauri desktop
+        shell: pwsh
+        run: pnpm --dir apps\desktop-tauri exec tauri build --ci --no-bundle --target x86_64-pc-windows-msvc
+
+      - name: Prepare EXE and checksum
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc\release\codexbar-desktop-tauri.exe'
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            Get-ChildItem -Path $env:CARGO_TARGET_DIR -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
+            throw "Missing expected Tauri executable: $source"
+          }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item -LiteralPath $source -Destination artifacts\codexbar.exe -Force
+          $hash = (Get-FileHash artifacts\codexbar.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  codexbar.exe" | Set-Content artifacts\codexbar.exe.sha256
+          "EXE SHA256: $hash" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexBar-Windows-${{ steps.source.outputs.short }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
