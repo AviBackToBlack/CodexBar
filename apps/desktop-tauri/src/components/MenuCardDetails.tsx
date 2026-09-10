@@ -573,6 +573,9 @@ export default function MenuCardDetails({
       {hasCost && provider.cost && (
         <section className="menu-card__group menu-card__cost">
           <div className="menu-card__group-title">
+            {hasCost && provider.cost && (
+        <section className="menu-card__group menu-card__cost">
+          <div className="menu-card__group-title">
             {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
               ? t("ApiSpendTitle")
               : balanceOnlyCost
@@ -582,11 +585,35 @@ export default function MenuCardDetails({
           {balanceOnlyCost ? (
             <div className="menu-card__cost-line">
               {provider.cost.formattedBalance ||
-                formatCurrency(
-                  provider.cost.balance,
-                  provider.cost.currencyCode,
-                )}
+                formatCurrency(costBalance!, provider.cost.currencyCode)}
             </div>
+          ) : spendAndBalanceCost ? (
+            <>
+              <div className="menu-card__local-grid menu-card__cost-grid">
+                <div>
+                  <span className="menu-card__local-label">{t("DetailCostUsed")}</span>
+                  <strong>
+                    {provider.cost.formattedUsed ||
+                      formatCurrency(
+                        provider.cost.used,
+                        provider.cost.currencyCode,
+                      )}
+                  </strong>
+                </div>
+                <div>
+                  <span className="menu-card__local-label">{t("DetailCostBalance")}</span>
+                  <strong>
+                    {provider.cost.formattedBalance ||
+                      formatCurrency(costBalance!, provider.cost.currencyCode)}
+                  </strong>
+                </div>
+              </div>
+              {costResetText && (
+                <div className="menu-card__cost-line menu-card__cost-line--muted">
+                  {costResetText}
+                </div>
+              )}
+            </>
           ) : (
             <>
               <div className="menu-card__local-grid menu-card__cost-grid">
