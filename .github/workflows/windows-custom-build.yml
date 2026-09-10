@@ -56,6 +56,38 @@ jobs:
         run: |
           pnpm --dir apps\desktop-tauri install --frozen-lockfile
 
+      - name: Repair duplicated cost JSX from rebase
+        shell: pwsh
+        run: |
+          $path = 'apps\desktop-tauri\src\components\MenuCardDetails.tsx'
+          $lines = [System.Collections.Generic.List[string]]::new()
+          Get-Content -LiteralPath $path | ForEach-Object { [void]$lines.Add($_) }
+
+          $start = -1
+          $end = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($start -lt 0 -and $lines[$i].Contains('{balanceOnlyCost ? (')) { $start = $i }
+            if ($start -ge 0 -and $lines[$i].Contains('{provider.providerId === "mistral"')) { $end = $i; break }
+          }
+          if ($start -lt 0 -or $end -lt 0) { throw 'Could not locate cost JSX block.' }
+
+          $branches = @()
+          for ($i = $start; $i -lt $end; $i++) {
+            if ($lines[$i].Trim() -eq ') : (') { $branches += $i }
+          }
+          if ($branches.Count -ne 3) {
+            throw "Expected exactly 3 duplicated ternary branch markers, found $($branches.Count)."
+          }
+
+          $lines[$branches[0]] = '          ) : spendAndBalanceCost ? ('
+          $removeStart = $branches[1]
+          $removeCount = $branches[2] - $branches[1]
+          $lines.RemoveRange($removeStart, $removeCount)
+          Set-Content -LiteralPath $path -Value $lines -Encoding utf8
+
+          Write-Host 'Repaired cost JSX block:'
+          Get-Content -LiteralPath $path | Select-Object -Skip ($start - 2) -First 90
+
       - name: Build Tauri desktop
         shell: pwsh
         run: |
