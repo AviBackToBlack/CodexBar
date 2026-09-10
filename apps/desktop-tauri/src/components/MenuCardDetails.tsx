@@ -583,38 +583,11 @@ export default function MenuCardDetails({
             <div className="menu-card__cost-line">
               {provider.cost.formattedBalance ||
                 formatCurrency(
-                  provider.cost.balance,
+                  costBalance!,
                   provider.cost.currencyCode,
                 )}
             </div>
-          ) : (
-            <>
-              <div className="menu-card__local-grid menu-card__cost-grid">
-                <div>
-                  <span className="menu-card__local-label">{t("DetailCostUsed")}</span>
-                  <strong>
-                    {provider.cost.formattedUsed ||
-                      formatCurrency(
-                        provider.cost.used,
-                        provider.cost.currencyCode,
-                      )}
-                  </strong>
-                </div>
-                <div>
-                  <span className="menu-card__local-label">{t("DetailCostBalance")}</span>
-                  <strong>
-                    {provider.cost.formattedBalance ||
-                      formatCurrency(costBalance!, provider.cost.currencyCode)}
-                  </strong>
-                </div>
-              </div>
-              {costResetText && (
-                <div className="menu-card__cost-line menu-card__cost-line--muted">
-                  {costResetText}
-                </div>
-              )}
-            </>
-          ) : (
+          ) : spendAndBalanceCost ? (
             <>
               <div className="menu-card__local-grid menu-card__cost-grid">
                 <div>
