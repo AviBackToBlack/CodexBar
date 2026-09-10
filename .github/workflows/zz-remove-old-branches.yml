@@ -1,0 +1,36 @@
+name: One-time obsolete branch cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/zz-remove-old-branches.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Delete obsolete branch names
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin --delete fix/litellm-key-budget fix/win-devin-provider
+
+      - name: Remove this workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/zz-remove-old-branches.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/zz-remove-old-branches.yml
+          git commit -m 'chore: finish obsolete branch cleanup'
+          git push origin HEAD:main
