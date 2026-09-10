@@ -1,5 +1,9 @@
 # CodexBar 🎚️ — May your tokens never run out.
 
+> [!NOTE]
+> **AviBackToBlack fork:** personal LiteLLM compatibility work and Windows Devin dogfood live on dedicated branches.
+> Use **Actions → Build macOS DMG** or **Actions → Build Windows EXE** to get binaries. See [FORK.md](FORK.md).
+
 > Every AI coding limit, in your menu bar.
 
 [![Latest release](https://img.shields.io/github/v/release/steipete/CodexBar?style=flat-square&color=0a0a0c)](https://github.com/steipete/CodexBar/releases/latest)
