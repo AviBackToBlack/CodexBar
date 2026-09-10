@@ -53,74 +53,31 @@ jobs:
 
       - name: Install desktop dependencies
         shell: pwsh
-        run: |
-          pnpm --dir apps\desktop-tauri install --frozen-lockfile
-
-      - name: Repair cost JSX from rebase
-        shell: pwsh
-        run: |
-          $path = 'apps\desktop-tauri\src\components\MenuCardDetails.tsx'
-          $lines = [System.Collections.Generic.List[string]]::new()
-          Get-Content -LiteralPath $path | ForEach-Object { [void]$lines.Add($_) }
-
-          $start = -1
-          $end = -1
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($start -lt 0 -and $lines[$i].Contains('{balanceOnlyCost ? (')) { $start = $i }
-            if ($start -ge 0 -and $lines[$i].Contains('{provider.providerId === "mistral"')) { $end = $i; break }
-          }
-          if ($start -lt 0 -or $end -lt 0) { throw 'Could not locate cost JSX block.' }
-
-          $branches = @()
-          for ($i = $start; $i -lt $end; $i++) {
-            if ($lines[$i].Trim() -eq ') : (') { $branches += $i }
-          }
-          if ($branches.Count -ne 3) {
-            throw "Expected exactly 3 duplicated ternary branch markers, found $($branches.Count)."
-          }
-
-          $lines[$branches[0]] = '          ) : spendAndBalanceCost ? ('
-          $removeStart = $branches[1]
-          $removeCount = $branches[2] - $branches[1]
-          $lines.RemoveRange($removeStart, $removeCount)
-
-          $balanceArgFixed = $false
-          for ($i = $start; $i -lt [Math]::Min($start + 20, $lines.Count); $i++) {
-            if ($lines[$i].Trim() -eq 'provider.cost.balance,') {
-              $lines[$i] = '                  costBalance!,'
-              $balanceArgFixed = $true
-              break
-            }
-          }
-          if (-not $balanceArgFixed) { throw 'Could not locate narrowed balance argument.' }
-
-          Set-Content -LiteralPath $path -Value $lines -Encoding utf8
-          Write-Host 'Repaired cost JSX block:'
-          Get-Content -LiteralPath $path | Select-Object -Skip ($start - 2) -First 90
+        run: pnpm --dir apps\desktop-tauri install --frozen-lockfile
 
       - name: Build Tauri desktop
         shell: pwsh
-        run: |
-          pnpm --dir apps\desktop-tauri exec tauri build --ci --no-bundle --target x86_64-pc-windows-msvc
+        run: pnpm --dir apps\desktop-tauri exec tauri build --ci --no-bundle --target x86_64-pc-windows-msvc
 
       - name: Prepare artifact
         shell: pwsh
         run: |
           $source = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc\release\codexbar-desktop-tauri.exe'
           if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            Write-Host 'Expected EXE not found. Candidate executables:'
             Get-ChildItem -Path $env:CARGO_TARGET_DIR -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
             throw "Missing expected Tauri executable: $source"
           }
           New-Item -ItemType Directory -Force -Path artifact | Out-Null
           Copy-Item -LiteralPath $source -Destination artifact\codexbar.exe -Force
-          Get-FileHash artifact\codexbar.exe -Algorithm SHA256 | Format-List
+          (Get-FileHash artifact\codexbar.exe -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content artifact\codexbar.exe.sha256
           Get-Item artifact\codexbar.exe | Select-Object FullName, Length, LastWriteTime
 
       - name: Upload codexbar.exe
         uses: actions/upload-artifact@v4
         with:
           name: codexbar-windows-custom-${{ github.sha }}
-          path: artifact/codexbar.exe
+          path: |
+            artifact/codexbar.exe
+            artifact/codexbar.exe.sha256
           if-no-files-found: error
           retention-days: 14
