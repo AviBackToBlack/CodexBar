@@ -1,0 +1,92 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or commit to build'
+        required: true
+        default: 'personal/litellm-work-key'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-macos-dmg.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || 'personal/litellm-work-key' }}
+
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_REF }}
+
+      - name: Record source revision
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          short="${sha:0:12}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "Building macOS DMG from $TARGET_REF ($sha)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "$candidate/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+          swift --version
+
+      - name: Package universal app with ad-hoc signing
+        env:
+          ARCHES: arm64 x86_64
+          CODEXBAR_SIGNING: adhoc
+          CODEXBAR_WIDGET_EXTENSION_TIMEOUT_SECONDS: '1800'
+        run: ./Scripts/package_app.sh release
+
+      - name: Create and verify DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="CodexBar-macOS-${{ steps.source.outputs.short }}"
+          stage="$(mktemp -d)"
+          mount="$(mktemp -d)"
+          trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true; rm -rf "$stage" "$mount"' EXIT
+
+          codesign --verify --deep --strict --verbose=2 CodexBar.app
+          lipo CodexBar.app/Contents/MacOS/CodexBar -verify_arch arm64 x86_64
+          ditto CodexBar.app "$stage/CodexBar.app"
+          ln -s /Applications "$stage/Applications"
+          mkdir -p artifacts
+          hdiutil create -volname CodexBar -srcfolder "$stage" -ov -format UDZO "artifacts/$name.dmg"
+          hdiutil verify "artifacts/$name.dmg"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "artifacts/$name.dmg"
+          test -x "$mount/CodexBar.app/Contents/MacOS/CodexBar"
+          codesign --verify --deep --strict --verbose=2 "$mount/CodexBar.app"
+          hdiutil detach "$mount"
+          shasum -a 256 "artifacts/$name.dmg" | tee "artifacts/$name.dmg.sha256"
+          echo "DMG: $name.dmg" >> "$GITHUB_STEP_SUMMARY"
+          echo "Universal arm64/x86_64; ad-hoc signed, not notarized." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload macOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexBar-macOS-${{ steps.source.outputs.short }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
