@@ -56,7 +56,7 @@ jobs:
         run: |
           pnpm --dir apps\desktop-tauri install --frozen-lockfile
 
-      - name: Repair duplicated cost JSX from rebase
+      - name: Repair cost JSX from rebase
         shell: pwsh
         run: |
           $path = 'apps\desktop-tauri\src\components\MenuCardDetails.tsx'
@@ -83,8 +83,18 @@ jobs:
           $removeStart = $branches[1]
           $removeCount = $branches[2] - $branches[1]
           $lines.RemoveRange($removeStart, $removeCount)
-          Set-Content -LiteralPath $path -Value $lines -Encoding utf8
 
+          $balanceArgFixed = $false
+          for ($i = $start; $i -lt [Math]::Min($start + 20, $lines.Count); $i++) {
+            if ($lines[$i].Trim() -eq 'provider.cost.balance,') {
+              $lines[$i] = '                  costBalance!,'
+              $balanceArgFixed = $true
+              break
+            }
+          }
+          if (-not $balanceArgFixed) { throw 'Could not locate narrowed balance argument.' }
+
+          Set-Content -LiteralPath $path -Value $lines -Encoding utf8
           Write-Host 'Repaired cost JSX block:'
           Get-Content -LiteralPath $path | Select-Object -Skip ($start - 2) -First 90
 
