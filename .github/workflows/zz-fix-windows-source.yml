@@ -1,0 +1,63 @@
+name: One-time Windows source cleanup
+
+on:
+  push:
+    branches:
+      - fix/win-devin-provider
+    paths:
+      - '.github/workflows/zz-fix-windows-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/win-devin-provider
+          fetch-depth: 0
+
+      - name: Apply deterministic source fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('apps/desktop-tauri/src/components/MenuCardDetails.tsx')
+          lines = path.read_text(encoding='utf-8').splitlines()
+
+          start = next((i for i, line in enumerate(lines) if '{balanceOnlyCost ? (' in line), -1)
+          end = next((i for i, line in enumerate(lines[start:], start) if '{provider.providerId === "mistral"' in line), -1)
+          if start < 0 or end < 0:
+              raise SystemExit('Could not locate cost JSX block')
+
+          branches = [i for i in range(start, end) if lines[i].strip() == ') : (']
+          if len(branches) != 3:
+              raise SystemExit(f'Expected exactly 3 duplicated ternary branch markers, found {len(branches)}')
+
+          lines[branches[0]] = '          ) : spendAndBalanceCost ? ('
+          del lines[branches[1]:branches[2]]
+
+          balance_fixed = False
+          for i in range(start, min(start + 20, len(lines))):
+              if lines[i].strip() == 'provider.cost.balance,':
+                  lines[i] = '                  costBalance!,'
+                  balance_fixed = True
+                  break
+          if not balance_fixed:
+              raise SystemExit('Could not locate narrowed balance argument')
+
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+      - name: Verify and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff -- apps/desktop-tauri/src/components/MenuCardDetails.tsx
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/desktop-tauri/src/components/MenuCardDetails.tsx
+          git commit -m 'fix(windows): persist post-rebase cost UI cleanup'
+          git push origin HEAD:fix/win-devin-provider
