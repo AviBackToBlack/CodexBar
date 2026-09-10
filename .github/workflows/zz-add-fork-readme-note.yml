@@ -1,0 +1,48 @@
+name: One-time fork README annotation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/zz-add-fork-readme-note.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  annotate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Add fork note and remove this workflow
+        shell: python
+        run: |
+          from pathlib import Path
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          marker = '> [!NOTE]\n> **AviBackToBlack fork:** personal LiteLLM compatibility work and Windows Devin dogfood live on dedicated branches.\n> Use **Actions → Build macOS DMG** or **Actions → Build Windows EXE** to get binaries. See [FORK.md](FORK.md).\n\n'
+          if marker not in text:
+              first_break = text.find('\n\n')
+              if first_break < 0:
+                  text = marker + text
+              else:
+                  text = text[:first_break + 2] + marker + text[first_break + 2:]
+              readme.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/zz-add-fork-readme-note.yml').unlink()
+
+      - name: Commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md .github/workflows/zz-add-fork-readme-note.yml
+          git commit -m 'docs(fork): point to custom branches and builds'
+          git push origin HEAD:main
