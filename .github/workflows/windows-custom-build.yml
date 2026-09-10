@@ -1,0 +1,84 @@
+name: Windows Custom EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/win-devin-provider
+    paths:
+      - '.github/workflows/windows-custom-build.yml'
+      - 'apps/desktop-tauri/**'
+      - 'rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build custom Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      CARGO_TARGET_DIR: ${{ github.workspace }}\target
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Activate pinned pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.25.0 --activate
+          node --version
+          pnpm --version
+
+      - name: Setup Rust MSVC toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile default
+          rustup default stable-x86_64-pc-windows-msvc
+          rustup target add x86_64-pc-windows-msvc --toolchain stable-x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
+
+      - name: Install desktop dependencies
+        shell: pwsh
+        run: |
+          pnpm --dir apps\desktop-tauri install --frozen-lockfile
+
+      - name: Build Tauri desktop
+        shell: pwsh
+        run: |
+          pnpm --dir apps\desktop-tauri exec tauri build --ci --no-bundle --target x86_64-pc-windows-msvc -- --quiet
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc\release\codexbar-desktop-tauri.exe'
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            Write-Host 'Expected EXE not found. Candidate executables:'
+            Get-ChildItem -Path $env:CARGO_TARGET_DIR -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object FullName, Length
+            throw "Missing expected Tauri executable: $source"
+          }
+          New-Item -ItemType Directory -Force -Path artifact | Out-Null
+          Copy-Item -LiteralPath $source -Destination artifact\codexbar.exe -Force
+          Get-FileHash artifact\codexbar.exe -Algorithm SHA256 | Format-List
+          Get-Item artifact\codexbar.exe | Select-Object FullName, Length, LastWriteTime
+
+      - name: Upload codexbar.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: codexbar-windows-custom-${{ github.sha }}
+          path: artifact/codexbar.exe
+          if-no-files-found: error
+          retention-days: 14
