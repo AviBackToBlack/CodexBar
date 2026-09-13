@@ -1,33 +1,9 @@
 import { useLocale } from "../hooks/useLocale";
 import type { SpendContract } from "../types/bridge";
-
-const currencyFormatters = new Map<string, Intl.NumberFormat>();
-
-function formatUsd(value: number | null, currency: string): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  const code = currency || "USD";
-  try {
-    let formatter = currencyFormatters.get(code);
-    if (!formatter) {
-      formatter = new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency: code,
-        maximumFractionDigits: 2,
-      });
-      currencyFormatters.set(code, formatter);
-    }
-    return formatter.format(value);
-  } catch {
-    return `$${value.toFixed(2)}`;
-  }
-}
-
-function formatTokens(value: number | null, tokenLabel: string, unknownLabel: string): string {
-  if (value == null || !Number.isFinite(value) || value < 0) {
-    return unknownLabel;
-  }
-  return `${value.toLocaleString()} ${tokenLabel}`;
-}
+import {
+  formatSpendTokens,
+  formatUsd,
+} from "../lib/usageSpendSharing";
 
 export function UsageSpendDailyLedger({
   daily,
@@ -58,7 +34,7 @@ export function UsageSpendDailyLedger({
                 <tr key={point.day}>
                   <td>{point.day}</td>
                   <td>{point.costUsd == null ? t("UsageSpendUnknown") : formatUsd(point.costUsd, "USD")}</td>
-                  <td>{formatTokens(point.totalTokens, t("UsageSpendTokens"), t("UsageSpendUnknown"))}</td>
+                  <td>{formatSpendTokens(point.totalTokens, t("UsageSpendTokens"), t("UsageSpendUnknown"))}</td>
                 </tr>
               ))}
             </tbody>
