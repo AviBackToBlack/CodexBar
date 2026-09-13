@@ -950,6 +950,22 @@ fn process_line_accepts_type_less_bare_usage_row() {
 }
 
 #[test]
+fn process_line_keeps_bare_usage_when_model_contains_turn_context() {
+    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+    let range = CostUsageDayRange::new(day, day);
+    let mut parser = CodexParserState::new(None, None);
+
+    parser.process_line(
+        r#"{"timestamp":"2026-05-31T10:00:01Z","model":"turn_context","usage":{"prompt_tokens":120,"completion_tokens":30}}"#,
+        &range,
+    );
+
+    assert_eq!(parser.records.len(), 1);
+    assert_eq!(parser.records[0].input, 120);
+    assert_eq!(parser.records[0].output, 30);
+}
+
+#[test]
 fn timestamp_less_bare_usage_uses_last_accepted_usage_day() {
     let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
     let range = CostUsageDayRange::new(day, day);
