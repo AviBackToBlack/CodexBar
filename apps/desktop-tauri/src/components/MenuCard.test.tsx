@@ -146,6 +146,7 @@ describe("MenuCard", () => {
         WayfinderOffline: "Gateway offline",
         WayfinderDryRun: "Dry run",
         WayfinderMissingKeys: "Missing keys",
+        UsageSpendTokens: "tokens",
         DeepSeekPricingTitle: "DeepSeek pricing",
         DeepSeekPricingStandard: "Standard / pre-schedule",
         DeepSeekPricingPeak: "Peak hours",
@@ -160,6 +161,7 @@ describe("MenuCard", () => {
     tauriMocks.getProviderChartData.mockResolvedValue({
       providerId: "claude",
       costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      tokensHistory: [{ date: "2026-05-24", tokens: 14_200 }],
       creditsHistory: [],
       usageBreakdown: [],
       localUsage: {
@@ -599,6 +601,38 @@ describe("MenuCard", () => {
     expect(details.open).toBe(false);
     fireEvent.click(details.querySelector("summary")!);
     expect(details.open).toBe(true);
+  });
+
+  it("includes the matching daily token count in the local cost tooltip", async () => {
+    const snapshot = provider(null);
+    snapshot.providerId = "codex";
+    snapshot.displayName = "Codex";
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      providerId: "codex",
+      costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: null,
+        thirtyDayCost: 1.23,
+        thirtyDayTokens: 14_200,
+        latestTokens: null,
+        topModel: "gpt-5",
+        estimateNote: "Estimated from local logs",
+        tokenCostUpdatedAtMs: 1234,
+      },
+      tokensHistory: [{ date: "2026-05-24", tokens: 14_200 }],
+      tokensIncomplete: false,
+    });
+
+    const { container } = renderCard(snapshot);
+    const bar = await waitFor(() => {
+      const element = container.querySelector(".menu-card__local-chart span");
+      if (!element) throw new Error("local chart bar not rendered yet");
+      return element;
+    });
+
+    expect(bar).toHaveAttribute("title", "2026-05-24: $1.23 · 14K tokens");
   });
 
   it("places Claude accounts above metrics and the collapsed usage details", async () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../../hooks/useLocale";
+import { UsageSpendDailyLedger } from "../../../components/UsageSpendDailyLedger";
 import {
   getSettingsSnapshot,
   getUsageSpendSummary,
@@ -257,6 +258,8 @@ export default function UsageSpendTab(_props: TabProps) {
       )}
 
       {!error && summary && <SpendContractOverview contract={summary.contract} t={t} />}
+
+      {!error && summary && <UsageSpendDailyLedger daily={summary.contract.daily} />}
 
       {!error && summary && (
         <ContractModelsPanel contract={summary.contract} showAll={showAllModels} onToggleAll={() => setShowAllModels((value) => !value)} t={t} />

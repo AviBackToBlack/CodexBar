@@ -3,6 +3,7 @@ import type {
   CostSummaryDisplayStyle,
   DailyCostPoint,
   ProviderDisplayDetail,
+  DailyTokenPoint,
   PaceSnapshot,
   ProviderInventoryItem,
   ProviderChartData,
@@ -90,10 +91,21 @@ function formatCurrency(amount: number, code: string): string {
 }
 
 function formatCompactCount(value: number | null): string {
-  if (value == null || value <= 0) return "—";
+  if (value == null || !Number.isFinite(value) || value < 0) return "—";
   return (value >= 1_000_000 ? compactCountFormat1 : compactCountFormat0).format(
     value,
   );
+}
+
+function formatLocalUsagePointTitle(
+  point: DailyCostPoint,
+  tokenCount: number | undefined,
+  tokenLabel: string,
+): string {
+  if (point.value == null && tokenCount == null) return point.date;
+  const cost = point.value == null ? "—" : formatCurrency(point.value, "USD");
+  const tokens = tokenCount == null ? "—" : `${formatCompactCount(tokenCount)} ${tokenLabel}`;
+  return `${point.date}: ${cost} · ${tokens}`;
 }
 
 function formatBudget(value: number): string {
@@ -106,10 +118,12 @@ function LocalUsageBlock({
   providerId,
   summary,
   costHistory,
+  tokensHistory,
 }: {
   providerId: string;
   summary: ProviderLocalUsageSummary;
   costHistory: DailyCostPoint[];
+  tokensHistory: DailyTokenPoint[];
 }) {
   const { t } = useLocale();
   const isCodex = providerId === "codex";
@@ -119,6 +133,7 @@ function LocalUsageBlock({
     ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
     0,
   );
+  const tokensByDate = new Map(tokensHistory.map((point) => [point.date, point.tokens]));
 
   return (
     <section className="menu-card__group menu-card__local-usage">
@@ -166,7 +181,11 @@ function LocalUsageBlock({
                 height: `${point.value == null || maxCost <= 0 ? 1 : Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
                 opacity: point.value == null ? 0 : undefined,
               }}
-              title={point.value == null ? point.date : `${point.date}: ${formatCurrency(point.value, "USD")}`}
+              title={formatLocalUsagePointTitle(
+                point,
+                tokensByDate.get(point.date),
+                t("UsageSpendTokens"),
+              )}
             />
           ))}
         </div>
@@ -540,6 +559,7 @@ export default function MenuCardDetails({
     display.resetTimeRelative,
   );
   const localCostHistory = chartData?.costHistory ?? [];
+  const localTokenHistory = chartData?.tokensHistory ?? [];
   const costStyle = display.costSummaryDisplayStyle ?? "detailed";
 
   const {
@@ -698,6 +718,7 @@ export default function MenuCardDetails({
                 providerId={provider.providerId}
                 summary={localUsage}
                 costHistory={localCostHistory}
+                tokensHistory={localTokenHistory}
               />
             )}
 
