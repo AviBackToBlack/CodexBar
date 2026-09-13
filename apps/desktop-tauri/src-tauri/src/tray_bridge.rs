@@ -564,7 +564,7 @@ fn render_tray_icon_for_settings(
     pace: Option<&crate::commands::PaceSnapshot>,
 ) -> (Vec<u8>, u32, u32) {
     let pace_color = if settings.menu_bar_color_pace {
-        pace.and_then(|snapshot| TrayPaceColor::from_delta(snapshot.delta_percent))
+        pace.and_then(|snapshot| TrayPaceColor::from_stage(&snapshot.stage))
     } else {
         None
     };
@@ -1100,7 +1100,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_pace_color_is_opt_in_and_follows_delta_direction() {
+    fn tray_pace_color_is_opt_in_and_follows_canonical_stage() {
         let pace_behind = crate::commands::PaceSnapshot {
             stage: "behind".to_string(),
             delta_percent: -8.0,
@@ -1112,6 +1112,11 @@ mod tests {
         let pace_ahead = crate::commands::PaceSnapshot {
             delta_percent: 8.0,
             stage: "ahead".to_string(),
+            ..pace_behind.clone()
+        };
+        let pace_on_track = crate::commands::PaceSnapshot {
+            delta_percent: 1.0,
+            stage: "on_track".to_string(),
             ..pace_behind.clone()
         };
         let default_settings = Settings::default();
@@ -1127,8 +1132,16 @@ mod tests {
             render_tray_icon_for_settings(&colored_settings, 50.0, None, false, Some(&pace_behind));
         let ahead =
             render_tray_icon_for_settings(&colored_settings, 50.0, None, false, Some(&pace_ahead));
+        let on_track = render_tray_icon_for_settings(
+            &colored_settings,
+            50.0,
+            None,
+            false,
+            Some(&pace_on_track),
+        );
 
         assert_eq!(normal, disabled);
+        assert_eq!(normal, on_track);
         assert_ne!(normal, behind);
         assert_ne!(behind, ahead);
     }

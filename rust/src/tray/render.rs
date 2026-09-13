@@ -13,8 +13,8 @@ pub const TRAY_ICON_SIZE: u32 = 32;
 /// Optional pace tint for a tray icon's usage indicator.
 ///
 /// The upstream pace treatment uses green when usage is behind the expected
-/// pace and red when it is ahead. On-track (zero) and unavailable deltas keep
-/// the normal usage-level colour.
+/// pace and red when it is ahead. On-track and unavailable stages keep the
+/// normal usage-level colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayPaceColor {
     Behind,
@@ -22,15 +22,12 @@ pub enum TrayPaceColor {
 }
 
 impl TrayPaceColor {
-    /// Map a finite, non-zero pace delta to its tray tint.
-    pub fn from_delta(delta_percent: f64) -> Option<Self> {
-        if !delta_percent.is_finite() || delta_percent == 0.0 {
-            return None;
-        }
-        if delta_percent < 0.0 {
-            Some(Self::Behind)
-        } else {
-            Some(Self::Ahead)
+    /// Map the canonical bridge pace stage to its tray tint.
+    pub fn from_stage(stage: &str) -> Option<Self> {
+        match stage {
+            "slightly_behind" | "behind" | "far_behind" => Some(Self::Behind),
+            "slightly_ahead" | "ahead" | "far_ahead" => Some(Self::Ahead),
+            _ => None,
         }
     }
 
@@ -361,11 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn pace_color_maps_direction_and_tints_bars() {
-        assert_eq!(TrayPaceColor::from_delta(-0.1), Some(TrayPaceColor::Behind));
-        assert_eq!(TrayPaceColor::from_delta(0.1), Some(TrayPaceColor::Ahead));
-        assert_eq!(TrayPaceColor::from_delta(0.0), None);
-        assert_eq!(TrayPaceColor::from_delta(f64::NAN), None);
+    fn pace_color_maps_canonical_stage_and_tints_bars() {
+        assert_eq!(
+            TrayPaceColor::from_stage("slightly_behind"),
+            Some(TrayPaceColor::Behind)
+        );
+        assert_eq!(
+            TrayPaceColor::from_stage("far_ahead"),
+            Some(TrayPaceColor::Ahead)
+        );
+        assert_eq!(TrayPaceColor::from_stage("on_track"), None);
+        assert_eq!(TrayPaceColor::from_stage("unknown"), None);
 
         let (behind, _, _) =
             render_bar_icon_rgba_with_pace(100.0, None, false, Some(TrayPaceColor::Behind));
