@@ -546,6 +546,8 @@ export const ALL_LOCALE_KEYS = [
   "PreferHighestUsageHelper",
   "ShowPercentInTray",
   "ShowPercentInTrayHelper",
+  "ColorPaceInTray",
+  "ColorPaceInTrayHelper",
   "DisplayModeLabel",
   "DisplayModeHelper",
   "DisplayModeDetailed",

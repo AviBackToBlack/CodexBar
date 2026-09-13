@@ -12,7 +12,9 @@ use tauri::menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItem, PredefinedMe
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
-use codexbar::tray::{render_bar_icon_rgba, render_percent_icon_rgba};
+use codexbar::tray::{
+    TrayPaceColor, render_bar_icon_rgba_with_pace, render_percent_icon_rgba_with_pace,
+};
 
 use crate::shell;
 use crate::state::{AppState, TrayAnchor};
@@ -419,8 +421,10 @@ pub fn update_tray_icon_and_tooltip(
             None,
         ),
     };
+    let pace = picked.and_then(|snapshot| snapshot.pace.as_ref());
 
-    let (rgba, w, h) = render_tray_icon_for_settings(&settings, session_pct, weekly_pct, all_error);
+    let (rgba, w, h) =
+        render_tray_icon_for_settings(&settings, session_pct, weekly_pct, all_error, pace);
     let icon = Image::new_owned(rgba, w, h);
     let _ = tray.set_icon(Some(icon));
 
@@ -557,11 +561,17 @@ fn render_tray_icon_for_settings(
     session_pct: f64,
     weekly_pct: Option<f64>,
     all_error: bool,
+    pace: Option<&crate::commands::PaceSnapshot>,
 ) -> (Vec<u8>, u32, u32) {
-    if settings.menu_bar_shows_percent {
-        render_percent_icon_rgba(session_pct, all_error)
+    let pace_color = if settings.menu_bar_color_pace {
+        pace.and_then(|snapshot| TrayPaceColor::from_delta(snapshot.delta_percent))
     } else {
-        render_bar_icon_rgba(session_pct, weekly_pct, all_error)
+        None
+    };
+    if settings.menu_bar_shows_percent {
+        render_percent_icon_rgba_with_pace(session_pct, all_error, pace_color)
+    } else {
+        render_bar_icon_rgba_with_pace(session_pct, weekly_pct, all_error, pace_color)
     }
 }
 
@@ -1081,12 +1091,46 @@ mod tests {
         };
 
         let (bar, bar_w, bar_h) =
-            render_tray_icon_for_settings(&bar_settings, 72.0, Some(40.0), false);
+            render_tray_icon_for_settings(&bar_settings, 72.0, Some(40.0), false, None);
         let (percent, pct_w, pct_h) =
-            render_tray_icon_for_settings(&percent_settings, 72.0, Some(40.0), false);
+            render_tray_icon_for_settings(&percent_settings, 72.0, Some(40.0), false, None);
 
         assert_eq!((bar_w, bar_h), (pct_w, pct_h));
         assert_ne!(bar, percent);
+    }
+
+    #[test]
+    fn tray_pace_color_is_opt_in_and_follows_delta_direction() {
+        let pace_behind = crate::commands::PaceSnapshot {
+            stage: "behind".to_string(),
+            delta_percent: -8.0,
+            will_last_to_reset: true,
+            eta_seconds: None,
+            expected_used_percent: 40.0,
+            actual_used_percent: 32.0,
+        };
+        let pace_ahead = crate::commands::PaceSnapshot {
+            delta_percent: 8.0,
+            stage: "ahead".to_string(),
+            ..pace_behind.clone()
+        };
+        let default_settings = Settings::default();
+        let colored_settings = Settings {
+            menu_bar_color_pace: true,
+            ..Settings::default()
+        };
+
+        let normal = render_tray_icon_for_settings(&default_settings, 50.0, None, false, None);
+        let disabled =
+            render_tray_icon_for_settings(&default_settings, 50.0, None, false, Some(&pace_behind));
+        let behind =
+            render_tray_icon_for_settings(&colored_settings, 50.0, None, false, Some(&pace_behind));
+        let ahead =
+            render_tray_icon_for_settings(&colored_settings, 50.0, None, false, Some(&pace_ahead));
+
+        assert_eq!(normal, disabled);
+        assert_ne!(normal, behind);
+        assert_ne!(behind, ahead);
     }
 
     #[test]

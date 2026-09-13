@@ -55,6 +55,7 @@ const settings: SettingsSnapshot = {
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,
+  menuBarColorPace: false,
   showAsUsed: false,
   showAllTokenAccountsInMenu: true,
   enableAnimations: true,

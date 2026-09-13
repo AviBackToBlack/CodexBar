@@ -10,6 +10,38 @@ use super::icon::UsageLevel;
 /// Side length of the generated tray icon in pixels.
 pub const TRAY_ICON_SIZE: u32 = 32;
 
+/// Optional pace tint for a tray icon's usage indicator.
+///
+/// The upstream pace treatment uses green when usage is behind the expected
+/// pace and red when it is ahead. On-track (zero) and unavailable deltas keep
+/// the normal usage-level colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayPaceColor {
+    Behind,
+    Ahead,
+}
+
+impl TrayPaceColor {
+    /// Map a finite, non-zero pace delta to its tray tint.
+    pub fn from_delta(delta_percent: f64) -> Option<Self> {
+        if !delta_percent.is_finite() || delta_percent == 0.0 {
+            return None;
+        }
+        if delta_percent < 0.0 {
+            Some(Self::Behind)
+        } else {
+            Some(Self::Ahead)
+        }
+    }
+
+    fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            Self::Behind => (76, 175, 80),
+            Self::Ahead => (244, 67, 54),
+        }
+    }
+}
+
 /// Render a usage-bar tray icon as raw RGBA bytes.
 ///
 /// - `session_percent`: primary bar fill (0–100), colour-coded by [`UsageLevel`]
@@ -23,6 +55,16 @@ pub fn render_bar_icon_rgba(
     session_percent: f64,
     weekly_percent: Option<f64>,
     has_error: bool,
+) -> (Vec<u8>, u32, u32) {
+    render_bar_icon_rgba_with_pace(session_percent, weekly_percent, has_error, None)
+}
+
+/// Render a usage-bar tray icon with an optional pace tint.
+pub fn render_bar_icon_rgba_with_pace(
+    session_percent: f64,
+    weekly_percent: Option<f64>,
+    has_error: bool,
+    pace_color: Option<TrayPaceColor>,
 ) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
     let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
@@ -40,7 +82,9 @@ pub fn render_bar_icon_rgba(
     }
 
     let color_for = |percent: f64| -> (u8, u8, u8) {
-        let (r, g, b) = UsageLevel::from_percent(percent).color();
+        let (r, g, b) = pace_color
+            .map(TrayPaceColor::rgb)
+            .unwrap_or_else(|| UsageLevel::from_percent(percent).color());
         if has_error {
             // Average of three u8 colour channels: sum ≤ 765, so /3 ≤ 255 fits u8.
             #[allow(
@@ -95,6 +139,15 @@ pub fn render_bar_icon_rgba(
 
 /// Render a compact numeric percent tray icon as raw RGBA bytes.
 pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
+    render_percent_icon_rgba_with_pace(percent, has_error, None)
+}
+
+/// Render a compact numeric percent tray icon with an optional pace tint.
+pub fn render_percent_icon_rgba_with_pace(
+    percent: f64,
+    has_error: bool,
+    pace_color: Option<TrayPaceColor>,
+) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
     let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
 
@@ -134,7 +187,9 @@ pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32,
     let start_x = (SZ.saturating_sub(text_width)) / 2;
     let start_y = (SZ.saturating_sub(text_height)) / 2;
 
-    let (r, g, b) = UsageLevel::from_percent(percent).color();
+    let (r, g, b) = pace_color
+        .map(TrayPaceColor::rgb)
+        .unwrap_or_else(|| UsageLevel::from_percent(percent).color());
     let color = if has_error {
         // Average of three u8 colour channels: sum ≤ 765, so /3 ≤ 255 fits u8.
         #[allow(
@@ -303,5 +358,21 @@ mod tests {
     fn percent_icon_clamps_to_hundred() {
         let (rgba, w, h) = render_percent_icon_rgba(125.0, false);
         assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
+    }
+
+    #[test]
+    fn pace_color_maps_direction_and_tints_bars() {
+        assert_eq!(TrayPaceColor::from_delta(-0.1), Some(TrayPaceColor::Behind));
+        assert_eq!(TrayPaceColor::from_delta(0.1), Some(TrayPaceColor::Ahead));
+        assert_eq!(TrayPaceColor::from_delta(0.0), None);
+        assert_eq!(TrayPaceColor::from_delta(f64::NAN), None);
+
+        let (behind, _, _) =
+            render_bar_icon_rgba_with_pace(100.0, None, false, Some(TrayPaceColor::Behind));
+        let (ahead, _, _) =
+            render_bar_icon_rgba_with_pace(100.0, None, false, Some(TrayPaceColor::Ahead));
+        let idx = ((16 * TRAY_ICON_SIZE + 8) * 4) as usize;
+        assert_eq!(&behind[idx..idx + 3], &[76, 175, 80]);
+        assert_eq!(&ahead[idx..idx + 3], &[244, 67, 54]);
     }
 }

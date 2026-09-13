@@ -80,6 +80,18 @@ export default function DisplayTab({
             />
           </Field>
           <Field
+            label={t("ColorPaceInTray")}
+            description={t("ColorPaceInTrayHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.menuBarColorPace ?? false}
+              ariaLabel={t("ColorPaceInTray")}
+              disabled={saving}
+              onChange={(v) => set({ menuBarColorPace: v })}
+            />
+          </Field>
+          <Field
             label={t("DisplayModeLabel")}
             description={t("DisplayModeHelper")}
           >

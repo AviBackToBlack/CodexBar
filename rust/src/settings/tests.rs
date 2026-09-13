@@ -116,6 +116,23 @@ fn open_codex_usage_logs_default_off_and_round_trip() {
 }
 
 #[test]
+fn tray_pace_color_defaults_off_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing tray pace color defaults false");
+    assert!(!defaulted.menu_bar_color_pace);
+
+    let enabled = Settings {
+        menu_bar_color_pace: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&enabled).expect("serialize tray pace color");
+    assert!(json.contains(r#""menu_bar_color_pace":true"#));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize tray pace color");
+    assert!(loaded.menu_bar_color_pace);
+}
+
+#[test]
 fn notification_sound_paths_round_trip_and_default_for_existing_settings() {
     let settings = Settings {
         notification_sound_theme: NotificationSoundTheme::CodexBar,

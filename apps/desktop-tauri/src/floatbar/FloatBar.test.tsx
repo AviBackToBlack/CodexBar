@@ -153,6 +153,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
     menuBarShowsPercent: false,
+    menuBarColorPace: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,

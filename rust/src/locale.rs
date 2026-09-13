@@ -812,6 +812,8 @@ locale_keys! {
     PreferHighestUsageHelper,
     ShowPercentInTray,
     ShowPercentInTrayHelper,
+    ColorPaceInTray,
+    ColorPaceInTrayHelper,
     DisplayModeLabel,
     DisplayModeHelper,
     DisplayModeDetailed,
