@@ -4,11 +4,9 @@
 //! This module provides path resolvers that detect WSL and map
 //! browser profile paths to their Windows host equivalents.
 
-use std::path::PathBuf;
-
 use crate::wsl;
 
-use super::detection::{BrowserProfile, BrowserType, DetectedBrowser};
+use super::detection::{BrowserDetector, BrowserType, DetectedBrowser};
 
 /// WSL-aware browser detector.
 ///
@@ -28,133 +26,19 @@ impl WslBrowserDetector {
             None => return Vec::new(),
         };
 
-        let mut browsers = Vec::new();
-
-        let candidates = windows_browser_candidates(&appdata_local);
-        let candidates: Vec<(BrowserType, PathBuf)> = candidates
-            .into_iter()
-            .chain([
-                (
-                    BrowserType::Edge,
-                    appdata_local
-                        .join("Microsoft")
-                        .join("Edge")
-                        .join("User Data"),
-                ),
-                (
-                    BrowserType::Brave,
-                    appdata_local
-                        .join("BraveSoftware")
-                        .join("Brave-Browser")
-                        .join("User Data"),
-                ),
-                (
-                    BrowserType::Arc,
-                    appdata_local.join("Arc").join("User Data"),
-                ),
-            ])
-            .collect();
-
-        for (browser_type, user_data_dir) in candidates {
-            if user_data_dir.exists() {
-                let profiles = detect_chromium_profiles(&user_data_dir);
-                if !profiles.is_empty() {
-                    browsers.push(DetectedBrowser {
-                        browser_type,
-                        user_data_dir,
-                        profiles,
-                    });
-                }
-            }
-        }
-
-        if let Some(appdata_roaming) = wsl::windows_appdata_roaming() {
-            let ff_dir = appdata_roaming
-                .join("Mozilla")
-                .join("Firefox")
-                .join("Profiles");
-            if ff_dir.exists() {
-                let profiles = detect_firefox_profiles(&ff_dir);
-                if !profiles.is_empty() {
-                    browsers.push(DetectedBrowser {
-                        browser_type: BrowserType::Firefox,
-                        user_data_dir: ff_dir,
-                        profiles,
-                    });
-                }
-            }
-        }
-
-        browsers
+        let appdata_roaming = wsl::windows_appdata_roaming();
+        BrowserType::all()
+            .iter()
+            .copied()
+            .filter_map(|browser_type| {
+                BrowserDetector::detect_in_roots(
+                    browser_type,
+                    &appdata_local,
+                    appdata_roaming.as_deref(),
+                )
+            })
+            .collect()
     }
-}
-
-/// Collect profile roots for every browser that resolves one under the given
-/// AppData/Local directory. Browsers without a shared-root mapping (Edge,
-/// Brave, Arc, Firefox) are skipped here and added separately by the caller.
-fn windows_browser_candidates(appdata_local: &std::path::Path) -> Vec<(BrowserType, PathBuf)> {
-    BrowserType::all()
-        .iter()
-        .copied()
-        .filter_map(|browser_type| {
-            browser_type
-                .user_data_dir_under(appdata_local)
-                .map(|path| (browser_type, path))
-        })
-        .collect()
-}
-
-/// Detect Chromium-based browser profiles
-fn detect_chromium_profiles(user_data_dir: &PathBuf) -> Vec<BrowserProfile> {
-    let mut profiles = Vec::new();
-
-    let default_path = user_data_dir.join("Default");
-    if default_path.exists() {
-        profiles.push(BrowserProfile {
-            name: "Default".to_string(),
-            path: default_path,
-            is_default: true,
-        });
-    }
-
-    if let Ok(entries) = std::fs::read_dir(user_data_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("Profile ") {
-                let path = entry.path();
-                if path.is_dir() {
-                    profiles.push(BrowserProfile {
-                        name,
-                        path,
-                        is_default: false,
-                    });
-                }
-            }
-        }
-    }
-
-    profiles
-}
-
-fn detect_firefox_profiles(profiles_dir: &PathBuf) -> Vec<BrowserProfile> {
-    let mut profiles = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(profiles_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let path = entry.path();
-            if path.is_dir() && name.contains('.') {
-                let is_default = name.contains("default");
-                profiles.push(BrowserProfile {
-                    name,
-                    path,
-                    is_default,
-                });
-            }
-        }
-    }
-
-    profiles
 }
 
 #[cfg(test)]
@@ -162,24 +46,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn windows_profile_roots_include_every_chrome_channel_and_chromium() {
-        let appdata = PathBuf::from("/mnt/c/Users/test/AppData/Local");
-        let expected = [
-            (BrowserType::Chrome, "Google/Chrome/User Data"),
-            (BrowserType::ChromeBeta, "Google/Chrome Beta/User Data"),
-            (BrowserType::ChromeDev, "Google/Chrome Dev/User Data"),
-            (BrowserType::ChromeCanary, "Google/Chrome SxS/User Data"),
-            (
-                BrowserType::ChromeForTesting,
-                "Google/Chrome for Testing/User Data",
-            ),
-            (BrowserType::Chromium, "Chromium/User Data"),
-        ];
+    fn shared_detector_reads_wsl_shaped_roots_without_roaming() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("mnt/c/Users/test/AppData/Local");
+        let chrome = local.join("Google/Chrome Beta/User Data");
+        std::fs::create_dir_all(chrome.join("Default")).unwrap();
+        std::fs::create_dir_all(chrome.join("Profile 2")).unwrap();
+        std::fs::create_dir_all(chrome.join("Profile 1")).unwrap();
+        std::fs::create_dir_all(chrome.join("Other")).unwrap();
 
-        let actual = windows_browser_candidates(&appdata);
-        for (browser_type, relative_path) in expected {
-            assert!(actual.contains(&(browser_type, appdata.join(relative_path))));
-        }
+        let detected =
+            BrowserDetector::detect_in_roots(BrowserType::ChromeBeta, &local, None).unwrap();
+        assert_eq!(detected.user_data_dir, chrome);
+        assert_eq!(detected.profiles[0].name, "Default");
+        assert!(detected.profiles[0].is_default);
+        let mut other_names: Vec<_> = detected.profiles[1..]
+            .iter()
+            .map(|profile| profile.name.as_str())
+            .collect();
+        other_names.sort_unstable();
+        assert_eq!(other_names, ["Profile 1", "Profile 2"]);
+        assert!(
+            detected.profiles[1..]
+                .iter()
+                .all(|profile| !profile.is_default)
+        );
+        assert!(BrowserDetector::detect_in_roots(BrowserType::Firefox, &local, None).is_none());
+    }
+
+    #[test]
+    fn shared_detector_reads_firefox_from_wsl_roaming_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("mnt/c/Users/test/AppData/Local");
+        let roaming = temp.path().join("mnt/c/Users/test/AppData/Roaming");
+        let firefox = roaming.join("Mozilla/Firefox/Profiles");
+        std::fs::create_dir_all(firefox.join("abc.default-release")).unwrap();
+        std::fs::create_dir_all(firefox.join("def.other")).unwrap();
+        std::fs::create_dir_all(local.join("Mozilla/Firefox/Profiles/fake.default")).unwrap();
+
+        let detected =
+            BrowserDetector::detect_in_roots(BrowserType::Firefox, &local, Some(&roaming)).unwrap();
+        assert_eq!(detected.user_data_dir, firefox);
+        assert_eq!(detected.profiles.len(), 2);
+        assert!(
+            detected
+                .profiles
+                .iter()
+                .any(|profile| profile.name == "abc.default-release" && profile.is_default)
+        );
+        assert!(
+            detected
+                .profiles
+                .iter()
+                .any(|profile| profile.name == "def.other" && !profile.is_default)
+        );
     }
 
     #[test]

@@ -65,41 +65,38 @@ impl BrowserType {
         }
     }
 
-    /// Resolve a browser's Windows AppData/Local profile root.
-    pub fn user_data_dir_under(&self, appdata_local: &Path) -> Option<PathBuf> {
+    /// Stable browser identifier shared by the core and desktop IPC bridge.
+    pub fn key(&self) -> &'static str {
         match self {
-            BrowserType::Chrome => Some(
-                appdata_local
-                    .join("Google")
-                    .join("Chrome")
-                    .join("User Data"),
-            ),
-            BrowserType::ChromeBeta => Some(
-                appdata_local
-                    .join("Google")
-                    .join("Chrome Beta")
-                    .join("User Data"),
-            ),
-            BrowserType::ChromeDev => Some(
-                appdata_local
-                    .join("Google")
-                    .join("Chrome Dev")
-                    .join("User Data"),
-            ),
-            BrowserType::ChromeCanary => Some(
-                appdata_local
-                    .join("Google")
-                    .join("Chrome SxS")
-                    .join("User Data"),
-            ),
-            BrowserType::ChromeForTesting => Some(
-                appdata_local
-                    .join("Google")
-                    .join("Chrome for Testing")
-                    .join("User Data"),
-            ),
-            BrowserType::Chromium => Some(appdata_local.join("Chromium").join("User Data")),
-            _ => None,
+            BrowserType::Chrome => "chrome",
+            BrowserType::ChromeBeta => "chrome-beta",
+            BrowserType::ChromeDev => "chrome-dev",
+            BrowserType::ChromeCanary => "chrome-canary",
+            BrowserType::ChromeForTesting => "chrome-for-testing",
+            BrowserType::Edge => "edge",
+            BrowserType::Brave => "brave",
+            BrowserType::Arc => "arc",
+            BrowserType::Firefox => "firefox",
+            BrowserType::Chromium => "chromium",
+        }
+    }
+
+    /// Resolve a profile root under Windows AppData. Firefox requires Roaming;
+    /// local-root browsers remain resolvable when Roaming is unavailable.
+    pub fn user_data_dir(&self, local: &Path, roaming: Option<&Path>) -> Option<PathBuf> {
+        match self {
+            BrowserType::Chrome => Some(local.join("Google/Chrome/User Data")),
+            BrowserType::ChromeBeta => Some(local.join("Google/Chrome Beta/User Data")),
+            BrowserType::ChromeDev => Some(local.join("Google/Chrome Dev/User Data")),
+            BrowserType::ChromeCanary => Some(local.join("Google/Chrome SxS/User Data")),
+            BrowserType::ChromeForTesting => {
+                Some(local.join("Google/Chrome for Testing/User Data"))
+            }
+            BrowserType::Edge => Some(local.join("Microsoft/Edge/User Data")),
+            BrowserType::Brave => Some(local.join("BraveSoftware/Brave-Browser/User Data")),
+            BrowserType::Arc => Some(local.join("Arc/User Data")),
+            BrowserType::Firefox => roaming.map(|root| root.join("Mozilla/Firefox/Profiles")),
+            BrowserType::Chromium => Some(local.join("Chromium/User Data")),
         }
     }
 }
@@ -167,7 +164,23 @@ impl BrowserDetector {
     /// Detect a specific browser
     pub fn detect(browser_type: BrowserType) -> Option<DetectedBrowser> {
         let user_data_dir = Self::get_user_data_dir(browser_type)?;
+        Self::detect_at_path(browser_type, user_data_dir)
+    }
 
+    /// Detect from explicit AppData roots, including WSL-mounted Windows roots.
+    pub(super) fn detect_in_roots(
+        browser_type: BrowserType,
+        local: &Path,
+        roaming: Option<&Path>,
+    ) -> Option<DetectedBrowser> {
+        let user_data_dir = browser_type.user_data_dir(local, roaming)?;
+        Self::detect_at_path(browser_type, user_data_dir)
+    }
+
+    fn detect_at_path(
+        browser_type: BrowserType,
+        user_data_dir: PathBuf,
+    ) -> Option<DetectedBrowser> {
         if !user_data_dir.exists() {
             return None;
         }
@@ -191,61 +204,17 @@ impl BrowserDetector {
         if wsl::is_wsl()
             && let Some(appdata_local) = wsl::windows_appdata_local()
         {
-            let path = match browser_type {
-                BrowserType::Chrome
-                | BrowserType::ChromeBeta
-                | BrowserType::ChromeDev
-                | BrowserType::ChromeCanary
-                | BrowserType::ChromeForTesting
-                | BrowserType::Chromium => browser_type.user_data_dir_under(&appdata_local),
-                BrowserType::Edge => Some(
-                    appdata_local
-                        .join("Microsoft")
-                        .join("Edge")
-                        .join("User Data"),
-                ),
-                BrowserType::Brave => Some(
-                    appdata_local
-                        .join("BraveSoftware")
-                        .join("Brave-Browser")
-                        .join("User Data"),
-                ),
-                BrowserType::Arc => Some(appdata_local.join("Arc").join("User Data")),
-                BrowserType::Firefox => wsl::windows_appdata_roaming()
-                    .map(|roaming| roaming.join("Mozilla").join("Firefox").join("Profiles")),
-            };
-            if let Some(ref p) = path
-                && p.exists()
+            let roaming = wsl::windows_appdata_roaming();
+            if let Some(path) = browser_type.user_data_dir(&appdata_local, roaming.as_deref())
+                && path.exists()
             {
-                return path;
+                return Some(path);
             }
         }
 
         let local_app_data = dirs::data_local_dir()?;
-        let app_data = dirs::data_dir()?;
-
-        let path = match browser_type {
-            BrowserType::Chrome
-            | BrowserType::ChromeBeta
-            | BrowserType::ChromeDev
-            | BrowserType::ChromeCanary
-            | BrowserType::ChromeForTesting
-            | BrowserType::Chromium => browser_type
-                .user_data_dir_under(&local_app_data)
-                .expect("matched a Chromium browser"),
-            BrowserType::Edge => local_app_data
-                .join("Microsoft")
-                .join("Edge")
-                .join("User Data"),
-            BrowserType::Brave => local_app_data
-                .join("BraveSoftware")
-                .join("Brave-Browser")
-                .join("User Data"),
-            BrowserType::Arc => local_app_data.join("Arc").join("User Data"),
-            BrowserType::Firefox => app_data.join("Mozilla").join("Firefox").join("Profiles"),
-        };
-
-        Some(path)
+        let app_data = dirs::data_dir();
+        browser_type.user_data_dir(&local_app_data, app_data.as_deref())
     }
 
     /// Detect profiles within a browser's user data directory
@@ -321,45 +290,88 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chrome_channels_resolve_to_distinct_windows_profile_roots() {
-        let appdata = Path::new("C:/Users/test/AppData/Local");
-        let channels = [
+    fn browser_paths_and_keys_cover_every_type() {
+        let local = Path::new("C:/Users/test/AppData/Local");
+        let roaming = Path::new("C:/Users/test/AppData/Roaming");
+        let expected = [
             (
                 BrowserType::Chrome,
                 "Google/Chrome/User Data",
                 "Google Chrome",
+                "chrome",
             ),
             (
                 BrowserType::ChromeBeta,
                 "Google/Chrome Beta/User Data",
                 "Google Chrome Beta",
+                "chrome-beta",
             ),
             (
                 BrowserType::ChromeDev,
                 "Google/Chrome Dev/User Data",
                 "Google Chrome Dev",
+                "chrome-dev",
             ),
             (
                 BrowserType::ChromeCanary,
                 "Google/Chrome SxS/User Data",
                 "Google Chrome Canary",
+                "chrome-canary",
             ),
             (
                 BrowserType::ChromeForTesting,
                 "Google/Chrome for Testing/User Data",
                 "Chrome for Testing",
+                "chrome-for-testing",
             ),
-            (BrowserType::Chromium, "Chromium/User Data", "Chromium"),
+            (
+                BrowserType::Edge,
+                "Microsoft/Edge/User Data",
+                "Microsoft Edge",
+                "edge",
+            ),
+            (
+                BrowserType::Brave,
+                "BraveSoftware/Brave-Browser/User Data",
+                "Brave",
+                "brave",
+            ),
+            (BrowserType::Arc, "Arc/User Data", "Arc", "arc"),
+            (
+                BrowserType::Firefox,
+                "Mozilla/Firefox/Profiles",
+                "Firefox",
+                "firefox",
+            ),
+            (
+                BrowserType::Chromium,
+                "Chromium/User Data",
+                "Chromium",
+                "chromium",
+            ),
         ];
 
-        for (browser, relative_path, display_name) in channels {
+        assert_eq!(BrowserType::all().len(), expected.len());
+        let mut keys = std::collections::HashSet::new();
+        for (browser, relative_path, display_name, key) in expected {
+            let root = if browser == BrowserType::Firefox {
+                roaming
+            } else {
+                local
+            };
             assert_eq!(
-                browser.user_data_dir_under(appdata).unwrap(),
-                appdata.join(relative_path),
+                browser.user_data_dir(local, Some(roaming)),
+                Some(root.join(relative_path)),
                 "wrong profile root for {display_name}"
             );
             assert_eq!(browser.display_name(), display_name);
+            assert_eq!(browser.key(), key);
+            assert!(keys.insert(browser.key()), "duplicate IPC key: {key}");
             assert!(BrowserType::all().contains(&browser));
+            assert_eq!(
+                browser.user_data_dir(local, None),
+                (browser != BrowserType::Firefox).then(|| local.join(relative_path))
+            );
         }
     }
 

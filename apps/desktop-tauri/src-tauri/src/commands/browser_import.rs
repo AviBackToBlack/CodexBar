@@ -23,7 +23,7 @@ pub fn list_detected_browsers() -> Vec<DetectedBrowserBridge> {
     BrowserDetector::detect_all()
         .into_iter()
         .map(|b| DetectedBrowserBridge {
-            browser_type: browser_type_key(b.browser_type).to_string(),
+            browser_type: b.browser_type.key().to_string(),
             display_name: b.browser_type.display_name().to_string(),
             profile_count: b.profiles.len(),
         })
@@ -62,7 +62,7 @@ pub fn import_browser_cookies(
     let browsers = BrowserDetector::detect_all();
     let browser = browsers
         .into_iter()
-        .find(|b| browser_type_key(b.browser_type) == browser_type.as_str())
+        .find(|b| b.browser_type.key() == browser_type.as_str())
         .ok_or_else(|| format!("Browser '{browser_type}' not found or not installed"))?;
 
     // Extract the cookie header.
@@ -85,21 +85,4 @@ pub fn import_browser_cookies(
     manual.save().map_err(|e| e.to_string())?;
 
     Ok(get_manual_cookies())
-}
-
-/// Map `BrowserType` to a stable lowercase string key used in the IPC bridge.
-fn browser_type_key(bt: codexbar::browser::detection::BrowserType) -> &'static str {
-    use codexbar::browser::detection::BrowserType;
-    match bt {
-        BrowserType::Chrome => "chrome",
-        BrowserType::ChromeBeta => "chrome-beta",
-        BrowserType::ChromeDev => "chrome-dev",
-        BrowserType::ChromeCanary => "chrome-canary",
-        BrowserType::ChromeForTesting => "chrome-for-testing",
-        BrowserType::Edge => "edge",
-        BrowserType::Brave => "brave",
-        BrowserType::Arc => "arc",
-        BrowserType::Firefox => "firefox",
-        BrowserType::Chromium => "chromium",
-    }
 }
