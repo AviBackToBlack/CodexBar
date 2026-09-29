@@ -3342,6 +3342,9 @@ fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
 }
 
 #[cfg(test)]
+#[path = "tests/claude_swap.rs"]
+mod claude_swap;
+#[cfg(test)]
 #[path = "tests/copied_prefix.rs"]
 mod copied_prefix;
 #[cfg(test)]

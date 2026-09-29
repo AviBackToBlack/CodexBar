@@ -35,6 +35,7 @@ use crate::providers::claude::quota_history::{
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
 mod claude_pricing;
+mod claude_roots;
 mod claude_usage;
 mod codex;
 mod read_receipt;
@@ -584,7 +585,7 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         include_pi_sessions: bool,
     ) -> CostSummary {
-        let projects_dir = self.get_claude_projects_dir();
+        let roots = self.claude_projects_roots();
         let mut summary = CostSummary::default();
         let today = Utc::now().date_naive();
         let start_date = today - Duration::days(self.days as i64);
@@ -596,7 +597,7 @@ impl CostScanner {
         // Walk through projects directory, de-duplicating usage records
         // that appear across multiple files.
         let mut claude_scan = ClaudeFileScanResult::default();
-        if projects_dir.exists() {
+        if !roots.is_empty() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
             let traversal_read_failures = {
@@ -623,7 +624,7 @@ impl CostScanner {
                     }
                     claude_scan.absorb(file_result);
                 };
-                self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file)
+                self.walk_claude_roots(&roots, &cutoff, cancel, &mut handle_file)
             };
             claude_scan.read_failures = claude_scan
                 .read_failures
@@ -649,7 +650,7 @@ impl CostScanner {
         // than turning a partial zero into a known zero.
         finalize_claude_summary(
             &mut summary,
-            projects_dir.exists(),
+            !roots.is_empty(),
             claude_scan,
             is_cancelled(cancel),
         );
@@ -663,7 +664,7 @@ impl CostScanner {
         &self,
         cancel: Option<&AtomicBool>,
     ) -> ClaudeChartSnapshot {
-        let projects_dir = self.get_claude_projects_dir();
+        let roots = self.claude_projects_roots();
         let today = Local::now().date_naive();
         let cutoff = Utc::now() - Duration::days(self.days as i64);
         let mut summary = CostSummary {
@@ -683,11 +684,11 @@ impl CostScanner {
 
         let mut quota_records = Vec::new();
         let mut scan_result = ClaudeFileScanResult::default();
-        if projects_dir.exists() {
+        if !roots.is_empty() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
             let traversal_read_failures =
-                self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut |path| {
+                self.walk_claude_roots(&roots, &cutoff, cancel, &mut |path| {
                     let mut file_has_usage = false;
                     let mut aggregation_complete = true;
                     let mut file_result = scan_claude_file_with_pricing(
@@ -735,10 +736,10 @@ impl CostScanner {
             &mut HashSet::new(),
         );
 
-        let complete = projects_dir.exists() && !is_cancelled(cancel) && scan_result.is_complete();
+        let complete = !roots.is_empty() && !is_cancelled(cancel) && scan_result.is_complete();
         finalize_claude_summary(
             &mut summary,
-            projects_dir.exists(),
+            !roots.is_empty(),
             scan_result,
             is_cancelled(cancel),
         );
@@ -804,23 +805,30 @@ impl CostScanner {
         }
     }
 
-    fn get_claude_projects_dir(&self) -> PathBuf {
-        if let Ok(claude_config) = std::env::var("CLAUDE_CONFIG_DIR") {
-            let trimmed = claude_config.trim();
-            if !trimmed.is_empty() {
-                return PathBuf::from(trimmed).join("projects");
-            }
-        }
+    /// Existing Claude transcript roots: the profile root plus claude-swap
+    /// session homes, de-duplicated by resolved path.
+    fn claude_projects_roots(&self) -> Vec<PathBuf> {
+        claude_roots::claude_projects_roots(
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+            dirs::home_dir().as_deref(),
+        )
+    }
 
-        // Try ~/.claude/projects first
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let claude_dir = home.join(".claude").join("projects");
-        if claude_dir.exists() {
-            return claude_dir;
-        }
-
-        // Fallback to ~/.config/claude/projects
-        home.join(".config").join("claude").join("projects")
+    /// Walk every root with one caller-owned `seen` set behind `on_file`, so a
+    /// row copied between homes is counted once. Returns read failures.
+    fn walk_claude_roots<F>(
+        &self,
+        roots: &[PathBuf],
+        cutoff: &DateTime<Utc>,
+        cancel: Option<&AtomicBool>,
+        on_file: &mut F,
+    ) -> u32
+    where
+        F: FnMut(&Path),
+    {
+        roots.iter().fold(0u32, |failures, root| {
+            failures.saturating_add(self.walk_claude_files(root, cutoff, cancel, on_file))
+        })
     }
 
     fn walk_claude_files<F>(
@@ -1204,7 +1212,7 @@ pub fn has_cost_usage_sources() -> bool {
         .get_codex_sessions_dirs()
         .iter()
         .any(|dir| dir.exists())
-        || scanner.get_claude_projects_dir().exists()
+        || !scanner.claude_projects_roots().is_empty()
         || crate::pi_session_cost::pi_compatible_session_roots(dirs::home_dir())
             .iter()
             .any(|dir| dir.exists())
@@ -1267,8 +1275,8 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
         "claude" => {
             // Real per-day breakdown: walk the project logs once,
             // de-duplicating records across files.
-            let projects_dir = scanner.get_claude_projects_dir();
-            if projects_dir.exists() {
+            let roots = scanner.claude_projects_roots();
+            if !roots.is_empty() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
@@ -1298,7 +1306,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                         }
                         claude_scan.absorb(file_result);
                     };
-                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file)
+                    scanner.walk_claude_roots(&roots, &cutoff, None, &mut handle_file)
                 };
                 claude_scan.read_failures = claude_scan
                     .read_failures
@@ -1389,8 +1397,8 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
             // Per-day token breakdown from the same de-duplicated record walk
             // as the cost chart. Only a complete valid walk establishes
             // authoritative coverage of the requested history window.
-            let projects_dir = scanner.get_claude_projects_dir();
-            if projects_dir.exists() {
+            let roots = scanner.claude_projects_roots();
+            if !roots.is_empty() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
@@ -1406,7 +1414,7 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
                         );
                         claude_scan.absorb(file_result);
                     };
-                    scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file)
+                    scanner.walk_claude_roots(&roots, &cutoff, None, &mut handle_file)
                 };
                 claude_scan.read_failures = claude_scan
                     .read_failures
