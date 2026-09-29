@@ -190,8 +190,10 @@ pub struct CostUsageCache {
     /// Last scan timestamp in milliseconds
     pub last_scan_unix_ms: i64,
     /// Per-file usage data
+    #[serde(serialize_with = "save_skip::sorted_map")]
     pub files: HashMap<String, CostUsageFileUsage>,
     /// Aggregated daily data: day_key -> model -> [input, cached, output, reasoning?]
+    #[serde(serialize_with = "save_skip::sorted_days")]
     pub days: HashMap<String, HashMap<String, Vec<i64>>>,
     /// Inclusive range covered by the last successful full inspection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,12 +239,20 @@ pub struct CostUsageCache {
     /// persists aggregate day/model totals rather than the native request-row
     /// representation used by upstream.  The map is optional on disk so old
     /// caches remain valid and can be upgraded lazily.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "save_skip::sorted_map"
+    )]
     pub codex_source_rows: HashMap<String, CodexSourceRowCache>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
     pub(crate) loaded_stamp: Option<Option<CacheStamp>>,
+    /// `last_scan_unix_ms` as decoded from disk, before any in-memory debounce
+    /// time from a skipped save. Baseline for the unchanged-payload check.
+    #[serde(skip)]
+    pub(crate) loaded_last_scan_unix_ms: i64,
 }
 
 /// Pricing evidence attached to one cached Codex request row.
@@ -299,6 +309,7 @@ pub struct CostUsageFileUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_file_identity: Option<String>,
     /// Daily usage data extracted from this file
+    #[serde(serialize_with = "save_skip::sorted_days")]
     pub days: HashMap<String, HashMap<String, Vec<i64>>>,
     /// Bytes parsed so far (for incremental parsing)
     pub parsed_bytes: Option<i64>,
@@ -507,6 +518,7 @@ impl CostUsageDayRange {
 /// JSONL Scanner for cost/usage logs
 pub struct JsonlScanner;
 pub(crate) mod codex;
+mod save_skip;
 pub(crate) use codex::source_rows::{
     read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
 };
@@ -548,6 +560,10 @@ impl JsonlScanner {
             && let Ok(mut cache) = serde_json::from_str::<CostUsageCache>(&contents)
         {
             let stamp = CacheStamp::from_bytes(contents.as_bytes());
+            cache.loaded_last_scan_unix_ms = cache.last_scan_unix_ms;
+            if let Some(scan_unix_ms) = save_skip::recorded_scan_time(&cache_path, &stamp) {
+                cache.last_scan_unix_ms = scan_unix_ms;
+            }
             if provider == ProviderId::Codex {
                 return codex::codex_cache_apply_load_policy(cache, stamp);
             }
@@ -851,6 +867,9 @@ impl JsonlScanner {
             let _cleared = fs::remove_file(&cache_path);
             return;
         }
+        if save_skip::skip_unchanged_save(&cache_path, cache, &json) {
+            return;
+        }
 
         let tmp_name = format!(
             ".{}.{}-{}.tmp",
@@ -882,6 +901,7 @@ impl JsonlScanner {
         };
         if wrote {
             cache.loaded_stamp = Some(Some(CacheStamp::from_bytes(json.as_bytes())));
+            cache.loaded_last_scan_unix_ms = cache.last_scan_unix_ms;
         }
         // Best-effort temp cleanup (ignore errors — unique name avoids clashes).
         let _truncated_tmp = fs::File::create(&tmp_path).and_then(|f| f.set_len(0));
