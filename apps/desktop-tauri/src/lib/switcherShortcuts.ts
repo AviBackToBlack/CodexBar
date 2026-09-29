@@ -8,6 +8,9 @@
  * stay portable. Windows reserves `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w`
  * (the tray/pop-out commands). `alt+f4` and `alt+tab` need no entry: F4 and
  * Tab are outside the grammar, so they are rejected as invalid.
+ *
+ * The backend validates the stored map with the same rules
+ * (`rust/src/switcher_shortcuts.rs`); keep the two in step.
  */
 
 export const SWITCHER_ACTIONS = [
@@ -124,6 +127,31 @@ export function validateSwitcherShortcuts(
     throw new SwitcherShortcutError("duplicate");
   }
   return result;
+}
+
+/**
+ * Resolve the map stored in settings; a missing or invalid map (the backend
+ * only stores valid ones) yields the defaults.
+ */
+export function resolveSwitcherShortcuts(
+  stored?: Readonly<Record<string, string>>,
+): SwitcherShortcutMap {
+  try {
+    return validateSwitcherShortcuts(stored);
+  } catch {
+    return { ...DEFAULT_SWITCHER_SHORTCUTS };
+  }
+}
+
+/** The entries of `mapping` that differ from the defaults (the patch payload). */
+export function switcherShortcutOverrides(
+  mapping: Readonly<SwitcherShortcutMap>,
+): Record<string, string> {
+  return Object.fromEntries(
+    SWITCHER_ACTIONS.filter(
+      (action) => mapping[action] !== DEFAULT_SWITCHER_SHORTCUTS[action],
+    ).map((action) => [action, mapping[action]]),
+  );
 }
 
 export type SwitcherKeyEvent = Pick<

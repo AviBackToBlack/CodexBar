@@ -5,8 +5,10 @@ import {
   SwitcherShortcutError,
   matchSwitcherAction,
   normalizeShortcut,
+  resolveSwitcherShortcuts,
   resolveSwitcherTarget,
   shortcutFromEvent,
+  switcherShortcutOverrides,
   validateSwitcherShortcuts,
   type SwitcherKeyEvent,
 } from "./switcherShortcuts";
@@ -195,5 +197,28 @@ describe("resolveSwitcherTarget", () => {
     expect(resolveSwitcherTarget("select2", ids, null)).toEqual({ providerId: "codex" });
     expect(resolveSwitcherTarget("select4", ids, null)).toEqual({ providerId: "gemini" });
     expect(resolveSwitcherTarget("select5", ids, null)).toBeNull();
+  });
+});
+
+describe("resolveSwitcherShortcuts", () => {
+  it("returns the defaults for a missing or invalid map", () => {
+    expect(resolveSwitcherShortcuts()).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+    expect(resolveSwitcherShortcuts({})).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+    expect(resolveSwitcherShortcuts({ next: "left" })).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+    expect(resolveSwitcherShortcuts({ bogus: "ctrl+1" })).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+  });
+
+  it("accepts the fully resolved map the backend sends", () => {
+    const stored = { ...DEFAULT_SWITCHER_SHORTCUTS, next: "none", select2: "ctrl+alt+2" };
+    expect(resolveSwitcherShortcuts(stored)).toEqual(stored);
+  });
+});
+
+describe("switcherShortcutOverrides", () => {
+  it("keeps only entries that differ from the defaults", () => {
+    expect(switcherShortcutOverrides(DEFAULT_SWITCHER_SHORTCUTS)).toEqual({});
+    expect(
+      switcherShortcutOverrides(validateSwitcherShortcuts({ next: "none", select2: "alt+2" })),
+    ).toEqual({ next: "none", select2: "alt+2" });
   });
 });

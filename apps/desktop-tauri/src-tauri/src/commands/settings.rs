@@ -41,6 +41,8 @@ pub struct SettingsUpdate {
     pub auto_download_updates: Option<bool>,
     pub install_updates_on_quit: Option<bool>,
     pub global_shortcut: Option<String>,
+    /// Provider-switcher shortcut overrides; replaces the stored overrides.
+    pub switcher_shortcuts: Option<std::collections::BTreeMap<String, String>>,
     pub codex_custom_sessions_dirs: Option<Vec<String>>,
     pub agent_sessions_enabled: Option<bool>,
     pub agent_session_ssh_hosts: Option<Vec<String>>,
@@ -416,6 +418,11 @@ impl SettingsUpdate {
             && codexbar::settings::LowPowerModePreference::parse(value).is_none()
         {
             return Err(format!("Invalid low power mode preference: {value}"));
+        }
+        if let Some(overrides) = &self.switcher_shortcuts {
+            settings.switcher_shortcuts =
+                codexbar::switcher_shortcuts::normalize_overrides(overrides)
+                    .map_err(|error| error.to_string())?;
         }
         if let Some(value) = self.copilot_seat_credit_entitlement {
             settings.set_seat_credit_entitlement(codexbar::core::ProviderId::Copilot, value)?;
@@ -805,5 +812,88 @@ mod tests {
             settings.notification_sound_paths,
             codexbar::settings::NotificationSoundPaths::default()
         );
+    }
+
+    fn switcher_patch(json: &str) -> SettingsUpdate {
+        serde_json::from_str(&format!(r#"{{"switcherShortcuts":{json}}}"#)).unwrap()
+    }
+
+    #[test]
+    fn switcher_shortcuts_patch_stores_normalized_non_default_overrides() {
+        let mut settings = Settings::default();
+        switcher_patch(r#"{"select2":"Alt+Cmd+2","previous":"left","next":"none"}"#)
+            .apply_to(&mut settings)
+            .expect("valid overrides are stored");
+
+        assert_eq!(
+            settings.switcher_shortcuts,
+            std::collections::BTreeMap::from([
+                ("select2".to_string(), "ctrl+alt+2".to_string()),
+                ("next".to_string(), "none".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn switcher_shortcuts_empty_patch_restores_defaults() {
+        let mut settings = Settings::default();
+        switcher_patch(r#"{"next":"shift+right"}"#)
+            .apply_to(&mut settings)
+            .unwrap();
+        switcher_patch("{}").apply_to(&mut settings).unwrap();
+
+        assert!(settings.switcher_shortcuts.is_empty());
+    }
+
+    #[test]
+    fn switcher_shortcuts_patch_rejects_invalid_maps_and_keeps_stored_value() {
+        let mut settings = Settings::default();
+        switcher_patch(r#"{"next":"shift+right"}"#)
+            .apply_to(&mut settings)
+            .unwrap();
+
+        for (json, message) in [
+            (
+                r#"{"bogus":"ctrl+1"}"#,
+                "Unknown switcher shortcut action: bogus",
+            ),
+            (
+                r#"{"next":"left"}"#,
+                "Each switcher shortcut can be assigned to only one action",
+            ),
+            (
+                r#"{"next":"ctrl+r"}"#,
+                "ctrl+r is reserved and cannot be used as a switcher shortcut",
+            ),
+            (r#"{"next":"f1"}"#, "f1 is not a valid switcher shortcut"),
+        ] {
+            let error = switcher_patch(json)
+                .apply_to(&mut settings)
+                .expect_err(json);
+            assert_eq!(error, message);
+        }
+        assert_eq!(
+            settings.switcher_shortcuts.get("next").map(String::as_str),
+            Some("shift+right")
+        );
+    }
+
+    #[test]
+    fn switcher_shortcuts_snapshot_exposes_the_fully_resolved_map() {
+        let settings = Settings {
+            switcher_shortcuts: std::collections::BTreeMap::from([(
+                "next".to_string(),
+                "none".to_string(),
+            )]),
+            ..Settings::default()
+        };
+        let value =
+            serde_json::to_value(super::super::bridge::SettingsSnapshot::from(settings)).unwrap();
+        let map = &value["switcherShortcuts"];
+
+        assert_eq!(map["next"], "none");
+        assert_eq!(map["previous"], "left");
+        assert_eq!(map["select9"], "ctrl+9");
+        assert_eq!(map.as_object().unwrap().len(), 11);
     }
 }

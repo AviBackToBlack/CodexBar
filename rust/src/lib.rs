@@ -26,6 +26,7 @@ pub mod sound;
 pub mod spend_contract;
 
 pub mod status;
+pub mod switcher_shortcuts;
 pub mod tray;
 pub mod updater;
 pub mod wsl;

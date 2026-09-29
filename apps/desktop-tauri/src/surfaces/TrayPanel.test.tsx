@@ -157,6 +157,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     autoDownloadUpdates: false,
     installUpdatesOnQuit: false,
     globalShortcut: "Ctrl+Shift+U",
+    switcherShortcuts: {},
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",

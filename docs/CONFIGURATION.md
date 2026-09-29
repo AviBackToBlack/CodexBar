@@ -81,7 +81,25 @@ The tray flyout and the pop-out window switch providers from the keyboard (porte
 | Previous / next | `Left` / `Right` (wraps through Overview) |
 | Overview, then providers in display order | `Ctrl+1` ... `Ctrl+9` |
 
-Keys are ignored while a text field, select or slider (the zoom slider) has focus, or while a grid drag is active. Customizing the keys is not yet exposed in Settings; the shortcut grammar (`ctrl`/`alt`/`shift` modifiers, `cmd` accepted as an alias for `ctrl`, `none` to disable) lives in `apps/desktop-tauri/src/lib/switcherShortcuts.ts`.
+Keys are ignored while a text field, select or slider (the zoom slider) has focus, or while a grid drag is active.
+
+### Customizing the keys
+
+**Settings → Menu → Provider switcher shortcuts** lists all 11 actions. Choose **Record**, then press the key or combination; **Backspace** while recording (or **Clear**) disables the action, **Reset to defaults** restores every default. The editor rejects duplicates and reserved keys with an inline message and saves nothing in that case.
+
+Only the actions you changed are stored, in `settings.json` under `switcher_shortcuts` (the key is omitted when everything is default):
+
+```json
+{ "switcher_shortcuts": { "previous": "shift+left", "select2": "ctrl+alt+2", "next": "none" } }
+```
+
+Rules (upstream grammar, validated by `rust/src/switcher_shortcuts.rs` and mirrored in `apps/desktop-tauri/src/lib/switcherShortcuts.ts`):
+
+- Actions: `previous`, `next`, `select1` ... `select9`. Unknown actions are rejected.
+- A shortcut is optional `ctrl`, `alt`, `shift` modifiers plus one key: `left`, `right`, `,`, a letter or a digit. `cmd` is accepted as an alias for `ctrl`, so shortcuts copied from macOS stay valid.
+- Letters, digits and `,` need `ctrl` or `alt`. `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w` are reserved for the tray and pop-out commands.
+- Two actions cannot share a shortcut. `none` disables an action and frees its key.
+- An invalid stored map is ignored on load (defaults apply) and logged as a warning; it never blocks the rest of the settings.
 
 ## Claude Code accounts
 

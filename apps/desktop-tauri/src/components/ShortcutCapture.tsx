@@ -6,6 +6,16 @@ interface ShortcutCaptureProps {
   disabled?: boolean;
   onCommit: (accelerator: string) => void;
   onClear: () => void;
+  /**
+   * Turns a key event into the committed shortcut string, or null to keep
+   * recording. Defaults to a Tauri accelerator (modifier + key). Must be a
+   * stable reference.
+   */
+  compose?: (event: KeyboardEvent) => string | null;
+  /** Overrides the recording hint text. */
+  recordingHint?: string;
+  /** Overrides the text shown when `value` is empty. */
+  emptyLabel?: string;
 }
 
 const MODIFIER_KEYS = new Set([
@@ -65,6 +75,9 @@ export function ShortcutCapture({
   disabled,
   onCommit,
   onClear,
+  compose = composeAccelerator,
+  recordingHint,
+  emptyLabel,
 }: ShortcutCaptureProps) {
   const { t } = useLocale();
   const [recording, setRecording] = useState(false);
@@ -91,7 +104,7 @@ export function ShortcutCapture({
         return;
       }
 
-      const accel = composeAccelerator(e);
+      const accel = compose(e);
       if (accel) {
         stopRecording();
         onCommit(accel);
@@ -102,7 +115,7 @@ export function ShortcutCapture({
     return () => {
       window.removeEventListener("keydown", handleKey, true);
     };
-  }, [recording, stopRecording, onCommit, onClear]);
+  }, [recording, stopRecording, onCommit, onClear, compose]);
 
   useEffect(() => {
     if (recording) {
@@ -111,8 +124,8 @@ export function ShortcutCapture({
   }, [recording]);
 
   const chipText = recording
-    ? t("ShortcutRecordingHint")
-    : value || t("ShortcutEmptyPlaceholder");
+    ? (recordingHint ?? t("ShortcutRecordingHint"))
+    : value || (emptyLabel ?? t("ShortcutEmptyPlaceholder"));
 
   return (
     <div className="shortcut-capture">

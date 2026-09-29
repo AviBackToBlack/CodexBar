@@ -1,5 +1,9 @@
-import { useEffect, useRef } from "react";
-import { matchSwitcherAction, resolveSwitcherTarget } from "../lib/switcherShortcuts";
+import { useEffect, useMemo, useRef } from "react";
+import {
+  matchSwitcherAction,
+  resolveSwitcherShortcuts,
+  resolveSwitcherTarget,
+} from "../lib/switcherShortcuts";
 
 const EDITABLE_SELECTOR =
   'input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="slider"]';
@@ -15,13 +19,17 @@ export function useProviderSwitcherKeys({
   providerIds,
   selectedProviderId,
   onSelect,
+  shortcuts,
 }: {
   providerIds: readonly string[];
   selectedProviderId: string | null;
   onSelect: (providerId: string | null) => void;
+  /** `settings.switcherShortcuts`; defaults apply when omitted or invalid. */
+  shortcuts?: Readonly<Record<string, string>>;
 }) {
-  const latest = useRef({ providerIds, selectedProviderId, onSelect });
-  latest.current = { providerIds, selectedProviderId, onSelect };
+  const mapping = useMemo(() => resolveSwitcherShortcuts(shortcuts), [shortcuts]);
+  const latest = useRef({ providerIds, selectedProviderId, onSelect, mapping });
+  latest.current = { providerIds, selectedProviderId, onSelect, mapping };
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -30,7 +38,7 @@ export function useProviderSwitcherKeys({
       if (target instanceof Element && target.closest(EDITABLE_SELECTOR)) return;
       if (document.querySelector(DRAGGING_SELECTOR)) return;
       const current = latest.current;
-      const action = matchSwitcherAction(event);
+      const action = matchSwitcherAction(event, current.mapping);
       if (action === null) return;
       const next = resolveSwitcherTarget(
         action,
