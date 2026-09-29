@@ -69,12 +69,14 @@ pub enum PreferencesAction {
     /// Write portable preferences to a JSON file
     Export {
         /// Destination file
-        path: std::path::PathBuf,
+        #[arg(long)]
+        file: std::path::PathBuf,
     },
     /// Apply a preferences file; restart a running CodexBar afterwards
     Import {
         /// Preferences file to read
-        path: std::path::PathBuf,
+        #[arg(long)]
+        file: std::path::PathBuf,
     },
 }
 
@@ -103,7 +105,7 @@ pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
 /// Export or import the portable preferences document.
 fn transfer_preferences(action: PreferencesAction) -> anyhow::Result<()> {
     match action {
-        PreferencesAction::Export { path } => {
+        PreferencesAction::Export { file: path } => {
             let document = PreferencesDocument::from_settings(&Settings::load())?;
             document.write_file(&path)?;
             println!(
@@ -112,7 +114,7 @@ fn transfer_preferences(action: PreferencesAction) -> anyhow::Result<()> {
                 path.display()
             );
         }
-        PreferencesAction::Import { path } => {
+        PreferencesAction::Import { file: path } => {
             let document = PreferencesDocument::read_file(&path)?;
             let mut settings = Settings::load();
             let applied = document.apply_to(&mut settings)?;
@@ -535,16 +537,18 @@ mod tests {
         use super::{ConfigArgs, ConfigCommand, PreferencesAction};
         use clap::Parser;
 
-        let export = ConfigArgs::try_parse_from(["config", "preferences", "export", "p.json"])
-            .expect("export parses");
+        let export =
+            ConfigArgs::try_parse_from(["config", "preferences", "export", "--file", "p.json"])
+                .expect("export parses");
         assert!(matches!(
             export.command,
             ConfigCommand::Preferences {
                 action: PreferencesAction::Export { .. }
             }
         ));
-        let import = ConfigArgs::try_parse_from(["config", "preferences", "import", "p.json"])
-            .expect("import parses");
+        let import =
+            ConfigArgs::try_parse_from(["config", "preferences", "import", "--file", "p.json"])
+                .expect("import parses");
         assert!(matches!(
             import.command,
             ConfigCommand::Preferences {
