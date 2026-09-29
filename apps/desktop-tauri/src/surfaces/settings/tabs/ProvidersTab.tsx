@@ -241,6 +241,7 @@ function providerSourceHintShort(
     case "zenmux":
     case "clinepass":
     case "neuralwatt":
+    case "devpass":
     case "doubao":
     case "crof":
     case "stepfun":

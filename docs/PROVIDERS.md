@@ -55,6 +55,19 @@ spend and, when the optional balance request succeeds, prepaid credit balance.
 It keeps those values in the cost/detail surfaces and does not invent a quota
 percentage or use a Replicate API token as a website credential.
 
+### DevPass
+
+DevPass reads `GET https://api.llmgateway.io/v1/key` with a regular LLM Gateway
+API key (`DEVPASS_API_KEY` or the Settings key field). Publishable keys and
+end-user sessions get HTTP 403. Plan credits are the primary lane and the
+premium weekly allowance is the secondary lane (seven-day window; the reset
+comes only from the response, and an inactive window has no reset). A
+pay-as-you-go key (`devPlan: none`) shows only key-scoped all-time spend.
+Remaining plan credits are an allowance, not a wallet balance, so no balance is
+reported. Amounts must be plain decimal strings; anything else fails the
+refresh instead of showing as zero. The key is only sent to the fixed HTTPS
+origin, redirects are not followed, and response bodies never appear in errors.
+
 ## Listing what is enabled
 
 ```powershell

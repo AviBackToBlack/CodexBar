@@ -19,6 +19,7 @@ import crossmodel from "./icons/ProviderIcon-crossmodel.svg?raw";
 import cursor from "./icons/ProviderIcon-cursor.svg?raw";
 import deepgram from "./icons/ProviderIcon-deepgram.svg?raw";
 import deepinfra from "./icons/ProviderIcon-deepinfra.svg?raw";
+import devpass from "./icons/ProviderIcon-devpass.svg?raw";
 import fireworks from "./icons/ProviderIcon-fireworks.svg?raw";
 import aiand from "./icons/ProviderIcon-aiand.svg?raw";
 import clinepass from "./icons/ProviderIcon-clinepass.svg?raw";
@@ -107,6 +108,7 @@ const RAW: Record<string, string> = {
   cursor: tint(cursor),
   deepgram: tint(deepgram),
   deepinfra: tint(deepinfra),
+  devpass: tint(devpass),
   fireworks: tint(fireworks),
   aiand: tint(aiand),
   clinepass: tint(clinepass),
@@ -174,6 +176,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   cursor:      { id: "cursor",      brandColor: "#00bfa5", fallbackLetter: "▸", svgPath: RAW.cursor },
   deepgram:    { id: "deepgram",    brandColor: "#13ef93", fallbackLetter: "D", svgPath: RAW.deepgram },
   deepinfra:   { id: "deepinfra",   brandColor: "#2a3275", fallbackLetter: "D", svgPath: RAW.deepinfra },
+  devpass:     { id: "devpass",     brandColor: "#2563eb", fallbackLetter: "D", svgPath: RAW.devpass },
   fireworks:   { id: "fireworks",   brandColor: "#f25b1c", fallbackLetter: "F", svgPath: RAW.fireworks },
   aiand:       { id: "aiand",       brandColor: "#e25c2b", fallbackLetter: "&", svgPath: RAW.aiand },
   clinepass:   { id: "clinepass",   brandColor: "#61a3fa", fallbackLetter: "C", svgPath: RAW.clinepass },

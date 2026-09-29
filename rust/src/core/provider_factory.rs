@@ -11,18 +11,18 @@ use crate::providers::{
     AntigravityProvider, AugmentProvider, AzureOpenAIProvider, BedrockProvider, ChutesProvider,
     ClaudeProvider, ClinePassProvider, CodeBuddyProvider, CodeRabbitProvider, CodebuffProvider,
     CodexProvider, CommandCodeProvider, CopilotProvider, CrofProvider, CrossModelProvider,
-    CursorProvider, DeepInfraProvider, DeepSeekProvider, DeepgramProvider, DevinProvider,
-    DoubaoProvider, ElevenLabsProvider, FactoryProvider, FireworksProvider, GeminiProvider,
-    GrokProvider, GroqProvider, HelmcodeProvider, HuggingFaceProvider, InfiniProvider,
-    JetBrainsProvider, KiloProvider, KimiK2Provider, KimiProvider, KiroProvider, LLMProxyProvider,
-    LiteLLMProvider, LongCatProvider, ManusProvider, MetaProvider, MiMoProvider, MiniMaxProvider,
-    MistralProvider, MuseProvider, NanoGPTProvider, NeuralwattProvider, NotionProvider,
-    NousProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider,
-    OpenRouterProvider, PerplexityProvider, PiProvider, PoeProvider, QoderProvider,
-    QwenCloudProvider, ReplicateProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider,
-    T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider, VertexAIProvider, WarpProvider,
-    WayfinderProvider, WindsurfProvider, XaiProvider, ZaiProvider, ZedProvider, ZenMuxProvider,
-    ZoomMateProvider,
+    CursorProvider, DeepInfraProvider, DeepSeekProvider, DeepgramProvider, DevPassProvider,
+    DevinProvider, DoubaoProvider, ElevenLabsProvider, FactoryProvider, FireworksProvider,
+    GeminiProvider, GrokProvider, GroqProvider, HelmcodeProvider, HuggingFaceProvider,
+    InfiniProvider, JetBrainsProvider, KiloProvider, KimiK2Provider, KimiProvider, KiroProvider,
+    LLMProxyProvider, LiteLLMProvider, LongCatProvider, ManusProvider, MetaProvider, MiMoProvider,
+    MiniMaxProvider, MistralProvider, MuseProvider, NanoGPTProvider, NeuralwattProvider,
+    NotionProvider, NousProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider,
+    OpenCodeProvider, OpenRouterProvider, PerplexityProvider, PiProvider, PoeProvider,
+    QoderProvider, QwenCloudProvider, ReplicateProvider, SakanaProvider, StepFunProvider,
+    Sub2ApiProvider, T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider,
+    VertexAIProvider, WarpProvider, WayfinderProvider, WindsurfProvider, XaiProvider, ZaiProvider,
+    ZedProvider, ZenMuxProvider, ZoomMateProvider,
 };
 
 /// Instantiate the concrete [`Provider`] implementation for a given [`ProviderId`].
@@ -111,6 +111,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Meta => Box::new(MetaProvider::new()),
         ProviderId::Muse => Box::new(MuseProvider::new()),
         ProviderId::Nous => Box::new(NousProvider::new()),
+        ProviderId::DevPass => Box::new(DevPassProvider::new()),
     }
 }
 
