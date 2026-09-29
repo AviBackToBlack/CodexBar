@@ -35,6 +35,7 @@ export function CredentialsDispatcher({ providerId, t }: Props) {
     case "openaiapi":
       return <OpenAiExtras providerId={providerId} t={t} />;
     case "litellm":
+    case "llmman":
     case "devin":
     case "opencodego":
     case "zed":

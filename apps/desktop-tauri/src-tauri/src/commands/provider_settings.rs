@@ -323,6 +323,7 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     Some(match provider_id {
         "openaiapi" => ProviderId::OpenAIApi,
         "litellm" => ProviderId::LiteLLM,
+        "llmman" => ProviderId::LLMMan,
         "devin" => ProviderId::Devin,
         "opencodego" => ProviderId::OpenCodeGo,
         "zed" => ProviderId::Zed,
@@ -392,6 +393,11 @@ mod tests {
             workspace_provider("opencodego"),
             Some(ProviderId::OpenCodeGo)
         );
+    }
+
+    #[test]
+    fn maps_llmman_workspace_provider() {
+        assert_eq!(workspace_provider("llmman"), Some(ProviderId::LLMMan));
     }
 
     #[test]

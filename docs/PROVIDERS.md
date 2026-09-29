@@ -55,6 +55,19 @@ spend and, when the optional balance request succeeds, prepaid credit balance.
 It keeps those values in the cost/detail surfaces and does not invent a quota
 percentage or use a Replicate API token as a website credential.
 
+### llmman daemon
+
+llmman reads a local (or LAN) llmman daemon: `GET {base}/llmman/node` for the
+memory budget plus loaded and stored models, and a best-effort
+`GET {base}/api/version`. The base URL comes from provider extras or
+`LLMMAN_HOST` and defaults to `http://127.0.0.1:17434`; a trailing `/v1` is
+accepted and dropped per request. `LLMMAN_API_KEY` is optional, because a
+daemon without configured keys is open, and is sent as a Bearer token only when
+set. Plain HTTP is accepted only for localhost, loopback, private-network
+(10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10) and `.local`
+hosts; any public host must use HTTPS. Embedded credentials, queries, and
+fragments are rejected.
+
 ## Listing what is enabled
 
 ```powershell

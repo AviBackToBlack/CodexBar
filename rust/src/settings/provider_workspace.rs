@@ -57,6 +57,8 @@ pub fn validate_provider_workspace_value(
         }
         ProviderId::LiteLLM => validate_token_endpoint(trimmed, "LiteLLM base URL", |_| true),
         ProviderId::Sub2Api => validate_sub2api_base_url(trimmed),
+        ProviderId::LLMMan => crate::providers::llmman::validated_llmman_base_url(trimmed)
+            .map_err(|err| err.to_string()),
         _ => Ok(trimmed.to_string()),
     }
 }
@@ -214,6 +216,35 @@ mod tests {
         ] {
             assert!(
                 validate_provider_workspace_value(ProviderId::LiteLLM, value).is_err(),
+                "accepted {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_and_normalizes_llmman_base_url() {
+        for (value, expected) in [
+            ("localhost", "http://localhost:17434"),
+            ("0.0.0.0:18000", "http://127.0.0.1:18000"),
+            ("https://llmman.example.com/", "https://llmman.example.com"),
+        ] {
+            assert_eq!(
+                validate_provider_workspace_value(ProviderId::LLMMan, value).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::LLMMan, "  ").unwrap(),
+            ""
+        );
+        for value in [
+            "http://public.example.com",
+            "http://user:password@127.0.0.1:17434",
+            "http://127.0.0.1:17434?probe=1",
+            "file:///tmp/llmman",
+        ] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::LLMMan, value).is_err(),
                 "accepted {value}"
             );
         }

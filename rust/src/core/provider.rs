@@ -93,6 +93,7 @@ pub enum ProviderId {
     Muse,
     Replicate,
     Nous,
+    LLMMan,
 }
 
 impl ProviderId {
@@ -179,6 +180,7 @@ impl ProviderId {
             ProviderId::Muse,
             ProviderId::Replicate,
             ProviderId::Nous,
+            ProviderId::LLMMan,
         ]
     }
 
@@ -226,6 +228,7 @@ impl ProviderId {
             ProviderId::Meta => "meta",
             ProviderId::Muse => "muse",
             ProviderId::Nous => "nous",
+            ProviderId::LLMMan => "llmman",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -313,6 +316,7 @@ impl ProviderId {
             ProviderId::Meta => "Meta",
             ProviderId::Muse => "Muse Code",
             ProviderId::Nous => "Nous Portal",
+            ProviderId::LLMMan => "llmman",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -415,6 +419,7 @@ impl ProviderId {
             ProviderId::Meta => None,
             ProviderId::Muse => None,
             ProviderId::Nous => None,
+            ProviderId::LLMMan => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -495,6 +500,7 @@ impl ProviderId {
             "fireworks" | "fireworks-ai" | "fw" => Some(ProviderId::Fireworks),
             "muse" | "muse-code" | "muse code" => Some(ProviderId::Muse),
             "nous" | "nous-portal" | "nous portal" | "hermes" => Some(ProviderId::Nous),
+            "llmman" => Some(ProviderId::LLMMan),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -1106,6 +1112,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Muse => "#0668E1",
         ProviderId::Replicate => "#000000",
         ProviderId::Nous => "#D6A55C",
+        ProviderId::LLMMan => "#6CC5B0",
     }
 }
 
@@ -1120,7 +1127,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 80);
+        assert_eq!(all.len(), 81);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1181,6 +1188,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Replicate));
         assert!(all.contains(&ProviderId::Muse));
         assert!(all.contains(&ProviderId::Nous));
+        assert!(all.contains(&ProviderId::LLMMan));
     }
 
     #[test]
