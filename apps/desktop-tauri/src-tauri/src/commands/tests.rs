@@ -486,6 +486,72 @@ fn fetch_context_replicate_empty_manual_fails_closed_without_browser_import() {
 }
 
 #[test]
+fn fetch_context_ollama_empty_manual_fails_closed_without_browser_import() {
+    let settings = Settings::default();
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_ollama_blank_manual_header_counts_as_missing() {
+    let mut cookies = ManualCookies::default();
+    cookies.set(ProviderId::Ollama.cli_name(), "   ");
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &Settings::default(),
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert!(ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_ollama_pasted_header_is_not_reported_missing() {
+    let mut cookies = ManualCookies::default();
+    cookies.set(ProviderId::Ollama.cli_name(), "__Secure-session=abc");
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &Settings::default(),
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("__Secure-session=abc")
+    );
+    assert!(!ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_ollama_auto_source_never_reports_manual_cookie_missing() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Ollama, "auto");
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert!(!ctx.manual_cookie_missing);
+}
+
+#[test]
 fn fetch_context_codex_manual_cookie_never_forces_unsupported_web() {
     // Default cookie source is "manual". Pasting a chatgpt.com cookie used to flip
     // Codex into SourceMode::Web, which CodexProvider rejects with

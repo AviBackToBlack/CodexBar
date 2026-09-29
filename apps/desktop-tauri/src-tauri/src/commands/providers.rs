@@ -128,7 +128,9 @@ pub(crate) fn build_fetch_context(
                 "off" => (SourceMode::Cli, None, false),
                 "manual" => {
                     let cookie_header = active_token_cookie.or(stored_cookie);
-                    let fails_closed_without_cookie = cookie_header.is_none()
+                    let fails_closed_without_cookie = cookie_header
+                        .as_deref()
+                        .is_none_or(|header| header.trim().is_empty())
                         && provider.manual_empty_cookie_policy()
                             == ManualEmptyCookiePolicy::FailClosedWeb;
                     let source_mode = if (has_kimi_code_api_key || has_opencodego_api_key)

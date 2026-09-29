@@ -14,8 +14,8 @@ use reqwest::Url;
 use serde::Deserialize;
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, ManualEmptyCookiePolicy, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 use crate::settings::ApiKeys;
 
@@ -415,6 +415,10 @@ impl Provider for OllamaProvider {
 
     fn retains_last_good_on_transport_failure(&self) -> bool {
         true
+    }
+
+    fn manual_empty_cookie_policy(&self) -> ManualEmptyCookiePolicy {
+        ManualEmptyCookiePolicy::FailClosedWeb
     }
 }
 

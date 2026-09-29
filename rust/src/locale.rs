@@ -539,6 +539,8 @@ locale_keys! {
     ProviderCodexNotRunningHelp,
     ProviderCookieSource,
     CookieSourceManual,
+    ProviderManualCookieMissing,
+    ProviderUseAutomaticCookies,
     ProviderRegion,
     ProviderClaudeCookies,
     ProviderClaudeCookiesHelp,

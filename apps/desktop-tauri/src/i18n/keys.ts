@@ -297,6 +297,8 @@ export const ALL_LOCALE_KEYS = [
   "ProviderCodexNotRunningHelp",
   "ProviderCookieSource",
   "CookieSourceManual",
+  "ProviderManualCookieMissing",
+  "ProviderUseAutomaticCookies",
   "ProviderRegion",
   "ProviderClaudeCookies",
   "ProviderClaudeCookiesHelp",

@@ -97,10 +97,26 @@ pub(super) fn resolve_cookie_source(
             .ok_or(ProviderError::NoCookies);
     }
 
+    // Manual source with nothing pasted: fail closed before any browser import
+    // (upstream `OllamaUsageError.manualCookieHeaderEmpty`, #3891).
+    if ctx.manual_cookie_missing {
+        return Err(manual_cookie_header_empty_error());
+    }
+
     match resolve_browser_cookie_header(false)? {
         Some(header) => Ok(OllamaCookieSource::Manual(header)),
         None => Err(ProviderError::NoCookies),
     }
+}
+
+pub(super) fn manual_cookie_header_empty_error() -> ProviderError {
+    ProviderError::Other(
+        concat!(
+            "Ollama cookie source is Manual, but no cookie header is configured. ",
+            "Paste a Cookie header from https://ollama.com/settings, or set Cookie source to Auto."
+        )
+        .to_string(),
+    )
 }
 
 /// After a successful web fetch, cache the validated browser/manual session header.
@@ -275,6 +291,49 @@ pub(super) fn is_ollama_sign_in_redirect(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_manual_cookie_source_fails_closed_with_upstream_message() {
+        // Upstream #3891 `OllamaUsageError.manualCookieHeaderEmpty`. The shell
+        // sets `manual_cookie_missing`; no browser import may be attempted.
+        let ctx = FetchContext {
+            manual_cookie_missing: true,
+            ..FetchContext::default()
+        };
+        let Err(error) = resolve_cookie_source(&ctx) else {
+            panic!("empty Manual source must not resolve a cookie");
+        };
+        assert_eq!(
+            error.to_string(),
+            "Ollama cookie source is Manual, but no cookie header is configured. Paste a Cookie header from https://ollama.com/settings, or set Cookie source to Auto."
+        );
+    }
+
+    #[test]
+    fn blank_manual_header_with_missing_flag_fails_closed() {
+        let ctx = FetchContext {
+            manual_cookie_header: Some("  ".to_string()),
+            manual_cookie_missing: true,
+            ..FetchContext::default()
+        };
+        assert!(matches!(
+            resolve_cookie_source(&ctx),
+            Err(ProviderError::Other(message)) if message.contains("no cookie header is configured")
+        ));
+    }
+
+    #[test]
+    fn non_empty_header_without_session_cookie_keeps_existing_error() {
+        let ctx = FetchContext {
+            manual_cookie_header: Some("theme=dark".to_string()),
+            manual_cookie_missing: false,
+            ..FetchContext::default()
+        };
+        assert!(matches!(
+            resolve_cookie_source(&ctx),
+            Err(ProviderError::NoCookies)
+        ));
+    }
 
     #[test]
     fn normalizes_raw_ollama_session_cookie_value() {
