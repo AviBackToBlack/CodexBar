@@ -460,7 +460,7 @@ fn build_usage_spend_summary(
     if include_opencodex {
         // OpenCodex is an enrichment source, never a standalone provider row.
         // Publish routed subscriptions even when no live provider snapshot exists.
-        for id in ["codex", "opencodego", "kimi", "deepseek"] {
+        for id in ["codex", "opencodego", "kimi", "deepseek", "nous"] {
             let contract = match id {
                 "codex" => None,
                 _ => Some(build_local_spend_contract(id, 30, true)),
@@ -536,7 +536,7 @@ fn build_usage_spend_summary(
                 refreshing: !pi_30_summary.history_coverage_established,
                 stale_updated_at: None,
             },
-            "opencodego" | "kimi" | "deepseek" if include_opencodex => {
+            "opencodego" | "kimi" | "deepseek" | "nous" if include_opencodex => {
                 let seven = build_local_spend_contract(&provider_id, 7, true);
                 let thirty = build_local_spend_contract(&provider_id, 30, true);
                 if !thirty.imports.is_empty() {

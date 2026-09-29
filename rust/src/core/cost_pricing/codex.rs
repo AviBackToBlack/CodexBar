@@ -95,7 +95,7 @@ impl CostUsagePricing {
         )
     }
 
-    fn codex_cost_usd_with_cache_write_and_pricing_snapshot(
+    pub(crate) fn codex_cost_usd_with_cache_write_and_pricing_snapshot(
         model: &str,
         input_tokens: u64,
         cached_input_tokens: u64,

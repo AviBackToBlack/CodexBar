@@ -29,6 +29,9 @@ struct OpenCodexEntry {
 }
 
 mod cache;
+mod nous;
+#[cfg(test)]
+mod nous_tests;
 
 #[derive(Default)]
 struct ModelAccumulator {
@@ -62,6 +65,7 @@ fn route_provider(provider: &str) -> RouteTarget {
         "opencode-go" => RouteTarget::Subscription("opencodego"),
         "kimi-coding" | "kimi-for-coding" => RouteTarget::Subscription("kimi"),
         "deepseek" => RouteTarget::Subscription("deepseek"),
+        "nous" => RouteTarget::Subscription(nous::SUBSCRIPTION_ID),
         "opencode-free" | "opencode" => RouteTarget::TokenOnly,
         _ => RouteTarget::Unknown,
     }
@@ -153,9 +157,14 @@ fn aggregate(
     let pricing_snapshot = crate::core::pricing_snapshot();
 
     for entry in &entries {
-        if let Some(conversation) = entry.conversation_id.as_ref() {
-            conversations.insert(conversation.clone());
-        }
+        // A row without a conversationId is its own session (upstream 0.68.0).
+        conversations.insert(
+            entry
+                .conversation_id
+                .as_ref()
+                .unwrap_or(&entry.request_id)
+                .clone(),
+        );
         token_mix.input_tokens = add_optional(token_mix.input_tokens, entry.input_tokens);
         token_mix.output_tokens = add_optional(token_mix.output_tokens, entry.output_tokens);
         token_mix.cache_read_tokens =
@@ -322,6 +331,9 @@ fn entry_cost(
     if !has_usage {
         return None;
     }
+    if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
+        return nous::cost(entry, custom, pricing_snapshot);
+    }
     let input = entry.input_tokens.unwrap_or(0);
     let output = entry.output_tokens.unwrap_or(0);
     let cache_read = entry.cache_read_tokens.unwrap_or(0);
@@ -429,9 +441,9 @@ fn parse_line(line: &str) -> Option<OpenCodexEntry> {
             .and_then(|object| nonnegative_u64(object.get("cacheCreationInputTokens"))),
         reasoning_tokens: usage
             .and_then(|object| nonnegative_u64(object.get("reasoningOutputTokens"))),
-        total_tokens: value
-            .get("totalTokens")
-            .and_then(|value| nonnegative_u64(Some(value))),
+        // The Hermes extractor reports the total inside `usage`.
+        total_tokens: nonnegative_u64(value.get("totalTokens"))
+            .or_else(|| usage.and_then(|object| nonnegative_u64(object.get("totalTokens")))),
     })
 }
 

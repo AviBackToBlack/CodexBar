@@ -322,6 +322,16 @@ fn codex_routed_provider_detects_known_routes() {
         codex_routed_pricing::codex_routed_provider("DeepSeek/deepseek-chat"),
         Some("deepseek")
     );
+    // Nous keeps the vendor-qualified model id whole after its own prefix.
+    let nous = "nous/anthropic/claude-sonnet-4.6";
+    assert_eq!(
+        codex_routed_pricing::codex_routed_provider(nous),
+        Some("nous")
+    );
+    assert_eq!(
+        codex_routed_pricing::strip_route_prefix(nous),
+        "anthropic/claude-sonnet-4.6"
+    );
 }
 
 #[test]

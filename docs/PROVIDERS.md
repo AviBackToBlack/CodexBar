@@ -71,7 +71,7 @@ Optional status polling (provider status pages) is available via CLI `--status` 
 
 ## Usage & Spend
 
-Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, or DeepSeek subscription instead of appearing as a second fake provider. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only. Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
+Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, DeepSeek, or Nous Portal subscription instead of appearing as a second fake provider. Ledger rows with `provider: "nous"` are priced only from an exact Nous models.dev entry or a `nous/<model>` custom pricing override, never from another vendor's rates, and never touch Portal credit meters. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only. Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
 
 ### AWS Bedrock monitoring
 

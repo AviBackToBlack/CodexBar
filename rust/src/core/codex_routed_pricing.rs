@@ -9,7 +9,7 @@
 /// return the matching models.dev provider id (upstream 0.50.1 #2946).
 ///
 /// Known routes: `deepseek/` → "deepseek", `kimi/` → "kimi",
-/// `opencode/` → "opencode". The `openai/` prefix is stripped by
+/// `opencode/` → "opencode", `nous/` → "nous". The `openai/` prefix is stripped by
 /// [`normalize_codex_model`] and priced against the OpenAI catalog as
 /// before. Unknown `provider/` prefixes return `None` here so the caller
 /// leaves them unpriced rather than guessing.
@@ -20,6 +20,8 @@ pub fn codex_routed_provider(model: &str) -> Option<&'static str> {
         "deepseek" => Some("deepseek"),
         "kimi" => Some("kimi"),
         "opencode" => Some("opencode"),
+        // Nous Portal keeps the vendor-qualified model id whole (`nous/anthropic/claude-...`).
+        "nous" => Some("nous"),
         _ => None,
     }
 }

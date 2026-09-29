@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::{OpenCodexEntry, parse_line};
 
-const CACHE_SCHEMA_VERSION: i64 = 2;
+const CACHE_SCHEMA_VERSION: i64 = 3;
 const PREFIX_DIGEST_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
