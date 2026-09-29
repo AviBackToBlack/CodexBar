@@ -21,6 +21,7 @@ pub(crate) fn rows_from_records(records: &[(CodexUsageRecord, i64)]) -> Vec<Code
             reasoning: record.reasoning.map(|value| value.max(0)),
             source_end_offset: *offset,
             pricing: pricing_evidence(&record.model),
+            turn_id: record.turn_id.clone(),
         })
         .collect()
 }

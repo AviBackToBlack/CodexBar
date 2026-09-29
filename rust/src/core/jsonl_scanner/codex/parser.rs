@@ -6,6 +6,8 @@ use serde_json::Value;
 
 pub(super) struct CodexParserState {
     pub(super) current_model: Option<String>,
+    /// Turn opened by the latest `task_started` event; token rows inherit it.
+    current_turn_id: Option<String>,
     pub(super) previous_totals: Option<CodexTotals>,
     /// High watermark of observed cumulative totals (never lowered). Used for
     /// Ultra interleaved-lineage containment (issue #2037 Phase 1).
@@ -80,6 +82,7 @@ impl CodexParserState {
             .and_then(|baseline| remaining_inherited_totals.or_else(|| Some(baseline.clone())));
         Self {
             current_model: initial_model,
+            current_turn_id: None,
             previous_totals: initial_totals.clone(),
             totals_watermark: initial_totals,
             saw_interleaved_totals: false,
@@ -169,9 +172,27 @@ impl CodexParserState {
                     totals.cached,
                     totals.output,
                     totals.reasoning,
+                    self.current_turn_id.clone(),
                     source_end_offset,
                 );
             }
+            return;
+        }
+
+        if event_payload_type(&obj) == Some("task_started") {
+            // A turn boundary is not a usage row, so it applies regardless of
+            // the requested day window.
+            let payload = obj.get("payload").or_else(|| obj.get("event_msg"));
+            self.current_turn_id = payload
+                .and_then(|payload| {
+                    codex_turn_id(payload).or_else(|| {
+                        payload
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .and_then(model_evidence)
+                    })
+                })
+                .map(str::to_string);
             return;
         }
 
@@ -224,6 +245,9 @@ impl CodexParserState {
                 if let Some(raw) = model {
                     self.current_model = model_evidence(raw).map(str::to_string);
                 }
+            }
+            CodexFastEvent::TaskStarted { turn_id } => {
+                self.current_turn_id = turn_id.map(str::to_string);
             }
             CodexFastEvent::TokenCount { timestamp, payload } => {
                 let parsed_timestamp = parse_codex_timestamp(timestamp);
@@ -300,6 +324,9 @@ impl CodexParserState {
 
         let info = payload.get("info");
         let model = self.resolve_token_model(info, payload, obj);
+        let turn_id = codex_turn_id(payload)
+            .map(str::to_string)
+            .or_else(|| self.current_turn_id.clone());
         self.record_usage(
             range,
             day_key,
@@ -309,6 +336,7 @@ impl CodexParserState {
             delta_cached,
             delta_output,
             reasoning,
+            turn_id,
             source_end_offset,
         );
     }
@@ -345,6 +373,12 @@ impl CodexParserState {
             .or(event_model)
             .unwrap_or(CostUsagePricing::CODEX_UNATTRIBUTED_MODEL)
             .to_string();
+        let turn_id = payload
+            .turn_id
+            .or_else(|| payload.info.as_ref().and_then(|info| info.turn_id))
+            .and_then(model_evidence)
+            .map(str::to_string)
+            .or_else(|| self.current_turn_id.clone());
         self.record_usage(
             range,
             day_key,
@@ -354,6 +388,7 @@ impl CodexParserState {
             delta_cached,
             delta_output,
             reasoning,
+            turn_id,
             source_end_offset,
         );
     }
@@ -372,6 +407,7 @@ impl CodexParserState {
         cached: i64,
         output: i64,
         reasoning: Option<i64>,
+        turn_id: Option<String>,
         source_end_offset: i64,
     ) {
         if !CostUsageDayRange::is_in_range(&day_key, &range.since_key, &range.until_key) {
@@ -386,6 +422,7 @@ impl CodexParserState {
                 cached: cached.min(input),
                 output,
                 reasoning: clamp_reasoning(reasoning, output),
+                turn_id,
             },
             source_end_offset,
         ));

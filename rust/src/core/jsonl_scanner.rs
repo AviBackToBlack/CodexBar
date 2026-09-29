@@ -239,6 +239,10 @@ pub struct CostUsageCache {
     /// caches remain valid and can be upgraded lazily.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub codex_source_rows: HashMap<String, CodexSourceRowCache>,
+    /// Priority (Fast) turn evidence read from the Codex trace database.
+    /// Applied as a pricing overlay whenever day totals are rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_priority_turns_cursor: Option<CodexPriorityTurnsCursor>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
@@ -273,6 +277,10 @@ pub struct CodexSourceUsageRow {
     pub source_end_offset: i64,
     #[serde(default)]
     pub pricing: CodexSourcePricingEvidence,
+    /// Codex turn (`task_started`) the request belongs to; matches Priority
+    /// trace evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 /// Source identity and rows retained for a cached Codex file.
@@ -468,6 +476,7 @@ pub struct CodexUsageRecord {
     pub cached: i64,
     pub output: i64,
     pub reasoning: Option<i64>,
+    pub turn_id: Option<String>,
 }
 
 /// Day range for scanning
@@ -507,6 +516,11 @@ impl CostUsageDayRange {
 /// JSONL Scanner for cost/usage logs
 pub struct JsonlScanner;
 pub(crate) mod codex;
+pub(crate) use codex::priority::CodexPriorityOverlay;
+pub use codex::priority::{
+    CODEX_PRIORITY_COMPLETED_MODEL_RETENTION_LIMIT, CodexPriorityCursorAnchor,
+    CodexPriorityTurnMetadata, CodexPriorityTurnsCursor,
+};
 pub(crate) use codex::source_rows::{
     read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
 };

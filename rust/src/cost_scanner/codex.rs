@@ -4,6 +4,7 @@ use crate::core::{CodexForkAccountingState, CodexSessionLineage};
 mod cache_days;
 mod logical_target;
 mod pending_range;
+mod priority_trace;
 mod reconciliation;
 mod scan;
 use cache_days::rebuild_cache_days;
@@ -178,6 +179,24 @@ impl CostScanner {
             &settings.codex_custom_sessions_dirs,
             &default_wsl_roots(),
         )
+    }
+
+    /// The Codex trace database that supplies Priority evidence. Injected
+    /// sessions roots (tests) never fall back to the ambient user database.
+    pub(super) fn codex_trace_database_path(&self) -> Option<PathBuf> {
+        if let Some(path) = &self.codex_trace_database_override {
+            return Some(path.clone());
+        }
+        if self.sessions_dirs_override.is_some() {
+            return None;
+        }
+        let home = std::env::var("CODEX_HOME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))?;
+        Some(home.join(priority_trace::CODEX_TRACE_DATABASE_FILE))
     }
 
     fn collect_codex_candidates(

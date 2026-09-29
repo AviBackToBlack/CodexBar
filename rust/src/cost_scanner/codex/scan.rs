@@ -83,6 +83,36 @@ fn key_path(key: &str) -> PathBuf {
     PathBuf::from(key)
 }
 
+/// Refresh the durable Priority-trace cursor before day totals are rebuilt.
+/// A missing or unreadable trace database keeps the previous evidence, so a
+/// transient failure never reprices history.
+fn resolve_codex_priority_evidence(
+    scanner: &CostScanner,
+    cache: &mut CostUsageCache,
+    start_date: NaiveDate,
+    cancel: Option<&AtomicBool>,
+) {
+    let Some(database_path) = scanner.codex_trace_database_path() else {
+        return;
+    };
+    // One day of slack covers the local/UTC offset at the window edge.
+    let coverage_since_epoch = start_date
+        .and_hms_opt(0, 0, 0)
+        .and_then(|midnight| midnight.and_local_timezone(Local).earliest())
+        .map_or(0, |start| start.timestamp() - 86_400)
+        .max(0);
+    let resolution = super::priority_trace::resolve_priority_turns(
+        &database_path,
+        cache.codex_priority_turns_cursor.take(),
+        coverage_since_epoch,
+        cancel,
+    );
+    cache.codex_priority_turns_cursor = resolution.cursor;
+    if resolution.validation_pending {
+        tracing::debug!("Codex priority trace validation is pending; retrying next scan");
+    }
+}
+
 pub(super) fn scan_codex_detailed_with_cache(
     scanner: &CostScanner,
     cancel: Option<&AtomicBool>,
@@ -331,6 +361,7 @@ pub(super) fn scan_codex_detailed_with_cache(
         !pruned_paths_pending.is_empty(),
         bytes_read_this_refresh,
     );
+    resolve_codex_priority_evidence(scanner, &mut cache, start_date, cancel);
     rebuild_cache_days(&mut cache);
     cache.last_scan_unix_ms = now_ms;
     if cache.codex_scan_incomplete {

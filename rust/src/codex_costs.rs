@@ -581,6 +581,7 @@ mod tests {
             cached: 0,
             output: 20,
             reasoning,
+            turn_id: None,
         };
 
         let mut known_summary = CostSummary::default();
@@ -612,6 +613,7 @@ mod tests {
             cached: 0,
             output: 20,
             reasoning,
+            turn_id: None,
         };
         let records = vec![
             (make_record(Some(7)), 0),
@@ -675,6 +677,7 @@ mod tests {
                     cached: 0,
                     output: 0,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -687,6 +690,7 @@ mod tests {
                     cached: 0,
                     output: 0,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -699,6 +703,7 @@ mod tests {
                     cached: 0,
                     output: 0,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -750,6 +755,7 @@ mod tests {
                     cached: 0,
                     output: 5,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -762,6 +768,7 @@ mod tests {
                     cached: 0,
                     output: 1_000_000,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -789,6 +796,7 @@ mod tests {
                 cached: 0,
                 output: 1,
                 reasoning: None,
+                turn_id: None,
             },
             0,
         )];
@@ -810,6 +818,7 @@ mod tests {
                 cached: 0,
                 output: 0,
                 reasoning: None,
+                turn_id: None,
             },
             0,
         )];
@@ -843,6 +852,7 @@ mod tests {
                 cached: 0,
                 output: 1_000_000,
                 reasoning: None,
+                turn_id: None,
             },
             0,
         )];

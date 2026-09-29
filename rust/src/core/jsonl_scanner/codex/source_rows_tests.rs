@@ -13,6 +13,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
             output: 0,
             reasoning: None,
             source_end_offset: 100,
+            turn_id: None,
             pricing: CodexSourcePricingEvidence {
                 pricing_model: Some("gpt-5.5".to_string()),
                 pricing_mode: Some("priority".to_string()),
@@ -27,6 +28,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
             output: 0,
             reasoning: None,
             source_end_offset: 200,
+            turn_id: None,
             pricing: CodexSourcePricingEvidence {
                 pricing_model: Some("gpt-5.5".to_string()),
                 pricing_mode: Some("standard".to_string()),
@@ -44,6 +46,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
             output: 0,
             reasoning: None,
             source_end_offset: 300,
+            turn_id: None,
             pricing: CodexSourcePricingEvidence {
                 pricing_model: Some("gpt-5.4".to_string()),
                 pricing_mode: Some("standard".to_string()),
@@ -68,6 +71,7 @@ fn source_row_recovery_does_not_price_an_appended_duplicate() {
         output: 0,
         reasoning: None,
         source_end_offset: 100,
+        turn_id: None,
         pricing: CodexSourcePricingEvidence {
             pricing_model: Some("gpt-5.5".to_string()),
             pricing_mode: Some("priority".to_string()),
@@ -103,6 +107,7 @@ fn source_rows_from_records_use_source_model_as_initial_evidence() {
             cached: 20,
             output: -4,
             reasoning: Some(-2),
+            turn_id: None,
         },
         42,
     )];

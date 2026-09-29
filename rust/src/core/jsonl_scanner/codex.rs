@@ -2,6 +2,7 @@ use super::*;
 
 mod helpers;
 mod parser;
+pub(crate) mod priority;
 pub(crate) mod source_rows;
 
 use helpers::{
@@ -13,8 +14,10 @@ use parser::CodexParserState;
 /// Persisted Codex cache schema version. Version 0 predates 64-bit totals;
 /// version 1 can retain a terminal pause after treating a paginated v2
 /// subagent's independent counters as an inherited fork. Version 3 adds
-/// persisted paginated-fork accounting state. Rebuild older artifacts.
-pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 3;
+/// persisted paginated-fork accounting state. Version 4 records the Codex
+/// turn id on source rows so Priority trace evidence can be matched.
+/// Rebuild older artifacts.
+pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 4;
 
 /// Whether a persisted Codex cache artifact matches the current schema.
 /// A mismatched artifact (e.g. a pre-64-bit cache from an older release) is

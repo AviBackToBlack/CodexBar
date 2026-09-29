@@ -492,6 +492,9 @@ pub struct CostScanner {
     cache_root: Option<PathBuf>,
     /// When set, bypass normal sessions-dir discovery (tests / inject roots).
     sessions_dirs_override: Option<Vec<PathBuf>>,
+    /// Explicit Codex trace database (tests / inject roots). Without it the
+    /// ambient `CODEX_HOME` database is used, unless sessions dirs are injected.
+    codex_trace_database_override: Option<PathBuf>,
 }
 
 impl CostScanner {
@@ -502,6 +505,7 @@ impl CostScanner {
             options: CostScanOptions::default(),
             cache_root: None,
             sessions_dirs_override: None,
+            codex_trace_database_override: None,
         }
     }
 
@@ -520,6 +524,12 @@ impl CostScanner {
     /// Override Codex sessions roots (primarily for tests).
     pub fn with_sessions_dirs(mut self, dirs: Vec<PathBuf>) -> Self {
         self.sessions_dirs_override = Some(dirs);
+        self
+    }
+
+    /// Override the Codex Priority trace database (primarily for tests).
+    pub fn with_codex_trace_database(mut self, path: impl Into<PathBuf>) -> Self {
+        self.codex_trace_database_override = Some(path.into());
         self
     }
 
