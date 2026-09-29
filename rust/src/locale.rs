@@ -1194,6 +1194,11 @@ locale_keys! {
     ProviderAutoResumeTitle,
     ProviderAutoResumeAfterQuotaReset,
     ProviderAutoResumeAfterQuotaResetHelper,
+    ProviderOptionalDetailsTitle,
+    ProviderLiteLLMModelActivity,
+    ProviderLiteLLMModelActivityHelper,
+    ProviderClaudeWorkspaceSpend,
+    ProviderClaudeWorkspaceSpendHelper,
 }
 
 #[cfg(test)]

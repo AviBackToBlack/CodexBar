@@ -36,6 +36,7 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         // join grace (upstream #2583), unlike `codexbar usage` which blocks
         // for the full completeness window.
         requires_optional_usage_completeness: false,
+        optional_details_enabled: false,
     };
 
     let mut results = Vec::new();

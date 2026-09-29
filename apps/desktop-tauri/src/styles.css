@@ -2086,6 +2086,13 @@ body:has(.tray-panel-reveal) {
   font-weight: 600;
 }
 
+.provider-usage-subheading {
+  margin: 8px 0 4px;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 .provider-usage-bar__track {
   height: 5px;
   border-radius: 3px;

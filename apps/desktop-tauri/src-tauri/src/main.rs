@@ -236,6 +236,7 @@ fn main() {
             commands::set_provider_cookie_source,
             commands::set_provider_usage_source,
             commands::set_provider_auto_resume_after_quota_reset,
+            commands::set_provider_optional_details,
             commands::has_openrouter_management_api_key,
             commands::set_openrouter_management_api_key,
             commands::remove_openrouter_management_api_key,

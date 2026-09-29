@@ -210,6 +210,9 @@ pub struct ProviderDisplayDetailSnapshot {
     pub value: String,
     pub secondary_value: Option<String>,
     pub progress: Option<ProviderDisplayProgressSnapshot>,
+    /// Heading shared by consecutive rows of the same group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
 }
 
 /// A frontend-friendly snapshot of one provider's usage data.
@@ -447,6 +450,7 @@ impl ProviderUsageSnapshot {
                             used: progress.used(),
                             total: progress.total(),
                         }),
+                    section: detail.section().map(ToOwned::to_owned),
                 })
                 .collect(),
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {

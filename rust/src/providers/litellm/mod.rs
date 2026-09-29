@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use reqwest::{Client, Url};
 use serde_json::Value;
 
+mod model_activity;
+
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
@@ -61,7 +63,7 @@ impl Provider for LiteLLMProvider {
                 let response = self
                     .client
                     .get(management_url(&base, "key/info")?)
-                    .bearer_auth(key)
+                    .bearer_auth(&key)
                     .header("Accept", "application/json")
                     .send()
                     .await?;
@@ -79,7 +81,20 @@ impl Provider for LiteLLMProvider {
                 let value: Value = response.json().await.map_err(|e| {
                     ProviderError::Parse(format!("Failed to parse LiteLLM key/info: {e}"))
                 })?;
-                Ok(result_from_key_info(&value))
+                let mut result = result_from_key_info(&value);
+                if ctx.optional_details_enabled
+                    && let Some(user_id) = user_id(&value)
+                    && let Ok(endpoint) = management_url(&base, "user/daily/activity")
+                {
+                    // Optional history must never fail the budget fetch.
+                    let today = chrono::Utc::now().date_naive();
+                    for row in
+                        model_activity::fetch(&self.client, &endpoint, &key, &user_id, today).await
+                    {
+                        result = result.with_display_detail(Some(row));
+                    }
+                }
+                Ok(result)
             }
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -132,11 +147,20 @@ fn management_url(base: &str, path: &str) -> Result<Url, ProviderError> {
         .map_err(|e| ProviderError::Other(format!("Invalid LiteLLM URL: {e}")))
 }
 
-fn result_from_key_info(value: &Value) -> ProviderFetchResult {
-    let root = value
+fn key_info_root(value: &Value) -> &Value {
+    value
         .get("info")
         .or_else(|| value.get("key"))
-        .unwrap_or(value);
+        .unwrap_or(value)
+}
+
+/// The key owner. Team-only keys carry no `user_id`, so no activity is requested.
+fn user_id(value: &Value) -> Option<String> {
+    string(key_info_root(value), &["user_id"])
+}
+
+fn result_from_key_info(value: &Value) -> ProviderFetchResult {
+    let root = key_info_root(value);
     let spend = number(root, &["spend", "spend_usd", "spendUSD"]).unwrap_or(0.0);
     let limit = number(root, &["max_budget", "maxBudget", "budget", "limit"]);
     let percent = limit
@@ -226,6 +250,20 @@ mod tests {
                 .as_deref(),
             Some("Team Platform: $70.00 / $1000.00")
         );
+    }
+
+    #[test]
+    fn user_id_is_read_from_the_key_info_root_only() {
+        assert_eq!(
+            user_id(&serde_json::json!({"info":{"user_id":" fixture+user "}})).as_deref(),
+            Some("fixture+user")
+        );
+        assert_eq!(
+            user_id(&serde_json::json!({"key":{"user_id":"u"}})).as_deref(),
+            Some("u")
+        );
+        assert_eq!(user_id(&serde_json::json!({"info":{"team_id":"t"}})), None);
+        assert_eq!(user_id(&serde_json::json!({"info":{"user_id":"  "}})), None);
     }
 
     #[test]

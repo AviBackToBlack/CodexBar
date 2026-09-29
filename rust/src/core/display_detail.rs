@@ -22,6 +22,7 @@ pub struct ProviderDisplayDetail {
     value: String,
     secondary_value: Option<String>,
     progress: Option<ProviderDisplayProgress>,
+    section: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,9 +45,10 @@ impl ProviderDisplayDetail {
             value: value.into(),
             secondary_value: None,
             progress: None,
+            section: None,
         };
         let valid = is_display_shape(&row.id, 64)
-            && is_display_shape(&row.title, 128)
+            && Self::is_valid_title(&row.title)
             && is_display_shape(&row.value, 512);
         valid.then_some(row)
     }
@@ -59,6 +61,23 @@ impl ProviderDisplayDetail {
         }
         self.secondary_value = Some(value);
         Some(self)
+    }
+
+    /// Group the row under a heading shared by consecutive rows; rejects
+    /// invalid text.
+    pub fn with_section(mut self, title: impl Into<String>) -> Option<Self> {
+        let title = title.into();
+        if !is_display_shape(&title, 128) {
+            return None;
+        }
+        self.section = Some(title);
+        Some(self)
+    }
+
+    /// Whether `title` would be accepted as a row title, for providers that
+    /// must reject a whole payload when any wire-supplied label is unusable.
+    pub fn is_valid_title(title: &str) -> bool {
+        is_display_shape(title, 128)
     }
 
     /// Attach a progress bar; rejects non-finite or non-positive ranges.
@@ -88,6 +107,10 @@ impl ProviderDisplayDetail {
 
     pub fn progress(&self) -> Option<ProviderDisplayProgress> {
         self.progress
+    }
+
+    pub fn section(&self) -> Option<&str> {
+        self.section.as_deref()
     }
 }
 

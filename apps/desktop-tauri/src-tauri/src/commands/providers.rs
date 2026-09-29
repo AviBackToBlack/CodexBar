@@ -229,6 +229,7 @@ pub(crate) fn build_fetch_context(
         api_region: (!api_region.is_empty()).then_some(api_region),
         gateway_url,
         auto_prefer_web,
+        optional_details_enabled: settings.optional_details_enabled(id),
         ..FetchContext::default()
     }
 }

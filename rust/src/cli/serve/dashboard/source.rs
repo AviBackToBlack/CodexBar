@@ -165,6 +165,7 @@ async fn fetch_provider_envelope(
         gateway_url: None,
         auto_prefer_web: false,
         requires_optional_usage_completeness: false,
+        optional_details_enabled: false,
     };
     let fetch = bounded_fetch(provider_id, ctx, None, fetch_timeout).await;
     ProviderFetchEnvelope {
@@ -298,6 +299,7 @@ async fn collect_claude_accounts(claude_enabled: bool) -> Option<ClaudeAccountsI
                 gateway_url: None,
                 auto_prefer_web: false,
                 requires_optional_usage_completeness: false,
+                optional_details_enabled: false,
             };
             let fetch = bounded_fetch(
                 ProviderId::Claude,

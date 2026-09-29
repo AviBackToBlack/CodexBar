@@ -11,6 +11,9 @@ pub struct ProviderDetail {
     pub enabled: bool,
     pub auto_resume_after_quota_reset: bool,
     pub auto_resume_supported: bool,
+    /// LiteLLM/Claude expose one opt-in extra breakdown; other providers do not.
+    pub optional_details_supported: bool,
+    pub optional_details_enabled: bool,
 
     // Identity
     pub email: Option<String>,
@@ -89,6 +92,8 @@ pub(crate) fn build_provider_detail(
         enabled,
         auto_resume_after_quota_reset: settings.auto_resume_after_quota_reset(id),
         auto_resume_supported: resume_supported,
+        optional_details_supported: codexbar::settings::provider_has_optional_details(id),
+        optional_details_enabled: settings.optional_details_enabled(id),
         email: None,
         plan: None,
         auth_type: None,

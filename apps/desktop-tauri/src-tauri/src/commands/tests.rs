@@ -319,6 +319,24 @@ fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
 }
 
 #[test]
+fn fetch_context_carries_the_optional_details_opt_in_for_its_own_provider() {
+    let mut settings = Settings::default();
+    settings.set_optional_details_enabled(ProviderId::LiteLLM, true);
+    let build = |id| {
+        super::build_fetch_context(
+            id,
+            &settings,
+            &ManualCookies::default(),
+            &ApiKeys::default(),
+            &HashMap::new(),
+        )
+    };
+
+    assert!(build(ProviderId::LiteLLM).optional_details_enabled);
+    assert!(!build(ProviderId::Codex).optional_details_enabled);
+}
+
+#[test]
 fn fetch_context_cursor_cookie_off_stays_cli() {
     let mut settings = Settings::default();
     settings.set_cookie_source(ProviderId::Cursor, "off");
@@ -1081,6 +1099,12 @@ fn provider_inventory_maps_to_the_bridge_without_token_ids() {
     );
     assert_eq!(snapshot.display_details.len(), 1);
     assert_eq!(snapshot.display_details[0].value, "12");
+    assert_eq!(snapshot.display_details[0].section, None);
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains("\"section\"")
+    );
     assert_eq!(
         snapshot.display_details[0].secondary_value.as_deref(),
         Some("Monthly refill: 100")
@@ -1088,6 +1112,28 @@ fn provider_inventory_maps_to_the_bridge_without_token_ids() {
     let serialized = serde_json::to_string(&snapshot).unwrap();
     assert!(serialized.contains("reset-credits"));
     assert!(!serialized.contains("coupon-token-secret"));
+}
+
+#[test]
+fn display_detail_section_maps_to_the_bridge() {
+    let result = ProviderFetchResult::new(
+        codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(12.0)),
+        "api",
+    )
+    .with_display_detail(
+        ProviderDisplayDetail::new("litellm-model-0", "fixture-alpha", "60 tokens")
+            .and_then(|row| row.with_section("Model activity")),
+    );
+    let metadata = instantiate_provider(ProviderId::LiteLLM).metadata().clone();
+    let snapshot =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::LiteLLM, &metadata, &result, None);
+
+    assert_eq!(
+        snapshot.display_details[0].section.as_deref(),
+        Some("Model activity")
+    );
+    let encoded = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(encoded["displayDetails"][0]["section"], "Model activity");
 }
 
 #[test]

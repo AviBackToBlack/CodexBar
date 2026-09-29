@@ -759,6 +759,28 @@ mod tests {
     }
 
     #[test]
+    fn display_detail_sections_are_validated() {
+        let row = ProviderDisplayDetail::new("a", "Alpha", "1").unwrap();
+        assert_eq!(row.section(), None);
+        assert!(row.clone().with_section("").is_none());
+        assert!(
+            row.clone()
+                .with_section(
+                    "bad
+section"
+                )
+                .is_none()
+        );
+        assert!(row.clone().with_section("x".repeat(129)).is_none());
+        assert_eq!(
+            row.with_section("Model activity").unwrap().section(),
+            Some("Model activity")
+        );
+        assert!(ProviderDisplayDetail::is_valid_title("fixture-alpha"));
+        assert!(!ProviderDisplayDetail::is_valid_title(""));
+    }
+
+    #[test]
     fn cost_snapshot_ignores_non_finite_values() {
         let cost = CostSnapshot::new(f64::NAN, "USD", "Monthly").with_limit(f64::INFINITY);
 

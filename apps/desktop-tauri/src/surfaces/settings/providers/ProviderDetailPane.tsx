@@ -26,6 +26,7 @@ import { IdentitySection } from "./sections/IdentitySection";
 import { UsageSection } from "./sections/UsageSection";
 import { UsageItemVisibilitySection } from "./sections/UsageItemVisibilitySection";
 import { AutoResumeSection } from "./sections/AutoResumeSection";
+import { OptionalDetailsSection } from "./sections/OptionalDetailsSection";
 import { PaceSection } from "./sections/PaceSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
@@ -315,6 +316,14 @@ export function ProviderDetailPane({
         providerId={detail.id}
         enabled={detail.autoResumeAfterQuotaReset}
         available={detail.autoResumeSupported}
+        disabled={settingsDisabled}
+        t={t}
+        onChanged={reload}
+      />
+      <OptionalDetailsSection
+        providerId={detail.id}
+        enabled={detail.optionalDetailsEnabled}
+        available={detail.optionalDetailsSupported}
         disabled={settingsDisabled}
         t={t}
         onChanged={reload}

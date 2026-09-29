@@ -22,6 +22,8 @@ function baseDetail(id = "claude"): ProviderDetail {
     enabled: true,
     autoResumeAfterQuotaReset: false,
     autoResumeSupported: true,
+    optionalDetailsSupported: false,
+    optionalDetailsEnabled: false,
     email: "team@example.com",
     plan: "Pro",
     authType: "oauth",

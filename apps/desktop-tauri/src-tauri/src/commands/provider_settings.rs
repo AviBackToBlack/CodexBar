@@ -132,6 +132,27 @@ pub fn set_provider_auto_resume_after_quota_reset(
     Ok(())
 }
 
+/// Persist the opt-in for a provider's optional extra breakdown (LiteLLM model
+/// activity, Claude workspace spend). Takes effect on the next refresh.
+#[tauri::command]
+pub fn set_provider_optional_details(
+    app: tauri::AppHandle,
+    provider_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let id = parse_provider_arg(&provider_id)?;
+    if !codexbar::settings::provider_has_optional_details(id) {
+        return Err(format!(
+            "Provider '{provider_id}' has no optional detail breakdown"
+        ));
+    }
+    let mut settings = Settings::load();
+    settings.set_optional_details_enabled(id, enabled);
+    settings.save().map_err(|e| e.to_string())?;
+    crate::events::emit_settings_changed(&app);
+    Ok(())
+}
+
 // ── OpenRouter Management API key ────────────────────────────────────
 
 #[tauri::command]

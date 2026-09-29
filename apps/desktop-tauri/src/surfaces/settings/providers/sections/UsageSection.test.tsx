@@ -40,6 +40,8 @@ function provider(): ProviderDetail {
     enabled: true,
     autoResumeAfterQuotaReset: false,
     autoResumeSupported: false,
+    optionalDetailsSupported: false,
+    optionalDetailsEnabled: false,
     email: null,
     plan: null,
     authType: null,
@@ -145,5 +147,40 @@ describe("UsageSection", () => {
 
     expect(await screen.findByText(/Limit Reset Credits: 2 available/)).toBeInTheDocument();
     expect(container.querySelector(".provider-usage-bar__track")).toBeNull();
+  });
+
+  it("prints one heading per display detail section", async () => {
+    const detail = provider();
+    detail.session = null;
+    detail.extraRateWindows = [];
+    detail.displayDetails = [
+      { id: "plain", title: "Plain", value: "1", secondaryValue: null, progress: null },
+      {
+        id: "a",
+        title: "fixture-alpha",
+        value: "60 tokens",
+        secondaryValue: null,
+        progress: null,
+        section: "Model activity",
+      },
+      {
+        id: "b",
+        title: "fixture-beta",
+        value: "30 tokens",
+        secondaryValue: null,
+        progress: null,
+        section: "Model activity",
+      },
+    ];
+
+    render(
+      <LocaleProvider>
+        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText(/fixture-alpha: 60 tokens/)).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "Model activity" })).toHaveLength(1);
+    expect(screen.getByText(/Plain: 1/)).toBeInTheDocument();
   });
 });

@@ -914,6 +914,11 @@ export const ALL_LOCALE_KEYS = [
   "ProviderAutoResumeTitle",
   "ProviderAutoResumeAfterQuotaReset",
   "ProviderAutoResumeAfterQuotaResetHelper",
+  "ProviderOptionalDetailsTitle",
+  "ProviderLiteLLMModelActivity",
+  "ProviderLiteLLMModelActivityHelper",
+  "ProviderClaudeWorkspaceSpend",
+  "ProviderClaudeWorkspaceSpendHelper",
 ] as const;
 
 export type LocaleKey = (typeof ALL_LOCALE_KEYS)[number];

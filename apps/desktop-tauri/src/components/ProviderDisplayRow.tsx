@@ -1,6 +1,20 @@
 import type { ProviderDisplayDetail } from "../types/bridge";
 
 /**
+ * The section heading to print above row `index`: its section when it differs
+ * from the previous row's, otherwise null. Rows without a section never print a
+ * heading.
+ */
+export function displaySectionHeading(
+  details: readonly ProviderDisplayDetail[],
+  index: number,
+): string | null {
+  const section = details[index]?.section ?? null;
+  if (!section) return null;
+  return section === (details[index - 1]?.section ?? null) ? null : section;
+}
+
+/**
  * One transient provider detail line: "{title}: {value} [secondary]"
  * plus an optional clamped progress bar.
  *

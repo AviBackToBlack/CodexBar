@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type {
   ProviderDisplayDetail,
   ProviderInventoryItem,
@@ -5,7 +6,7 @@ import type {
   RateWindowSnapshot,
 } from "../../../../types/bridge";
 import { InventoryItemRow } from "../../../../components/InventoryRows";
-import { ProviderDisplayRow } from "../../../../components/ProviderDisplayRow";
+import { ProviderDisplayRow, displaySectionHeading } from "../../../../components/ProviderDisplayRow";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
 import { isUsageItemVisible } from "../../../../lib/usageItemVisibility";
@@ -94,15 +95,20 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
           lineClassName="provider-usage-inventory"
         />
       ))}
-      {displayDetails.map((detail) => (
-        <ProviderDisplayRow
-          key={detail.id}
-          detail={detail}
-          lineClassName="provider-usage-inventory"
-          trackClassName="provider-usage-bar__track"
-          fillClassName="provider-usage-bar__fill"
-        />
-      ))}
+      {displayDetails.map((detail, index) => {
+        const heading = displaySectionHeading(displayDetails, index);
+        return (
+          <Fragment key={detail.id}>
+            {heading && <h5 className="provider-usage-subheading">{heading}</h5>}
+            <ProviderDisplayRow
+              detail={detail}
+              lineClassName="provider-usage-inventory"
+              trackClassName="provider-usage-bar__track"
+              fillClassName="provider-usage-bar__fill"
+            />
+          </Fragment>
+        );
+      })}
     </section>
   );
 }

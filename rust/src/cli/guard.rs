@@ -325,6 +325,7 @@ async fn fetch_guard_outcome(
         auto_prefer_web: false,
         // Guard checks keep the short optional-join grace.
         requires_optional_usage_completeness: false,
+        optional_details_enabled: false,
     };
 
     match provider.fetch_usage(&ctx).await {

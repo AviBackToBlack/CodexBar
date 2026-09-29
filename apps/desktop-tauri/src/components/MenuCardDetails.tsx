@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type {
   CostSummaryDisplayStyle,
   DailyCostPoint,
@@ -22,6 +22,7 @@ import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
+import { displaySectionHeading } from "./ProviderDisplayRow";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
 import PaceDetailsChart from "./PaceDetailsChart";
@@ -597,17 +598,29 @@ export default function MenuCardDetails({
       )}
       {!provider.error && hasDisplayDetails && !compactOverview && (
         <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
+          {provider.displayDetails?.map((detail, index) => {
+            const heading = displaySectionHeading(provider.displayDetails ?? [], index);
+            return (
+              <Fragment key={`${detail.id}-${index}`}>
+                {heading && <div className="menu-card__group-title">{heading}</div>}
+                <DisplayDetailRow detail={detail} />
+              </Fragment>
+            );
+          })}
         </section>
       )}
 
       {!provider.error && hasDisplayDetails && (
         <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
+          {provider.displayDetails?.map((detail, index) => {
+            const heading = displaySectionHeading(provider.displayDetails ?? [], index);
+            return (
+              <Fragment key={`${detail.id}-${index}`}>
+                {heading && <div className="menu-card__group-title">{heading}</div>}
+                <DisplayDetailRow detail={detail} />
+              </Fragment>
+            );
+          })}
         </section>
       )}
 
