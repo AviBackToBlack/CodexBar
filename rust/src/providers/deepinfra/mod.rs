@@ -4,10 +4,16 @@
 //! - `GET https://api.deepinfra.com/payment/checklist?compute_owed=true`
 //! - `GET https://api.deepinfra.com/payment/usage?from=current`
 //!
+//! Each GET follows upstream's `transientIdempotent` policy: one retry for
+//! transient failures, bounded by an overall fetch budget (see
+//! `DeepInfraProvider::send_with_retry`).
+//!
 //! Ported from steipete/CodexBar `DeepInfraUsageFetcher`.
 
+use std::time::{Duration, Instant};
+
 use async_trait::async_trait;
-use reqwest::Client;
+use reqwest::{Client, Response, StatusCode};
 use serde::Deserialize;
 
 use crate::core::{
@@ -20,6 +26,25 @@ const USAGE_URL: &str = "https://api.deepinfra.com/payment/usage?from=current";
 const CREDENTIAL_TARGET: &str = "codexbar-deepinfra";
 const CENTS_PER_DOLLAR: f64 = 100.0;
 const ENV_KEYS: &[&str] = &["DEEPINFRA_API_KEY", "DEEPINFRA_TOKEN"];
+
+/// Per-request timeout (upstream `timeoutSeconds: 30`).
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Wall-clock budget for the whole refresh (both GETs plus any retry). The
+/// desktop shell drops a provider fetch after 35 s, so retries must not push
+/// past it; a retry that cannot finish inside the budget is not attempted.
+const FETCH_BUDGET: Duration = Duration::from_secs(33);
+/// Upstream `ProviderHTTPRetryPolicy.transientIdempotent`: a single retry.
+const MAX_RETRIES: u32 = 1;
+const RETRYABLE_STATUSES: [StatusCode; 6] = [
+    StatusCode::REQUEST_TIMEOUT,
+    StatusCode::TOO_MANY_REQUESTS,
+    StatusCode::INTERNAL_SERVER_ERROR,
+    StatusCode::BAD_GATEWAY,
+    StatusCode::SERVICE_UNAVAILABLE,
+    StatusCode::GATEWAY_TIMEOUT,
+];
+const DEFAULT_RETRY_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(10);
 
 /// Checklist monetary fields are USD. Negative `stripe_balance` means prepaid funds.
 #[derive(Debug, Deserialize, Clone)]
@@ -159,7 +184,7 @@ impl DeepInfraProvider {
                 tertiary_label_key: None,
             },
             client: crate::core::credentialed_http_client_builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(REQUEST_TIMEOUT)
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
@@ -180,11 +205,12 @@ impl DeepInfraProvider {
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let api_key = Self::resolve_api_key(ctx.api_key.as_deref())?;
+        let deadline = Instant::now() + FETCH_BUDGET;
         let checklist = self
-            .fetch_json::<ChecklistResponse>(CHECKLIST_URL, &api_key)
+            .fetch_json::<ChecklistResponse>(CHECKLIST_URL, &api_key, deadline)
             .await?;
         let usage = self
-            .fetch_json::<UsageResponse>(USAGE_URL, &api_key)
+            .fetch_json::<UsageResponse>(USAGE_URL, &api_key, deadline)
             .await?;
         let snapshot = DeepInfraSnapshot::from_responses(&checklist, &usage);
 
@@ -199,14 +225,9 @@ impl DeepInfraProvider {
         &self,
         url: &str,
         api_key: &str,
+        deadline: Instant,
     ) -> Result<T, ProviderError> {
-        let resp = self
-            .client
-            .get(url)
-            .header("Authorization", format!("Bearer {api_key}"))
-            .header("Accept", "application/json")
-            .send()
-            .await?;
+        let resp = self.send_with_retry(url, api_key, deadline).await?;
 
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -229,6 +250,80 @@ impl DeepInfraProvider {
             .await
             .map_err(|e| ProviderError::Parse(format!("Failed to parse DeepInfra response: {e}")))
     }
+}
+
+impl DeepInfraProvider {
+    /// Send the billing GET, retrying once on a transient failure.
+    ///
+    /// Retried: HTTP 408/429/500/502/503/504 and typed transport failures
+    /// (timeout, refused connection) as classified by
+    /// [`ProviderError::is_transport_failure`], which excludes TLS failures.
+    /// 401/403 are returned to the caller unretried. The wait honors
+    /// `Retry-After` (seconds, capped at 10 s, default 1 s), and no retry
+    /// starts unless it can fit in the remaining `deadline`. Dropping the
+    /// future (shell refresh timeout / cancellation) also drops the sleep.
+    async fn send_with_retry(
+        &self,
+        url: &str,
+        api_key: &str,
+        deadline: Instant,
+    ) -> Result<Response, ProviderError> {
+        let mut attempt = 0;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ProviderError::Timeout);
+            }
+            let outcome = self
+                .client
+                .get(url)
+                .header("Authorization", format!("Bearer {api_key}"))
+                .header("Accept", "application/json")
+                .timeout(remaining.min(REQUEST_TIMEOUT))
+                .send()
+                .await
+                .map_err(ProviderError::Network);
+
+            let delay = match &outcome {
+                Ok(resp) if RETRYABLE_STATUSES.contains(&resp.status()) => Some(retry_delay(
+                    resp.headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok()),
+                )),
+                Err(error) if error.is_transport_failure() => Some(retry_delay(None)),
+                _ => None,
+            };
+            let Some(delay) = delay else {
+                return outcome;
+            };
+            let time_left = deadline.saturating_duration_since(Instant::now());
+            if attempt >= MAX_RETRIES || delay >= time_left {
+                return outcome;
+            }
+            tracing::debug!(
+                attempt = attempt + 1,
+                ?delay,
+                "DeepInfra billing request failed transiently; retrying once"
+            );
+            tokio::time::sleep(delay).await;
+            attempt += 1;
+        }
+    }
+}
+
+/// Retry wait: `Retry-After` seconds (non-negative, capped at 10 s), else 1 s.
+fn retry_delay(retry_after: Option<&str>) -> Duration {
+    retry_after
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|seconds| *seconds >= 0.0)
+        .map(|seconds| {
+            if seconds >= MAX_RETRY_DELAY.as_secs_f64() {
+                MAX_RETRY_DELAY
+            } else {
+                Duration::from_secs_f64(seconds)
+            }
+        })
+        .unwrap_or(DEFAULT_RETRY_DELAY)
 }
 
 impl Default for DeepInfraProvider {
@@ -441,6 +536,170 @@ mod tests {
         );
         assert_eq!(clean_api_key("bearer sk-abc").as_deref(), Some("sk-abc"));
         assert_eq!(clean_api_key("   ").as_deref(), None);
+    }
+
+    fn far_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(30)
+    }
+
+    #[test]
+    fn retry_delay_honors_retry_after_within_bounds() {
+        assert_eq!(retry_delay(None), Duration::from_secs(1));
+        assert_eq!(retry_delay(Some(" 2 ")), Duration::from_secs(2));
+        assert_eq!(retry_delay(Some("0.5")), Duration::from_millis(500));
+        assert_eq!(retry_delay(Some("0")), Duration::ZERO);
+        assert_eq!(retry_delay(Some("99")), Duration::from_secs(10));
+        assert_eq!(retry_delay(Some("inf")), Duration::from_secs(10));
+        for unusable in ["-3", "nan", "soon", "", "Wed, 21 Oct 2026 07:28:00 GMT"] {
+            assert_eq!(retry_delay(Some(unusable)), Duration::from_secs(1));
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_status_is_retried_once_then_succeeds() {
+        for status in [408, 429, 500, 502, 503, 504] {
+            let mut server = mockito::Server::new_async().await;
+            let failing = server
+                .mock("GET", "/payment/checklist")
+                .with_status(status)
+                .with_header("retry-after", "0")
+                .expect(1)
+                .create_async()
+                .await;
+            let ok = server
+                .mock("GET", "/payment/checklist")
+                .with_status(200)
+                .with_body(checklist_json(-5.0, 1.0, None, false, None))
+                .expect(1)
+                .create_async()
+                .await;
+
+            let url = format!("{}/payment/checklist", server.url());
+            let checklist = DeepInfraProvider::new()
+                .fetch_json::<ChecklistResponse>(&url, "sk-test", far_deadline())
+                .await
+                .unwrap_or_else(|e| panic!("HTTP {status} should be retried: {e}"));
+
+            assert_eq!(checklist.stripe_balance, -5.0);
+            failing.assert_async().await;
+            ok.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn persistent_transient_status_makes_exactly_two_requests() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/payment/usage")
+            .with_status(503)
+            .with_header("retry-after", "0")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let url = format!("{}/payment/usage", server.url());
+        let error = DeepInfraProvider::new()
+            .fetch_json::<UsageResponse>(&url, "sk-test", far_deadline())
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("HTTP 503"), "got: {error}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn auth_and_client_errors_are_not_retried() {
+        for (status, message) in [
+            (401, "rejected (HTTP 401)"),
+            (403, "billing data (HTTP 403)"),
+            (404, "HTTP 404"),
+        ] {
+            let mut server = mockito::Server::new_async().await;
+            let mock = server
+                .mock("GET", "/payment/checklist")
+                .with_status(status)
+                .with_header("retry-after", "0")
+                .expect(1)
+                .create_async()
+                .await;
+
+            let url = format!("{}/payment/checklist", server.url());
+            let error = DeepInfraProvider::new()
+                .fetch_json::<ChecklistResponse>(&url, "sk-test", far_deadline())
+                .await
+                .unwrap_err();
+
+            assert!(error.to_string().contains(message), "got: {error}");
+            mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_that_cannot_fit_in_the_budget_is_skipped() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/payment/checklist")
+            .with_status(429)
+            .with_header("retry-after", "10")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let url = format!("{}/payment/checklist", server.url());
+        let started = Instant::now();
+        let error = DeepInfraProvider::new()
+            .fetch_json::<ChecklistResponse>(
+                &url,
+                "sk-test",
+                Instant::now() + Duration::from_secs(3),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("HTTP 429"), "got: {error}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn expired_budget_fails_without_sending_a_request() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/payment/checklist")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let url = format!("{}/payment/checklist", server.url());
+        let error = DeepInfraProvider::new()
+            .fetch_json::<ChecklistResponse>(&url, "sk-test", Instant::now())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProviderError::Timeout), "got: {error:?}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn refused_connection_is_retried_once_then_reported() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let started = Instant::now();
+        let error = DeepInfraProvider::new()
+            .fetch_json::<ChecklistResponse>(
+                &format!("http://{address}/payment/checklist"),
+                "sk-test",
+                far_deadline(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProviderError::Network(_)), "got: {error:?}");
+        // One default 1 s wait proves the transport failure was retried once.
+        assert!(started.elapsed() >= Duration::from_millis(900));
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]
