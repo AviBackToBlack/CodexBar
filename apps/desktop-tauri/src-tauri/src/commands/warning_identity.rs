@@ -1,4 +1,5 @@
 use codexbar::core::ProviderId;
+use codexbar::notifications::WarningScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WarningSourceLane {
@@ -103,6 +104,21 @@ impl WarningIdentity {
             WarningAccountState::Organization(organization) => format!("org:{organization}"),
             WarningAccountState::Unresolved => self.unresolved_key().unwrap_or_default(),
             WarningAccountState::Missing => String::new(),
+        }
+    }
+
+    /// How this identity takes part in threshold-warning continuity across
+    /// identity gaps. Only resolved emails and unresolved Claude CLI/OAuth
+    /// samples are bridged; token accounts and organizations stay independent.
+    pub(super) fn gap_scope(&self) -> WarningScope {
+        let key = self.threshold_key();
+        match (&self.account, self.unresolved_key()) {
+            (WarningAccountState::Unresolved, _) => WarningScope::Unresolved(key),
+            (WarningAccountState::Email(_), Some(unresolved)) => WarningScope::Resolved {
+                account: key,
+                unresolved,
+            },
+            _ => WarningScope::Independent(key),
         }
     }
 
@@ -222,5 +238,45 @@ mod tests {
             resolved_cli.predictive_key().as_deref(),
             Some("cli:person@example.com")
         );
+    }
+
+    #[test]
+    fn gap_scope_bridges_only_resolved_email_and_unresolved_claude_sources() {
+        let unresolved = WarningIdentity::new(ProviderId::Claude, "cli", None, None, None);
+        assert_eq!(
+            unresolved.gap_scope(),
+            WarningScope::Unresolved("claude:cli:unknown".to_string())
+        );
+        let resolved = WarningIdentity::new(
+            ProviderId::Claude,
+            "cli",
+            Some("Person@Example.com"),
+            None,
+            None,
+        );
+        assert_eq!(
+            resolved.gap_scope(),
+            WarningScope::Resolved {
+                account: "person@example.com".to_string(),
+                unresolved: "claude:cli:unknown".to_string(),
+            }
+        );
+        let token = WarningIdentity::new(
+            ProviderId::Claude,
+            "cli",
+            Some("person@example.com"),
+            None,
+            Some(uuid::Uuid::nil()),
+        );
+        assert!(matches!(token.gap_scope(), WarningScope::Independent(_)));
+        let org = WarningIdentity::new(ProviderId::Claude, "cli", None, Some("Acme"), None);
+        assert_eq!(
+            org.gap_scope(),
+            WarningScope::Independent("org:acme".to_string())
+        );
+        let web = WarningIdentity::new(ProviderId::Claude, "web", Some("a@b.c"), None, None);
+        assert!(matches!(web.gap_scope(), WarningScope::Independent(_)));
+        let codex = WarningIdentity::new(ProviderId::Codex, "cli", Some("a@b.c"), None, None);
+        assert!(matches!(codex.gap_scope(), WarningScope::Independent(_)));
     }
 }

@@ -6,6 +6,7 @@ use super::warning_identity::WarningIdentity;
 use super::*;
 use chrono::{Local, Utc};
 use codexbar::core::HookUsageWindow;
+use codexbar::notifications::WarningScope;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -976,12 +977,24 @@ fn notify_usage_thresholds(
                     snapshot.account_organization.as_deref(),
                     token_account_id,
                 );
+                // Hooks keep their own per-source baselines (edge-triggered, first sample
+                // never fires), so they stay on the source key; only toast dedupe below
+                // bridges account-identity gaps.
                 let account = warning_identity.threshold_key();
+                let scope = warning_identity.gap_scope();
                 // Skip all session consumers for synthetic/no-session
                 // placeholders (e.g. Claude OAuth five_hour: null).
+                let session_account = resolve_toast_account(
+                    &mut guard.notification_manager,
+                    provider,
+                    &scope,
+                    "session",
+                    &snapshot.primary,
+                    settings,
+                );
                 if guard.notification_manager.check_session_lane(
                     provider,
-                    &account,
+                    &session_account,
                     snapshot.primary.used_percent,
                     snapshot.primary.is_informational,
                     settings,
@@ -997,9 +1010,17 @@ fn notify_usage_thresholds(
                 if let Some(weekly) = &snapshot.secondary
                     && !weekly.is_informational
                 {
+                    let weekly_account = resolve_toast_account(
+                        &mut guard.notification_manager,
+                        provider,
+                        &scope,
+                        "weekly",
+                        weekly,
+                        settings,
+                    );
                     guard.notification_manager.check_and_notify(
                         provider,
-                        &account,
+                        &weekly_account,
                         "weekly",
                         weekly.used_percent,
                         settings,
@@ -1022,6 +1043,34 @@ fn notify_usage_thresholds(
             }
         }
     }
+}
+
+/// Account key a toast lane is deduped under (see `NotificationManager::resolve_warning_account`).
+/// Informational placeholders are not observed, matching `check_session_lane`.
+fn resolve_toast_account(
+    manager: &mut codexbar::notifications::NotificationManager,
+    provider: ProviderId,
+    scope: &WarningScope,
+    window: &str,
+    lane: &RateWindowSnapshot,
+    settings: &Settings,
+) -> String {
+    if lane.is_informational {
+        return scope.key().to_string();
+    }
+    let resets_at = lane
+        .resets_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|date| date.with_timezone(&chrono::Utc));
+    manager.resolve_warning_account(
+        provider,
+        scope,
+        window,
+        lane.used_percent,
+        resets_at,
+        settings,
+    )
 }
 
 fn dispatch_quota_hooks(

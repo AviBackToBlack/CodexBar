@@ -14,6 +14,10 @@ use crate::settings::Settings;
 use crate::sound::{NotificationSoundEvent, play_alert};
 use chrono::{DateTime, Utc};
 
+mod identity_gaps;
+
+pub use identity_gaps::WarningScope;
+
 /// Notification types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NotificationType {
@@ -132,6 +136,10 @@ pub struct NotificationManager {
     previous_session_percent: std::collections::HashMap<SessionTransitionKey, f64>,
     predictive_warning_keys: std::collections::HashSet<PredictiveWarningKey>,
     deepseek_pricing_period: Option<String>,
+    identity_gaps: identity_gaps::IdentityGapState,
+    /// Toasts that would have been shown; tests assert on this instead of popping real toasts.
+    #[cfg(test)]
+    toasts: std::cell::RefCell<Vec<String>>,
 }
 
 impl NotificationManager {
@@ -141,6 +149,9 @@ impl NotificationManager {
             previous_session_percent: std::collections::HashMap::new(),
             predictive_warning_keys: std::collections::HashSet::new(),
             deepseek_pricing_period: None,
+            identity_gaps: identity_gaps::IdentityGapState::default(),
+            #[cfg(test)]
+            toasts: std::cell::RefCell::new(Vec::new()),
         }
     }
 
@@ -514,7 +525,12 @@ impl NotificationManager {
         Self::play_notification_sound(NotificationSoundEvent::StatusIssue, settings);
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(test)]
+    fn show_toast(&self, title: &str, body: &str) {
+        self.toasts.borrow_mut().push(format!("{title}: {body}"));
+    }
+
+    #[cfg(all(target_os = "windows", not(test)))]
     fn show_toast(&self, title: &str, body: &str) {
         use std::os::windows::process::CommandExt;
         use std::process::Command;
@@ -578,7 +594,7 @@ impl NotificationManager {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), not(test)))]
     fn show_toast(&self, title: &str, body: &str) {
         use std::process::Command;
 
