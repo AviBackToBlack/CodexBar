@@ -320,11 +320,13 @@ fn empty_account_reads_zero_of_zero_at_full_usage() {
     let snap = snapshot(base(json!([]), 0.0, 0.0));
     assert!((snap.primary.used_percent - 100.0).abs() < 1e-9);
     assert_eq!(description(&snap.primary), "0/0 credits");
+    // Empty pools stay present but informational, so they cannot look
+    // depleted to notifications, hooks, or auto-resume.
     let bonus = snap.secondary.expect("secondary always present");
-    assert!((bonus.used_percent - 100.0).abs() < 1e-9);
+    assert!(bonus.is_informational);
     assert_eq!(description(&bonus), "0/0 bonus");
     let purchased = snap.tertiary.expect("tertiary always present");
-    assert!((purchased.used_percent - 100.0).abs() < 1e-9);
+    assert!(purchased.is_informational);
     assert_eq!(description(&purchased), "0/0 credits");
     assert!(snap.login_method.is_none());
 }
@@ -367,6 +369,7 @@ fn negative_usage_is_shown_as_reported_and_negative_grants_floor_at_zero() {
     assert_eq!(description(&snap.primary), "-20/100 credits");
     assert!(snap.primary.used_percent.abs() < 1e-9);
     let bonus = snap.secondary.expect("bonus");
+    assert!(bonus.is_informational);
     assert!(description(&bonus).starts_with("0/0 bonus"));
 }
 

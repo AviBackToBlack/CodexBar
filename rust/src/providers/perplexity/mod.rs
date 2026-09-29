@@ -170,7 +170,7 @@ impl PerplexityProvider {
 
         let primary = if recurring > 0.0 {
             RateWindow::with_details(
-                Self::used_percent(recurring_used, recurring),
+                (recurring_used / recurring * 100.0).clamp(0.0, 100.0),
                 None,
                 renewal,
                 Self::credit_description(recurring_used, recurring, "credits"),
@@ -188,16 +188,10 @@ impl PerplexityProvider {
                 expiry.with_timezone(expiry_tz).format("%b %-d")
             ));
         }
-        let secondary = RateWindow::with_details(
-            Self::used_percent(promo_used, promo),
-            None,
-            None,
-            promo_description,
-        );
-        let tertiary = RateWindow::with_details(
-            Self::used_percent(purchased_used, purchased),
-            None,
-            None,
+        let secondary = Self::pool_window(promo_used, promo, promo_description);
+        let tertiary = Self::pool_window(
+            purchased_used,
+            purchased,
             Self::credit_description(purchased_used, purchased, "credits"),
         );
 
@@ -215,12 +209,16 @@ impl PerplexityProvider {
         snapshot
     }
 
-    /// An empty pool reads 100% used so its bar renders empty, not full.
-    fn used_percent(used: f64, total: f64) -> f64 {
+    /// Lane for a bonus or purchased pool. An empty pool is informational
+    /// (`0/0 credits` text, no bar): a depleted-looking 100% lane would fire
+    /// exhausted notifications and quota hooks for every account that simply
+    /// has no promotional or purchased credits.
+    fn pool_window(used: f64, total: f64, description: Option<String>) -> RateWindow {
         if total > 0.0 {
-            (used / total * 100.0).clamp(0.0, 100.0)
+            let percent = (used / total * 100.0).clamp(0.0, 100.0);
+            RateWindow::with_details(percent, None, None, description)
         } else {
-            100.0
+            RateWindow::informational(description.unwrap_or_default())
         }
     }
 
@@ -309,6 +307,8 @@ impl PerplexityProvider {
             return self.fetch_first_accepted(&[manual.to_string()]).await;
         }
 
+        // An unreadable browser store is only reported when no session at all
+        // (browser or environment) was found.
         let (mut headers, browser_error) =
             match crate::providers::browser_cookie_headers_for_domain("perplexity.ai") {
                 Ok(candidates) => (
@@ -320,13 +320,10 @@ impl PerplexityProvider {
             };
         headers.extend(environment_cookie(|name| std::env::var(name).ok()));
 
-        match self.fetch_first_accepted(&headers).await {
-            // An unreadable browser store is more useful than "no cookies"
-            // when nothing else produced a session.
-            Err(ProviderError::NoCookies) if browser_error.is_some() => {
-                Err(browser_error.unwrap_or(ProviderError::NoCookies))
-            }
-            result => result,
+        let result = self.fetch_first_accepted(&headers).await;
+        match (result, browser_error) {
+            (Err(ProviderError::NoCookies), Some(error)) => Err(error),
+            (result, _) => result,
         }
     }
 }
