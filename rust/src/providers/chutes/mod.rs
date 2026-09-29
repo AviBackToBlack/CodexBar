@@ -1,14 +1,21 @@
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
-use reqwest::Client;
-use serde_json::Value;
+use reqwest::header::ACCEPT;
+use reqwest::{Client, StatusCode, Url};
+use serde_json::{Map, Value, json};
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    SourceMode, UsageSnapshot,
 };
 
+mod parse;
+#[cfg(test)]
+mod tests;
+
+use parse::{ParsedQuotas, parse, text};
+
 const CREDENTIAL_TARGET: &str = "codexbar-chutes";
+const DEFAULT_API_URL: &str = "https://api.chutes.ai";
 
 pub struct ChutesProvider {
     metadata: ProviderMetadata,
@@ -64,26 +71,13 @@ impl Provider for ChutesProvider {
                     &["CHUTES_API_KEY"],
                 )?;
                 let base = std::env::var("CHUTES_API_URL")
-                    .unwrap_or_else(|_| "https://api.chutes.ai".into());
-                let url = crate::providers::validated_https_url(&base, "Chutes API")?
-                    .join("users/me/subscription_usage")
-                    .map_err(|e| ProviderError::Other(format!("Invalid Chutes API URL: {e}")))?;
-                let response = self.client.get(url).bearer_auth(key).send().await?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                    || response.status() == reqwest::StatusCode::FORBIDDEN
-                {
-                    return Err(ProviderError::AuthRequired);
-                }
-                if !response.status().is_success() {
-                    return Err(ProviderError::Other(format!(
-                        "Chutes usage returned status {}",
-                        response.status()
-                    )));
-                }
-                let value: Value = response.json().await.map_err(|e| {
-                    ProviderError::Parse(format!("Failed to parse Chutes usage: {e}"))
-                })?;
-                Ok(ProviderFetchResult::new(snapshot_from_usage(&value), "api"))
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| DEFAULT_API_URL.to_string());
+                let base = crate::providers::validated_https_url(&base, "Chutes API")?;
+                let usage = fetch_usage_snapshot(&self.client, &base, &key).await?;
+                Ok(ProviderFetchResult::new(usage, "api"))
             }
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -96,494 +90,136 @@ impl Provider for ChutesProvider {
     }
 }
 
-fn snapshot_from_usage(value: &Value) -> UsageSnapshot {
-    let windows = quota_windows(value);
-    let primary = windows
-        .first()
-        .cloned()
-        .unwrap_or_else(|| RateWindow::new(0.0));
-    let mut snapshot = UsageSnapshot::new(primary);
-    if let Some(second) = windows.get(1).cloned() {
-        snapshot = snapshot.with_secondary(second);
-    }
-    snapshot.with_login_method("Chutes API")
-}
-
-fn quota_windows(value: &Value) -> Vec<RateWindow> {
-    let mut out = Vec::new();
-    collect_windows(value, &mut out);
-    out
-}
-
-fn collect_windows(value: &Value, out: &mut Vec<RateWindow>) {
-    match value {
-        Value::Object(map) => {
-            if let Some(window) = window_from_object(map) {
-                out.push(window);
-            }
-            for value in map.values() {
-                collect_windows(value, out);
-            }
-        }
-        Value::Array(items) => {
-            for value in items {
-                collect_windows(value, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Build a rate window from a quota object.
+/// Read `users/me/subscription_usage`, then enrich it from `quotas` and
+/// `quota_usage/{id}` only when the rolling or monthly lane is still missing.
 ///
-/// Quota counts (`used`/`limit`) go into `reset_description` as detail text
-/// (e.g. `"25/100 credits"`). They are never treated as reset schedules.
-fn window_from_object(map: &serde_json::Map<String, Value>) -> Option<RateWindow> {
-    let percent = percent_from_object(map)?;
-    let detail = quota_count_description(map);
-    let window_minutes = window_minutes_from_object(map);
-    // Only parse dedicated reset timestamp keys — never raw quota counts.
-    let resets_at = first_reset_timestamp(map);
-    Some(RateWindow::with_details(
-        percent,
-        window_minutes,
-        resets_at,
-        detail,
-    ))
+/// Enrichment is best effort: a rejected key stays fatal, every other failure
+/// leaves the subscription result as it was. A cancelled refresh drops this
+/// future, so cancellation needs no separate handling here.
+async fn fetch_usage_snapshot(
+    client: &Client,
+    base: &Url,
+    key: &str,
+) -> Result<UsageSnapshot, ProviderError> {
+    let mut subscription = parse(&get_json(client, base, key, &["subscription_usage"]).await?);
+    if !subscription.has_rolling_and_monthly() {
+        match fetch_quota_details(client, base, key).await {
+            Ok(quotas) if quotas.lanes().has_windows() => subscription.fill_missing_from(quotas),
+            Ok(_) => {}
+            Err(ProviderError::AuthRequired) => return Err(ProviderError::AuthRequired),
+            Err(error) => tracing::debug!(%error, "Chutes quota enrichment failed"),
+        }
+    }
+    Ok(subscription.lanes().into_usage())
 }
 
-fn percent_from_object(map: &serde_json::Map<String, Value>) -> Option<f64> {
-    for key in [
-        "usage_percent",
-        "usagePercent",
-        "percent_used",
-        "percentUsed",
-    ] {
-        let Some(v) = map.get(key).and_then(Value::as_f64) else {
-            continue;
-        };
-        // Chutes usage/quota payloads (GET /users/me/subscription_usage, and
-        // whatever `collect_windows` recurses into) carry whole percent values
-        // in 0..=100 — no documented field is a 0..=1 fraction. Rescaling
-        // 0..=1 as fractions turned a real 1% into a false 100% exhausted
-        // state (#408; same class as #247 / upstream #3216, fixed for
-        // opencodego in #407).
-        if v.is_finite() {
-            return Some(v.clamp(0.0, 100.0));
-        }
-    }
-    let used = first_f64(map, &["used", "usage", "current_usage", "currentUsage"]);
-    let limit = first_f64(
-        map,
-        &["limit", "quota", "quota_limit", "quotaLimit", "total"],
-    );
-    let remaining = first_f64(map, &["remaining", "remaining_quota", "remainingQuota"]);
-    match (used, limit, remaining) {
-        (Some(used), Some(limit), _) if limit > 0.0 => {
-            let percent = (used / limit) * 100.0;
-            percent.is_finite().then_some(percent.clamp(0.0, 100.0))
-        }
-        (None, Some(limit), Some(remaining)) if limit > 0.0 => {
-            let percent = ((limit - remaining).max(0.0) / limit) * 100.0;
-            percent.is_finite().then_some(percent.clamp(0.0, 100.0))
-        }
-        (Some(used), None, Some(remaining)) => {
-            let limit = used + remaining;
-            if limit <= 0.0 {
-                return None;
-            }
-            let percent = (used / limit) * 100.0;
-            percent.is_finite().then_some(percent.clamp(0.0, 100.0))
-        }
-        _ => None,
-    }
-}
-
-fn quota_count_description(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let used = first_f64(map, &["used", "usage", "current_usage", "currentUsage"]);
-    let mut limit = first_f64(
-        map,
-        &["limit", "quota", "quota_limit", "quotaLimit", "total"],
-    );
-    let remaining = first_f64(map, &["remaining", "remaining_quota", "remainingQuota"]);
-
-    if limit.is_none()
-        && let (Some(used), Some(remaining)) = (used, remaining)
-    {
-        limit = Some(used + remaining);
-    }
-    let limit = limit.filter(|l| l.is_finite() && *l > 0.0)?;
-    let used = match used {
-        Some(u) => u,
-        None => remaining.map(|r| (limit - r).max(0.0))?,
+/// `GET users/me/quotas`, then `GET users/me/quota_usage/{id}` for each quota
+/// definition, merged with the usage fields taking precedence.
+async fn fetch_quota_details(
+    client: &Client,
+    base: &Url,
+    key: &str,
+) -> Result<ParsedQuotas, ProviderError> {
+    let raw = get_json(client, base, key, &["quotas"]).await?;
+    let mut quotas = parse(&raw);
+    let Some(definitions) =
+        quota_definitions(&raw).filter(|list| list.iter().any(Value::is_object))
+    else {
+        return Ok(quotas);
     };
-    let unit = first_str(map, &["unit", "units", "quota_unit", "quotaUnit"]).unwrap_or("credits");
-    Some(format!(
-        "{}/{} {}",
-        format_quota_amount(used),
-        format_quota_amount(limit),
-        unit
-    ))
+    let mut enriched = Vec::new();
+    for definition in definitions.iter().filter_map(Value::as_object) {
+        let mut merged = definition.clone();
+        if let Some(id) = quota_id(definition) {
+            match get_json(client, base, key, &["quota_usage", &id]).await {
+                Ok(usage) => merged.extend(usage_fields(&usage)),
+                Err(ProviderError::AuthRequired) => return Err(ProviderError::AuthRequired),
+                Err(error) => tracing::debug!(%error, "Chutes quota usage request failed"),
+            }
+        }
+        enriched.push(Value::Object(merged));
+    }
+    let detailed = parse(&json!({ "quotas": enriched }));
+    if detailed.lanes().has_windows() {
+        quotas = detailed;
+    }
+    Ok(quotas)
 }
 
-fn window_minutes_from_object(map: &serde_json::Map<String, Value>) -> Option<u32> {
-    for (keys, multiplier) in [
-        (
-            [
-                "window_minutes",
-                "windowMinutes",
-                "period_minutes",
-                "periodMinutes",
-                "duration_minutes",
-                "durationMinutes",
-            ]
-            .as_slice(),
-            1.0,
-        ),
-        (
-            [
-                "window_hours",
-                "windowHours",
-                "period_hours",
-                "periodHours",
-                "duration_hours",
-                "durationHours",
-            ]
-            .as_slice(),
-            60.0,
-        ),
-        (
-            [
-                "window_days",
-                "windowDays",
-                "period_days",
-                "periodDays",
-                "duration_days",
-                "durationDays",
-            ]
-            .as_slice(),
-            24.0 * 60.0,
-        ),
-        (
-            [
-                "window_seconds",
-                "windowSeconds",
-                "period_seconds",
-                "periodSeconds",
-                "duration_seconds",
-                "durationSeconds",
-            ]
-            .as_slice(),
-            1.0 / 60.0,
-        ),
-    ] {
-        if let Some(minutes) = keys.iter().find_map(|key| {
-            map.get(*key)
-                .and_then(numeric_value)
-                .and_then(|value| rounded_window_minutes(value * multiplier))
-        }) {
-            return Some(minutes);
-        }
-    }
+/// The quota definition list: the payload itself, `quotas`, `data`, or
+/// `data.quotas`, whichever is an array first.
+fn quota_definitions(raw: &Value) -> Option<&Vec<Value>> {
+    let root = raw.as_object();
+    let data = root.and_then(|root| root.get("data"));
+    [
+        Some(raw),
+        root.and_then(|root| root.get("quotas")),
+        data,
+        data.and_then(Value::as_object)
+            .and_then(|data| data.get("quotas")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(Value::as_array)
+}
 
-    ["window", "period", "interval", "duration"]
+fn quota_id(definition: &Map<String, Value>) -> Option<String> {
+    ["chute_id", "chuteId", "id"]
         .iter()
-        .find_map(|key| map.get(*key).and_then(Value::as_str))
-        .and_then(parse_window_duration_text)
+        .find_map(|key| text(definition.get(*key)))
 }
 
-fn numeric_value(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(number) => number.as_f64().filter(|value| value.is_finite()),
-        Value::String(text) => text
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|value| value.is_finite()),
-        _ => None,
-    }
-}
-
-fn rounded_window_minutes(value: f64) -> Option<u32> {
-    if !value.is_finite() || value <= 0.0 {
-        return None;
-    }
-    let rounded = value.round();
-    if rounded <= 0.0 || rounded > u32::MAX as f64 {
-        return None;
-    }
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "rounded value is bounded by u32::MAX"
-    )]
-    Some(rounded as u32)
-}
-
-fn parse_window_duration_text(raw: &str) -> Option<u32> {
-    let compact: String = raw
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect();
-    let split_at = compact.find(|character: char| {
-        !character.is_ascii_digit() && !matches!(character, '.' | '+' | '-' | 'e' | 'E')
-    })?;
-    let (number, suffix) = compact.split_at(split_at);
-    let value = number.parse::<f64>().ok()?;
-    let multiplier = if suffix.starts_with("min") || suffix == "m" {
-        1.0
-    } else if suffix.starts_with("hour") || suffix.starts_with("hr") || suffix == "h" {
-        60.0
-    } else if suffix.starts_with("day") || suffix == "d" {
-        24.0 * 60.0
-    } else if suffix.starts_with("month") || suffix == "mo" {
-        30.0 * 24.0 * 60.0
-    } else {
-        return None;
+/// Usage fields of a `quota_usage/{id}` response, unwrapping `data` or `result`.
+fn usage_fields(response: &Value) -> Map<String, Value> {
+    let Some(result) = response.as_object() else {
+        return Map::new();
     };
-    rounded_window_minutes(value * multiplier)
+    ["data", "result"]
+        .iter()
+        .find_map(|key| result.get(*key).and_then(Value::as_object))
+        .unwrap_or(result)
+        .clone()
 }
 
-fn first_reset_timestamp(map: &serde_json::Map<String, Value>) -> Option<DateTime<Utc>> {
-    for key in [
-        "resets_at",
-        "resetsAt",
-        "reset_at",
-        "resetAt",
-        "reset_time",
-        "resetTime",
-        "renews_at",
-        "renewsAt",
-    ] {
-        if let Some(dt) = map.get(key).and_then(parse_timestamp_value) {
-            return Some(dt);
-        }
-    }
-    None
+/// `{base}/users/me/{segments...}`; the configured path and query are kept.
+fn endpoint(base: &Url, segments: &[&str]) -> Result<Url, ProviderError> {
+    let mut url = base.clone();
+    url.set_fragment(None);
+    url.path_segments_mut()
+        .map_err(|()| ProviderError::Other("Invalid Chutes API URL: cannot be a base".into()))?
+        .pop_if_empty()
+        .push("users")
+        .push("me")
+        .extend(segments);
+    Ok(url)
 }
 
-fn parse_timestamp_value(value: &Value) -> Option<DateTime<Utc>> {
-    match value {
-        Value::String(raw) => {
-            let text = raw.trim();
-            if text.is_empty() {
-                return None;
-            }
-            // ISO-8601 / RFC3339 only for strings that look like dates.
-            // Bare small numbers as strings are quota counts, not schedules.
-            if let Ok(dt) = DateTime::parse_from_rfc3339(text) {
-                return Some(dt.with_timezone(&Utc));
-            }
-            if let Ok(number) = text.parse::<f64>() {
-                return epoch_to_datetime(number);
-            }
-            None
-        }
-        Value::Number(n) => n.as_f64().and_then(epoch_to_datetime),
-        _ => None,
+async fn get_json(
+    client: &Client,
+    base: &Url,
+    key: &str,
+    segments: &[&str],
+) -> Result<Value, ProviderError> {
+    let response = client
+        .get(endpoint(base, segments)?)
+        .bearer_auth(key)
+        .header(ACCEPT, "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(ProviderError::AuthRequired);
     }
-}
-
-fn epoch_to_datetime(value: f64) -> Option<DateTime<Utc>> {
-    if !value.is_finite() || value <= 0.0 {
-        return None;
+    if !status.is_success() {
+        return Err(ProviderError::Other(format!(
+            "Chutes usage API error: HTTP {}",
+            status.as_u16()
+        )));
     }
-    // Reject small integers that are clearly quota counts, not unix epochs.
-    // Unix seconds ~1e9; ms ~1e12. Quota counts are typically << 1e8.
-    if value < 1_000_000_000.0 {
-        return None;
-    }
-    let seconds = if value > 10_000_000_000.0 {
-        value / 1000.0
-    } else {
-        value
-    };
-    // Epoch seconds; the sub-second fraction is below timestamp resolution.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "epoch seconds; sub-second fraction below timestamp resolution"
-    )]
-    let whole_seconds = seconds as i64;
-    Utc.timestamp_opt(whole_seconds, 0).single()
-}
-
-fn first_f64(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<f64> {
-    keys.iter().find_map(|k| {
-        map.get(*k)
-            .and_then(Value::as_f64)
-            .filter(|v| v.is_finite())
-    })
-}
-
-fn first_str<'a>(map: &'a serde_json::Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
-    keys.iter()
-        .find_map(|k| map.get(*k).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-}
-
-fn format_quota_amount(value: f64) -> String {
-    if !value.is_finite() {
-        return "unknown".to_string();
-    }
-    let rounded = value.round();
-    if (value - rounded).abs() < 0.0001 && rounded >= i64::MIN as f64 && rounded < i64::MAX as f64 {
-        // Guarded above: value is within 0.0001 of a whole number, so the
-        // fractional part is zero and the rounded value fits in i64.
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "finite rounded value is bounded to the i64 range above"
-        )]
-        let whole = rounded as i64;
-        format!("{}", whole)
-    } else {
-        let mut text = format!("{value:.2}");
-        while text.contains('.') && text.ends_with('0') {
-            text.pop();
-        }
-        if text.ends_with('.') {
-            text.pop();
-        }
-        text
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_ratio_window() {
-        let snapshot =
-            snapshot_from_usage(&serde_json::json!({"quotas":[{"used":25,"limit":100}]}));
-        assert_eq!(snapshot.primary.used_percent, 25.0);
-    }
-
-    #[test]
-    fn quota_counts_go_to_reset_description_not_schedule() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [{
-                "used": 25,
-                "limit": 100,
-                "unit": "credits",
-                "remaining": 75
-            }]
-        }));
-        assert_eq!(snapshot.primary.used_percent, 25.0);
-        assert_eq!(
-            snapshot.primary.reset_description.as_deref(),
-            Some("25/100 credits")
-        );
-        assert!(snapshot.primary.resets_at.is_none());
-    }
-
-    #[test]
-    fn small_numeric_fields_are_not_reset_schedules() {
-        // A mis-keyed payload where "reset_time" is accidentally a remaining count.
-        // Values below unix-epoch range must not become resets_at.
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [{
-                "used": 10,
-                "limit": 50,
-                "reset_time": 40
-            }]
-        }));
-        assert_eq!(snapshot.primary.used_percent, 20.0);
-        assert!(snapshot.primary.resets_at.is_none());
-        assert_eq!(
-            snapshot.primary.reset_description.as_deref(),
-            Some("10/50 credits")
-        );
-    }
-
-    #[test]
-    fn iso_reset_timestamps_still_parse() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [{
-                "used": 1,
-                "limit": 2,
-                "resets_at": "2026-08-01T00:00:00Z"
-            }]
-        }));
-        assert_eq!(
-            snapshot.primary.resets_at,
-            Some(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap())
-        );
-    }
-
-    #[test]
-    fn usage_percent_one_stays_one() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [{"usage_percent": 1, "limit": 100}]
-        }));
-        assert_eq!(snapshot.primary.used_percent, 1.0);
-    }
-
-    #[test]
-    fn usage_percent_half_stays_half() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [{"usage_percent": 0.5, "limit": 100}]
-        }));
-        assert_eq!(snapshot.primary.used_percent, 0.5);
-    }
-
-    #[test]
-    fn usage_percent_hundred_stays_hundred() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [{"usage_percent": 100, "limit": 100}]
-        }));
-        assert_eq!(snapshot.primary.used_percent, 100.0);
-    }
-
-    #[test]
-    fn large_quota_amounts_keep_their_description() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "rolling_window": {"used": 1e20, "limit": 2e20, "unit": "credits"}
-        }));
-        assert_eq!(snapshot.primary.used_percent, 50.0);
-        assert_eq!(
-            snapshot.primary.reset_description.as_deref(),
-            Some("100000000000000000000/200000000000000000000 credits")
-        );
-    }
-
-    #[test]
-    fn duration_fields_populate_window_minutes() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "quotas": [
-                {"used": 25, "limit": 100, "duration": "4 hours"},
-                {"used": 1, "limit": 2, "window_seconds": 1800}
-            ]
-        }));
-        assert_eq!(snapshot.primary.window_minutes, Some(240));
-        assert_eq!(
-            snapshot.secondary.as_ref().unwrap().window_minutes,
-            Some(30)
-        );
-    }
-
-    #[test]
-    fn unrepresentable_duration_keeps_usage_with_unknown_window() {
-        let snapshot = snapshot_from_usage(&serde_json::json!({
-            "rolling_window": {
-                "used": 25,
-                "limit": 100,
-                "window_hours": "1e308"
-            }
-        }));
-        assert_eq!(snapshot.primary.used_percent, 25.0);
-        assert_eq!(snapshot.primary.window_minutes, None);
-    }
-
-    #[test]
-    fn non_finite_amount_formatting_is_safe() {
-        assert_eq!(format_quota_amount(f64::INFINITY), "unknown");
-        assert_eq!(format_quota_amount(f64::NAN), "unknown");
-    }
-
-    #[test]
-    fn oversized_integral_amount_is_not_saturated_to_i64_max() {
-        let value = 2_f64.powi(63);
-
-        assert_eq!(format_quota_amount(value), "9223372036854775808");
-    }
+    response
+        .json::<Value>()
+        .await
+        .ok()
+        .filter(|value| value.is_object() || value.is_array())
+        .ok_or_else(|| ProviderError::Parse("Chutes usage response is not valid JSON".into()))
 }
