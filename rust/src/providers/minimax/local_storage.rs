@@ -1,10 +1,12 @@
 //! MiniMax LocalStorage Importer
 //!
-//! Extracts session data from browser localStorage for MiniMax platform.
-//! Supports Chrome, Edge, Firefox, and Brave browsers.
+//! Extracts session data from Chromium browser storage for the MiniMax platform.
+//! Storage directories come from `browser::storage_discovery` (every installed Chromium-family
+//! browser and profile: Local Storage, then Session Storage, then MiniMax IndexedDB).
 
+use crate::browser::storage_discovery::{self, StorageCandidate, StorageKind};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::Path;
 
 /// Session data extracted from MiniMax localStorage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,111 +42,59 @@ impl std::fmt::Display for ImportError {
 
 impl std::error::Error for ImportError {}
 
+/// Origin prefixes of the MiniMax IndexedDB databases (`<scheme>_<host>_<port>`).
+const INDEXED_DB_ORIGIN_PREFIXES: &[&str] = &[
+    "https_platform.minimax.io_",
+    "https_www.minimax.io_",
+    "https_minimax.io_",
+    "https_platform.minimaxi.com_",
+    "https_minimaxi.com_",
+    "https_www.minimaxi.com_",
+];
+
+/// Stores tried in order; a later store is read only when earlier ones yield no session.
+const STORAGE_ORDER: [StorageKind; 3] = [
+    StorageKind::LocalStorage,
+    StorageKind::SessionStorage,
+    StorageKind::IndexedDb {
+        origin_prefixes: INDEXED_DB_ORIGIN_PREFIXES,
+    },
+];
+
 /// MiniMax localStorage importer
 pub struct MiniMaxLocalStorageImporter;
 
 impl MiniMaxLocalStorageImporter {
-    /// Import MiniMax session from browser localStorage
+    /// Import a MiniMax session from Chromium browser storage.
+    ///
+    /// Visits every installed Chromium-family browser and profile: Local Storage first, then
+    /// Session Storage, then MiniMax-origin IndexedDB when the earlier stores yield nothing.
     pub fn import_session() -> Result<MiniMaxSession, ImportError> {
-        // Try browsers in order of preference
-        let browsers = Self::get_browser_paths();
-
-        for (browser_name, ls_path) in browsers {
-            if let Ok(session) = Self::extract_from_path(&ls_path, &browser_name) {
-                return Ok(session);
-            }
-        }
-
-        Err(ImportError::BrowserNotFound)
+        Self::import_with(storage_discovery::discover)
     }
 
-    /// Get paths to browser localStorage databases
-    fn get_browser_paths() -> Vec<(String, PathBuf)> {
-        #[allow(
-            unused_mut,
-            reason = "mutability needed for conditional initialization that the compiler cannot prove"
-        )]
-        let mut paths = Vec::new();
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(local_data) = dirs::data_local_dir() {
-                // Chrome
-                let chrome_path = local_data
-                    .join("Google")
-                    .join("Chrome")
-                    .join("User Data")
-                    .join("Default")
-                    .join("Local Storage")
-                    .join("leveldb");
-                if chrome_path.exists() {
-                    paths.push(("Chrome".to_string(), chrome_path));
-                }
-
-                // Edge
-                let edge_path = local_data
-                    .join("Microsoft")
-                    .join("Edge")
-                    .join("User Data")
-                    .join("Default")
-                    .join("Local Storage")
-                    .join("leveldb");
-                if edge_path.exists() {
-                    paths.push(("Edge".to_string(), edge_path));
-                }
-
-                // Brave
-                let brave_path = local_data
-                    .join("BraveSoftware")
-                    .join("Brave-Browser")
-                    .join("User Data")
-                    .join("Default")
-                    .join("Local Storage")
-                    .join("leveldb");
-                if brave_path.exists() {
-                    paths.push(("Brave".to_string(), brave_path));
-                }
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(home) = dirs::home_dir() {
-                // Chrome
-                let chrome_path = home
-                    .join("Library")
-                    .join("Application Support")
-                    .join("Google")
-                    .join("Chrome")
-                    .join("Default")
-                    .join("Local Storage")
-                    .join("leveldb");
-                if chrome_path.exists() {
-                    paths.push(("Chrome".to_string(), chrome_path));
-                }
-
-                // Edge
-                let edge_path = home
-                    .join("Library")
-                    .join("Application Support")
-                    .join("Microsoft Edge")
-                    .join("Default")
-                    .join("Local Storage")
-                    .join("leveldb");
-                if edge_path.exists() {
-                    paths.push(("Edge".to_string(), edge_path));
-                }
-            }
-        }
-
-        paths
-    }
-
-    /// Extract session from a localStorage path
-    fn extract_from_path(
-        path: &PathBuf,
-        browser_name: &str,
+    fn import_with(
+        discover: impl Fn(StorageKind) -> Vec<StorageCandidate>,
     ) -> Result<MiniMaxSession, ImportError> {
+        let mut found_any_store = false;
+        for kind in STORAGE_ORDER {
+            for candidate in discover(kind) {
+                found_any_store = true;
+                if let Ok(session) = Self::extract_from_path(&candidate.path, &candidate.label) {
+                    return Ok(session);
+                }
+            }
+        }
+
+        Err(if found_any_store {
+            ImportError::StorageNotFound
+        } else {
+            ImportError::BrowserNotFound
+        })
+    }
+
+    /// Extract session from a storage directory
+    fn extract_from_path(path: &Path, source_label: &str) -> Result<MiniMaxSession, ImportError> {
         // Look for .ldb or .log files
         let entries =
             std::fs::read_dir(path).map_err(|e| ImportError::AccessDenied(e.to_string()))?;
@@ -168,7 +118,7 @@ impl MiniMaxLocalStorageImporter {
         }
 
         match minimax_data {
-            Some(json) => Self::parse_session_from_json(&json, browser_name),
+            Some(json) => Self::parse_session_from_json(&json, source_label),
             None => Err(ImportError::StorageNotFound),
         }
     }
@@ -230,7 +180,7 @@ impl MiniMaxLocalStorageImporter {
     /// Parse session from extracted JSON
     fn parse_session_from_json(
         json: &serde_json::Value,
-        browser_name: &str,
+        source_label: &str,
     ) -> Result<MiniMaxSession, ImportError> {
         let access_token = json
             .get("access_token")
@@ -290,7 +240,7 @@ impl MiniMaxLocalStorageImporter {
             email,
             phone,
             plan_type,
-            source_label: format!("{} localStorage", browser_name),
+            source_label: source_label.to_string(),
         })
     }
 }
@@ -324,5 +274,102 @@ mod tests {
 
         let result = MiniMaxLocalStorageImporter::parse_session_from_json(&json, "Chrome");
         assert!(result.is_err());
+    }
+
+    fn candidate(label: &str, path: &Path) -> StorageCandidate {
+        StorageCandidate {
+            label: label.to_string(),
+            path: path.to_path_buf(),
+        }
+    }
+
+    fn write_store(dir: &Path, token: Option<&str>) -> std::path::PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let body = match token {
+            Some(token) => {
+                format!(" minimax_user{{\"access_token\":\"{token}\",\"user_id\":\"1\"}}")
+            }
+            None => " unrelated".to_string(),
+        };
+        std::fs::write(dir.join("000003.log"), body).unwrap();
+        dir.to_path_buf()
+    }
+
+    fn discover_from(
+        local: Vec<StorageCandidate>,
+        session: Vec<StorageCandidate>,
+        indexed: Vec<StorageCandidate>,
+    ) -> impl Fn(StorageKind) -> Vec<StorageCandidate> {
+        move |kind| match kind {
+            StorageKind::LocalStorage => local.clone(),
+            StorageKind::SessionStorage => session.clone(),
+            StorageKind::IndexedDb { origin_prefixes } => {
+                assert_eq!(origin_prefixes, INDEXED_DB_ORIGIN_PREFIXES);
+                indexed.clone()
+            }
+        }
+    }
+
+    #[test]
+    fn import_prefers_local_storage_over_later_stores() {
+        let root = tempfile::tempdir().unwrap();
+        let local = write_store(&root.path().join("local"), Some("from-local"));
+        let session = write_store(&root.path().join("session"), Some("from-session"));
+
+        let found = MiniMaxLocalStorageImporter::import_with(discover_from(
+            vec![candidate("Chrome Default", &local)],
+            vec![candidate("Chrome Default (Session Storage)", &session)],
+            Vec::new(),
+        ))
+        .unwrap();
+
+        assert_eq!(found.access_token.as_deref(), Some("from-local"));
+        assert_eq!(found.source_label, "Chrome Default");
+    }
+
+    #[test]
+    fn import_falls_back_to_session_then_indexed_db_when_earlier_stores_are_empty() {
+        let root = tempfile::tempdir().unwrap();
+        let local = write_store(&root.path().join("local"), None);
+        let session = write_store(&root.path().join("session"), None);
+        let indexed = write_store(&root.path().join("indexed"), Some("from-indexed"));
+
+        let found = MiniMaxLocalStorageImporter::import_with(discover_from(
+            vec![candidate("Edge Default", &local)],
+            vec![candidate("Edge Default (Session Storage)", &session)],
+            vec![candidate("Edge Default (IndexedDB)", &indexed)],
+        ))
+        .unwrap();
+        assert_eq!(found.access_token.as_deref(), Some("from-indexed"));
+        assert_eq!(found.source_label, "Edge Default (IndexedDB)");
+
+        let session_token = write_store(&root.path().join("session2"), Some("from-session"));
+        let found = MiniMaxLocalStorageImporter::import_with(discover_from(
+            vec![candidate("Edge Default", &local)],
+            vec![candidate("Edge Default (Session Storage)", &session_token)],
+            vec![candidate("Edge Default (IndexedDB)", &indexed)],
+        ))
+        .unwrap();
+        assert_eq!(found.access_token.as_deref(), Some("from-session"));
+    }
+
+    #[test]
+    fn import_distinguishes_no_browser_from_no_session() {
+        let root = tempfile::tempdir().unwrap();
+        let empty = write_store(&root.path().join("empty"), None);
+
+        let none = MiniMaxLocalStorageImporter::import_with(discover_from(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ));
+        assert!(matches!(none, Err(ImportError::BrowserNotFound)));
+
+        let no_session = MiniMaxLocalStorageImporter::import_with(discover_from(
+            vec![candidate("Brave Default", &empty)],
+            Vec::new(),
+            Vec::new(),
+        ));
+        assert!(matches!(no_session, Err(ImportError::StorageNotFound)));
     }
 }
