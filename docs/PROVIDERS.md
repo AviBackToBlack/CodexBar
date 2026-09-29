@@ -55,6 +55,29 @@ spend and, when the optional balance request succeeds, prepaid credit balance.
 It keeps those values in the cost/detail surfaces and does not invent a quota
 percentage or use a Replicate API token as a website credential.
 
+### Muse Code browser team quota
+
+Muse Code reads its quota from the device-code login. When that response has no
+`subs_usage`, CodexBar can optionally read the quota of one dev.meta.ai team you
+select in Settings → Providers → Muse Code → **Browser team**.
+
+- The cookie source is **Off** by default. The Windows default ("Manual" with no
+  pasted cookie) also reads nothing, and never touches a browser.
+- **Automatic** imports the `llama_dev_sess` cookie from the selected browser.
+  **Manual** accepts a pasted Cookie header or cURL capture.
+- Requests, in order: `GET /api/auth/me` (its email must match the login email,
+  case-insensitively), `GET /api/portal/teams`, then
+  `GET /api/portal/teams/{id}/subscription-quota` for the selected team only. The
+  team's `tier` must equal the login plan. At most 5 requests, 8 seconds each.
+- The team list appears as the picker options and starts at "Choose a team...";
+  the first team is never selected for you. The team ID is stored as the provider
+  workspace value and accepts digits only.
+- The source label becomes `oauth+web`. This port has no `estimated` data
+  confidence, so the pace shown for this reading is marked non-authoritative
+  instead. The device-code token is only sent to `api.meta.ai`; dev.meta.ai
+  requests carry only the browser cookie.
+- The CLI does not read browser cookies for Muse Code.
+
 ## Listing what is enabled
 
 ```powershell

@@ -413,7 +413,7 @@ impl ProviderId {
             ProviderId::DeepInfra => None,
             ProviderId::Fireworks => None,
             ProviderId::Meta => None,
-            ProviderId::Muse => None,
+            ProviderId::Muse => Some("dev.meta.ai"),
             ProviderId::Nous => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
@@ -771,6 +771,12 @@ pub struct FetchContext {
     /// manual cookie source, etc.). Workspace overrides are checked separately.
     pub auto_prefer_web: bool,
 
+    /// The user chose automatic browser cookie import for a provider whose
+    /// cookies only enrich its API usage (`Provider::cookies_only_enrich_usage`).
+    /// False for the default manual-without-cookie state and for Off, so those
+    /// never read a browser.
+    pub browser_cookie_import: bool,
+
     /// Foreground usage reads (`codexbar usage`, `codexbar serve`) set this so
     /// providers join slow optional enrichment with the full optional-item
     /// timeout budget measured from task start; background/UI polls keep the
@@ -794,6 +800,7 @@ impl Default for FetchContext {
             api_region: None,
             gateway_url: None,
             auto_prefer_web: false,
+            browser_cookie_import: false,
             requires_optional_usage_completeness: false,
         }
     }
@@ -890,6 +897,15 @@ pub trait Provider: Send + Sync {
     /// so the fallback lane can still fill in.
     fn automatic_metric_missing_core_is_terminal(&self) -> bool {
         true
+    }
+
+    /// Whether cookies only enrich an API-backed result instead of being a
+    /// usage source of their own. The shell then keeps the configured usage
+    /// source, forwards a manual cookie as-is, and reads a browser only when
+    /// the cookie source is Automatic (`FetchContext::browser_cookie_import`);
+    /// the default manual state with no cookie never triggers a browser read.
+    fn cookies_only_enrich_usage(&self) -> bool {
+        false
     }
 
     /// Whether browser-cookie discovery/recovery is owned by the provider.
@@ -1450,7 +1466,7 @@ mod tests {
     fn test_provider_id_muse() {
         assert_eq!(ProviderId::Muse.cli_name(), "muse");
         assert_eq!(ProviderId::Muse.display_name(), "Muse Code");
-        assert_eq!(ProviderId::Muse.cookie_domain(), None);
+        assert_eq!(ProviderId::Muse.cookie_domain(), Some("dev.meta.ai"));
         assert_eq!(ProviderId::from_cli_name("muse"), Some(ProviderId::Muse));
         assert_eq!(
             ProviderId::from_cli_name("muse-code"),

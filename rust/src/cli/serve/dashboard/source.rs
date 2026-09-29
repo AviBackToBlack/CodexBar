@@ -164,6 +164,7 @@ async fn fetch_provider_envelope(
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        browser_cookie_import: false,
         requires_optional_usage_completeness: false,
     };
     let fetch = bounded_fetch(provider_id, ctx, None, fetch_timeout).await;
@@ -297,6 +298,7 @@ async fn collect_claude_accounts(claude_enabled: bool) -> Option<ClaudeAccountsI
                 api_region: None,
                 gateway_url: None,
                 auto_prefer_web: false,
+                browser_cookie_import: false,
                 requires_optional_usage_completeness: false,
             };
             let fetch = bounded_fetch(

@@ -90,6 +90,12 @@ pub(crate) fn build_fetch_context(
     let has_opencodego_api_key = id == ProviderId::OpenCodeGo
         && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
 
+    // Providers whose cookies only enrich an API result keep the configured
+    // usage source. Off and the default manual-without-cookie state never read
+    // a browser; only Automatic imports one (`browser_cookie_import`).
+    let cookies_only_enrich_usage = provider.cookies_only_enrich_usage();
+    let browser_cookie_import =
+        cookies_only_enrich_usage && matches!(cookie_source, "auto" | "browser" | "web");
     let (mut source_mode, mut cookie_header, fails_closed_without_cookie) =
         if id.cookie_domain().is_none() {
             let source_mode = if active_token_env.is_some() {
@@ -98,6 +104,11 @@ pub(crate) fn build_fetch_context(
                 usage_source
             };
             (source_mode, None, false)
+        } else if cookies_only_enrich_usage {
+            let cookie_header = (cookie_source == "manual")
+                .then(|| active_token_cookie.or(stored_cookie))
+                .flatten();
+            (usage_source, cookie_header, false)
         } else {
             match cookie_source {
                 // #433: an explicitly selected, non-empty Claude manual cookie is
@@ -180,7 +191,11 @@ pub(crate) fn build_fetch_context(
     // historically mapped "manual + no cookie" to Cli, which surfaces as
     // "Source mode 'Cli' not supported". Remap to Web and try browser cookies
     // unless the user explicitly disabled cookies ("off").
-    if source_mode == SourceMode::Cli && cookie_source != "off" && !provider.supports_cli() {
+    if source_mode == SourceMode::Cli
+        && cookie_source != "off"
+        && !provider.supports_cli()
+        && !cookies_only_enrich_usage
+    {
         if cookie_header
             .as_deref()
             .map(str::trim)
@@ -229,6 +244,7 @@ pub(crate) fn build_fetch_context(
         api_region: (!api_region.is_empty()).then_some(api_region),
         gateway_url,
         auto_prefer_web,
+        browser_cookie_import,
         ..FetchContext::default()
     }
 }

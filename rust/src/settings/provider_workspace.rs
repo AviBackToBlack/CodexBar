@@ -30,6 +30,9 @@ pub fn validate_provider_workspace_value(
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         }),
+        ProviderId::Muse => validate_id(trimmed, "Muse browser team ID", |value| {
+            value.chars().all(|c| c.is_ascii_digit())
+        }),
         ProviderId::Zed => validate_zed_url(trimmed),
         ProviderId::Xai => {
             if trimmed.contains('/') || trimmed == "." || trimmed == ".." {
@@ -170,6 +173,24 @@ fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn muse_browser_team_id_is_digits_only() {
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Muse, " 424242424242 ").unwrap(),
+            "424242424242"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Muse, "  ").unwrap(),
+            ""
+        );
+        for invalid in ["team-1", "12/34", "1 2", "-5", "1e3", "../1"] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::Muse, invalid).is_err(),
+                "{invalid} must be rejected"
+            );
+        }
+    }
 
     #[test]
     fn validates_workspace_ids_by_provider() {
