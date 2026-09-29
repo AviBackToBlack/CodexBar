@@ -4,6 +4,7 @@ import {
   formatUsageSpendReportingDay,
   filterUsageSpendSummaryForOverview,
   renderUsageSpendSharePng,
+  usageSpendShareColumns,
   usageSpendShareFooter,
   usageSpendSubscriptionCaption,
 } from "./usageSpendSharing";
@@ -86,7 +87,15 @@ describe("usage spend sharing", () => {
     // account emails or provider-identity secrets. The renderer draws exactly
     // these cells; keep the invariant comment on renderUsageSpendSharePng in
     // sync if this list ever grows.
-    const renderedCells = ["displayName", "sevenDay", "thirtyDay", "currency", "source"] as const;
+    const renderedCells = [
+      "displayName",
+      "periodCost",
+      "periodTokens",
+      "sevenDay",
+      "thirtyDay",
+      "currency",
+      "source",
+    ] as const;
     const row: UsageSpendRow = {
       providerId: "codex",
       displayName: "Codex",
@@ -103,5 +112,37 @@ describe("usage spend sharing", () => {
     // UsageSpendRow field may carry account-identity data (no email/org).
     expect(Object.keys(row).filter((key) => /email|org|token|account/i.test(key))).toEqual([]);
     expect(unsafeKeys).toEqual(["providerId", "includedInOverview"]);
+  });
+
+  it("adds a labelled History window column while keeping the fixed 7 and 30 day columns", () => {
+    const row: UsageSpendRow = {
+      providerId: "codex",
+      displayName: "Codex",
+      sevenDay: 1,
+      thirtyDay: 2,
+      periodCost: 9,
+      periodTokens: 900,
+      currency: "USD",
+      source: "local",
+      includedInOverview: true,
+    };
+    const plain = usageSpendShareColumns();
+    expect(plain.headers).toEqual(["Provider", "7 days", "30 days", "Currency", "Source"]);
+    expect(plain.cellsFor(row)).toHaveLength(plain.headers.length);
+
+    const withPeriod = usageSpendShareColumns("Month to date");
+    expect(withPeriod.headers).toEqual([
+      "Provider",
+      "Month to date",
+      "7 days",
+      "30 days",
+      "Currency",
+      "Source",
+    ]);
+    const cells = withPeriod.cellsFor(row);
+    expect(cells).toHaveLength(withPeriod.headers.length);
+    expect(cells).toHaveLength(withPeriod.colW.length);
+    expect(cells[1]).toContain("900");
+    expect(cells[2]).not.toContain("900");
   });
 });

@@ -1,7 +1,13 @@
 import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
+import type {
+  BootstrapState,
+  ProviderUsageSnapshot,
+  UsageSpendRow,
+  UsageSpendSummary,
+} from "../types/bridge";
 import type { LocaleKey } from "../i18n/keys";
+import { costPeriodLabel, costPeriodShortLabel } from "../lib/costPeriod";
 import {
   beginFlyoutGesture,
   getUsageSpendSummary,
@@ -206,7 +212,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         />
         <div className="provider-grid__divider" />
         {selectedProviderId === null && (
-          <OverviewSpendSummary providerIds={sorted.map((provider) => provider.providerId)} t={t} />
+          <OverviewSpendSummary
+            providerIds={sorted.map((provider) => provider.providerId)}
+            period={settings.costReportingPeriod}
+            t={t}
+          />
         )}
         <div className="menu-stack">
           {useWideColumns
@@ -336,45 +346,66 @@ function TrayResizeHandles() {
   );
 }
 
-function OverviewSpendSummary({ providerIds, t }: { providerIds: string[]; t: (key: LocaleKey) => string }) {
+function OverviewSpendSummary({
+  providerIds,
+  period,
+  t,
+}: {
+  providerIds: string[];
+  /** Saved History window; a change rescans. Omitted means the backend default. */
+  period?: string;
+  t: (key: LocaleKey) => string;
+}) {
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void getUsageSpendSummary({ historyDays: 30 })
+    // No explicit period: the backend resolves the saved History window.
+    void getUsageSpendSummary()
       .then((value) => { if (!cancelled) setSummary(value); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [providerIds.join("|")]);
+  }, [providerIds.join("|"), period]);
 
   // Overview consumes the same backend spend catalog as Usage & Spend. Do not
   // restrict accounting to whichever cards happen to be rendered in this tray.
   const overviewSummary = summary ? filterUsageSpendSummaryForOverview(summary) : null;
 
   if (!overviewSummary) return null;
+  // The summary names the History window its period columns cover. Payloads
+  // without one only carry the fixed 30-day column.
+  const summaryPeriod = overviewSummary.reportingPeriod || null;
+  const spendOf = (row: UsageSpendRow) => (summaryPeriod ? row.periodCost : row.thirtyDay);
+  const title = summaryPeriod
+    ? t("OverviewSpendPeriodTitle").replace("{}", costPeriodShortLabel(summaryPeriod, t))
+    : t("OverviewSpendTitle");
   const onShare = () => {
     setShareError(null);
     const error = shareUsageSpendPng(
       overviewSummary,
-      t("OverviewSpendTitle"),
+      title,
       `codexbar-overview-usage-${overviewSummary.reportingDay}.png`,
+      summaryPeriod ? costPeriodLabel(summaryPeriod, t) : undefined,
     );
     if (error) setShareError(t(error as LocaleKey));
   };
 
   const rows = overviewSummary.rows;
   const summable = rows.filter((row) => (row.currency || "USD") === "USD");
-  const known = summable.filter((row) => row.thirtyDay != null && Number.isFinite(row.thirtyDay));
+  const known = summable.filter((row) => {
+    const spend = spendOf(row);
+    return spend != null && Number.isFinite(spend);
+  });
   if (known.length === 0) return null;
-  const total = known.reduce((sum, row) => sum + (row.thirtyDay ?? 0), 0);
+  const total = known.reduce((sum, row) => sum + (spendOf(row) ?? 0), 0);
   const partial = known.length < rows.length;
   const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 
   return (
     <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-        <strong>{t("OverviewSpendTitle")}</strong>
+        <strong>{title}</strong>
         <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
       </div>
       <div className="settings-section__caption" style={{ marginTop: 4 }}>

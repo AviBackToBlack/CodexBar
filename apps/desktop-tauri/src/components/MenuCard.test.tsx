@@ -129,6 +129,9 @@ describe("MenuCard", () => {
         PanelReserveSuffix: "in reserve",
         PanelThirtyDayCost: "30d cost",
         PanelThirtyDayTokens: "30d tokens",
+        PanelPeriodCost: "{} cost",
+        PanelPeriodTokens: "{} tokens",
+        CostPeriodShortMonthToDate: "MTD",
         PanelTodayBudget: "today",
         PanelUsedSuffix: "used",
         ResetsInHoursMinutes: "Resets in {}h {}m",
@@ -599,6 +602,37 @@ describe("MenuCard", () => {
     expect(details.open).toBe(false);
     fireEvent.click(details.querySelector("summary")!);
     expect(details.open).toBe(true);
+  });
+
+  it("labels local totals with the selected History window instead of 30 days", async () => {
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      providerId: "claude",
+      costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: null,
+        // The fixed 30-day fields must not leak into the period rows.
+        thirtyDayCost: 1.23,
+        thirtyDayTokens: 584_000,
+        periodCost: 7.5,
+        periodTokens: 2_000_000,
+        reportingPeriod: "month-to-date",
+        latestTokens: null,
+        topModel: "glim-4.6",
+        estimateNote: "Estimated from local logs",
+        tokenCostUpdatedAtMs: 1234,
+      },
+    });
+
+    renderCard(provider(null));
+
+    expect(await screen.findByText("MTD cost")).toBeInTheDocument();
+    expect(screen.getByText("MTD tokens")).toBeInTheDocument();
+    expect(screen.getByText("$7.50")).toBeInTheDocument();
+    expect(screen.getByText("2M")).toBeInTheDocument();
+    expect(screen.queryByText("30d cost")).not.toBeInTheDocument();
+    expect(screen.queryByText("584K")).not.toBeInTheDocument();
   });
 
   it("places Claude accounts above metrics and the collapsed usage details", async () => {

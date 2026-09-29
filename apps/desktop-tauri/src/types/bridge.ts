@@ -275,6 +275,11 @@ export interface SettingsSnapshot {
   /** Opt-in read-only OpenCodex usage.jsonl import. */
   openCodexUsageLogsEnabled?: boolean;
   hideNativeCodexCostWhenOpenCodexPresent?: boolean;
+  /**
+   * History window for local cost surfaces: `rolling:N` (1..=365),
+   * `month-to-date`, or `all`. Absent from older backends.
+   */
+  costReportingPeriod?: string;
   /** Per-provider accent color overrides (CLI name → hex color, #2972). */
   providerAccentColors: Record<string, string>;
 }
@@ -360,6 +365,8 @@ export interface SettingsUpdate {
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   openCodexUsageLogsEnabled?: boolean;
   hideNativeCodexCostWhenOpenCodexPresent?: boolean;
+  /** `rolling:N` (1..=365), `month-to-date`, or `all`; the backend rejects other values. */
+  costReportingPeriod?: string;
   providerAccentColors?: Record<string, string | null>;
 }
 
@@ -381,6 +388,9 @@ export interface UsageSpendRow {
   thirtyDay: number | null;
   sevenDayTokens?: number | null;
   thirtyDayTokens?: number | null;
+  /** Cost over the selected History window (`UsageSpendSummary.reportingPeriod`). */
+  periodCost?: number | null;
+  periodTokens?: number | null;
   currency: string;
   source: string;
   includedInOverview: boolean;
@@ -394,6 +404,8 @@ export interface UsageSpendRow {
 export interface UsageSpendSummary {
   rows: UsageSpendRow[];
   contract: SpendContract;
+  /** Raw History window the `period*` columns were built for. */
+  reportingPeriod?: string;
   reportingDay: string;
   dashboardTimezone: string;
 }
@@ -517,6 +529,8 @@ export interface CodexLocalProjectUsageSnapshot {
 export interface SpendContract {
   providerId: string;
   historyDays: number;
+  /** Raw History window this contract was built for. */
+  reportingPeriod?: string;
   knownCostUsd: number | null;
   knownZero: boolean;
   provenance: CostProvenance;
@@ -819,8 +833,13 @@ export interface DailyUsageBreakdown {
 
 export interface ProviderLocalUsageSummary {
   todayCost: number | null;
+  /** Always the trailing 30 days. */
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
+  /** Selected History window totals; absent from older backends. */
+  periodCost?: number | null;
+  periodTokens?: number | null;
+  reportingPeriod?: string;
   latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;

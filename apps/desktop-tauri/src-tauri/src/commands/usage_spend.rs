@@ -1,8 +1,12 @@
-//! Usage & Spend settings tab: 7-day / 30-day local cost aggregates.
+//! Usage & Spend settings tab: 7-day / 30-day compat columns plus the
+//! selected reporting period (History window).
 
-use codexbar::cost_scanner::{CostScanner, CostSummary};
+use chrono::Utc;
+use codexbar::cost_reporting_period::{CostReportingPeriod, CostTimeZone};
+use codexbar::cost_scanner::CostScanner;
 use codexbar::spend_contract::{
-    SpendContract, build_local_spend_contract, build_local_spend_contract_from_summary,
+    SpendContract, build_contract_from_period_summary, build_local_spend_contract,
+    build_local_spend_contract_for_period, build_local_spend_contract_from_summary,
 };
 use serde::Serialize;
 use tauri::State;
@@ -28,6 +32,10 @@ pub struct UsageSpendRow {
     pub thirty_day: Option<f64>,
     pub seven_day_tokens: Option<u64>,
     pub thirty_day_tokens: Option<u64>,
+    /// Cost over the selected reporting period (History window).
+    pub period_cost: Option<f64>,
+    /// Tokens over the selected reporting period.
+    pub period_tokens: Option<u64>,
     pub currency: String,
     pub source: String,
     /// Included in the shared Overview spend denominator.
@@ -50,6 +58,8 @@ struct SpendValues {
     thirty_day: Option<f64>,
     seven_day_tokens: Option<u64>,
     thirty_day_tokens: Option<u64>,
+    period_cost: Option<f64>,
+    period_tokens: Option<u64>,
     source: String,
     refreshing: bool,
     stale_updated_at: Option<String>,
@@ -60,6 +70,8 @@ struct SpendValues {
 pub struct UsageSpendSummary {
     pub rows: Vec<UsageSpendRow>,
     pub contract: SpendContract,
+    /// Raw reporting period the rows' `period*` columns were built for.
+    pub reporting_period: String,
     pub reporting_day: String,
     pub dashboard_timezone: String,
 }
@@ -182,6 +194,7 @@ struct BuiltUsageSpendSummary {
 pub async fn get_usage_spend_summary(
     state: State<'_, Mutex<AppState>>,
     history_days: Option<u32>,
+    period: Option<String>,
     force_refresh: Option<bool>,
 ) -> Result<UsageSpendSummary, String> {
     let cached = {
@@ -189,10 +202,16 @@ pub async fn get_usage_spend_summary(
         guard.provider_cache.clone()
     };
 
-    let selected_days = history_days.unwrap_or(30);
+    // An explicit `period` wins, then the legacy `history_days` (0 = All),
+    // then the saved History window.
+    let period = CostReportingPeriod::resolve_request(
+        period.as_deref(),
+        history_days,
+        codexbar::settings::Settings::load().cost_reporting_period,
+    );
     let force_refresh = force_refresh.unwrap_or(false);
     let built = tauri::async_runtime::spawn_blocking(move || {
-        build_usage_spend_summary_cached(&cached, selected_days, force_refresh)
+        build_usage_spend_summary_cached(&cached, period, force_refresh)
     })
     .await
     .map_err(|e| format!("usage spend worker failed: {e}"))??;
@@ -202,7 +221,7 @@ pub async fn get_usage_spend_summary(
         .map(|guard| guard.provider_cache.clone())?;
     let current_key = usage_spend_cache_key(
         &current_cached,
-        selected_days,
+        period,
         &codexbar::settings::Settings::load(),
     );
     if current_key != built.key {
@@ -231,11 +250,11 @@ pub fn write_usage_spend_export(path: String, payload: String) -> Result<(), Str
 
 fn build_usage_spend_summary_cached(
     cached: &[ProviderUsageSnapshot],
-    selected_days: u32,
+    period: CostReportingPeriod,
     force_refresh: bool,
 ) -> Result<BuiltUsageSpendSummary, String> {
     let settings = codexbar::settings::Settings::load();
-    let key = usage_spend_cache_key(cached, selected_days, &settings);
+    let key = usage_spend_cache_key(cached, period, &settings);
     {
         let guard = usage_spend_coordinator()
             .lock()
@@ -257,7 +276,7 @@ fn build_usage_spend_summary_cached(
             .map_err(|error| error.to_string())?;
         coordinator.begin(key.clone())
     };
-    let summary = build_usage_spend_summary(cached, selected_days, &settings, force_refresh);
+    let summary = build_usage_spend_summary(cached, period, &settings, force_refresh);
     let refreshing = summary_is_refreshing(&summary);
     let codex_scan_pause_reason =
         codexbar::core::JsonlScanner::load_cache_status(codexbar::core::ProviderId::Codex, None)
@@ -299,12 +318,12 @@ fn build_usage_spend_summary_cached(
 
 fn usage_spend_cache_key(
     cached: &[ProviderUsageSnapshot],
-    selected_days: u32,
+    period: CostReportingPeriod,
     settings: &codexbar::settings::Settings,
 ) -> String {
     usage_spend_cache_key_with_privacy(
         cached,
-        selected_days,
+        &period.identity(Utc::now(), CostTimeZone::Local),
         settings.open_codex_usage_logs_enabled,
         settings.hide_native_codex_cost_when_open_codex_present,
         settings.hide_personal_info,
@@ -313,7 +332,7 @@ fn usage_spend_cache_key(
 
 fn usage_spend_cache_key_with_privacy(
     cached: &[ProviderUsageSnapshot],
-    selected_days: u32,
+    period_identity: &str,
     include_opencodex: bool,
     hide_native: bool,
     hide_personal_info: bool,
@@ -347,7 +366,7 @@ fn usage_spend_cache_key_with_privacy(
     format!(
         "{}|{}|{}|{}|{}|{}",
         chrono::Local::now().date_naive(),
-        selected_days,
+        period_identity,
         include_opencodex,
         hide_native,
         hide_personal_info,
@@ -357,10 +376,12 @@ fn usage_spend_cache_key_with_privacy(
 
 fn build_usage_spend_summary(
     cached: &[ProviderUsageSnapshot],
-    selected_days: u32,
+    period: CostReportingPeriod,
     settings: &codexbar::settings::Settings,
     force_refresh: bool,
 ) -> UsageSpendSummary {
+    let now = Utc::now();
+    let period_scan_days = period.scan_days(now);
     let include_opencodex = settings.open_codex_usage_logs_enabled;
     let hide_native = settings.hide_native_codex_cost_when_open_codex_present;
     let pi_selected = settings.enabled_providers.iter().any(|id| id == "pi")
@@ -377,34 +398,51 @@ fn build_usage_spend_summary(
     };
     let mut codex_scan_options = codex_scan_options;
     codex_scan_options.include_pi_sessions = include_pi_in_native;
+    // The selected period reuses the fixed 7d/30d scan when it is the same
+    // rolling window; any other period costs one extra scan per provider.
     let (
-        (codex_7_summary, codex_30_summary),
-        (claude_7_summary, claude_30_summary),
-        (pi_7_summary, pi_30_summary),
+        (codex_7_summary, codex_30_summary, codex_period_summary),
+        (claude_7_summary, claude_30_summary, claude_period_summary),
+        (pi_7_summary, pi_30_summary, pi_period_summary),
     ) = std::thread::scope(|scope| {
         let codex = scope.spawn(move || {
-            (
-                CostScanner::new(7)
+            let seven = CostScanner::new(7)
+                .with_options(codex_scan_options)
+                .scan_codex();
+            let thirty = CostScanner::new(30)
+                .with_options(codex_scan_options)
+                .scan_codex();
+            let selected = match period {
+                CostReportingPeriod::Rolling(7) => seven.clone(),
+                CostReportingPeriod::Rolling(30) => thirty.clone(),
+                _ => CostScanner::for_period(period)
                     .with_options(codex_scan_options)
                     .scan_codex(),
-                CostScanner::new(30)
-                    .with_options(codex_scan_options)
-                    .scan_codex(),
-            )
+            };
+            (seven, thirty, selected)
         });
         let claude = scope.spawn(|| {
-            (
-                CostScanner::new(7)
+            let seven = CostScanner::new(7)
+                .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native);
+            let thirty = CostScanner::new(30)
+                .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native);
+            let selected = match period {
+                CostReportingPeriod::Rolling(7) => seven.clone(),
+                CostReportingPeriod::Rolling(30) => thirty.clone(),
+                _ => CostScanner::for_period(period)
                     .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native),
-                CostScanner::new(30)
-                    .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native),
-            )
+            };
+            (seven, thirty, selected)
         });
         let pi = scope.spawn(|| {
-            (
-                CostScanner::new(7).scan_pi(),
-                CostScanner::new(30).scan_pi(),
-            )
+            let seven = CostScanner::new(7).scan_pi();
+            let thirty = CostScanner::new(30).scan_pi();
+            let selected = match period {
+                CostReportingPeriod::Rolling(7) => seven.clone(),
+                CostReportingPeriod::Rolling(30) => thirty.clone(),
+                _ => CostScanner::for_period(period).scan_pi(),
+            };
+            (seven, thirty, selected)
         });
         (
             codex.join().expect("Codex spend scan worker panicked"),
@@ -437,6 +475,22 @@ fn build_usage_spend_summary(
         hide_native,
         settings.hide_personal_info,
         codex_30_summary.clone(),
+    );
+    let codex_period_contract = build_contract_from_period_summary(
+        "codex",
+        period,
+        include_opencodex,
+        hide_native,
+        settings.hide_personal_info,
+        codex_period_summary,
+    );
+    let pi_period_contract = build_contract_from_period_summary(
+        "pi",
+        period,
+        false,
+        false,
+        settings.hide_personal_info,
+        pi_period_summary,
     );
     let pi_7_contract = build_local_spend_contract_from_summary(
         "pi",
@@ -502,6 +556,8 @@ fn build_usage_spend_summary(
                 thirty_day: codex_30_contract.known_cost_usd,
                 seven_day_tokens: total_token_mix(&codex_7_contract.token_mix),
                 thirty_day_tokens: total_token_mix(&codex_30_contract.token_mix),
+                period_cost: codex_period_contract.known_cost_usd,
+                period_tokens: total_token_mix(&codex_period_contract.token_mix),
                 source: if include_opencodex && !codex_30_contract.imports.is_empty() {
                     "local logs + OpenCodex".to_string()
                 } else {
@@ -523,6 +579,12 @@ fn build_usage_spend_summary(
                         .input_tokens
                         .saturating_add(claude_30_summary.output_tokens),
                 ),
+                period_cost: Some(claude_period_summary.total_cost_usd),
+                period_tokens: Some(
+                    claude_period_summary
+                        .input_tokens
+                        .saturating_add(claude_period_summary.output_tokens),
+                ),
                 source: "local logs".to_string(),
                 refreshing: false,
                 stale_updated_at: None,
@@ -532,6 +594,8 @@ fn build_usage_spend_summary(
                 thirty_day: pi_30_contract.known_cost_usd,
                 seven_day_tokens: total_token_mix(&pi_7_contract.token_mix),
                 thirty_day_tokens: total_token_mix(&pi_30_contract.token_mix),
+                period_cost: pi_period_contract.known_cost_usd,
+                period_tokens: total_token_mix(&pi_period_contract.token_mix),
                 source: "local Pi/OMP history".to_string(),
                 refreshing: !pi_30_summary.history_coverage_established,
                 stale_updated_at: None,
@@ -540,11 +604,15 @@ fn build_usage_spend_summary(
                 let seven = build_local_spend_contract(&provider_id, 7, true);
                 let thirty = build_local_spend_contract(&provider_id, 30, true);
                 if !thirty.imports.is_empty() {
+                    let selected =
+                        build_local_spend_contract_for_period(&provider_id, period, true);
                     SpendValues {
                         seven_day: seven.known_cost_usd,
                         thirty_day: thirty.known_cost_usd,
                         seven_day_tokens: total_token_mix(&seven.token_mix),
                         thirty_day_tokens: total_token_mix(&thirty.token_mix),
+                        period_cost: selected.known_cost_usd,
+                        period_tokens: total_token_mix(&selected.token_mix),
                         source: if provider_id == "opencodego" {
                             "local logs + OpenCodex".to_string()
                         } else {
@@ -554,32 +622,39 @@ fn build_usage_spend_summary(
                         stale_updated_at: None,
                     }
                 } else {
-                    cached_spend(cached_snapshot)
+                    cached_spend(cached_snapshot, period, now)
                 }
             }
             "cursor" => {
                 let seven = codexbar::providers::cursor::local_csv::summarize(7);
                 let thirty = codexbar::providers::cursor::local_csv::summarize(30);
                 if thirty.row_count > 0 {
+                    let selected =
+                        codexbar::providers::cursor::local_csv::summarize(period_scan_days);
                     SpendValues {
                         seven_day: (seven.row_count > 0).then_some(seven.total_cost_usd),
                         thirty_day: Some(thirty.total_cost_usd),
                         seven_day_tokens: (seven.row_count > 0).then_some(seven.total_tokens),
                         thirty_day_tokens: Some(thirty.total_tokens),
+                        period_cost: (selected.row_count > 0).then_some(selected.total_cost_usd),
+                        period_tokens: (selected.row_count > 0).then_some(selected.total_tokens),
                         source: "local Cursor tokscale cache".to_string(),
                         refreshing: false,
                         stale_updated_at: None,
                     }
                 } else {
-                    cached_spend(cached_snapshot)
+                    cached_spend(cached_snapshot, period, now)
                 }
             }
             "grok" => {
                 let seven = codexbar::providers::grok::local_sessions::summarize(7);
                 let thirty = codexbar::providers::grok::local_sessions::summarize(30);
-                let mut spend = cached_spend(cached_snapshot);
+                let selected =
+                    codexbar::providers::grok::local_sessions::summarize(period_scan_days);
+                let mut spend = cached_spend(cached_snapshot, period, now);
                 spend.seven_day_tokens = (seven.session_count > 0).then_some(seven.total_tokens);
                 spend.thirty_day_tokens = (thirty.session_count > 0).then_some(thirty.total_tokens);
+                spend.period_tokens = (selected.session_count > 0).then_some(selected.total_tokens);
                 if thirty.session_count > 0 {
                     spend.source = "local Grok sessions".to_string();
                 }
@@ -589,17 +664,21 @@ fn build_usage_spend_summary(
                 use codexbar::providers::antigravity::local_sessions::LocalHistoryCoverage;
                 let seven = codexbar::providers::antigravity::local_sessions::summarize(7);
                 let thirty = codexbar::providers::antigravity::local_sessions::summarize(30);
-                let mut spend = cached_spend(cached_snapshot);
+                let selected =
+                    codexbar::providers::antigravity::local_sessions::summarize(period_scan_days);
+                let mut spend = cached_spend(cached_snapshot, period, now);
                 spend.seven_day_tokens = matches!(seven.coverage, LocalHistoryCoverage::Complete)
                     .then_some(seven.total_tokens);
                 spend.thirty_day_tokens = matches!(thirty.coverage, LocalHistoryCoverage::Complete)
                     .then_some(thirty.total_tokens);
+                spend.period_tokens = matches!(selected.coverage, LocalHistoryCoverage::Complete)
+                    .then_some(selected.total_tokens);
                 if matches!(thirty.coverage, LocalHistoryCoverage::Complete) {
                     spend.source = "local Antigravity history".to_string();
                 }
                 spend
             }
-            _ => cached_spend(cached_snapshot),
+            _ => cached_spend(cached_snapshot, period, now),
         };
 
         let currency = cached_snapshot
@@ -625,6 +704,8 @@ fn build_usage_spend_summary(
             thirty_day: spend.thirty_day,
             seven_day_tokens: spend.seven_day_tokens,
             thirty_day_tokens: spend.thirty_day_tokens,
+            period_cost: spend.period_cost,
+            period_tokens: spend.period_tokens,
             currency,
             source: spend.source,
             included_in_overview: include_in_shared_overview(
@@ -638,31 +719,13 @@ fn build_usage_spend_summary(
         });
     }
 
-    let history_days = if selected_days == 0 {
-        365
-    } else {
-        selected_days.clamp(1, 365)
-    };
-    let selected_summary: CostSummary = match history_days {
-        7 => codex_7_summary,
-        30 => codex_30_summary,
-        days => CostScanner::new(days)
-            .with_options(codex_scan_options)
-            .scan_codex(),
-    };
-    let contract = build_local_spend_contract_from_summary(
-        "codex",
-        history_days,
-        include_opencodex,
-        hide_native,
-        settings.hide_personal_info,
-        selected_summary,
-    );
+    let contract = codex_period_contract;
     let reporting_day = last_included_reporting_day(&contract);
     let dashboard_timezone = codexbar::core::local_timezone_name();
     UsageSpendSummary {
         rows,
         contract,
+        reporting_period: period.raw(),
         reporting_day,
         dashboard_timezone,
     }
@@ -701,13 +764,42 @@ fn total_token_mix(mix: &codexbar::spend_contract::SpendTokenMix) -> Option<u64>
     saw.then_some(total)
 }
 
-fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
+/// Provider-reported daily costs bucket by UTC day, so the selected period is
+/// resolved in UTC here. `None` when no day falls inside the window.
+fn period_cost_from_daily(
+    daily: &[super::bridge::CostDailyPointBridge],
+    period: CostReportingPeriod,
+    now: chrono::DateTime<Utc>,
+) -> Option<f64> {
+    let earliest = daily
+        .iter()
+        .filter_map(|point| chrono::NaiveDate::parse_from_str(&point.day, "%Y-%m-%d").ok())
+        .min();
+    let bounds = period.bounds(now, CostTimeZone::UTC, earliest);
+    let mut total = 0.0;
+    let mut saw = false;
+    for point in daily {
+        if bounds.contains_day_key(&point.day) {
+            total += point.amount;
+            saw = true;
+        }
+    }
+    saw.then_some(total)
+}
+
+fn cached_spend(
+    snapshot: Option<&ProviderUsageSnapshot>,
+    reporting_period: CostReportingPeriod,
+    now: chrono::DateTime<Utc>,
+) -> SpendValues {
     let Some(snapshot) = snapshot else {
         return SpendValues {
             seven_day: None,
             thirty_day: None,
             seven_day_tokens: None,
             thirty_day_tokens: None,
+            period_cost: None,
+            period_tokens: None,
             source: "unavailable".to_string(),
             refreshing: false,
             stale_updated_at: None,
@@ -719,6 +811,8 @@ fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
             thirty_day: None,
             seven_day_tokens: None,
             thirty_day_tokens: None,
+            period_cost: None,
+            period_tokens: None,
             source: if snapshot.error.is_some() {
                 "unavailable".to_string()
             } else {
@@ -759,11 +853,21 @@ fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
         }
         (saw_seven.then_some(seven), saw_thirty.then_some(thirty))
     };
+    let period_cost = if cost.daily.is_empty() {
+        // A provider-reported 30-day total only answers a 30-day selection.
+        (reporting_period == CostReportingPeriod::Rolling(30))
+            .then_some(thirty_day)
+            .flatten()
+    } else {
+        period_cost_from_daily(&cost.daily, reporting_period, now)
+    };
     SpendValues {
         seven_day,
         thirty_day,
         seven_day_tokens: None,
         thirty_day_tokens: None,
+        period_cost,
+        period_tokens: None,
         source: if period.is_empty() {
             snapshot.source_label.clone()
         } else {
@@ -775,63 +879,4 @@ fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
 }
 
 #[cfg(test)]
-mod cache_key_tests {
-    use super::*;
-
-    #[test]
-    fn invalidated_owner_clears_orphaned_indexing_activity() {
-        let mut coordinator = UsageSpendCoordinator::default();
-        let owner = coordinator.begin("account:old".to_string());
-
-        assert!(coordinator.clear_if_indexing(&owner));
-        assert!(!coordinator.is_current(&owner));
-    }
-
-    #[test]
-    fn old_owner_cleanup_cannot_clear_a_replacement() {
-        let mut coordinator = UsageSpendCoordinator::default();
-        let old = coordinator.begin("account:old".to_string());
-        let replacement = coordinator.begin("account:new".to_string());
-
-        assert!(!coordinator.clear_if_indexing(&old));
-        assert!(coordinator.is_current(&replacement));
-    }
-
-    #[test]
-    fn settings_replacement_preserves_an_intentional_pause() {
-        let mut coordinator = UsageSpendCoordinator::default();
-        let old = coordinator.begin("settings:old".to_string());
-        let replacement = coordinator.begin("settings:new".to_string());
-        let status = codexbar::core::CachedCostReadStatus {
-            codex_scan_pause_reason: Some(codexbar::core::CodexScanPauseReason::NoProgress),
-            ..Default::default()
-        };
-        mark_refresh_paused_if_codex_scan_paused(
-            &mut coordinator,
-            &replacement,
-            true,
-            status.codex_scan_pause_reason.as_ref(),
-        );
-
-        assert!(!coordinator.clear_if_indexing(&old));
-        assert_eq!(
-            coordinator.current.as_ref().map(|(_, phase)| *phase),
-            Some(UsageSpendRefreshPhase::Paused)
-        );
-    }
-
-    #[test]
-    fn privacy_mode_is_part_of_usage_spend_cache_identity() {
-        let public = usage_spend_cache_key_with_privacy(&[], 30, false, false, false);
-        let private = usage_spend_cache_key_with_privacy(&[], 30, false, false, true);
-        assert_ne!(public, private);
-    }
-
-    #[test]
-    fn pi_history_is_an_alternate_view_not_a_shared_overview_source() {
-        assert!(!include_in_shared_overview("pi", true, true));
-        assert!(include_in_shared_overview("codex", true, false));
-        assert!(include_in_shared_overview("claude", false, true));
-        assert!(!include_in_shared_overview("codex", false, false));
-    }
-}
+mod tests;

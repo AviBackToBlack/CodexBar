@@ -458,6 +458,7 @@ fn spend_contract_serializes_provenance_for_tauri_and_cli() {
     let contract = SpendContract {
         provider_id: "codex".to_string(),
         history_days: 30,
+        reporting_period: "rolling:30".to_string(),
         known_cost_usd: Some(0.0),
         known_zero: false,
         provenance: CostProvenance::VendorMetered,
@@ -517,4 +518,46 @@ fn coverage_for_models_counts_priced_rows_as_estimated() {
     assert_eq!(coverage.estimated, 2);
     assert_eq!(coverage.unpriced, 1);
     assert_eq!(coverage.total(), 3);
+}
+
+#[test]
+fn period_contract_reports_its_period_and_sidecar_window() {
+    let now = Utc::now();
+    let cases = [
+        (CostReportingPeriod::Rolling(7), "rolling:7", 7),
+        (
+            CostReportingPeriod::MonthToDate,
+            "month-to-date",
+            CostReportingPeriod::MonthToDate.sidecar_days(now),
+        ),
+        (CostReportingPeriod::AllAvailable, "all", MAX_ROLLING_DAYS),
+    ];
+    for (period, raw, sidecar_days) in cases {
+        let contract = build_contract_from_period_summary(
+            "unknown-provider",
+            period,
+            false,
+            false,
+            false,
+            CostSummary::default(),
+        );
+        assert_eq!(contract.reporting_period, raw);
+        assert_eq!(contract.history_days, sidecar_days);
+        let json = serde_json::to_value(&contract).expect("contract serializes");
+        assert_eq!(json["reportingPeriod"], raw);
+    }
+}
+
+#[test]
+fn legacy_summary_builder_keeps_a_rolling_period() {
+    let contract = build_local_spend_contract_from_summary(
+        "unknown-provider",
+        90,
+        false,
+        false,
+        false,
+        CostSummary::default(),
+    );
+    assert_eq!(contract.reporting_period, "rolling:90");
+    assert_eq!(contract.history_days, 90);
 }

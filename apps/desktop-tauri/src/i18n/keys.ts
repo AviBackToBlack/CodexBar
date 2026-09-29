@@ -914,6 +914,24 @@ export const ALL_LOCALE_KEYS = [
   "ProviderAutoResumeTitle",
   "ProviderAutoResumeAfterQuotaReset",
   "ProviderAutoResumeAfterQuotaResetHelper",
+
+  // History window for local cost surfaces (upstream 0.67.0 reporting periods)
+  "CostPeriodHistoryWindow",
+  "CostPeriodHistoryWindowHelper",
+  "CostPeriodMonthToDate",
+  "CostPeriodAll",
+  "CostPeriodToday",
+  "CostPeriodLastDays",
+  "CostPeriodCustom",
+  "CostPeriodCustomDays",
+  "CostPeriodShortMonthToDate",
+  "CostPeriodShortAll",
+  "CostPeriodShortDays",
+  "PanelPeriodCost",
+  "PanelPeriodTokens",
+  "OverviewSpendPeriodTitle",
+  "UsageSpendModelsPeriodCaption",
+  "UsageSpendProjectsPeriodCaption",
 ] as const;
 
 export type LocaleKey = (typeof ALL_LOCALE_KEYS)[number];

@@ -15,12 +15,22 @@ import {
 } from "../../../lib/usageSpendSharing";
 import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
+import {
+  DEFAULT_COST_PERIOD,
+  costPeriodLabel,
+  normalizeCostPeriod,
+  periodFromLegacyDays,
+} from "../../../lib/costPeriod";
 import type { TabProps } from "../settingsTabs";
+import CostPeriodControl from "./CostPeriodControl";
 
 export default function UsageSpendTab(_props: TabProps) {
   const { t } = useLocale();
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
-  const [selectedDays, setSelectedDays] = useState<0 | 7 | 30>(30);
+  // Null until the saved History window is known, so the first scan uses it
+  // instead of scanning the default and then rescanning.
+  const [period, setPeriod] = useState<string | null>(null);
+  const [periodError, setPeriodError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
@@ -36,26 +46,43 @@ export default function UsageSpendTab(_props: TabProps) {
       .then((settings) => {
         setIncludeOpenCodex(settings.openCodexUsageLogsEnabled ?? false);
         setHideNativeCodex(settings.hideNativeCodexCostWhenOpenCodexPresent ?? false);
+        setPeriod(normalizeCostPeriod(settings.costReportingPeriod));
       })
       .catch(() => {
-        // Keep the safe default (off) if settings cannot be loaded.
+        // Keep the safe defaults (off, 30 days) if settings cannot be loaded.
+        setPeriod(DEFAULT_COST_PERIOD);
       });
   }, []);
 
   const load = useCallback(async (forceRefresh = false, silent = false) => {
+    if (period === null) return;
     if (!silent) {
       setLoading(true);
       setError(null);
     }
     try {
-      const data = await getUsageSpendSummary({ historyDays: selectedDays, forceRefresh });
+      const data = await getUsageSpendSummary({ period, forceRefresh });
       setSummary(data);
     } catch (err: unknown) {
       if (!silent) setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [hideNativeCodex, includeOpenCodex, selectedDays]);
+  }, [hideNativeCodex, includeOpenCodex, period]);
+
+  const onPeriodChange = useCallback(
+    (next: string) => {
+      const previous = period;
+      setPeriodError(null);
+      setPeriod(next);
+      void updateSettings({ costReportingPeriod: next }).catch((err: unknown) => {
+        setPeriod(previous);
+        // Kept apart from `error`: the rescan for the restored window clears it.
+        setPeriodError(err instanceof Error ? err.message : String(err));
+      });
+    },
+    [period],
+  );
 
   useEffect(() => {
     load(false);
@@ -84,15 +111,20 @@ export default function UsageSpendTab(_props: TabProps) {
     };
   }, [load]);
 
+  // Label the period column with the window the summary was built for, so it
+  // stays accurate while a rescan for a newly picked window is in flight.
+  const periodTitle = costPeriodLabel(summary?.reportingPeriod ?? period, t);
+
   const onShare = useCallback(() => {
     setShareError(null);
     const error = shareUsageSpendPng(
       summary,
       t("UsageSpendTitle"),
       `codexbar-usage-spend-${summary?.reportingDay ?? "unknown"}.png`,
+      periodTitle,
     );
     if (error) setShareError(t(error as LocaleKey));
-  }, [summary, t]);
+  }, [summary, t, periodTitle]);
 
   const onCopyJson = useCallback(async () => {
     setShareError(null);
@@ -168,19 +200,10 @@ export default function UsageSpendTab(_props: TabProps) {
         </button>
       </div>
 
+      {period !== null && <CostPeriodControl value={period} onChange={onPeriodChange} t={t} />}
+
       <div className="settings-section__group" style={{ marginBottom: 12, display: "flex", gap: 8 }}>
-        {([7, 30, 0] as const).map((days) => (
-          <button
-            key={days}
-            type="button"
-            className="credential-btn credential-btn--secondary"
-            aria-pressed={selectedDays === days}
-            onClick={() => setSelectedDays(days)}
-          >
-            {days === 0 ? t("UsageSpendAllTime") : `${days}d`}
-          </button>
-        ))}
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <input
             type="checkbox"
             checked={includeOpenCodex}
@@ -216,6 +239,7 @@ export default function UsageSpendTab(_props: TabProps) {
 
       <CostSummaryStyleControl t={t} />
 
+      {periodError && <p className="settings-section__error">{periodError}</p>}
       {error && <p className="settings-section__error">{error}</p>}
       {shareError && <p className="settings-section__error">{shareError}</p>}
 
@@ -224,6 +248,7 @@ export default function UsageSpendTab(_props: TabProps) {
           <thead>
             <tr>
               <th>{t("UsageSpendColProvider")}</th>
+              <th>{periodTitle}</th>
               <th>{t("UsageSpendCol7d")}</th>
               <th>{t("UsageSpendCol30d")}</th>
               <th>{t("UsageSpendColCurrency")}</th>
@@ -234,6 +259,7 @@ export default function UsageSpendTab(_props: TabProps) {
             {(summary?.rows ?? []).map((row) => (
               <tr key={row.providerId}>
                 <td>{row.displayName}</td>
+                <td>{formatSpendMetric(row.periodCost, row.periodTokens, row.currency, t("UsageSpendTokens"))}</td>
                 <td>{formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, t("UsageSpendTokens"))}</td>
                 <td>{formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, t("UsageSpendTokens"))}</td>
                 <td>{row.currency || "USD"}</td>
@@ -249,7 +275,7 @@ export default function UsageSpendTab(_props: TabProps) {
             ))}
             {!loading && (summary?.rows?.length ?? 0) === 0 && (
               <tr>
-                <td colSpan={5}>{t("UsageSpendEmpty")}</td>
+                <td colSpan={6}>{t("UsageSpendEmpty")}</td>
               </tr>
             )}
           </tbody>
@@ -284,6 +310,11 @@ export default function UsageSpendTab(_props: TabProps) {
 }
 
 
+
+/** Window label for a contract; older payloads only carry a day count (0 = all). */
+function contractPeriodLabel(contract: SpendContract, t: (key: LocaleKey) => string): string {
+  return costPeriodLabel(contract.reportingPeriod ?? periodFromLegacyDays(contract.historyDays), t);
+}
 
 function SpendContractOverview({ contract, t }: { contract: SpendContract; t: (key: LocaleKey) => string }) {
   const coverage = contract.priceCoverageRatio == null
@@ -368,7 +399,9 @@ function ContractModelsPanel({ contract, showAll, onToggleAll, t }: { contract: 
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
         <div>
           <h4 style={{ margin: 0 }}>{t("UsageSpendModels")}</h4>
-          <p className="settings-section__caption">{t("UsageSpendAllTimeHistory")} {contract.historyDays} days of local history.</p>
+          <p className="settings-section__caption">
+            {t("UsageSpendModelsPeriodCaption").replace("{}", contractPeriodLabel(contract, t))}
+          </p>
         </div>
         {contract.models.length > 8 && (
           <button type="button" className="credential-btn credential-btn--secondary" onClick={onToggleAll}>
@@ -421,7 +454,7 @@ function ProjectsPanel({
         <div>
           <h4 style={{ margin: 0 }}>{t("UsageSpendProjects")}</h4>
           <p className="settings-section__caption" style={{ marginTop: 4 }}>
-            Ranked Codex local project spend for the last {contract.historyDays} days
+            {t("UsageSpendProjectsPeriodCaption").replace("{}", contractPeriodLabel(contract, t))}
             {partial ? ` · ${t("UsageSpendPartialHistory")}` : ""}.
           </p>
         </div>

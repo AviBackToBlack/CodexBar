@@ -18,6 +18,7 @@ import {
   type ResetTimeFormatMode,
 } from "../hooks/useFormattedResetTime";
 import { formatEta } from "../lib/formatEta";
+import { periodCostLabel, periodTokensLabel } from "../lib/costPeriod";
 import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
@@ -114,6 +115,11 @@ function LocalUsageBlock({
   const { t } = useLocale();
   const isCodex = providerId === "codex";
   const isMuse = providerId === "muse";
+  // The selected History window; the histogram below stays a fixed 30 days.
+  // Payloads without a period (older cache entries) fall back to 30 days.
+  const period = summary.reportingPeriod || null;
+  const periodCost = period ? summary.periodCost : summary.thirtyDayCost;
+  const periodTokens = period ? summary.periodTokens : summary.thirtyDayTokens;
   const visibleHistory = costHistory.slice(-30);
   const maxCost = Math.max(
     ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
@@ -137,17 +143,19 @@ function LocalUsageBlock({
         </div>
         {!isMuse && (
           <div>
-            <span className="menu-card__local-label">{t("PanelThirtyDayCost")}</span>
+            <span className="menu-card__local-label">
+              {period ? periodCostLabel(period, t) : t("PanelThirtyDayCost")}
+            </span>
             <strong>
-              {summary.thirtyDayCost != null
-                ? formatCurrency(summary.thirtyDayCost, "USD")
-                : "—"}
+              {periodCost != null ? formatCurrency(periodCost, "USD") : "—"}
             </strong>
           </div>
         )}
         <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayTokens")}</span>
-          <strong>{formatCompactCount(summary.thirtyDayTokens)}</strong>
+          <span className="menu-card__local-label">
+            {period ? periodTokensLabel(period, t) : t("PanelThirtyDayTokens")}
+          </span>
+          <strong>{formatCompactCount(periodTokens ?? null)}</strong>
         </div>
         {!isMuse && (
           <div>

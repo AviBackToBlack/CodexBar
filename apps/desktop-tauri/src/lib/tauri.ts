@@ -284,9 +284,10 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getUsageSpendSummary(options?: { historyDays?: number; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
+/** `period` is a raw reporting period; omitted means the saved `costReportingPeriod`. */
+export function getUsageSpendSummary(options?: { period?: string; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
   return invoke<UsageSpendSummary>("get_usage_spend_summary", {
-    historyDays: options?.historyDays ?? null,
+    period: options?.period ?? null,
     forceRefresh: options?.forceRefresh ?? null,
   });
 }
@@ -297,11 +298,11 @@ export function writeUsageSpendExport(path: string, payload: string): Promise<vo
 
 export function getSpendContract(
   providerId: string,
-  options?: { historyDays?: number; includeOpenCodex?: boolean },
+  options?: { period?: string; includeOpenCodex?: boolean },
 ): Promise<SpendContract> {
   return invoke<SpendContract>("get_spend_contract", {
     providerId,
-    historyDays: options?.historyDays ?? null,
+    period: options?.period ?? null,
     includeOpenCodex: options?.includeOpenCodex ?? null,
   });
 }

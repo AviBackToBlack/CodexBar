@@ -140,6 +140,40 @@ export function formatSpendMetric(
 }
 
 /**
+ * Share-card columns. The fixed 7 and 30 day columns stay for compatibility;
+ * when `periodLabel` is given, a column for the selected History window
+ * (read from `periodCost` / `periodTokens`) follows the provider name.
+ */
+export function usageSpendShareColumns(periodLabel?: string): {
+  headers: string[];
+  colW: number[];
+  cellsFor: (row: UsageSpendRow) => string[];
+} {
+  const withPeriod = Boolean(periodLabel);
+  return {
+    headers: [
+      "Provider",
+      ...(withPeriod ? [periodLabel as string] : []),
+      "7 days",
+      "30 days",
+      "Currency",
+      "Source",
+    ],
+    colW: withPeriod ? [150, 130, 100, 100, 70, 130] : [160, 100, 100, 80, 160],
+    cellsFor: (row) => [
+      row.displayName,
+      ...(withPeriod
+        ? [formatSpendMetric(row.periodCost, row.periodTokens, row.currency, "tokens")]
+        : []),
+      formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, "tokens"),
+      formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, "tokens"),
+      row.currency || "USD",
+      row.source,
+    ],
+  };
+}
+
+/**
  * Render the sanitized share-card PNG.
  *
  * Redaction invariant (upstream #2112): the rendered image must never contain
@@ -148,12 +182,16 @@ export function formatSpendMetric(
  * states the guarantee. Keep it that way — do not add account fields to the
  * drawn cells or the footer.
  */
-export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: string): string {
+export function renderUsageSpendSharePng(
+  summary: UsageSpendSummary,
+  title: string,
+  periodLabel?: string,
+): string {
   const rows = summary.rows;
   const pad = 24;
   const rowH = 28;
   const headerH = 48;
-  const colW = [160, 100, 100, 80, 160];
+  const { headers, cellsFor, colW } = usageSpendShareColumns(periodLabel);
   const width = pad * 2 + colW.reduce((a, b) => a + b, 0);
   const height = pad * 2 + headerH + Math.max(1, rows.length) * rowH + 52;
   const canvas = document.createElement("canvas");
@@ -177,7 +215,6 @@ export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: stri
   ctx.font = "12px system-ui,Segoe UI,sans-serif";
   ctx.fillText("Win-CodexBar · local estimates · no account emails", pad, pad + 36);
 
-  const headers = ["Provider", "7 days", "30 days", "Currency", "Source"];
   let x = pad;
   const y0 = pad + headerH;
   ctx.fillStyle = "#9fb0c8";
@@ -200,13 +237,7 @@ export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: stri
   } else {
     rows.forEach((row, index) => {
       const y = y0 + (index + 1) * rowH;
-      const cells = [
-        row.displayName,
-        formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, "tokens"),
-        formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, "tokens"),
-        row.currency || "USD",
-        row.source,
-      ];
+      const cells = cellsFor(row);
       let cellX = pad;
       cells.forEach((cell, cellIndex) => {
         ctx.fillStyle = cellIndex === 0 ? "#e7ecf3" : "#c5d0e0";
@@ -250,10 +281,11 @@ export function shareUsageSpendPng(
   summary: UsageSpendSummary | null,
   title: string,
   filename: string,
+  periodLabel?: string,
 ): string | null {
   if (!summary) return "UsageSpendShareEmpty";
   try {
-    const dataUrl = renderUsageSpendSharePng(summary, title);
+    const dataUrl = renderUsageSpendSharePng(summary, title, periodLabel);
     if (!dataUrl) return "UsageSpendShareFailed";
     downloadPng(dataUrl, filename);
     return null;
