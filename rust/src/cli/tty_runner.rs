@@ -359,7 +359,7 @@ impl TtyCommandRunner {
         let mut buffer = String::new();
         let mut stopped_early = false;
         let mut detected_urls = Vec::new();
-        let mut last_output_time = Instant::now();
+        let mut last_output_time;
         let mut triggered_sends = std::collections::HashSet::new();
 
         // URL detection regex
@@ -403,12 +403,11 @@ impl TtyCommandRunner {
             match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
                 Ok(chunk) => {
                     tracing::trace!(
-                        elapsed_ms = start.elapsed().as_millis() as u64,
+                        elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                         bytes = chunk.len(),
                         "tty session: startup chunk"
                     );
                     buffer.push_str(&chunk);
-                    last_output_time = Instant::now();
                     if chunk.contains("\x1b[6n") {
                         let _cursor_reply = write!(writer, "\x1b[1;1R");
                         let _cursor_flushed = writer.flush();
@@ -419,7 +418,7 @@ impl TtyCommandRunner {
             }
         }
         tracing::trace!(
-            elapsed_ms = start.elapsed().as_millis() as u64,
+            elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
             buffered = buffer.len(),
             "tty session: sending script"
         );
@@ -498,7 +497,7 @@ impl TtyCommandRunner {
             // Read available output
             while let Ok(chunk) = rx.try_recv() {
                 tracing::trace!(
-                    elapsed_ms = start.elapsed().as_millis() as u64,
+                    elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     bytes = chunk.len(),
                     "tty session: output chunk"
                 );
@@ -609,7 +608,7 @@ impl TtyCommandRunner {
 
         if child.try_wait().ok().flatten().is_none() {
             tracing::trace!(
-                elapsed_ms = start.elapsed().as_millis() as u64,
+                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "tty session: killing child tree"
             );
             // On Windows several CLIs (claude.exe, npm shims) are launchers
@@ -626,7 +625,7 @@ impl TtyCommandRunner {
             // Best-effort reap; the exit status is intentionally discarded.
             let _reaped = child.wait();
             tracing::trace!(
-                elapsed_ms = start.elapsed().as_millis() as u64,
+                elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "tty session: child reaped"
             );
         }
