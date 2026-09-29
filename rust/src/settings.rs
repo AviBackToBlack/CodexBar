@@ -27,6 +27,7 @@ pub const CLAUDE_DAILY_ROUTINES_USAGE_ITEM_ID: &str = "metric:extra-claude-routi
 
 mod api_keys;
 mod manual_cookies;
+mod preferences_document;
 mod provider_workspace;
 mod raw;
 mod status;
@@ -34,6 +35,7 @@ mod types;
 
 pub use api_keys::*;
 pub use manual_cookies::*;
+pub use preferences_document::*;
 pub use provider_workspace::*;
 use raw::RawSettings;
 pub use status::*;

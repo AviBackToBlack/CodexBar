@@ -230,6 +230,8 @@ fn main() {
             commands::get_provider_local_usage_summary,
             commands::get_usage_spend_summary,
             commands::write_usage_spend_export,
+            commands::export_preferences,
+            commands::import_preferences,
             commands::get_spend_contract,
             commands::get_codex_workspaces_snapshot,
             commands::reorder_providers,

@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use std::path::Path;
 
 use crate::core::{ProviderId, TokenAccountStore, instantiate_provider};
-use crate::settings::{ApiKeys, ManualCookies, Settings};
+use crate::settings::{ApiKeys, ManualCookies, PreferencesDocument, Settings};
 
 /// Arguments for the config command
 #[derive(Parser, Debug)]
@@ -57,6 +57,25 @@ pub enum ConfigCommand {
     },
     /// Show configuration file paths
     Path,
+    /// Export or import portable preferences (no secrets, no machine state)
+    Preferences {
+        #[command(subcommand)]
+        action: PreferencesAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PreferencesAction {
+    /// Write portable preferences to a JSON file
+    Export {
+        /// Destination file
+        path: std::path::PathBuf,
+    },
+    /// Apply a preferences file; restart a running CodexBar afterwards
+    Import {
+        /// Preferences file to read
+        path: std::path::PathBuf,
+    },
 }
 
 /// Run the config command
@@ -77,7 +96,34 @@ pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
             no_enable,
         } => set_api_key(&provider, api_key.as_deref(), stdin, !no_enable).await,
         ConfigCommand::Path => show_paths().await,
+        ConfigCommand::Preferences { action } => transfer_preferences(action),
     }
+}
+
+/// Export or import the portable preferences document.
+fn transfer_preferences(action: PreferencesAction) -> anyhow::Result<()> {
+    match action {
+        PreferencesAction::Export { path } => {
+            let document = PreferencesDocument::from_settings(&Settings::load())?;
+            document.write_file(&path)?;
+            println!(
+                "Config: exported {} preferences to {}",
+                document.len(),
+                path.display()
+            );
+        }
+        PreferencesAction::Import { path } => {
+            let document = PreferencesDocument::read_file(&path)?;
+            let mut settings = Settings::load();
+            let applied = document.apply_to(&mut settings)?;
+            settings.save()?;
+            println!(
+                "Config: imported {applied} preferences from {}. Restart CodexBar to apply them to a running app.",
+                path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Validate configuration files
@@ -483,6 +529,30 @@ mod tests {
     use crate::secure_file;
     use crate::settings::ManualCookies;
     use serde_json::json;
+
+    #[test]
+    fn preferences_subcommands_parse_a_path() {
+        use super::{ConfigArgs, ConfigCommand, PreferencesAction};
+        use clap::Parser;
+
+        let export = ConfigArgs::try_parse_from(["config", "preferences", "export", "p.json"])
+            .expect("export parses");
+        assert!(matches!(
+            export.command,
+            ConfigCommand::Preferences {
+                action: PreferencesAction::Export { .. }
+            }
+        ));
+        let import = ConfigArgs::try_parse_from(["config", "preferences", "import", "p.json"])
+            .expect("import parses");
+        assert!(matches!(
+            import.command,
+            ConfigCommand::Preferences {
+                action: PreferencesAction::Import { .. }
+            }
+        ));
+        assert!(ConfigArgs::try_parse_from(["config", "preferences", "import"]).is_err());
+    }
 
     #[cfg(windows)]
     #[test]

@@ -295,6 +295,16 @@ export function writeUsageSpendExport(path: string, payload: string): Promise<vo
   return invoke<void>("write_usage_spend_export", { path, payload });
 }
 
+/** Write portable preferences to `path`; resolves with how many were exported. */
+export function exportPreferences(path: string): Promise<number> {
+  return invoke<number>("export_preferences", { path });
+}
+
+/** Apply the preferences file at `path`; the shell validates before saving anything. */
+export function importPreferences(path: string): Promise<SettingsSnapshot> {
+  return invoke<SettingsSnapshot>("import_preferences", { path });
+}
+
 export function getSpendContract(
   providerId: string,
   options?: { historyDays?: number; includeOpenCodex?: boolean },
