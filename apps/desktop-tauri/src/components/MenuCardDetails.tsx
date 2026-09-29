@@ -376,6 +376,12 @@ function MetricRow({
   const paceView = showPace ? getMetricPaceView(snap) : { kind: "none" as const };
   const reserveDescription = formatReserveDescription(snap, t);
   const forecastText = blocked ? null : formatSessionEquivalentEstimate(sessionEquivalentForecast);
+  // Blocked rows explain themselves everywhere; plain exhaustion only in the full card.
+  const statusLabel = blocked
+    ? t("PanelBlockedByMonthlyLimit")
+    : !compactOverview && !isInformational && snap.isExhausted
+      ? exhaustedLabel
+      : null;
   return (
     <div className="menu-metric">
       <span className="menu-metric__title">{title}</span>
@@ -402,12 +408,7 @@ function MetricRow({
           <span className="menu-metric__reset">{resetText}</span>
         )}
       </div>
-      {blocked && (
-        <div className="menu-metric__exhausted">{t("PanelBlockedByMonthlyLimit")}</div>
-      )}
-      {!blocked && !compactOverview && !isInformational && snap.isExhausted && (
-        <div className="menu-metric__exhausted">{exhaustedLabel}</div>
-      )}
+      {statusLabel && <div className="menu-metric__exhausted">{statusLabel}</div>}
       {!compactOverview && !isInformational && paceView.kind === "budget" && (
         <div className="menu-metric__budget">
           <button

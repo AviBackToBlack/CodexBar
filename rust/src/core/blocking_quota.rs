@@ -102,6 +102,13 @@ mod tests {
         assert!(blocked.primary && blocked.secondary);
         assert_eq!(blocked.extra, vec![false, true]);
         assert!(!blocked.tertiary && !blocked.model_specific);
+
+        // Tertiary and model-specific lanes follow the same rule as the primary.
+        let mut usage = usage;
+        usage.tertiary = Some(window(10.0, Some(10_080), None));
+        usage.model_specific = Some(window(10.0, Some(60), None));
+        let blocked = BlockedWindows::evaluate(ProviderId::Kimi, &usage, now());
+        assert!(blocked.tertiary && blocked.model_specific);
         // Evaluation never rewrites the raw percentages.
         assert_eq!(usage.primary.used_percent, 0.0);
     }
