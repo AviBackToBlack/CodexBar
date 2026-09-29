@@ -53,6 +53,13 @@ const POLICIES: Readonly<Record<string, UsageSourcePolicy>> = {
       { value: "oauth", label: "API", description: "Uses the configured Charm Hyper API key only." },
     ],
   },
+  zed: {
+    options: [
+      { value: "auto", label: "Auto", description: "Uses the Zed editor credential; the browser session is used only when Browser session is selected." },
+      { value: "oauth", label: "API", description: "Uses the Zed editor credential only." },
+      { value: "web", label: "Browser session", description: "Reads token spend from the zed.dev browser session or manual cookie header only, with no editor-credential fallback." },
+    ],
+  },
   gitkraken: {
     options: [
       { value: "auto", label: "Auto", description: "Uses the configured GitKraken access token." },
