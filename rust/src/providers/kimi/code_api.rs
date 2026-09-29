@@ -278,21 +278,45 @@ pub(crate) fn kimi_code_home() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".kimi-code"))
 }
 
-/// Read-only access to a still-fresh Kimi Code CLI access token.
+/// State of the Kimi Code CLI credential file, as seen read-only.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum KimiCliCredential {
+    /// No CLI credential is usable or eligible (missing file, empty token,
+    /// non-default region, or an endpoint override).
+    Unavailable,
+    /// The CLI credential exists but is expired or inside the safety margin.
+    Stale,
+    Fresh(String),
+}
+
+/// Guidance shown when a stale or rejected CLI credential leaves no working
+/// source. Never includes token values.
+const KIMI_CLI_CREDENTIAL_GUIDANCE: &str = "Kimi Code CLI credential is invalid or expired. Run kimi to renew it, or add a Kimi Code API key in Settings > Providers > Kimi (KIMI_CODE_API_KEY). CodexBar does not refresh CLI-owned credentials.";
+
+pub(crate) fn kimi_cli_credential_error() -> ProviderError {
+    ProviderError::Other(KIMI_CLI_CREDENTIAL_GUIDANCE.into())
+}
+
+/// Read-only access to the Kimi Code CLI access token.
 ///
 /// Never refreshes or rewrites CLI-owned `credentials/kimi-code.json`.
 /// Skips when `KIMI_CODE_BASE_URL` / OAuth host overrides are set.
-pub(crate) fn kimi_code_cli_access_token(region: KimiRegion, now_unix: f64) -> Option<String> {
+pub(crate) fn kimi_code_cli_credential(region: KimiRegion, now_unix: f64) -> KimiCliCredential {
     if region != KimiRegion::China || has_code_endpoint_override() {
-        return None;
+        return KimiCliCredential::Unavailable;
     }
-    let home = kimi_code_home()?;
-    let credential = read_kimi_code_credential(&home)?;
-    let token = cleaned_owned(credential.access_token)?;
-    if !is_kimi_code_credential_fresh(credential.expires_at, now_unix) {
-        return None;
+    let Some(credential) = kimi_code_home().and_then(|home| read_kimi_code_credential(&home))
+    else {
+        return KimiCliCredential::Unavailable;
+    };
+    let Some(token) = cleaned_owned(credential.access_token) else {
+        return KimiCliCredential::Unavailable;
+    };
+    if is_kimi_code_credential_fresh(credential.expires_at, now_unix) {
+        KimiCliCredential::Fresh(token)
+    } else {
+        KimiCliCredential::Stale
     }
-    Some(token)
 }
 
 pub(crate) fn kimi_code_cli_identity_headers(home: &Path) -> Vec<(&'static str, String)> {
@@ -414,8 +438,10 @@ mod tests {
             std::env::set_var(KIMI_CODE_HOME_ENV, home.path());
         }
 
-        let token = kimi_code_cli_access_token(KimiRegion::China, now);
-        assert_eq!(token.as_deref(), Some("oauth-token"));
+        assert_eq!(
+            kimi_code_cli_credential(KimiRegion::China, now),
+            KimiCliCredential::Fresh("oauth-token".into())
+        );
 
         let after = std::fs::read(&cred_path).unwrap();
         let after_modified = std::fs::metadata(&cred_path).unwrap().modified().unwrap();
@@ -434,6 +460,71 @@ mod tests {
         unsafe {
             std::env::remove_var(KIMI_CODE_HOME_ENV);
         }
+    }
+
+    #[test]
+    fn stale_cli_credential_is_reported_without_touching_the_file() {
+        let _guard = env_lock();
+        // A 15-minute token: the 60 s safety margin makes it stale at 14 min.
+        let issued = 1_800_000_000.0_f64;
+        let home = write_temp_kimi_code_home("synthetic-stale", Some(json!(issued + 900.0)));
+        let cred_path = home.path().join("credentials").join("kimi-code.json");
+        let original = std::fs::read(&cred_path).unwrap();
+
+        // SAFETY: guarded by env_lock for process-wide env mutation in tests.
+        unsafe {
+            std::env::remove_var(KIMI_CODE_BASE_URL_ENV);
+            std::env::remove_var(KIMI_CODE_OAUTH_HOST_ENV);
+            std::env::remove_var(KIMI_OAUTH_HOST_ENV);
+            std::env::set_var(KIMI_CODE_HOME_ENV, home.path());
+        }
+        assert_eq!(
+            kimi_code_cli_credential(KimiRegion::China, issued + 839.0),
+            KimiCliCredential::Fresh("synthetic-stale".into())
+        );
+        for seconds in [840.0, 900.0] {
+            assert_eq!(
+                kimi_code_cli_credential(KimiRegion::China, issued + seconds),
+                KimiCliCredential::Stale
+            );
+        }
+        assert_eq!(std::fs::read(&cred_path).unwrap(), original);
+
+        // SAFETY: final cleanup while the env_lock() guard is still alive.
+        unsafe {
+            std::env::remove_var(KIMI_CODE_HOME_ENV);
+        }
+    }
+
+    #[test]
+    fn missing_cli_credential_is_unavailable_not_stale() {
+        let _guard = env_lock();
+        let home = tempfile::tempdir().expect("tempdir");
+        // SAFETY: guarded by env_lock for process-wide env mutation in tests.
+        unsafe {
+            std::env::remove_var(KIMI_CODE_BASE_URL_ENV);
+            std::env::remove_var(KIMI_CODE_OAUTH_HOST_ENV);
+            std::env::remove_var(KIMI_OAUTH_HOST_ENV);
+            std::env::set_var(KIMI_CODE_HOME_ENV, home.path());
+        }
+        assert_eq!(
+            kimi_code_cli_credential(KimiRegion::China, 1_800_000_000.0),
+            KimiCliCredential::Unavailable
+        );
+        // SAFETY: final cleanup while the env_lock() guard is still alive.
+        unsafe {
+            std::env::remove_var(KIMI_CODE_HOME_ENV);
+        }
+    }
+
+    #[test]
+    fn cli_credential_guidance_explains_renewal_and_api_key_setup() {
+        assert_eq!(
+            kimi_cli_credential_error().to_string(),
+            "Kimi Code CLI credential is invalid or expired. Run kimi to renew it, or add a \
+             Kimi Code API key in Settings > Providers > Kimi (KIMI_CODE_API_KEY). CodexBar \
+             does not refresh CLI-owned credentials."
+        );
     }
 
     #[test]
@@ -463,7 +554,10 @@ mod tests {
             std::env::set_var(KIMI_CODE_BASE_URL_ENV, "https://proxy.example.com/kimi");
         }
         assert!(has_code_endpoint_override());
-        assert!(kimi_code_cli_access_token(KimiRegion::China, now).is_none());
+        assert_eq!(
+            kimi_code_cli_credential(KimiRegion::China, now),
+            KimiCliCredential::Unavailable
+        );
 
         // SAFETY: still under the same env_lock() guard; swapping which
         // override keys are present between assertions.
@@ -471,7 +565,10 @@ mod tests {
             std::env::remove_var(KIMI_CODE_BASE_URL_ENV);
             std::env::set_var(KIMI_CODE_OAUTH_HOST_ENV, "https://oauth.example.com");
         }
-        assert!(kimi_code_cli_access_token(KimiRegion::China, now).is_none());
+        assert_eq!(
+            kimi_code_cli_credential(KimiRegion::China, now),
+            KimiCliCredential::Unavailable
+        );
 
         // SAFETY: final cleanup while the env_lock() guard is still alive.
         unsafe {

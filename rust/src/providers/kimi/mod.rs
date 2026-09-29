@@ -349,34 +349,55 @@ impl Provider for KimiProvider {
                     }
                 }
 
-                if let Some(cli_token) =
-                    code_api::kimi_code_cli_access_token(region, unix_now_secs())
-                {
-                    let home = code_api::kimi_code_home().unwrap_or_default();
-                    let headers = code_api::kimi_code_cli_identity_headers(&home);
-                    match code_api::fetch_via_code_api(
-                        ctx,
-                        region,
-                        Some(&cli_token),
-                        Some(&headers),
-                        "Kimi Code CLI",
-                    )
-                    .await
-                    {
-                        Ok(usage) => {
-                            return Ok(ProviderFetchResult::new(usage, "code-cli"));
-                        }
-                        Err(err) => {
-                            tracing::debug!(
-                                error = %err,
-                                "Kimi Code CLI credential fetch failed; falling back to web"
-                            );
+                let mut cli_credential_unusable = false;
+                match code_api::kimi_code_cli_credential(region, unix_now_secs()) {
+                    code_api::KimiCliCredential::Fresh(cli_token) => {
+                        let home = code_api::kimi_code_home().unwrap_or_default();
+                        let headers = code_api::kimi_code_cli_identity_headers(&home);
+                        match code_api::fetch_via_code_api(
+                            ctx,
+                            region,
+                            Some(&cli_token),
+                            Some(&headers),
+                            "Kimi Code CLI",
+                        )
+                        .await
+                        {
+                            Ok(usage) => {
+                                return Ok(ProviderFetchResult::new(usage, "code-cli"));
+                            }
+                            Err(err) => {
+                                cli_credential_unusable |=
+                                    matches!(err, ProviderError::AuthRequired);
+                                tracing::debug!(
+                                    error = %err,
+                                    "Kimi Code CLI credential fetch failed; falling back to web"
+                                );
+                            }
                         }
                     }
+                    code_api::KimiCliCredential::Stale => {
+                        cli_credential_unusable = true;
+                        tracing::debug!("Kimi Code CLI credential is stale; falling back to web");
+                    }
+                    code_api::KimiCliCredential::Unavailable => {}
                 }
 
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await?;
-                Ok(ProviderFetchResult::new(usage, "web"))
+                match web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await {
+                    Ok(usage) => Ok(ProviderFetchResult::new(usage, "web")),
+                    // The CLI credential is the only source the user can
+                    // still repair, so name it instead of a generic web error.
+                    Err(err)
+                        if cli_credential_unusable
+                            && web::is_session_unavailable(
+                                ctx.manual_cookie_header.as_deref(),
+                                &err,
+                            ) =>
+                    {
+                        Err(code_api::kimi_cli_credential_error())
+                    }
+                    Err(err) => Err(err),
+                }
             }
             SourceMode::OAuth => {
                 let usage =

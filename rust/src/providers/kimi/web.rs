@@ -41,6 +41,29 @@ fn browser_import_error(cookie_source: &str) -> ProviderError {
     ProviderError::Other(message.into())
 }
 
+/// Whether a failed web fetch means no usable web session exists: the server
+/// rejected every candidate, none was found, or web auth is switched off.
+/// Transport and parse failures are not session problems.
+pub(super) fn is_session_unavailable(manual_header: Option<&str>, error: &ProviderError) -> bool {
+    session_unavailable_for(manual_header, &cookie_source(), error)
+}
+
+fn session_unavailable_for(
+    manual_header: Option<&str>,
+    cookie_source: &str,
+    error: &ProviderError,
+) -> bool {
+    match error {
+        ProviderError::AuthRequired | ProviderError::NoCookies => true,
+        ProviderError::Other(_) => {
+            let manual_token = manual_header
+                .is_some_and(|header| KimiProvider::auth_token_from_cookie_header(header).is_ok());
+            !manual_token && !browser_import_allowed(cookie_source)
+        }
+        _ => false,
+    }
+}
+
 /// Web auth token chain for both the web fetch and the Code-API enrichment
 /// (upstream `KimiWebEnrichmentTokenResolver.resolve`):
 /// 1. Manual cookie header (its `kimi-auth`/auth cookie), source-independent.
@@ -337,6 +360,46 @@ mod tests {
 
     fn no_token(_: KimiRegion) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn session_unavailable_covers_rejected_missing_and_disabled_web_auth() {
+        let manual = Some("kimi-auth=synthetic-web");
+        assert!(session_unavailable_for(
+            None,
+            "auto",
+            &ProviderError::AuthRequired
+        ));
+        assert!(session_unavailable_for(
+            None,
+            "auto",
+            &ProviderError::NoCookies
+        ));
+        assert!(session_unavailable_for(
+            None,
+            "off",
+            &browser_import_error("off")
+        ));
+        assert!(session_unavailable_for(
+            None,
+            "manual",
+            &browser_import_error("manual")
+        ));
+        // A usable manual token, or automatic import, means an `Other` error
+        // is a real web failure rather than an absent session.
+        let server_error = ProviderError::Other("API error: 500".into());
+        assert!(!session_unavailable_for(manual, "off", &server_error));
+        assert!(!session_unavailable_for(None, "auto", &server_error));
+        assert!(!session_unavailable_for(
+            None,
+            "off",
+            &ProviderError::Timeout
+        ));
+        assert!(!session_unavailable_for(
+            None,
+            "off",
+            &ProviderError::Parse("bad".into())
+        ));
     }
 
     fn input<'a>(
