@@ -19,6 +19,7 @@ fn test_settings_default() {
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
+    assert!(!settings.credential_expiry_notifications_enabled);
     assert!(!settings.float_bar_show_cost);
     assert!(!settings.tray_panel_always_on_top);
     assert_eq!(settings.overview_layout, "compact");
@@ -183,6 +184,7 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 
     assert!(!loaded.show_reset_when_exhausted);
     assert!(!loaded.predictive_pace_warning_enabled);
+    assert!(!loaded.credential_expiry_notifications_enabled);
 }
 
 #[test]

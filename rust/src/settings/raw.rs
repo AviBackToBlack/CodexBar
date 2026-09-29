@@ -44,6 +44,7 @@ pub(super) struct RawSettings {
     reset_time_relative: bool,
     show_reset_when_exhausted: bool,
     predictive_pace_warning_enabled: bool,
+    credential_expiry_notifications_enabled: bool,
     #[serde(default = "default_true")]
     show_pace: bool,
     menu_bar_display_mode: String,
@@ -214,6 +215,7 @@ impl Default for RawSettings {
             reset_time_relative: s.reset_time_relative,
             show_reset_when_exhausted: s.show_reset_when_exhausted,
             predictive_pace_warning_enabled: s.predictive_pace_warning_enabled,
+            credential_expiry_notifications_enabled: s.credential_expiry_notifications_enabled,
             show_pace: s.show_pace,
             menu_bar_display_mode: s.menu_bar_display_mode,
             overview_layout: s.overview_layout,
@@ -541,6 +543,7 @@ impl From<RawSettings> for Settings {
             reset_time_relative: raw.reset_time_relative,
             show_reset_when_exhausted: raw.show_reset_when_exhausted,
             predictive_pace_warning_enabled: raw.predictive_pace_warning_enabled,
+            credential_expiry_notifications_enabled: raw.credential_expiry_notifications_enabled,
             show_pace: raw.show_pace,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             overview_layout: normalize_overview_layout(&raw.overview_layout),

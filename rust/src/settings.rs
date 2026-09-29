@@ -165,6 +165,10 @@ pub struct Settings {
     #[serde(default)]
     pub predictive_pace_warning_enabled: bool,
 
+    /// Notify once per failure episode when a provider account needs sign-in again.
+    #[serde(default)]
+    pub credential_expiry_notifications_enabled: bool,
+
     /// Show pace visualizations and forecast text in provider menu cards.
     #[serde(default = "default_true")]
     pub show_pace: bool,
@@ -549,6 +553,7 @@ impl Default for Settings {
             reset_time_relative: true, // Show relative times by default
             show_reset_when_exhausted: false,
             predictive_pace_warning_enabled: false,
+            credential_expiry_notifications_enabled: false,
             show_pace: true,
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             overview_layout: default_overview_layout(),

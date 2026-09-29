@@ -36,6 +36,7 @@ mod claude_accounts;
 pub(crate) mod claude_reconciliation;
 mod codex_accounts;
 mod codex_workspaces;
+mod credential_alerts;
 mod credential_detection;
 mod credentials;
 mod diagnostics;

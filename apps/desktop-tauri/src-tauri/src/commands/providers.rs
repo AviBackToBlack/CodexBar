@@ -1,3 +1,4 @@
+use super::credential_alerts::{self, FetchAttempt};
 use super::provider_refresh::{
     ProviderRefreshCompletion, ProviderRefreshReservation, complete_provider_refresh,
     reserve_provider_refresh,
@@ -6,6 +7,7 @@ use super::warning_identity::WarningIdentity;
 use super::*;
 use chrono::{Local, Utc};
 use codexbar::core::HookUsageWindow;
+use codexbar::notifications::CredentialAlertPolicy;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -519,6 +521,7 @@ fn spawn_provider_refreshes(
             .and_then(ProviderAccountData::active_account)
             .map(|account| account.id);
         let hooks_enabled = inputs.settings.hooks_enabled;
+        let credential_alerts = CredentialAlertPolicy::from_settings(&inputs.settings);
 
         handles.push(tokio::spawn(async move {
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
@@ -531,6 +534,7 @@ fn spawn_provider_refreshes(
                 generation,
                 token_account_id,
                 hooks_enabled,
+                credential_alerts,
             )
             .await;
         }));
@@ -564,10 +568,13 @@ async fn refresh_provider(
     generation: u64,
     token_account_id: Option<uuid::Uuid>,
     hooks_enabled: bool,
+    credential_alerts: CredentialAlertPolicy,
 ) {
     let (snapshot, account_identity, failure_policy) =
         fetch_provider_snapshot(id, ctx, token_account_id).await;
     let fresh_snapshot = snapshot.error.is_none();
+    // Captured before last-good preservation can swap in a cached snapshot.
+    let fetch_attempt = FetchAttempt::of(&snapshot);
 
     let state = app.state::<Mutex<AppState>>();
     let published = if let Ok(mut guard) = state.lock() {
@@ -601,6 +608,15 @@ async fn refresh_provider(
                     .provider_cache_updated_at_by_provider
                     .insert(id, std::time::Instant::now());
             }
+            credential_alerts::observe_attempt(
+                &mut guard.notification_manager,
+                credential_alerts,
+                id,
+                token_account_id,
+                fetch_attempt,
+                &snapshot,
+                cached.as_ref(),
+            );
             Some(snapshot)
         }
     } else {
@@ -950,6 +966,11 @@ fn update_tray_and_notifications(
     crate::tray_bridge::update_tray_status_items(app, &cached);
     crate::tray_bridge::update_tray_icon_and_tooltip(app, &cached);
     notify_usage_thresholds(state, settings, token_accounts, &cached);
+    if let Ok(mut guard) = state.lock() {
+        guard
+            .notification_manager
+            .retire_credential_episodes_except(&settings.get_enabled_provider_ids());
+    }
     Ok(())
 }
 
@@ -1053,7 +1074,7 @@ fn dispatch_quota_hooks(
 
 /// Stable account discriminator for threshold/session toast dedupe.
 /// Prefer token-account id, then email, org, plan; empty for single-account lanes.
-fn quota_notification_account_identity(
+pub(super) fn quota_notification_account_identity(
     snapshot: &ProviderUsageSnapshot,
     token_account_id: Option<uuid::Uuid>,
 ) -> String {

@@ -244,6 +244,10 @@ locale_keys! {
     PredictivePaceWarningsHelper,
     PredictivePaceWarningTitle,
     PredictivePaceWarningBody,
+    CredentialExpiryNotifications,
+    CredentialExpiryNotificationsHelper,
+    CredentialExpiryTitle,
+    CredentialExpiryBody,
 
     // Display settings (Preferences)
     UsageDisplay,
