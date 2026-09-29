@@ -91,6 +91,8 @@ codexbar serve --port 8080
 
 Typical endpoints: `/health`, `/usage`, `/cost`, and `/dashboard/v1/snapshot`. Loopback default keeps local use simple; treat non-loopback as a threat-model choice because the token for protected requests crosses the network over HTTP.
 
+The dashboard page at `/` has a "Usage display" control (Follow server, Used, Remaining). Follow server uses `host.usageBarsShowUsed` from the snapshot; the other two override it for this browser only, stored in `localStorage` under `codexbar.dashboard.usageDisplay`. Changing it re-renders the cached snapshot without refetching. Bar colour always follows consumption (70% used warns, 90% used is full), whichever value is shown.
+
 Pass `--metrics` to enable the Prometheus text endpoint at `/metrics`; it returns `404` when the flag is absent. The endpoint uses the same Host allowlist, Bearer token, snapshot cache, and single-flight collection as the dashboard snapshot. A scrape never waits for provider I/O: it returns the last successful snapshot while an expired value refreshes in the background, or `codexbar_up 0` until the first collection succeeds.
 
 ```powershell
