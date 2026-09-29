@@ -1,8 +1,10 @@
 //! Alibaba Token Plan Personal/Solo OneConsole path (upstream 0.46.0).
 
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use super::cli;
 use super::region::AlibabaTokenPlanRegion;
 use super::{
     LANGUAGE, PERSONAL_CONSOLE_PRODUCT, PERSONAL_QUOTA_CONFIG_API, PERSONAL_SUBSCRIPTION_API,
@@ -11,6 +13,31 @@ use super::{
     percentage_points, throw_if_error_payload,
 };
 use crate::core::{FetchContext, ProviderError};
+
+/// Usage-object keys that mark a Personal/Solo payload as carrying window data.
+const USAGE_WINDOW_KEYS: &[&str] = &[
+    "per5HourPercentage",
+    "per1WeekPercentage",
+    "per1MonthPercentage",
+];
+
+/// How window ratios and reset times are read from the usage object.
+#[derive(Clone, Copy)]
+pub(super) enum WindowStrictness {
+    /// Web gateway: numeric strings are coerced and ratios are clamped.
+    Web,
+    /// Bailian CLI: ratios must be JSON numbers in 0-1, and a reset is honored
+    /// only when that window's ratio is valid.
+    Cli,
+}
+
+/// Per-window credit totals from the quota-config payload.
+#[derive(Clone, Copy)]
+struct QuotaTotals {
+    five_hour: Option<f64>,
+    weekly: Option<f64>,
+    monthly: Option<f64>,
+}
 
 struct PersonalApiContext<'a> {
     client: &'a reqwest::Client,
@@ -78,14 +105,12 @@ pub(super) async fn fetch_personal_usage(
     unreachable!("bounded usage retry loop always returns")
 }
 
-fn personal_usage_success_without_windows(data: &[u8]) -> bool {
+pub(super) fn personal_usage_success_without_windows(data: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<Value>(data) else {
         return false;
     };
     let expanded = expand_json_strings(value);
-    let has_windows =
-        find_object_containing_any_of(&expanded, &["per5HourPercentage", "per1WeekPercentage"])
-            .is_some();
+    let has_windows = find_object_containing_any_of(&expanded, USAGE_WINDOW_KEYS).is_some();
     if has_windows {
         return false;
     }
@@ -264,42 +289,92 @@ pub(super) fn parse_personal_usage(
     let expanded = expand_json_strings(value);
     throw_if_error_payload(&expanded)?;
 
-    let usage =
-        find_object_containing_any_of(&expanded, &["per5HourPercentage", "per1WeekPercentage"])
-            .ok_or_else(|| {
-                ProviderError::Parse("Missing Alibaba Token Plan Personal usage windows".into())
-            })?;
+    personal_usage_snapshot(
+        &expanded,
+        subscription_data,
+        quota_config_data,
+        "Personal",
+        WindowStrictness::Web,
+    )
+    .ok_or_else(|| ProviderError::Parse("Missing Alibaba Token Plan Personal usage windows".into()))
+}
 
-    let five_hour = percentage_points(number_field(&usage, "per5HourPercentage"));
-    let weekly = percentage_points(number_field(&usage, "per1WeekPercentage"));
-    if five_hour.is_none() && weekly.is_none() {
-        return Err(ProviderError::Parse(
-            "Missing Alibaba Token Plan Personal usage windows".into(),
-        ));
+/// Build a snapshot from the first object carrying a 5-hour, weekly, or monthly
+/// window. Returns `None` when no window has a valid ratio.
+pub(super) fn personal_usage_snapshot(
+    expanded: &Value,
+    subscription_data: Option<&[u8]>,
+    quota_config_data: Option<&[u8]>,
+    default_plan_name: &str,
+    strictness: WindowStrictness,
+) -> Option<TokenPlanSnapshot> {
+    let usage = find_object_containing_any_of(expanded, USAGE_WINDOW_KEYS)?;
+    let (five_hour, five_hour_resets_at) = read_window(
+        &usage,
+        "per5HourPercentage",
+        "per5HourResetTime",
+        strictness,
+    );
+    let (weekly, weekly_resets_at) = read_window(
+        &usage,
+        "per1WeekPercentage",
+        "per1WeekResetTime",
+        strictness,
+    );
+    let (monthly, monthly_resets_at) = read_window(
+        &usage,
+        "per1MonthPercentage",
+        "per1MonthResetTime",
+        strictness,
+    );
+    if five_hour.is_none() && weekly.is_none() && monthly.is_none() {
+        return None;
     }
 
     let plan_code = subscription_data.and_then(plan_code_from_bytes);
     let plan_name = plan_code
         .as_deref()
         .map(display_plan_name)
-        .or_else(|| Some("Personal".to_string()));
+        .unwrap_or_else(|| default_plan_name.to_string());
     let quota = quota_config_data
         .zip(plan_code.as_ref())
         .and_then(|(data, code)| quota_totals_from_bytes(data, code));
 
-    Ok(TokenPlanSnapshot {
-        plan_name,
+    Some(TokenPlanSnapshot {
+        plan_name: Some(plan_name),
         used_quota: None,
         total_quota: None,
         remaining_quota: None,
         resets_at: None,
         five_hour_used_percent: five_hour,
-        five_hour_total_quota: quota.map(|q| q.0).unwrap_or(None),
-        five_hour_resets_at: date_field(&usage, "per5HourResetTime"),
+        five_hour_total_quota: quota.and_then(|q| q.five_hour),
+        five_hour_resets_at,
         weekly_used_percent: weekly,
-        weekly_total_quota: quota.map(|q| q.1).unwrap_or(None),
-        weekly_resets_at: date_field(&usage, "per1WeekResetTime"),
+        weekly_total_quota: quota.and_then(|q| q.weekly),
+        weekly_resets_at,
+        monthly_used_percent: monthly,
+        monthly_total_quota: quota.and_then(|q| q.monthly),
+        monthly_resets_at,
     })
+}
+
+fn read_window(
+    usage: &Value,
+    ratio_key: &str,
+    reset_key: &str,
+    strictness: WindowStrictness,
+) -> (Option<f64>, Option<DateTime<Utc>>) {
+    match strictness {
+        WindowStrictness::Web => (
+            percentage_points(number_field(usage, ratio_key)),
+            date_field(usage, reset_key),
+        ),
+        WindowStrictness::Cli => {
+            let percent = percentage_points(cli::ratio(usage.get(ratio_key)));
+            let reset = percent.and_then(|_| cli::reset_date(usage.get(reset_key)));
+            (percent, reset)
+        }
+    }
 }
 
 fn plan_code_from_bytes(data: &[u8]) -> Option<String> {
@@ -330,19 +405,18 @@ fn display_plan_name(plan_code: &str) -> String {
     }
 }
 
-fn quota_totals_from_bytes(data: &[u8], plan_code: &str) -> Option<(Option<f64>, Option<f64>)> {
+fn quota_totals_from_bytes(data: &[u8], plan_code: &str) -> Option<QuotaTotals> {
     let value: Value = serde_json::from_slice(data).ok()?;
     let expanded = expand_json_strings(value);
-    let quota = find_first_value_for_key(&expanded, plan_code)?
-        .as_object()?
-        .clone();
-    let five_hour = number_field(&Value::Object(quota.clone()), "five_hour")
-        .or_else(|| number_field(&Value::Object(quota.clone()), "fiveHour"));
-    let weekly = number_field(&Value::Object(quota), "weekly");
-    if five_hour.is_none() && weekly.is_none() {
-        return None;
-    }
-    Some((five_hour, weekly))
+    let quota = find_first_value_for_key(&expanded, plan_code)?;
+    quota.as_object()?;
+    let totals = QuotaTotals {
+        five_hour: number_field(&quota, "five_hour").or_else(|| number_field(&quota, "fiveHour")),
+        weekly: number_field(&quota, "weekly"),
+        monthly: number_field(&quota, "monthly"),
+    };
+    (totals.five_hour.is_some() || totals.weekly.is_some() || totals.monthly.is_some())
+        .then_some(totals)
 }
 
 fn find_first_value_for_key(value: &Value, key: &str) -> Option<Value> {

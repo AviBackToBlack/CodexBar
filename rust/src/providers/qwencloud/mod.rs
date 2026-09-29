@@ -4,6 +4,9 @@
 //! `POST https://cs-data.qwencloud.com/data/api.json?...`
 //! with `IntlBroadScopeAspnGateway` / `sfm_bailian`.
 
+#[cfg(test)]
+mod monthly_tests;
+
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use regex_lite::Regex;
@@ -47,6 +50,7 @@ const COOKIE_DOMAINS: &[&str] = &[
 const FIVE_HOUR_MINUTES: u32 = 5 * 60;
 const WEEKLY_MINUTES: u32 = 7 * 24 * 60;
 const LEGACY_MINUTES: u32 = 30 * 24 * 60;
+const MONTHLY_MINUTES: u32 = 30 * 24 * 60;
 
 pub struct QwenCloudProvider {
     metadata: ProviderMetadata,
@@ -65,7 +69,25 @@ struct QwenCloudSnapshot {
     weekly_used_percent: Option<f64>,
     weekly_total_quota: Option<f64>,
     weekly_resets_at: Option<DateTime<Utc>>,
+    monthly_used_percent: Option<f64>,
+    monthly_total_quota: Option<f64>,
+    monthly_resets_at: Option<DateTime<Utc>>,
 }
+
+/// Per-window credit totals from the quota-config payload.
+#[derive(Clone, Copy)]
+struct QuotaTotals {
+    five_hour: Option<f64>,
+    weekly: Option<f64>,
+    monthly: Option<f64>,
+}
+
+/// Usage-object keys that mark a payload as carrying token-plan window data.
+const USAGE_WINDOW_KEYS: &[&str] = &[
+    "per5HourPercentage",
+    "per1WeekPercentage",
+    "per1MonthPercentage",
+];
 
 impl QwenCloudProvider {
     pub fn new() -> Self {
@@ -356,21 +378,42 @@ impl QwenCloudProvider {
             )
         });
 
+        let monthly = snapshot.monthly_used_percent.map(|percent| {
+            RateWindow::with_details(
+                percent,
+                Some(MONTHLY_MINUTES),
+                snapshot.monthly_resets_at,
+                quota_detail_percent(percent, snapshot.monthly_total_quota),
+            )
+        });
+
         // Prefer the 5-hour window, then the legacy 30-day envelope. Individual
         // Qwen Cloud plans expose only the weekly window (`per1WeekPercentage`);
         // promote it to primary in that case instead of failing the whole fetch.
-        let (primary, secondary, primary_label) = match (five_hour.or(legacy), weekly) {
-            (Some(primary), secondary) => (primary, secondary, None),
-            (None, Some(weekly)) => (weekly, None, Some(self.metadata.weekly_label)),
-            (None, None) => {
-                return Err(ProviderError::Parse(
-                    "Qwen Cloud usage windows missing".into(),
-                ));
-            }
-        };
+        // A monthly window takes the primary bar only when no other window exists;
+        // otherwise it is an extra "Monthly" row.
+        let (primary, secondary, mut primary_label, monthly_extra) =
+            match (five_hour.or(legacy), weekly) {
+                (Some(primary), secondary) => (primary, secondary, None, monthly),
+                (None, Some(weekly)) => (weekly, None, Some(self.metadata.weekly_label), monthly),
+                (None, None) => match monthly {
+                    Some(monthly) => (monthly, None, None, None),
+                    None => {
+                        return Err(ProviderError::Parse(
+                            "Qwen Cloud usage windows missing".into(),
+                        ));
+                    }
+                },
+            };
+        if primary.window_minutes == Some(MONTHLY_MINUTES) {
+            primary_label = Some("Monthly");
+        }
         let mut usage = UsageSnapshot::new(primary);
         if let Some(label) = primary_label {
             usage = usage.with_primary_label(label);
+        }
+        if let Some(monthly) = monthly_extra {
+            usage = usage.with_extra_rate_window("monthly", "Monthly", monthly);
         }
         if let Some(secondary) = secondary {
             usage = usage.with_secondary(secondary);
@@ -464,11 +507,11 @@ fn parse_current_token_plan(
     subscription_data: Option<&[u8]>,
     quota_config_data: Option<&[u8]>,
 ) -> Option<QwenCloudSnapshot> {
-    let usage =
-        find_object_containing_any_of(expanded, &["per5HourPercentage", "per1WeekPercentage"])?;
+    let usage = find_object_containing_any_of(expanded, USAGE_WINDOW_KEYS)?;
     let five_hour = percentage_points(number_field(&usage, "per5HourPercentage"));
     let weekly = percentage_points(number_field(&usage, "per1WeekPercentage"));
-    if five_hour.is_none() && weekly.is_none() {
+    let monthly = percentage_points(number_field(&usage, "per1MonthPercentage"));
+    if five_hour.is_none() && weekly.is_none() && monthly.is_none() {
         return None;
     }
 
@@ -485,11 +528,14 @@ fn parse_current_token_plan(
         remaining_quota: None,
         resets_at: None,
         five_hour_used_percent: five_hour,
-        five_hour_total_quota: quota.map(|q| q.0).unwrap_or(None),
+        five_hour_total_quota: quota.and_then(|q| q.five_hour),
         five_hour_resets_at: date_field(&usage, "per5HourResetTime"),
         weekly_used_percent: weekly,
-        weekly_total_quota: quota.map(|q| q.1).unwrap_or(None),
+        weekly_total_quota: quota.and_then(|q| q.weekly),
         weekly_resets_at: date_field(&usage, "per1WeekResetTime"),
+        monthly_used_percent: monthly,
+        monthly_total_quota: quota.and_then(|q| q.monthly),
+        monthly_resets_at: date_field(&usage, "per1MonthResetTime"),
     })
 }
 
@@ -538,6 +584,9 @@ fn parse_legacy_token_plan(expanded: &Value) -> Result<QwenCloudSnapshot, Provid
         weekly_used_percent: None,
         weekly_total_quota: None,
         weekly_resets_at: None,
+        monthly_used_percent: None,
+        monthly_total_quota: None,
+        monthly_resets_at: None,
     })
 }
 
@@ -569,19 +618,18 @@ fn display_plan_name(plan_code: &str) -> String {
     }
 }
 
-fn quota_totals_from_bytes(data: &[u8], plan_code: &str) -> Option<(Option<f64>, Option<f64>)> {
+fn quota_totals_from_bytes(data: &[u8], plan_code: &str) -> Option<QuotaTotals> {
     let value: Value = serde_json::from_slice(data).ok()?;
     let expanded = expand_json_strings(value);
-    let quota = find_first_value_for_key(&expanded, plan_code)?
-        .as_object()?
-        .clone();
-    let five_hour = number_field(&Value::Object(quota.clone()), "five_hour")
-        .or_else(|| number_field(&Value::Object(quota.clone()), "fiveHour"));
-    let weekly = number_field(&Value::Object(quota), "weekly");
-    if five_hour.is_none() && weekly.is_none() {
-        return None;
-    }
-    Some((five_hour, weekly))
+    let quota = find_first_value_for_key(&expanded, plan_code)?;
+    quota.as_object()?;
+    let totals = QuotaTotals {
+        five_hour: number_field(&quota, "five_hour").or_else(|| number_field(&quota, "fiveHour")),
+        weekly: number_field(&quota, "weekly"),
+        monthly: number_field(&quota, "monthly"),
+    };
+    (totals.five_hour.is_some() || totals.weekly.is_some() || totals.monthly.is_some())
+        .then_some(totals)
 }
 
 fn throw_if_error_payload(value: &Value) -> Result<(), ProviderError> {

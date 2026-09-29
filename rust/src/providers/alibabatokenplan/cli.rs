@@ -4,7 +4,8 @@ use std::time::Duration;
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
 
-use super::{AlibabaTokenPlanRegion, TokenPlanSnapshot};
+use super::personal::{WindowStrictness, personal_usage_snapshot};
+use super::{AlibabaTokenPlanRegion, PERSONAL_USAGE_API, TokenPlanSnapshot, expand_json_strings};
 use crate::core::ProviderError;
 use crate::host::{CommandError, CommandOptions, CommandRunner};
 
@@ -89,19 +90,33 @@ fn map_command_error(error: CommandError) -> ProviderError {
 }
 
 pub(super) fn cli_arguments(region: AlibabaTokenPlanRegion) -> Vec<String> {
-    [
-        "usage",
-        "token-plan",
-        "--console-region",
-        region.current_region_id(),
-        "--console-site",
-        region.cli_console_site(),
-        "--output",
-        "json",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+    // Personal/Solo reads the raw usage endpoint: `bl usage token-plan` omits the
+    // monthly window. Team keeps the dedicated subcommand.
+    let command: &[&str] = if region.uses_personal_api() {
+        &[
+            "console",
+            "call",
+            "--api",
+            PERSONAL_USAGE_API,
+            "--data",
+            "{}",
+        ]
+    } else {
+        &["usage", "token-plan"]
+    };
+    command
+        .iter()
+        .copied()
+        .chain([
+            "--console-region",
+            region.current_region_id(),
+            "--console-site",
+            region.cli_console_site(),
+            "--output",
+            "json",
+        ])
+        .map(str::to_string)
+        .collect()
 }
 
 pub(super) fn sanitized_child_environment(
@@ -118,43 +133,31 @@ pub(super) fn sanitized_child_environment(
 }
 
 pub(super) fn parse_cli_usage(text: &str) -> Result<TokenPlanSnapshot, ProviderError> {
-    let value: Value = serde_json::from_str(text).map_err(|_| {
+    let unsupported = || {
         ProviderError::Parse("Bailian CLI returned an unsupported Token Plan usage response".into())
-    })?;
-    let object = value.as_object().ok_or_else(|| {
-        ProviderError::Parse("Bailian CLI returned an unsupported Token Plan usage response".into())
-    })?;
-
-    let five_hour_ratio = ratio(object.get("per5HourPercentage"));
-    let weekly_ratio = ratio(object.get("per1WeekPercentage"));
-    if five_hour_ratio.is_none() && weekly_ratio.is_none() {
-        return Err(ProviderError::Parse(
-            "Bailian CLI returned an unsupported Token Plan usage response".into(),
-        ));
+    };
+    let value: Value = serde_json::from_str(text).map_err(|_| unsupported())?;
+    if !value.is_object() {
+        return Err(unsupported());
     }
-
-    Ok(TokenPlanSnapshot {
-        plan_name: Some("Token Plan".to_string()),
-        used_quota: None,
-        total_quota: None,
-        remaining_quota: None,
-        resets_at: None,
-        five_hour_used_percent: five_hour_ratio.map(|ratio| ratio * 100.0),
-        five_hour_total_quota: None,
-        five_hour_resets_at: five_hour_ratio
-            .and_then(|_| reset_date(object.get("per5HourResetTime"))),
-        weekly_used_percent: weekly_ratio.map(|ratio| ratio * 100.0),
-        weekly_total_quota: None,
-        weekly_resets_at: weekly_ratio.and_then(|_| reset_date(object.get("per1WeekResetTime"))),
-    })
+    // `bl console call` wraps the usage object in the gateway envelope
+    // (`data.DataV2.data.data`); `bl usage token-plan` prints it flat.
+    personal_usage_snapshot(
+        &expand_json_strings(value),
+        None,
+        None,
+        "Token Plan",
+        WindowStrictness::Cli,
+    )
+    .ok_or_else(unsupported)
 }
 
-fn ratio(value: Option<&Value>) -> Option<f64> {
+pub(super) fn ratio(value: Option<&Value>) -> Option<f64> {
     let ratio = value?.as_f64()?;
     (ratio.is_finite() && (0.0..=1.0).contains(&ratio)).then_some(ratio)
 }
 
-fn reset_date(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
+pub(super) fn reset_date(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
     let milliseconds = value?.as_f64()?;
     if !milliseconds.is_finite() || milliseconds <= 0.0 {
         return None;
@@ -227,7 +230,7 @@ mod tests {
     #[test]
     fn regional_cli_arguments_match_bailian_contract() {
         assert_eq!(
-            cli_arguments(AlibabaTokenPlanRegion::CnPersonal),
+            cli_arguments(AlibabaTokenPlanRegion::Cn),
             vec![
                 "usage",
                 "token-plan",
@@ -235,6 +238,40 @@ mod tests {
                 "cn-beijing",
                 "--console-site",
                 "domestic",
+                "--output",
+                "json"
+            ]
+        );
+        assert_eq!(
+            cli_arguments(AlibabaTokenPlanRegion::CnPersonal),
+            vec![
+                "console",
+                "call",
+                "--api",
+                "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage",
+                "--data",
+                "{}",
+                "--console-region",
+                "cn-beijing",
+                "--console-site",
+                "domestic",
+                "--output",
+                "json"
+            ]
+        );
+        assert_eq!(
+            cli_arguments(AlibabaTokenPlanRegion::IntlPersonal),
+            vec![
+                "console",
+                "call",
+                "--api",
+                "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage",
+                "--data",
+                "{}",
+                "--console-region",
+                "ap-southeast-1",
+                "--console-site",
+                "international",
                 "--output",
                 "json"
             ]
