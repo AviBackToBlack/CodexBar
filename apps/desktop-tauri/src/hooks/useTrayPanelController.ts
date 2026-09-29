@@ -151,6 +151,10 @@ export function useTrayPanelController(state: BootstrapState) {
     return hydrateProviderSlots(denseProviderSlots, providersById);
   }, [denseProviderSlots, expectsDenseOverview, providersById, sorted]);
 
+  // What the switcher grid displays: the dense overview shows hydrated slots
+  // (with placeholders); everything else shows the sorted providers.
+  const gridProviders = expectsDenseOverview ? denseTrayProviders : sorted;
+
   useEffect(() => {
     setSelectedProviderId(initialProviderId);
   }, [initialProviderId]);
@@ -346,12 +350,12 @@ export function useTrayPanelController(state: BootstrapState) {
     },
     [],
   );
-  const sortedProviderIds = useMemo(
-    () => sorted.map((provider) => provider.providerId),
-    [sorted],
+  const gridProviderIds = useMemo(
+    () => gridProviders.map((provider) => provider.providerId),
+    [gridProviders],
   );
   useProviderSwitcherKeys({
-    providerIds: sortedProviderIds,
+    providerIds: gridProviderIds,
     selectedProviderId,
     onSelect: handleGridClick,
   });
@@ -379,8 +383,7 @@ export function useTrayPanelController(state: BootstrapState) {
     trayScaleFillPercent,
     handleTrayScaleChange,
     sorted,
-    denseTrayProviders,
-    expectsDenseOverview,
+    gridProviders,
     selectedProviderId,
     gridExpanded,
     setGridExpanded,

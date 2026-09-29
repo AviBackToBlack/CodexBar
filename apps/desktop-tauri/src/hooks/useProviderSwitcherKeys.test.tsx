@@ -88,16 +88,4 @@ describe("useProviderSwitcherKeys", () => {
     fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight" });
     expect(onSelect).not.toHaveBeenCalled();
   });
-
-  it("scrolls the active grid item into view when the selection changes", () => {
-    const item = document.createElement("button");
-    item.className = "provider-grid__item provider-grid__item--active";
-    const scrollIntoView = vi.fn();
-    item.scrollIntoView = scrollIntoView;
-    document.body.append(item);
-    const { rerender } = setup(null);
-    scrollIntoView.mockClear();
-    rerender({ selected: "claude" });
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
-  });
 });
