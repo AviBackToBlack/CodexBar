@@ -527,3 +527,186 @@ fn rolling_weekly_confirmation_keeps_inventory_and_expiry_guards() {
         "candidate expired"
     );
 }
+
+fn plan_snapshot(plan: Option<&str>, used: f64, captured_minutes: i64) -> UsageSnapshot {
+    let mut snapshot = snapshot(used, 9, captured_minutes);
+    snapshot.login_method = plan.map(str::to_string);
+    snapshot
+}
+
+/// Plus subscription with a stale 80% weekly baseline that resets in one day.
+fn plus_baseline() -> AccountState {
+    let mut previous = snapshot(80.0, 1, 0);
+    previous.login_method = Some("ChatGPT Plus".to_string());
+    AccountState {
+        published_weekly: previous.secondary.clone(),
+        published_at: previous.updated_at,
+        plan: previous.login_method.clone(),
+        credit_inventory: Some(inventory("credit-a")),
+        candidate: None,
+    }
+}
+
+#[test]
+fn plan_upgrade_starts_a_new_baseline_and_publishes_the_new_plan() {
+    let mut state = plus_baseline();
+    let inv = inventory("credit-a");
+    let initial = plan_snapshot(Some("ChatGPT Pro"), 0.0, 10);
+    let confirmation = plan_snapshot(Some("ChatGPT Pro"), 0.0, 11);
+    assert_eq!(
+        initial_decision(&mut state, &initial, Some(&inv), true, now()),
+        InitialDecision::RequiresConfirmation
+    );
+    assert!(state.published_weekly.is_none());
+    assert!(state.credit_inventory.is_none());
+    assert!(state.candidate.is_none());
+    assert_eq!(
+        confirmation_decision(
+            &mut state,
+            &initial,
+            Some(&inv),
+            &confirmation,
+            Some(&inv),
+            true,
+            now(),
+        ),
+        ConfirmationDecision::Publish
+    );
+}
+
+#[test]
+fn same_plan_near_zero_reading_keeps_the_previous_weekly_pinned() {
+    // Identical to the upgrade scenario, but the plan did not change: the old
+    // weekly window stays pinned until the confirmation is trustworthy.
+    let mut state = plus_baseline();
+    let inv = inventory("credit-a");
+    let initial = plan_snapshot(Some("ChatGPT Plus"), 0.0, 10);
+    let confirmation = plan_snapshot(Some("ChatGPT Plus"), 0.0, 11);
+    assert_eq!(
+        initial_decision(&mut state, &initial, Some(&inv), true, now()),
+        InitialDecision::RequiresConfirmation
+    );
+    assert!(state.published_weekly.is_some());
+    assert_eq!(
+        confirmation_decision(
+            &mut state,
+            &initial,
+            Some(&inv),
+            &confirmation,
+            Some(&inv),
+            true,
+            now(),
+        ),
+        ConfirmationDecision::Preserve
+    );
+}
+
+#[test]
+fn plan_upgrade_does_not_pin_the_previous_plan_weekly_window() {
+    let mut state = plus_baseline();
+    let current = plan_snapshot(Some("ChatGPT Pro"), 5.0, 10);
+    assert_eq!(
+        initial_decision(&mut state, &current, None, true, now()),
+        InitialDecision::Publish
+    );
+    let preserved = preserve_weekly(&state, current.clone());
+    let used = |snapshot: &UsageSnapshot| snapshot.secondary.as_ref().map(|w| w.used_percent);
+    assert_eq!(used(&preserved), Some(5.0));
+    assert_eq!(used(&preserved), used(&current));
+}
+
+#[test]
+fn plan_change_discards_a_pending_candidate() {
+    let mut state = plus_baseline();
+    state.candidate = Some(DelayedCandidate {
+        evidence_version: EVIDENCE_VERSION,
+        first_observed_at: now(),
+        created_at: now(),
+        snapshot_updated_at: now(),
+        weekly: RateWindow::new(0.0),
+        plan: Some("ChatGPT Plus".to_string()),
+        inventory: inventory("credit-a"),
+    });
+    let current = plan_snapshot(Some("ChatGPT Pro"), 5.0, 10);
+    assert_eq!(
+        initial_decision(&mut state, &current, None, true, now()),
+        InitialDecision::Publish
+    );
+    assert!(state.candidate.is_none());
+}
+
+#[test]
+fn same_unknown_stale_or_non_oauth_plans_keep_the_baseline() {
+    let cases: [(&str, Option<&str>, bool); 4] = [
+        (
+            "same plan with case and spacing",
+            Some(" chatgpt plus "),
+            true,
+        ),
+        ("unknown fresh plan", None, true),
+        ("blank fresh plan", Some("  "), true),
+        ("not exact OAuth", Some("ChatGPT Pro"), false),
+    ];
+    for (name, plan, exact_oauth) in cases {
+        let mut state = plus_baseline();
+        let current = plan_snapshot(plan, 5.0, 10);
+        initial_decision(&mut state, &current, None, exact_oauth, now());
+        assert!(state.published_weekly.is_some(), "{name}");
+        assert!(state.credit_inventory.is_some(), "{name}");
+    }
+
+    let mut unknown_stored = plus_baseline();
+    unknown_stored.plan = None;
+    let fresh = plan_snapshot(Some("ChatGPT Pro"), 5.0, 10);
+    initial_decision(&mut unknown_stored, &fresh, None, true, now());
+    assert!(
+        unknown_stored.published_weekly.is_some(),
+        "unknown stored plan"
+    );
+
+    let mut older = plus_baseline();
+    let stale = plan_snapshot(Some("ChatGPT Pro"), 5.0, -1);
+    initial_decision(&mut older, &stale, None, true, now());
+    assert!(older.published_weekly.is_some(), "older observation");
+}
+
+#[test]
+fn near_zero_confirmation_must_report_the_initial_plan() {
+    let inv = inventory("credit-a");
+    for confirmation_plan in [Some("ChatGPT Plus"), None] {
+        for has_baseline in [false, true] {
+            let mut state = if has_baseline {
+                baseline()
+            } else {
+                AccountState::default()
+            };
+            let initial = plan_snapshot(Some("ChatGPT Pro"), 0.0, 10);
+            let confirmation = plan_snapshot(confirmation_plan, 0.0, 11);
+            assert_eq!(
+                confirmation_decision(
+                    &mut state,
+                    &initial,
+                    Some(&inv),
+                    &confirmation,
+                    Some(&inv),
+                    true,
+                    now(),
+                ),
+                ConfirmationDecision::Preserve,
+                "{confirmation_plan:?} baseline {has_baseline}"
+            );
+            assert!(state.candidate.is_none());
+        }
+    }
+}
+
+#[test]
+fn nonzero_confirmation_can_publish_its_own_plan() {
+    let mut state = AccountState::default();
+    let initial = plan_snapshot(Some("ChatGPT Pro"), 0.0, 10);
+    let confirmation = plan_snapshot(Some("ChatGPT Plus"), 5.0, 11);
+    assert_eq!(
+        confirmation_decision(&mut state, &initial, None, &confirmation, None, true, now()),
+        ConfirmationDecision::Publish
+    );
+}

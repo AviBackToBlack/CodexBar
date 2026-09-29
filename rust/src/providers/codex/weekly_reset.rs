@@ -244,6 +244,13 @@ pub(super) fn initial_decision(
     exact_oauth: bool,
     observed_at: DateTime<Utc>,
 ) -> InitialDecision {
+    if exact_oauth && plan_changed(state, current) {
+        // A new subscription has its own quota baseline, not evidence of a
+        // reset on the previous plan: drop the stored weekly window, pending
+        // candidate, and credit inventory so the old plan cannot be pinned.
+        log_reset_diagnostic("planBaseline", "reset", ResetDiagnosticReason::PlanChanged);
+        *state = AccountState::default();
+    }
     if let Some(candidate) = state.candidate.clone() {
         match delayed_candidate_decision(
             state,
@@ -325,7 +332,12 @@ pub(super) fn confirmation_decision(
     if confirmation_weekly.used_percent > RESET_THRESHOLD {
         return ConfirmationDecision::Publish;
     }
-    if initial_weekly.used_percent > RESET_THRESHOLD {
+    // A near-zero reading is only trusted when both observations report the
+    // same plan; a plan flip between them is not a confirmation.
+    if initial_weekly.used_percent > RESET_THRESHOLD
+        || normalized_plan(initial.login_method.as_deref())
+            != normalized_plan(confirmation.login_method.as_deref())
+    {
         return ConfirmationDecision::Preserve;
     }
 
@@ -696,16 +708,32 @@ fn supported_delayed_boundary(previous: &RateWindow, current: &RateWindow) -> bo
     distance.abs() < STABLE_BOUNDARY_TOLERANCE_SECONDS || distance >= RESET_TOLERANCE_SECONDS
 }
 
+fn normalized_plan(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_lowercase)
+}
+
+/// True only when the stored and fresh plans are both known and differ;
+/// an unknown plan never resets the baseline.
+fn plan_changed(state: &AccountState, current: &UsageSnapshot) -> bool {
+    if current.updated_at <= state.published_at {
+        return false;
+    }
+    match (
+        normalized_plan(state.plan.as_deref()),
+        normalized_plan(current.login_method.as_deref()),
+    ) {
+        (Some(previous), Some(current)) => previous != current,
+        _ => false,
+    }
+}
+
 fn plans_match(previous: Option<&str>, left: &UsageSnapshot, right: &UsageSnapshot) -> bool {
-    let normalize = |value: Option<&str>| {
-        value
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_lowercase)
-    };
-    let previous = normalize(previous);
-    let left = normalize(left.login_method.as_deref());
-    let right = normalize(right.login_method.as_deref());
+    let previous = normalized_plan(previous);
+    let left = normalized_plan(left.login_method.as_deref());
+    let right = normalized_plan(right.login_method.as_deref());
     previous.is_some() && previous == left && left == right
 }
 

@@ -698,6 +698,11 @@ pub(super) fn codex_reset_backfill(
     if !matches!(snapshot.provider_id.as_str(), "codex" | "zai") {
         return;
     }
+    // A subscription change starts a new quota baseline: reset times from the
+    // previous plan are not evidence for the new one. Unknown plans never block.
+    if snapshot.provider_id == "codex" && codex_plan_changed(cached, snapshot) {
+        return;
+    }
 
     // Backfill each slot from the corresponding cached slot.
     backfill_slot_window(
@@ -713,6 +718,20 @@ pub(super) fn codex_reset_backfill(
     if let (Some(fresh), Some(cached_ter)) = (&mut snapshot.tertiary, &cached.tertiary) {
         backfill_slot_window(&snapshot.provider_id, fresh, cached_ter);
     }
+}
+
+/// True only when both snapshots report a known plan and the plans differ.
+fn codex_plan_changed(cached: &ProviderUsageSnapshot, fresh: &ProviderUsageSnapshot) -> bool {
+    let normalize = |plan: &Option<String>| {
+        plan.as_deref()
+            .map(str::trim)
+            .filter(|plan| !plan.is_empty())
+            .map(str::to_lowercase)
+    };
+    matches!(
+        (normalize(&cached.plan_name), normalize(&fresh.plan_name)),
+        (Some(cached), Some(fresh)) if cached != fresh
+    )
 }
 
 /// Backfill `resets_at` and `reset_description` on a fresh window from the
@@ -1389,6 +1408,39 @@ mod reset_backfill_tests {
         let mut fresh = codex_snapshot(win(30.0, Some(&future1)));
         codex_reset_backfill(&mut fresh, Some(&cached));
         assert_eq!(fresh.primary.resets_at.as_deref(), Some(future1.as_str()));
+    }
+
+    #[test]
+    fn codex_backfill_skips_when_known_plans_differ() {
+        let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        let mut cached = codex_snapshot(win(80.0, Some(&future)));
+        cached.plan_name = Some("Plus".into());
+        let mut fresh = codex_snapshot(win(5.0, None));
+        fresh.plan_name = Some("Pro".into());
+        codex_reset_backfill(&mut fresh, Some(&cached));
+        assert!(fresh.primary.resets_at.is_none(), "plan change baseline");
+    }
+
+    #[test]
+    fn codex_backfill_keeps_baseline_for_same_or_unknown_plan() {
+        let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        for (cached_plan, fresh_plan) in [
+            (Some("Plus"), Some(" plus ")),
+            (Some("Plus"), None),
+            (None, Some("Pro")),
+            (Some("Plus"), Some("  ")),
+        ] {
+            let mut cached = codex_snapshot(win(80.0, Some(&future)));
+            cached.plan_name = cached_plan.map(str::to_string);
+            let mut fresh = codex_snapshot(win(5.0, None));
+            fresh.plan_name = fresh_plan.map(str::to_string);
+            codex_reset_backfill(&mut fresh, Some(&cached));
+            assert_eq!(
+                fresh.primary.resets_at.as_deref(),
+                Some(future.as_str()),
+                "{cached_plan:?} -> {fresh_plan:?}"
+            );
+        }
     }
 
     #[test]
