@@ -65,6 +65,12 @@ const POLICIES: Readonly<Record<string, UsageSourcePolicy>> = {
       { value: "oauth", label: "API", description: "Uses the configured Bifrost gateway and virtual key only." },
     ],
   },
+  aixy: {
+    options: [
+      { value: "auto", label: "Auto", description: "Uses the configured Aixy API key." },
+      { value: "oauth", label: "API", description: "Uses the configured Aixy API key only." },
+    ],
+  },
   muse: {
     options: [
       { value: "auto", label: "Auto", description: "Uses the local Muse Code device login." },

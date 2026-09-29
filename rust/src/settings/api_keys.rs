@@ -652,6 +652,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             config_file_path: None,
             dashboard_url: None,
         },
+        ProviderConfigInfo {
+            id: ProviderId::Aixy,
+            name: "Aixy",
+            requires_api_key: true,
+            api_key_env_var: Some("AIXY_API_KEY"),
+            api_key_help: Some(
+                "Save an Aixy API key. Leave the Base URL empty for the hosted gateway, or set it for a self-hosted one. Or set AIXY_API_KEY and AIXY_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://dash.aixy-gateway.com"),
+        },
     ]
 }
 

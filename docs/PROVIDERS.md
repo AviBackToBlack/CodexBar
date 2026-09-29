@@ -55,6 +55,30 @@ spend and, when the optional balance request succeeds, prepaid credit balance.
 It keeps those values in the cost/detail surfaces and does not invent a quota
 percentage or use a Replicate API token as a website credential.
 
+## API-key gateway providers
+
+### Aixy
+
+Aixy reports the API key's own usage and the budgets that apply to it
+(`GET {base}/v1/usage`, `Authorization: Bearer <key>`). Configure the key in
+Settings → Providers → Aixy (or a token account, or `AIXY_API_KEY`). Leave the
+Base URL empty for `https://api.aixy-gateway.com`; set it (or `AIXY_BASE_URL`)
+for a self-hosted gateway. A trailing `/v1` and path prefix are accepted; HTTPS
+is required except for localhost, private-network and `.local` hosts, and a
+Base URL with embedded credentials, a query or a fragment is rejected. Redirects
+are never followed and response bodies are never echoed in errors.
+
+- Hard budgets come first; the two most-utilised known budgets fill the primary
+  and secondary lanes and every other budget is a named window. Overlapping
+  budgets are never summed. Unknown balances show as Unavailable.
+- Details show the key, project and observation time, each applicable budget,
+  and the last seven days of requests, tokens, attributed spend and coverage.
+  Attributed spend is the provider cost; it is not an invoice.
+- Only the Automatic menu-bar metric is offered.
+- A response that fails the `key.usage` contract (wrong currency, another key's
+  budget, inconsistent coverage, malformed amounts) is a parse error, not a
+  partial balance.
+
 ## Listing what is enabled
 
 ```powershell

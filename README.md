@@ -116,6 +116,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Grok | Cookies / auth.json | Billing |
 | Helmcode (also NaN Builders) | Browser cookies / manual Cookie header | Per-model token quotas, reset windows, Helmcode prepaid balance |
 | Replicate | Cookies / token accounts | Monthly spend, credit balance |
+| Aixy | API Key / token accounts | Applicable budget balances, 7-day key usage |
 | ElevenLabs | API Key | Subscription Credits, Voice Slots |
 | Deepgram | API Key | Project Usage |
 | Groq | API Key | Enterprise Metrics |

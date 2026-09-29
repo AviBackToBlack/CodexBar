@@ -123,4 +123,23 @@ describe("MenuBarMetricSection", () => {
       providerMetrics: { copilot: "extraUsage" },
     });
   });
+
+  it("offers only Automatic for Aixy, even with extra budget windows", () => {
+    const aixy = provider();
+    aixy.id = "aixy";
+    aixy.displayName = "Aixy";
+    aixy.weekly = rateWindow(40);
+    render(
+      <MenuBarMetricSection
+        provider={aixy}
+        providerMetrics={{}}
+        disabled={false}
+        t={(key) => key}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(["Automatic"]);
+  });
 });

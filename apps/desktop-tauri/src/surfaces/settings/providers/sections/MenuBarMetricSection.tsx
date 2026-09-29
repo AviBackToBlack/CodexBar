@@ -20,6 +20,8 @@ interface MetricOption {
   label: string;
 }
 
+const AUTOMATIC_ONLY_PROVIDERS: ReadonlySet<string> = new Set(["aixy"]);
+
 export function MenuBarMetricSection({
   provider,
   providerMetrics,
@@ -76,11 +78,15 @@ function metricOptions(
   selected: MetricPreference,
   t: (key: LocaleKey) => string,
 ): MetricOption[] {
-  const options: MetricOption[] = [
-    { value: "automatic", label: t("Automatic") },
-    { value: "session", label: t("ProviderSessionLabel") },
-  ];
+  const options: MetricOption[] = [{ value: "automatic", label: t("Automatic") }];
 
+  // Aixy's primary budget depends on which limits currently apply to the key,
+  // so a fixed session/weekly lane would be misleading. Offer Automatic only.
+  if (AUTOMATIC_ONLY_PROVIDERS.has(provider.id)) {
+    return withSelected(options, selected, t);
+  }
+
+  options.push({ value: "session", label: t("ProviderSessionLabel") });
   if (provider.weekly) {
     options.push({ value: "weekly", label: t("ProviderWeeklyLabel") });
   }
@@ -104,12 +110,21 @@ function metricOptions(
   if (provider.id === "gemini" && provider.weekly) {
     options.push({ value: "average", label: t("Average") });
   }
-  if (!options.some((option) => option.value === selected)) {
-    options.push({
+  return withSelected(options, selected, t);
+}
+
+/** Keep a previously saved preference visible even if it is no longer offered. */
+function withSelected(
+  options: MetricOption[],
+  selected: MetricPreference,
+  t: (key: LocaleKey) => string,
+): MetricOption[] {
+  if (options.some((option) => option.value === selected)) return options;
+  return [
+    ...options,
+    {
       value: selected,
       label: selected === "credits" ? t("CreditsLabel") : selected,
-    });
-  }
-
-  return options;
+    },
+  ];
 }

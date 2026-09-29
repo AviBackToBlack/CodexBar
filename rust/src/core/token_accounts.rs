@@ -320,6 +320,17 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: false,
                 cookie_name: None,
             }),
+            // Upstream 0.67: labeled Aixy API keys via token accounts.
+            ProviderId::Aixy => Some(TokenAccountSupport {
+                title: "API keys",
+                subtitle: "Store multiple Aixy API keys.",
+                placeholder: "Paste Aixy API key…",
+                injection: TokenInjection::Environment {
+                    key: "AIXY_API_KEY".to_string(),
+                },
+                requires_manual_cookie_source: false,
+                cookie_name: None,
+            }),
             ProviderId::Copilot => Some(TokenAccountSupport {
                 title: "GitHub accounts",
                 subtitle: "Store GitHub OAuth tokens for Copilot plan usage.",
@@ -801,6 +812,19 @@ mod tests {
         assert!(!TokenAccountSupport::is_supported(ProviderId::Hyper));
         assert!(!TokenAccountSupport::is_supported(ProviderId::GitKraken));
         assert!(!TokenAccountSupport::is_supported(ProviderId::Bifrost));
+    }
+
+    #[test]
+    fn aixy_token_accounts_inject_api_key_env() {
+        let support = TokenAccountSupport::for_provider(ProviderId::Aixy).unwrap();
+        assert_eq!(support.title, "API keys");
+        assert_eq!(support.placeholder, "Paste Aixy API key…");
+        assert!(!support.requires_manual_cookie_source);
+        let env = TokenAccountSupport::env_override(ProviderId::Aixy, "gak_fixture").unwrap();
+        assert_eq!(
+            env.get("AIXY_API_KEY").map(String::as_str),
+            Some("gak_fixture")
+        );
     }
 
     #[test]

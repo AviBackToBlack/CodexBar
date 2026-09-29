@@ -95,6 +95,7 @@ pub enum ProviderId {
     Hyper,
     GitKraken,
     Bifrost,
+    Aixy,
 }
 
 impl ProviderId {
@@ -183,6 +184,7 @@ impl ProviderId {
             ProviderId::Hyper,
             ProviderId::GitKraken,
             ProviderId::Bifrost,
+            ProviderId::Aixy,
         ]
     }
 
@@ -233,6 +235,7 @@ impl ProviderId {
             ProviderId::Hyper => "hyper",
             ProviderId::GitKraken => "gitkraken",
             ProviderId::Bifrost => "bifrost",
+            ProviderId::Aixy => "aixy",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -322,6 +325,7 @@ impl ProviderId {
             ProviderId::Hyper => "Charm Hyper",
             ProviderId::GitKraken => "GitKraken AI",
             ProviderId::Bifrost => "Bifrost",
+            ProviderId::Aixy => "Aixy",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -426,6 +430,7 @@ impl ProviderId {
             ProviderId::Hyper => Some("hyper.charm.land"),
             ProviderId::GitKraken => None,
             ProviderId::Bifrost => None,
+            ProviderId::Aixy => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -508,6 +513,7 @@ impl ProviderId {
             "hyper" | "charm-hyper" | "charm hyper" => Some(ProviderId::Hyper),
             "gitkraken" | "gitkraken-ai" | "gitkraken ai" => Some(ProviderId::GitKraken),
             "bifrost" | "bifrost-gateway" | "bifrost gateway" => Some(ProviderId::Bifrost),
+            "aixy" | "aixy-gateway" | "aixy gateway" => Some(ProviderId::Aixy),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -1120,6 +1126,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Hyper => "#7C3AED",
         ProviderId::GitKraken => "#179287",
         ProviderId::Bifrost => "#5B7CFA",
+        ProviderId::Aixy => "#123650",
     }
 }
 
@@ -1134,7 +1141,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 82);
+        assert_eq!(all.len(), 83);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1197,6 +1204,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Hyper));
         assert!(all.contains(&ProviderId::GitKraken));
         assert!(all.contains(&ProviderId::Bifrost));
+        assert!(all.contains(&ProviderId::Aixy));
     }
 
     #[test]

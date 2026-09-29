@@ -1,0 +1,134 @@
+{
+  "object": "key.usage",
+  "currency": "USD",
+  "as_of": "2026-09-24T12:00:00+00:00",
+  "key": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "name": "Developer CLI",
+    "project_id": "22222222-2222-4222-8222-222222222222",
+    "project_name": "Engineering"
+  },
+  "usage": {
+    "window": "7d",
+    "requests": 12,
+    "input_tokens": 1000,
+    "output_tokens": 200,
+    "total_tokens": 1200,
+    "spend_usd": 1.25,
+    "attributed_requests": 10,
+    "estimated_requests": 8,
+    "provider_reported_requests": 1,
+    "reconciled_requests": 1,
+    "partial_requests": 2
+  },
+  "budgets": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "object": "cost.personal_budget",
+      "scope": "project",
+      "target_id": "22222222-2222-4222-8222-222222222222",
+      "target_name": "Engineering",
+      "interval": "monthly",
+      "limit_usd": "100",
+      "warning_threshold_percent": 80,
+      "enforcement": "hard",
+      "allocation": "shared",
+      "shared": true,
+      "applies_to": [
+        {
+          "api_key_id": "11111111-1111-4111-8111-111111111111",
+          "api_key_name": "Developer CLI",
+          "project_id": "22222222-2222-4222-8222-222222222222",
+          "project_name": "Engineering",
+          "team_id": null,
+          "team_name": null
+        }
+      ],
+      "spend_usd": "20",
+      "remaining_usd": "80",
+      "utilization_percent": 20,
+      "state": "healthy",
+      "starts_at": "2026-09-01T00:00:00+00:00",
+      "resets_at": "2026-10-01T00:00:00+00:00",
+      "spend_status": "available",
+      "availability": {
+        "status": "available",
+        "spent_usd": "20",
+        "reserved_usd": "10",
+        "remaining_usd": "70"
+      }
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "object": "cost.personal_budget",
+      "scope": "user",
+      "target_id": "66666666-6666-4666-8666-666666666666",
+      "target_name": "Engineering",
+      "interval": "weekly",
+      "limit_usd": "100",
+      "warning_threshold_percent": 80,
+      "enforcement": "monitor",
+      "allocation": "shared",
+      "shared": false,
+      "applies_to": [
+        {
+          "api_key_id": "11111111-1111-4111-8111-111111111111",
+          "api_key_name": "Developer CLI",
+          "project_id": "22222222-2222-4222-8222-222222222222",
+          "project_name": "Engineering",
+          "team_id": null,
+          "team_name": null
+        }
+      ],
+      "spend_usd": "40",
+      "remaining_usd": "60",
+      "utilization_percent": 40,
+      "state": "healthy",
+      "starts_at": "2026-09-21T00:00:00+00:00",
+      "resets_at": "2026-09-28T00:00:00+00:00",
+      "spend_status": "available",
+      "availability": {
+        "status": "not_enforced",
+        "spent_usd": null,
+        "reserved_usd": null,
+        "remaining_usd": null
+      }
+    },
+    {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "object": "cost.personal_budget",
+      "scope": "organization",
+      "target_id": null,
+      "target_name": "Engineering",
+      "interval": "daily",
+      "limit_usd": "100",
+      "warning_threshold_percent": 80,
+      "enforcement": "hard",
+      "allocation": "shared",
+      "shared": true,
+      "applies_to": [
+        {
+          "api_key_id": "11111111-1111-4111-8111-111111111111",
+          "api_key_name": "Developer CLI",
+          "project_id": "22222222-2222-4222-8222-222222222222",
+          "project_name": "Engineering",
+          "team_id": null,
+          "team_name": null
+        }
+      ],
+      "spend_usd": null,
+      "remaining_usd": null,
+      "utilization_percent": null,
+      "state": "unknown",
+      "starts_at": "2026-09-24T00:00:00+00:00",
+      "resets_at": "2026-09-25T00:00:00+00:00",
+      "spend_status": "unavailable",
+      "availability": {
+        "status": "unavailable",
+        "spent_usd": null,
+        "reserved_usd": null,
+        "remaining_usd": null
+      }
+    }
+  ]
+}

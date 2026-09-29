@@ -9,6 +9,7 @@ use futures::{Stream, StreamExt};
 
 pub mod abacus;
 pub mod aiand;
+pub mod aixy;
 pub mod alibaba;
 pub mod alibabatokenplan;
 pub mod amp;
@@ -95,6 +96,7 @@ pub mod zoommate;
 // Re-export provider implementations
 pub use abacus::AbacusProvider;
 pub use aiand::AiAndProvider;
+pub use aixy::AixyProvider;
 pub use alibaba::{AlibabaProvider, AlibabaRegion};
 pub use alibabatokenplan::{AlibabaTokenPlanProvider, AlibabaTokenPlanRegion};
 pub use amp::AmpProvider;
@@ -175,6 +177,26 @@ pub use zai::ZaiProvider;
 pub use zed::ZedProvider;
 pub use zenmux::ZenMuxProvider;
 pub use zoommate::ZoomMateProvider;
+
+/// True for hosts where plain HTTP is acceptable for a self-hosted gateway:
+/// `localhost`, `*.localhost`, and loopback, private or link-local IP literals.
+pub(crate) fn is_private_network_host(host: &str) -> bool {
+    use std::net::IpAddr;
+
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return true;
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let Ok(ip) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    match ip {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
+        IpAddr::V6(ip) => {
+            ip.is_loopback() || ip.is_unique_local() || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum BoundedBodyError<E> {

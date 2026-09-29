@@ -1,6 +1,37 @@
 import type { LocaleKey } from "../../../../i18n/keys";
 
+export type GatewayProviderId = "wayfinder" | "bifrost" | "aixy";
+
+interface GatewayCopy {
+  title: LocaleKey;
+  label: LocaleKey;
+  help: LocaleKey;
+}
+
+const GATEWAY_COPY: Record<GatewayProviderId, GatewayCopy> = {
+  wayfinder: {
+    title: "WayfinderGatewayTitle",
+    label: "WayfinderGatewayLabel",
+    help: "WayfinderGatewayHelp",
+  },
+  bifrost: {
+    title: "BifrostGatewayTitle",
+    label: "WayfinderGatewayLabel",
+    help: "BifrostGatewayHelp",
+  },
+  aixy: {
+    title: "AixyGatewayTitle",
+    label: "AixyGatewayLabel",
+    help: "AixyGatewayHelp",
+  },
+};
+
+export function isGatewayProviderId(id: string): id is GatewayProviderId {
+  return Object.prototype.hasOwnProperty.call(GATEWAY_COPY, id);
+}
+
 interface Props {
+  providerId: GatewayProviderId;
   draft: string;
   error: string | null;
   busy: boolean;
@@ -8,10 +39,10 @@ interface Props {
   onDraftChange: (draft: string) => void;
   onSave: () => void;
   t: (key: LocaleKey) => string;
-  bifrost?: boolean;
 }
 
 export function WayfinderGatewaySection({
+  providerId,
   draft,
   error,
   busy,
@@ -19,13 +50,13 @@ export function WayfinderGatewaySection({
   onDraftChange,
   onSave,
   t,
-  bifrost = false,
 }: Props) {
+  const copy = GATEWAY_COPY[providerId];
   return (
     <section className="provider-detail__section">
-      <h3>{bifrost ? "Bifrost gateway" : t("WayfinderGatewayTitle")}</h3>
+      <h3>{t(copy.title)}</h3>
       <label>
-        <span>{bifrost ? "Gateway URL" : t("WayfinderGatewayLabel")}</span>
+        <span>{t(copy.label)}</span>
         <input
           type="url"
           value={draft}
@@ -34,9 +65,7 @@ export function WayfinderGatewaySection({
           aria-describedby="wayfinder-gateway-help"
         />
       </label>
-      <p id="wayfinder-gateway-help">
-        {bifrost ? "Base URL of your Bifrost gateway." : t("WayfinderGatewayHelp")}
-      </p>
+      <p id="wayfinder-gateway-help">{t(copy.help)}</p>
       {error && <p role="alert">{error}</p>}
       <button
         type="button"
