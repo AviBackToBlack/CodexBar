@@ -14,8 +14,10 @@ use parser::{CodexParseMode, CodexParserState};
 /// version 1 can retain a terminal pause after treating a paginated v2
 /// subagent's independent counters as an inherited fork. Version 3 adds
 /// persisted paginated-fork accounting state. Version 4 reparses copied-prefix
-/// subagents with locally inferred component baselines. Rebuild older artifacts.
-pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 4;
+/// subagents with locally inferred component baselines. Version 5 records a
+/// fork's first token timestamp so direct-fork chains resolve through parents
+/// with no token snapshot at the descendant's fork time. Rebuild older artifacts.
+pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 5;
 
 /// Whether a persisted Codex cache artifact matches the current schema.
 /// A mismatched artifact (e.g. a pre-64-bit cache from an older release) is
@@ -289,6 +291,18 @@ impl JsonlScanner {
             parse_rfc3339_timestamp(later),
         ) {
             (Some(earlier), Some(later)) => earlier <= later,
+            _ => false,
+        }
+    }
+
+    /// Strict counterpart of [`Self::codex_timestamp_at_or_before`]: `earlier`
+    /// is before `later`. Malformed timestamps fail closed.
+    pub(crate) fn codex_timestamp_before(earlier: &str, later: &str) -> bool {
+        match (
+            parse_rfc3339_timestamp(earlier),
+            parse_rfc3339_timestamp(later),
+        ) {
+            (Some(earlier), Some(later)) => earlier < later,
             _ => false,
         }
     }
@@ -643,6 +657,7 @@ impl JsonlScanner {
             last_totals: parser.previous_totals,
             token_timestamps_monotonic: parser.token_timestamps_monotonic,
             last_token_timestamp: parser.previous_token_timestamp,
+            first_token_timestamp: parser.first_token_timestamp,
             token_timestamp_comparisons: parser.token_timestamp_comparisons,
             bytes_read,
             is_complete,

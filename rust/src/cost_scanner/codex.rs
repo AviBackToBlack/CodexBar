@@ -746,6 +746,7 @@ impl CostScanner {
                 history_base_thread_id: history_base_thread_id.clone(),
                 fork_timestamp: codex_fork_timestamp.clone(),
                 inherited_totals: parse_result.fork_baseline.clone(),
+                first_token_timestamp: parse_result.first_token_timestamp.clone(),
                 remaining_inherited_totals: parse_result.remaining_inherited_totals.clone(),
                 locally_resolved,
             })

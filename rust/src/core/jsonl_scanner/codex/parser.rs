@@ -14,6 +14,10 @@ pub(super) struct CodexParserState {
     saw_interleaved_totals: bool,
     pub(super) records: Vec<(CodexUsageRecord, i64)>,
     pub(super) previous_token_timestamp: Option<String>,
+    /// First token timestamp seen by this parse. A fork uses it to prove that
+    /// its inherited origin is still the counter state at a descendant's
+    /// cutoff. Resumed non-fork parses do not observe the whole prefix.
+    pub(super) first_token_timestamp: Option<String>,
     previous_token_timestamp_parsed: Option<DateTime<chrono::FixedOffset>>,
     pub(super) token_timestamps_monotonic: Option<bool>,
     pub(super) token_timestamp_comparisons: u64,
@@ -278,6 +282,7 @@ impl CodexParserState {
             saw_interleaved_totals: false,
             records: Vec::new(),
             previous_token_timestamp,
+            first_token_timestamp: None,
             previous_token_timestamp_parsed,
             // A parser always validates a fresh prefix.  `None` is only an
             // input marker for the legacy-cache path, not an output state.
@@ -845,6 +850,9 @@ impl CodexParserState {
             if !ordered {
                 self.token_timestamps_monotonic = Some(false);
             }
+        }
+        if self.first_token_timestamp.is_none() {
+            self.first_token_timestamp = Some(timestamp.to_string());
         }
         self.previous_token_timestamp = Some(timestamp.to_string());
         self.previous_token_timestamp_parsed = current_parsed;
