@@ -293,6 +293,20 @@ fn replicate_cookie_source_and_domain_are_exposed() {
 }
 
 #[test]
+fn raycast_cookie_source_and_domain_are_exposed() {
+    let mut settings = Settings::default();
+    super::provider_cookie_source_set(&mut settings, "raycast", "manual".to_string()).unwrap();
+    assert_eq!(
+        provider_cookie_source_lookup(&settings, "raycast").as_deref(),
+        Some("manual")
+    );
+    assert_eq!(
+        super::provider_cookie_domain(ProviderId::Raycast, &settings),
+        Some("www.raycast.com")
+    );
+}
+
+#[test]
 fn provider_cookie_source_set_rejects_unknown_provider() {
     let mut s = Settings::default();
     let err = super::provider_cookie_source_set(&mut s, "nope", "x".into()).unwrap_err();
@@ -483,6 +497,49 @@ fn fetch_context_replicate_empty_manual_fails_closed_without_browser_import() {
     assert_eq!(ctx.source_mode, SourceMode::Web);
     assert!(ctx.manual_cookie_header.is_none());
     assert!(ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_raycast_cookie_sources_never_import_in_the_shell() {
+    let build = |source: &str, stored: Option<&str>| {
+        let mut settings = Settings::default();
+        settings.set_cookie_source(ProviderId::Raycast, source);
+        let mut cookies = ManualCookies::default();
+        if let Some(stored) = stored {
+            cookies.set(ProviderId::Raycast.cli_name(), stored);
+        }
+        super::build_fetch_context(
+            ProviderId::Raycast,
+            &settings,
+            &cookies,
+            &ApiKeys::default(),
+            &HashMap::new(),
+        )
+    };
+
+    // Manual with no stored header fails closed instead of using a browser.
+    let empty_manual = build("manual", None);
+    assert_eq!(empty_manual.source_mode, SourceMode::Web);
+    assert!(empty_manual.manual_cookie_header.is_none());
+    assert!(empty_manual.manual_cookie_missing);
+
+    // Off maps to the source the provider refuses, and never carries a header.
+    let off = build("off", Some("__raycast_session=stored"));
+    assert_eq!(off.source_mode, SourceMode::Cli);
+    assert!(off.manual_cookie_header.is_none());
+
+    // Auto leaves browser resolution to the provider (Chrome only).
+    let auto = build("auto", None);
+    assert_eq!(auto.source_mode, SourceMode::Auto);
+    assert!(auto.manual_cookie_header.is_none());
+    assert!(!auto.manual_cookie_missing);
+
+    let manual = build("manual", Some("__raycast_session=stored"));
+    assert_eq!(manual.source_mode, SourceMode::Web);
+    assert_eq!(
+        manual.manual_cookie_header.as_deref(),
+        Some("__raycast_session=stored")
+    );
 }
 
 #[test]
@@ -1777,6 +1834,13 @@ fn replicate_cookie_options_allow_automatic_and_manual_sessions() {
     let opts = super::cookie_source_options_for("replicate", Language::English);
     let values: Vec<_> = opts.iter().map(|option| option.value.as_str()).collect();
     assert_eq!(values, vec!["auto", "manual"]);
+}
+
+#[test]
+fn raycast_cookie_options_include_off_and_a_pinned_manual_session() {
+    let opts = super::cookie_source_options_for("raycast", Language::English);
+    let values: Vec<_> = opts.iter().map(|option| option.value.as_str()).collect();
+    assert_eq!(values, vec!["auto", "manual", "off"]);
 }
 
 #[test]

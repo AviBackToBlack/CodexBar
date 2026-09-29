@@ -266,6 +266,10 @@ static ICONS: &[(&str, &[u8])] = &[
         include_bytes!("icons/ProviderIcon-qwencloud.svg"),
     ),
     (
+        "ProviderIcon-raycast",
+        include_bytes!("icons/ProviderIcon-raycast.svg"),
+    ),
+    (
         "ProviderIcon-replicate",
         include_bytes!("icons/ProviderIcon-replicate.svg"),
     ),

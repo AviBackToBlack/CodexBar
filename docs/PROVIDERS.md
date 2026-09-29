@@ -45,6 +45,18 @@ Settings → **Providers** → provider detail → choose browser → Import.
 Manual cookie header paste is the fallback (required under WSL for Chromium DPAPI).  
 Details: [COOKIES.md](./COOKIES.md).
 
+### Raycast credits
+
+Raycast reads the unofficial `frontend_api/current_user/ai_credits` route of
+`www.raycast.com` with the `__raycast_session` and `csrf_token` cookies only.
+Auto imports those cookies from Chrome (all profiles, exact `www.raycast.com`
+host first); Windows Chrome App-Bound Encryption can block automatic import, in
+which case paste a Cookie header under Manual. A manual header is pinned and
+never falls back to a browser, and Off makes no request. When the response has
+a positive allowance and a known balance the provider shows one "credits left"
+meter with the renewal date; otherwise it shows the balance and total as detail
+rows. Top-up packages and credit details are not fetched.
+
 ### Replicate billing
 
 Replicate uses the signed-in `replicate.com` session cookie for its billing

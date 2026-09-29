@@ -72,6 +72,7 @@ pub mod pi;
 pub mod poe;
 pub mod qoder;
 pub mod qwencloud;
+pub mod raycast;
 pub mod replicate;
 pub mod sakana;
 pub mod stepfun;
@@ -154,6 +155,7 @@ pub use pi::PiProvider;
 pub use poe::PoeProvider;
 pub use qoder::QoderProvider;
 pub use qwencloud::QwenCloudProvider;
+pub use raycast::RaycastProvider;
 pub use replicate::ReplicateProvider;
 pub use sakana::SakanaProvider;
 pub use stepfun::StepFunProvider;
@@ -267,6 +269,18 @@ pub(crate) fn browser_cookies_for_domain(
     domain: &str,
 ) -> Result<Vec<crate::browser::cookies::Cookie>, crate::core::ProviderError> {
     crate::browser::cookies::get_cookies_for_domain(domain).map_err(map_browser_cookie_error)
+}
+
+/// Cookies for `domain` from one browser only, so a provider can avoid
+/// touching unrelated browsers (and their credential prompts).
+pub(crate) fn browser_cookies_from_browser(
+    browser_type: crate::browser::detection::BrowserType,
+    domain: &str,
+) -> Result<Vec<crate::browser::cookies::Cookie>, crate::core::ProviderError> {
+    let browser = crate::browser::detection::BrowserDetector::detect(browser_type)
+        .ok_or(crate::core::ProviderError::NoCookies)?;
+    crate::browser::cookies::CookieExtractor::extract_for_domain(&browser, domain)
+        .map_err(map_browser_cookie_error)
 }
 
 fn map_browser_cookie_error(
