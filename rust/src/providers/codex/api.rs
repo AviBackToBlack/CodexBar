@@ -21,6 +21,11 @@ const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const USAGE_PATH: &str = "/wham/usage";
 const RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
+/// Upstream 0.69.0 #4088: the Codex CLI owns `auth.json` and may be publishing a
+/// replacement while we read it. Re-read a missing, unreadable, or torn file up to
+/// this many times, `CREDENTIAL_READ_RETRY_DELAY` apart, before reporting the error.
+const CREDENTIAL_READ_RETRIES: u32 = 2;
+const CREDENTIAL_READ_RETRY_DELAY: Duration = Duration::from_millis(50);
 const EXTERNAL_OAUTH_REFRESH_WINDOW: chrono::TimeDelta = chrono::Duration::minutes(5);
 
 static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceLock::new();
@@ -113,7 +118,7 @@ impl CodexApi {
     pub async fn fetch_usage(
         &self,
     ) -> Result<(UsageSnapshot, Option<CostSnapshot>, Option<String>), ProviderError> {
-        let creds = self.load_credentials()?;
+        let creds = self.load_credentials().await?;
         let base_url = self.resolve_base_url();
         let auth_path = self.get_auth_path();
         let scope = weekly_reset::scope_key(creds.account_id.as_deref(), &auth_path);
@@ -306,7 +311,31 @@ impl CodexApi {
         decode_reset_credits(&response.bytes().await?)
     }
 
-    fn load_credentials(&self) -> Result<CodexCredentials, ProviderError> {
+    /// Load credentials, tolerating a brief owner publication of `auth.json`.
+    ///
+    /// Only read-side failures are retried (missing -> `NotInstalled`, unreadable ->
+    /// `Other`, malformed or incomplete -> `Parse`). The final error keeps its
+    /// category, and a stale/gated credential (`AuthRequired`) is never retried.
+    /// Nothing is written, and the credential cache semantics are unchanged.
+    /// Dropping the returned future cancels the retry delay.
+    async fn load_credentials(&self) -> Result<CodexCredentials, ProviderError> {
+        let mut retries_remaining = CREDENTIAL_READ_RETRIES;
+        loop {
+            match self.load_credentials_once() {
+                Err(
+                    ProviderError::NotInstalled(_)
+                    | ProviderError::Other(_)
+                    | ProviderError::Parse(_),
+                ) if retries_remaining > 0 => {
+                    retries_remaining -= 1;
+                    tokio::time::sleep(CREDENTIAL_READ_RETRY_DELAY).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn load_credentials_once(&self) -> Result<CodexCredentials, ProviderError> {
         let auth_path = self.get_auth_path();
 
         if !auth_path.exists() {
@@ -1349,6 +1378,9 @@ fn capitalize(s: &str) -> String {
         Some(first) => first.to_uppercase().chain(chars).collect(),
     }
 }
+
+#[cfg(test)]
+mod credential_retry_tests;
 
 #[cfg(test)]
 mod tests {
