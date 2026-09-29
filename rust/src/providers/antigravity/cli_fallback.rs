@@ -192,42 +192,44 @@ fn prepare_command(binary: &Path, args: &[&str], working_dir: &Path) -> AsyncCom
     command
 }
 
-/// Owns the kill-on-close job for one probe. Dropping it (success, error or
-/// timeout) terminates the probe's whole process tree, not only the direct
-/// child that `kill_on_drop` reaches; `agy` starts MCP server descendants that
-/// would otherwise outlive the probe.
+/// Kill-on-close job for one probe. Dropping it (success, error or timeout)
+/// terminates the probe's whole process tree, not only the direct child that
+/// `kill_on_drop` reaches; `agy` starts MCP server descendants that would
+/// otherwise outlive the probe.
 #[cfg(windows)]
-struct ProbeContainment(
-    #[expect(dead_code, reason = "held only so its Drop closes the job")] Option<ProcessJob>,
-);
-
+type ProbeJob = ProcessJob;
 #[cfg(not(windows))]
-struct ProbeContainment;
+type ProbeJob = ();
 
 /// Spawn the probe and place it in its own job. Only this probe's process tree
 /// is ever in the job, so unrelated `agy` processes are never touched.
 fn spawn_contained(
     command: &mut AsyncCommand,
-) -> Result<(tokio::process::Child, ProbeContainment), ProviderError> {
+) -> Result<(tokio::process::Child, Option<ProbeJob>), ProviderError> {
     let child = command
         .spawn()
         .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
-    #[cfg(windows)]
-    let containment = ProbeContainment(contain_child(&child));
-    #[cfg(not(windows))]
-    let containment = ProbeContainment;
-    Ok((child, containment))
+    let job = contain_child(&child);
+    Ok((child, job))
 }
 
 #[cfg(windows)]
-fn contain_child(child: &tokio::process::Child) -> Option<ProcessJob> {
-    let handle = child.raw_handle()?;
+fn contain_child(child: &tokio::process::Child) -> Option<ProbeJob> {
+    let Some(handle) = child.raw_handle() else {
+        tracing::warn!("Antigravity CLI probe exited before it could be job-contained");
+        return None;
+    };
     ProcessJob::create("agy-probe")
         .and_then(|job| job.contain(handle).map(|()| job))
         .inspect_err(|error| {
-            tracing::debug!(%error, "Antigravity CLI probe could not be job-contained");
+            tracing::warn!(%error, "Antigravity CLI probe could not be job-contained");
         })
         .ok()
+}
+
+#[cfg(not(windows))]
+fn contain_child(_child: &tokio::process::Child) -> Option<ProbeJob> {
+    None
 }
 
 async fn run_cli_command(
@@ -379,6 +381,17 @@ mod tests {
     }
 
     #[cfg(windows)]
+    struct KillOnDrop(std::process::Child);
+
+    #[cfg(windows)]
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            drop(self.0.kill());
+            drop(self.0.wait());
+        }
+    }
+
+    #[cfg(windows)]
     async fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while !condition() {
@@ -399,15 +412,17 @@ mod tests {
             marker.display()
         );
         // An unrelated process started outside the probe must survive the reap.
-        let mut bystander = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-Command",
-                "Start-Sleep -Seconds 120",
-            ])
-            .spawn()
-            .expect("start bystander");
+        let bystander = KillOnDrop(
+            std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-Command",
+                    "Start-Sleep -Seconds 120",
+                ])
+                .spawn()
+                .expect("start bystander"),
+        );
 
         let mut command = AsyncCommand::new("powershell.exe");
         command
@@ -419,7 +434,6 @@ mod tests {
             .kill_on_drop(true);
         let (child, containment) = spawn_contained(&mut command).expect("spawn contained probe");
 
-        wait_until(|| marker.exists(), "descendant pid marker").await;
         let mut descendant = None;
         wait_until(
             || {
@@ -444,10 +458,7 @@ mod tests {
         );
         drop(containment);
         wait_until(|| !process_is_alive(descendant), "descendant reaped").await;
-        assert!(process_is_alive(bystander.id()));
-
-        drop(bystander.kill());
-        drop(bystander.wait());
+        assert!(process_is_alive(bystander.0.id()));
     }
 
     #[test]
