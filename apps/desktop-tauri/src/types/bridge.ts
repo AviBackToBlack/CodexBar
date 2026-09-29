@@ -685,6 +685,8 @@ export interface ProviderUsageSnapshot {
   trayStatusLabel: string | null;
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
+  /** Per-UTC-day OpenAI Admin API history; only the `openaiapi` Admin path sets it. */
+  openAiApiUsage?: OpenAiApiUsageSnapshot | null;
   sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
 }
 
@@ -715,6 +717,49 @@ export interface WayfinderUsageSnapshot {
   unit: string;
   priced: boolean;
   routes: WayfinderRouteSummary[];
+}
+
+/** Line item cost for one UTC day; descending by cost, then name. */
+export interface OpenAiApiLineItemSnapshot {
+  name: string;
+  costUsd: number;
+}
+
+/** Model usage for one UTC day; descending by total tokens, then name. */
+export interface OpenAiApiModelUsageSnapshot {
+  name: string;
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+/**
+ * One UTC-day bucket. Input and output include audio tokens, cached input is a
+ * subset of input, and `totalTokens === inputTokens + outputTokens`.
+ */
+export interface OpenAiApiDailyUsageSnapshot {
+  /** Bucket start, epoch seconds. */
+  startTime: number;
+  /** Bucket end, epoch seconds; always after `startTime`. */
+  endTime: number;
+  costUsd: number;
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  lineItems: OpenAiApiLineItemSnapshot[];
+  models: OpenAiApiModelUsageSnapshot[];
+}
+
+export interface OpenAiApiUsageSnapshot {
+  /** Requested window in days (1-365). */
+  historyDays: number;
+  projectId: string | null;
+  /** Ascending by `startTime`; empty when the window had no data. */
+  daily: OpenAiApiDailyUsageSnapshot[];
 }
 
 export interface RefreshCompletePayload {

@@ -73,6 +73,56 @@ pub struct WayfinderRouteSummary {
     pub saved: f64,
 }
 
+/// Per-UTC-day OpenAI Admin API usage behind the daily usage chart (upstream 0.66.0
+/// `openAIAPIUsage`). It carries only what the two Admin endpoints report and stays
+/// provider-siloed: it is never persisted and never mixed into quota math.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiUsageHistory {
+    /// Length of the requested window in days (1-365).
+    pub history_days: u32,
+    /// Project the Admin queries were scoped to, when one is configured.
+    pub project_id: Option<String>,
+    /// One bucket per UTC day that has data, ascending by `start_time`.
+    pub daily: Vec<OpenAiApiDailyUsage>,
+}
+
+/// One UTC-day bucket. `input_tokens` and `output_tokens` include audio tokens and
+/// `cached_input_tokens` is a subset of input, so
+/// `total_tokens == input_tokens + output_tokens` (cached is never added on top).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiDailyUsage {
+    /// Bucket start, epoch seconds.
+    pub start_time: i64,
+    /// Bucket end, epoch seconds (always after `start_time`).
+    pub end_time: i64,
+    pub cost_usd: f64,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    /// Descending by cost, then name.
+    pub line_items: Vec<OpenAiApiLineItemCost>,
+    /// Descending by total tokens, then name.
+    pub models: Vec<OpenAiApiModelUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiLineItemCost {
+    pub name: String,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiModelUsage {
+    pub name: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+}
+
 /// A labeled extra usage window surfaced by provider APIs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedRateWindow {
@@ -615,6 +665,11 @@ pub struct ProviderFetchResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wayfinder_usage: Option<WayfinderUsageSnapshot>,
 
+    /// Per-day OpenAI Admin API history for the daily usage chart. Set only by the
+    /// Admin usage path; the balance fallback has no per-day data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_ai_api_usage: Option<OpenAiApiUsageHistory>,
+
     /// Transient non-quota inventory for provider-specific display.
     ///
     /// The field is intentionally skipped by serde: it belongs to the current
@@ -656,6 +711,7 @@ impl ProviderFetchResult {
             usage,
             cost: None,
             wayfinder_usage: None,
+            open_ai_api_usage: None,
             inventory: Vec::new(),
             display_details: Vec::new(),
             source_label: source_label.into(),
@@ -695,6 +751,12 @@ impl ProviderFetchResult {
     /// Builder pattern: set Wayfinder operational data.
     pub fn with_wayfinder_usage(mut self, usage: WayfinderUsageSnapshot) -> Self {
         self.wayfinder_usage = Some(usage);
+        self
+    }
+
+    /// Attach the per-day OpenAI Admin API history.
+    pub fn with_open_ai_api_usage(mut self, history: OpenAiApiUsageHistory) -> Self {
+        self.open_ai_api_usage = Some(history);
         self
     }
 

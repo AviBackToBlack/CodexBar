@@ -12,6 +12,9 @@
 //!   subset of input and is never added on top.
 //! - Each Admin GET gets one transient retry (see [`RetryPolicy`]).
 //!
+//! The Admin path also returns a per-UTC-day [`crate::core::OpenAiApiUsageHistory`] (upstream's
+//! `openAIAPIUsage` card, built in [`history`]) next to the spend summary.
+//!
 //! The history window is fixed at 30 days. Upstream's `OPENAI_HISTORY_DAYS` (1-365) is
 //! deferred until a Windows setting exists for it; [`usage_ranges`] already takes the day
 //! count, so honoring it later only needs to pass the setting through.
@@ -23,6 +26,8 @@ use reqwest::header::{HeaderValue, RETRY_AFTER};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
+
+mod history;
 
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
@@ -73,10 +78,6 @@ struct Page<T> {
 #[derive(Debug, Deserialize)]
 struct CostBucket {
     start_time: i64,
-    #[allow(
-        dead_code,
-        reason = "field present in the OpenAI API billing payload; kept so serde preserves it"
-    )]
     end_time: i64,
     results: Vec<CostResult>,
 }
@@ -95,10 +96,6 @@ struct CostAmount {
 #[derive(Debug, Deserialize)]
 struct CompletionsUsageBucket {
     start_time: i64,
-    #[allow(
-        dead_code,
-        reason = "field present in the OpenAI API billing payload; kept so serde preserves it"
-    )]
     end_time: i64,
     results: Vec<CompletionsUsageResult>,
 }
@@ -107,30 +104,11 @@ struct CompletionsUsageBucket {
 struct CompletionsUsageResult {
     model: Option<String>,
     input_tokens: Option<i64>,
-    #[allow(
-        dead_code,
-        reason = "cached input is a subset of input_tokens, so it is tracked but never added to totals"
-    )]
     input_cached_tokens: Option<i64>,
     output_tokens: Option<i64>,
     input_audio_tokens: Option<i64>,
     output_audio_tokens: Option<i64>,
     num_model_requests: Option<i64>,
-}
-
-impl CompletionsUsageResult {
-    /// Upstream `tokens = input + input_audio + output + output_audio`.
-    fn total_tokens(&self) -> i64 {
-        [
-            self.input_tokens,
-            self.input_audio_tokens,
-            self.output_tokens,
-            self.output_audio_tokens,
-        ]
-        .into_iter()
-        .map(|tokens| tokens.unwrap_or(0))
-        .sum()
-    }
 }
 
 /// One `start_time..end_time` request window of at most [`MAX_BUCKETS_PER_REQUEST`] days.
@@ -503,41 +481,25 @@ fn result_from_admin_usage(
     now: DateTime<Utc>,
     project_id: Option<&str>,
 ) -> Result<ProviderFetchResult, ProviderError> {
-    let mut cost_total = 0.0;
-    let mut line_item_costs: HashMap<String, f64> = HashMap::new();
-    for result in costs.iter().flat_map(|bucket| &bucket.results) {
-        let amount = cost_amount(result)?;
-        cost_total += amount;
-        let line_item = result
-            .line_item
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("API");
-        *line_item_costs.entry(line_item.to_string()).or_default() += amount;
-    }
+    let daily = history::daily_usage(costs, completions, now, HISTORY_DAYS)?;
 
-    let mut request_total: i64 = 0;
-    let mut token_total: i64 = 0;
-    let mut model_tokens: HashMap<String, i64> = HashMap::new();
-    for result in completions.iter().flat_map(|bucket| &bucket.results) {
-        let tokens = result.total_tokens();
-        request_total += result.num_model_requests.unwrap_or(0);
-        token_total += tokens;
-        let model = result
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("Responses and Chat Completions");
-        *model_tokens.entry(model.to_string()).or_default() += tokens;
+    let cost_total: f64 = daily.iter().map(|day| day.cost_usd).sum();
+    let request_total: u64 = daily.iter().map(|day| day.requests).sum();
+    let token_total: u64 = daily.iter().map(|day| day.total_tokens).sum();
+    let mut model_tokens: HashMap<&str, u64> = HashMap::new();
+    let mut line_item_costs: HashMap<&str, f64> = HashMap::new();
+    for day in &daily {
+        for model in &day.models {
+            *model_tokens.entry(&model.name).or_default() += model.total_tokens;
+        }
+        for item in &day.line_items {
+            *line_item_costs.entry(&item.name).or_default() += item.cost_usd;
+        }
     }
-
-    let first_bucket = costs
+    let start = daily
         .first()
-        .map(|b| b.start_time)
-        .or_else(|| completions.first().map(|b| b.start_time));
-    let start = first_bucket.and_then(|ts| Utc.timestamp_opt(ts, 0).single());
+        .and_then(|day| Utc.timestamp_opt(day.start_time, 0).single());
+    let project_id = project_id.filter(|id| !id.is_empty());
 
     let mut usage = UsageSnapshot::new(RateWindow::with_details(
         0.0,
@@ -557,17 +519,16 @@ fn result_from_admin_usage(
     )
     .with_login_method(
         project_id
-            .filter(|id| !id.is_empty())
             .map(|id| format!("Admin API: {id}"))
             .unwrap_or_else(|| "Admin API".to_string()),
     );
-    if let Some(project_id) = project_id.filter(|id| !id.is_empty()) {
+    if let Some(project_id) = project_id {
         usage = usage.with_organization(format!("Project: {project_id}"));
     }
     usage.updated_at = now;
 
     let mut top_models: Vec<_> = model_tokens.into_iter().collect();
-    top_models.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    top_models.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     for (idx, (model, tokens)) in top_models.into_iter().take(3).enumerate() {
         usage = usage.with_extra_rate_window(
             format!("model-{idx}"),
@@ -577,7 +538,7 @@ fn result_from_admin_usage(
     }
 
     let mut top_items: Vec<_> = line_item_costs.into_iter().collect();
-    top_items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    top_items.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     for (idx, (item, amount)) in top_items.into_iter().take(3).enumerate() {
         usage = usage.with_extra_rate_window(
             format!("line-item-{idx}"),
@@ -586,13 +547,15 @@ fn result_from_admin_usage(
         );
     }
 
-    Ok(
-        ProviderFetchResult::new(usage, "admin-api").with_cost(CostSnapshot::new(
-            cost_total,
-            "USD",
-            format!("Last {HISTORY_DAYS} days"),
-        )),
-    )
+    let mut result = ProviderFetchResult::new(usage, "admin-api").with_cost(CostSnapshot::new(
+        cost_total,
+        "USD",
+        format!("Last {HISTORY_DAYS} days"),
+    ));
+    if let Some(history) = history::usage_history(daily, HISTORY_DAYS, project_id) {
+        result = result.with_open_ai_api_usage(history);
+    }
+    Ok(result)
 }
 
 /// A missing, null or blank amount counts as zero; a present but non-numeric or
@@ -779,5 +742,7 @@ fn resolve_api_key(
 )]
 fn _assert_datetime_send(_: DateTime<Utc>) {}
 
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod tests;

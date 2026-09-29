@@ -400,6 +400,52 @@ async fn openai_admin_usage_filters_costs_and_completions_by_project() {
 }
 
 #[tokio::test]
+async fn openai_admin_usage_returns_per_day_history_from_the_wire_pages() {
+    let mut server = Server::new_async().await;
+    let day = 1_700_000_000;
+    let costs_page = format!(
+        r#"{{"object":"page","has_more":false,"next_page":null,"data":[
+            {{"object":"bucket","start_time":{day},"end_time":{end},"results":[
+                {{"object":"organization.costs.result","amount":{{"value":"2.50","currency":"usd"}},"line_item":"Text tokens"}}]}}]}}"#,
+        end = day + 86_400
+    );
+    let completions_page = format!(
+        r#"{{"object":"page","has_more":false,"next_page":null,"data":[
+            {{"object":"bucket","start_time":{day},"end_time":{end},"results":[
+                {{"object":"organization.usage.completions.result","input_tokens":100,"input_cached_tokens":40,"output_tokens":50,"input_audio_tokens":null,"num_model_requests":4,"model":"gpt-5.2"}}]}}]}}"#,
+        end = day + 86_400
+    );
+    let _costs = mock_page(&mut server, COSTS_PATH, Matcher::Any, &costs_page).await;
+    let _completions = mock_page(
+        &mut server,
+        COMPLETIONS_PATH,
+        Matcher::Any,
+        &completions_page,
+    )
+    .await;
+
+    let result = provider(&server)
+        .fetch_admin_usage("sk-test", Some("proj_abc"), fixed_now(3_600))
+        .await
+        .unwrap();
+
+    let history = result
+        .open_ai_api_usage
+        .expect("Admin path returns history");
+    assert_eq!(history.history_days, 30);
+    assert_eq!(history.project_id.as_deref(), Some("proj_abc"));
+    assert_eq!(history.daily.len(), 1);
+    let bucket = &history.daily[0];
+    assert_eq!((bucket.start_time, bucket.end_time), (day, day + 86_400));
+    assert_eq!(bucket.cost_usd, 2.5);
+    assert_eq!(bucket.requests, 4);
+    assert_eq!(bucket.cached_input_tokens, 40);
+    assert_eq!(bucket.total_tokens, 150);
+    assert_eq!(bucket.line_items[0].name, "Text tokens");
+    assert_eq!(bucket.models[0].name, "gpt-5.2");
+}
+
+#[tokio::test]
 async fn openai_admin_usage_pages_each_range_of_a_long_history() {
     let mut server = Server::new_async().await;
     let costs = mock_page(&mut server, COSTS_PATH, Matcher::Any, EMPTY_PAGE)
@@ -706,6 +752,8 @@ async fn openai_unscoped_key_falls_back_to_balance_on_admin_auth_failure() {
         result.usage.login_method.as_deref(),
         Some("API balance: $75.00")
     );
+    // The balance endpoint has no per-day data, so there is no chart history.
+    assert!(result.open_ai_api_usage.is_none());
 }
 
 #[tokio::test]
