@@ -409,6 +409,7 @@ export function ProviderDetailPane({
         providerId={detail.id}
         accountEmail={detail.email}
         accentColor={providerAccentColors[detail.id]}
+        openAiApiUsage={detail.openAiApiUsage}
         t={t}
       />
 

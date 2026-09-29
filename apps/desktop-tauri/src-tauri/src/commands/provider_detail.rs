@@ -37,6 +37,9 @@ pub struct ProviderDetail {
     // Cost / pace.
     pub cost: Option<CostSnapshotBridge>,
     pub pace: Option<PaceSnapshot>,
+    /// Per-day OpenAI Admin API history for the Settings daily usage chart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_ai_api_usage: Option<OpenAiApiUsageSnapshot>,
 
     // Error / state.
     pub last_error: Option<String>,
@@ -107,6 +110,7 @@ pub(crate) fn build_provider_detail(
         display_details: Vec::new(),
         cost: None,
         pace: None,
+        open_ai_api_usage: None,
         last_error: None,
         error_state: None,
         dashboard_url: dashboard_url.clone(),
@@ -172,6 +176,7 @@ pub fn get_provider_detail(
             detail.display_details = snapshot.display_details.clone();
             detail.cost = snapshot.cost.clone();
             detail.pace = snapshot.pace.clone();
+            detail.open_ai_api_usage = snapshot.open_ai_api_usage.clone();
         }
         detail.last_error = snapshot.error.clone();
         detail.error_state = Some(snapshot.error_state);

@@ -1,8 +1,13 @@
 import { type CSSProperties, useEffect, useState } from "react";
 import { getProviderChartData, getSettingsSnapshot } from "../../../../../lib/tauri";
 import { providerSupportsChartData } from "../../../../../lib/providerCharts";
-import type { ProviderChartData, SettingsSnapshot } from "../../../../../types/bridge";
+import type {
+  OpenAiApiUsageSnapshot,
+  ProviderChartData,
+  SettingsSnapshot,
+} from "../../../../../types/bridge";
 import type { useLocale } from "../../../../../hooks/useLocale";
+import { OpenAIApiUsageChart } from "../../../../../components/OpenAIApiUsageChart";
 import { CostHistoryChart } from "./CostHistoryChart";
 import { CreditsHistoryChart } from "./CreditsHistoryChart";
 import { TokensHistoryChart } from "./TokensHistoryChart";
@@ -15,6 +20,8 @@ interface Props {
   accountEmail: string | null;
   /** Per-provider accent color override (hex); applied as CSS --provider-accent. */
   accentColor?: string;
+  /** Per-day OpenAI Admin API history (`openaiapi` only); drawn instead of the local-log tabs. */
+  openAiApiUsage?: OpenAiApiUsageSnapshot | null;
   t: T;
 }
 
@@ -29,7 +36,13 @@ type TabKey = "tokens" | "cost" | "credits" | "usage";
  * Phase 10: fetches the latest settings snapshot so the animation flag feeds
  * through to each chart component.
  */
-export function ChartsSection({ providerId, accountEmail, accentColor, t }: Props) {
+export function ChartsSection({
+  providerId,
+  accountEmail,
+  accentColor,
+  openAiApiUsage,
+  t,
+}: Props) {
   const [data, setData] = useState<ProviderChartData | null>(null);
   const [active, setActive] = useState<TabKey | null>(null);
   const [animations, setAnimations] = useState(true);
@@ -70,6 +83,19 @@ export function ChartsSection({ providerId, accountEmail, accentColor, t }: Prop
       cancelled = true;
     };
   }, [providerId]);
+
+  if (providerId === "openaiapi") {
+    if (!openAiApiUsage || openAiApiUsage.daily.length === 0) return null;
+    return (
+      <section
+        className="provider-detail-section provider-detail-charts"
+        style={accentColor ? ({ "--provider-accent": accentColor } as CSSProperties) : undefined}
+      >
+        <div className="provider-detail-chart__title">{t("OpenAIChartTitle")}</div>
+        <OpenAIApiUsageChart usage={openAiApiUsage} animations={animations} t={t} />
+      </section>
+    );
+  }
 
   if (!data) return null;
 

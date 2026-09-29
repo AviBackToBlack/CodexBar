@@ -3104,6 +3104,166 @@ body:has(.tray-panel-reveal) {
   margin-right: 6px;
 }
 
+/* Selectable bars (OpenAI daily usage): keyboard focus ring on the active bar. */
+.chart__bar[role="option"] {
+  cursor: pointer;
+}
+
+.chart__bar[role="option"]:focus {
+  outline: none;
+}
+
+.chart__bar[role="option"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chart__bar[data-selected="true"] {
+  stroke: var(--text-primary);
+  stroke-width: 1;
+}
+
+/* ── OpenAI Admin API daily usage (tray card + Settings charts) ───── */
+
+.openai-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.openai-usage__tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.openai-usage__tab {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.openai-usage__tab:hover {
+  color: var(--text-primary);
+}
+
+.openai-usage__tab[data-active="true"] {
+  color: var(--text-primary);
+  border-color: var(--panel-border);
+  background: var(--provider-row-bg);
+}
+
+.openai-usage__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.openai-usage__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.openai-usage__hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.openai-usage__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.openai-usage__day {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.openai-usage__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.openai-usage__stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.openai-usage__stats dt {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.openai-usage__stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.openai-usage__list-title {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.openai-usage__list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.openai-usage__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.openai-usage__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.openai-usage__amount {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.openai-usage__list li.openai-usage__more {
+  color: var(--text-muted);
+}
+
+.openai-usage__footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--panel-border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.openai-usage__footer strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chart__bar,
   .chart__line,

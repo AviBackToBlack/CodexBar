@@ -1024,6 +1024,8 @@ export interface ProviderDetail {
 
   cost: CostSnapshotBridge | null;
   pace: PaceSnapshot | null;
+  /** Per-UTC-day OpenAI Admin API history; only the `openaiapi` Admin path sets it. */
+  openAiApiUsage?: OpenAiApiUsageSnapshot | null;
 
   lastError: string | null;
   errorState: ProviderStateKind | null;
