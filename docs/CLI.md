@@ -64,7 +64,16 @@ codexbar cost
 codexbar cost -p codex -f json --pretty
 codexbar cost -p codex --remote user@mac-host
 codexbar cost -p codex --format json --summary-only --provider-native-only --days 30
+codexbar cost --period month-to-date --json
+codexbar cost --period all --json
+codexbar cost --days 7 --json
 ```
+
+**Reporting period.** `--period month-to-date|all` selects the calendar month so far (midnight on the first of the month, in the machine's local zone, through today) or all available local history. `--days N` (1..=365) always selects a rolling window and wins over `--period`. With neither flag the saved `cost_reporting_period` in `settings.json` applies (`rolling:30`, `month-to-date` or `all`; 30 days when unset). Text headings show the period label (`Last 30 days`, `Month to date`, `All`, `Today`). JSON payloads add `reportingPeriod` (the raw value), `historyLabel`, and a `totals` object (`inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens`, `totalTokens`, `totalCost`) for the selected window, and `days_scanned` is the resolved day count; the existing `cost`, `tokens`, and `sessions_count` fields keep their meaning. `totals` is `null` when a scan found nothing without establishing a known zero.
+
+`--remote` and `--summary-only` keep the 1..=365 day protocol: month to date is sent as its current day count, and All is rejected unless you pass an explicit `--days N`. `--group-by session` lists the most recent 365 days at most when All is selected. All reads every available local log, including logs older than a year; missing or deleted logs cannot be recovered and incomplete scans stay marked incomplete.
+
+`serve` `/cost` reads the saved period on every request, so `days_scanned`, `totals`, the scanner windows and the `daily` chart rows follow it (`daily` covers at most the latest 365 days for All). The dashboard cost line, the dashboard snapshot, and the Prometheus gauge `codexbar_cost_last_30_days_usd` keep their 30-day meaning.
 
 Claude/Codex costs come from local session logs. Antigravity exposes local **token history only** through `cost`; dollar cost remains unknown rather than becoming a false `$0`. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
 

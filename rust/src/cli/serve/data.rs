@@ -6,9 +6,11 @@
 
 use serde_json::json;
 
+use crate::cli::cost_period::{cost_totals_json, rolling_window_days, stamp_period, window_days};
 use crate::cli::usage::ProviderSelection;
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::{self, CostScanner};
+use crate::settings::Settings;
 
 use super::json_response;
 
@@ -64,25 +66,29 @@ pub async fn cost_response(provider: Option<&str>) -> String {
             return json_response(400, json!({ "error": error.to_string() }));
         }
     };
-    let scanner = CostScanner::new(30).with_options(CostScanOptions::app_driven());
+    // The saved selection is read per request, so a change in Settings (or a
+    // month rollover for month to date) applies without restarting `serve`.
+    // There is no `/cost` response cache; the scanners' own caches are keyed by
+    // the resolved day range, so one period never reuses another's entries.
+    let period = Settings::load().cost_reporting_period;
+    let days = window_days(period);
+    let scanner = CostScanner::for_period(period).with_options(CostScanOptions::app_driven());
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
         if provider_id == ProviderId::Antigravity {
-            let history = crate::providers::antigravity::local_sessions::summarize(30);
-            results.push(crate::spend_contract::local_token_history_json(
-                "antigravity",
-                history,
-                30,
-            ));
+            let history = crate::providers::antigravity::local_sessions::summarize(days);
+            let mut payload =
+                crate::spend_contract::local_token_history_json("antigravity", history, days);
+            stamp_period(&mut payload, period);
+            results.push(payload);
             continue;
         }
         if provider_id == ProviderId::Muse {
-            let report = crate::providers::muse::local_usage::scan(30, None);
-            results.push(crate::spend_contract::local_token_history_json(
-                "muse",
-                report.into(),
-                30,
-            ));
+            let report = crate::providers::muse::local_usage::scan(days, None);
+            let mut payload =
+                crate::spend_contract::local_token_history_json("muse", report.into(), days);
+            stamp_period(&mut payload, period);
+            results.push(payload);
             continue;
         }
         let (supported, summary) = match provider_id {
@@ -94,15 +100,17 @@ pub async fn cost_response(provider: Option<&str>) -> String {
         if supported {
             // Daily spend history for the dashboard bar charts. The debounced
             // helper reuses the cache the summary scan just warmed, so no
-            // second disk walk happens per request.
+            // second disk walk happens per request. All charts the most recent
+            // year; month to date charts exactly its own days.
             let daily = daily_json(cost_scanner::get_daily_cost_history(
                 provider_id.cli_name(),
-                30,
+                rolling_window_days(period),
             ));
-            results.push(json!({
+            let mut payload = json!({
                 "provider": provider_id.cli_name(),
                 "supported": true,
-                "days_scanned": 30,
+                "days_scanned": days,
+                "totals": cost_totals_json(&summary),
                 "cost": {
                     "total_usd": summary.total_cost_usd,
                     "currency": "USD"
@@ -115,7 +123,9 @@ pub async fn cost_response(provider: Option<&str>) -> String {
                 },
                 "sessions_count": summary.sessions_count,
                 "by_model": summary.by_model,
-            }));
+            });
+            stamp_period(&mut payload, period);
+            results.push(payload);
         } else {
             results.push(json!({
                 "provider": provider_id.cli_name(),

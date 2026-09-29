@@ -15,6 +15,7 @@ pub mod account;
 pub mod autostart;
 pub mod config;
 pub mod cost;
+mod cost_period;
 pub mod dashboard;
 pub mod diagnose;
 pub mod guard;

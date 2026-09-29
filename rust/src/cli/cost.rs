@@ -4,11 +4,15 @@
 
 use clap::Args;
 
+use super::cost_period::{
+    cost_totals_json, resolve_period, rolling_window_days, stamp_period, window_days,
+};
 use super::usage::{OutputFormat, ProviderSelection};
 use crate::codex_costs::{
     CodexHostCostReport, CodexHostCostsArgs, CodexHostOutcome, run_codex_host_costs,
 };
 use crate::core::{CostScanOptions, ProviderId};
+use crate::cost_reporting_period::CostReportingPeriod;
 use crate::cost_scanner::{CostScanner, CostSummary};
 use crate::settings::Settings;
 use crate::spend_contract::build_local_spend_contract_from_summary;
@@ -36,9 +40,14 @@ pub struct CostArgs {
     #[arg(long)]
     pub pretty: bool,
 
-    /// Number of days to scan (default: 30)
-    #[arg(short, long, default_value = "30")]
-    pub days: u32,
+    /// Cost history window in days (1..=365); always rolling and overrides --period
+    #[arg(short, long)]
+    pub days: Option<u32>,
+
+    /// Cost period: month-to-date or all. Without --days or --period the
+    /// saved cost period applies (30 days by default)
+    #[arg(long)]
+    pub period: Option<String>,
 
     /// A16 (upstream 0.48.0): exclude pi/OMP-compatible agent session mirrors,
     /// reporting only the provider-native local JSONL logs. When omitted
@@ -91,9 +100,18 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     let group_by = CostGroupBy::from_arg(args.group_by.as_deref());
     let use_color = !args.no_color && is_terminal();
 
-    if args.remote.is_some() || args.summary_only {
+    let host_summary = args.remote.is_some() || args.summary_only;
+    let period = resolve_period(
+        args.days,
+        args.period.as_deref(),
+        Settings::load().cost_reporting_period,
+        host_summary,
+    )?;
+    let days = window_days(period);
+
+    if host_summary {
         return run_codex_host_costs(&CodexHostCostsArgs {
-            days: args.days,
+            days,
             remote: args.remote.clone(),
             summary_only: args.summary_only,
             pretty: args.pretty,
@@ -115,13 +133,14 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     // owns its mirrored Codex/Claude events. A single native-provider request
     // keeps the historical inclusive behavior unless explicitly narrowed.
     scan_options.include_pi_sessions = !args.provider_native_only && !pi_selected;
-    let scanner = CostScanner::new(args.days).with_options(scan_options);
+    let scanner = CostScanner::for_period(period).with_options(scan_options);
 
     tracing::debug!(
-        "Running cost command: providers={:?}, format={:?}, days={}",
+        "Running cost command: providers={:?}, format={:?}, period={}, days={}",
         providers.as_list(),
         format,
-        args.days
+        period,
+        days
     );
 
     // Collect cost data for requested providers
@@ -170,12 +189,12 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
                     summary: CostSummary::default(),
                     supported: true,
                     token_history: Some(crate::providers::antigravity::local_sessions::summarize(
-                        args.days,
+                        days,
                     )),
                 });
             }
             ProviderId::Muse => {
-                let report = crate::providers::muse::local_usage::scan(args.days, None);
+                let report = crate::providers::muse::local_usage::scan(days, None);
                 results.push(CostResult {
                     provider: provider.cli_name().to_string(),
                     display_name: provider.display_name().to_string(),
@@ -199,10 +218,10 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
 
     match format {
         OutputFormat::Text => {
-            print_text_output(&results, use_color, args.days, group_by);
+            print_text_output(&results, use_color, period, group_by);
         }
         OutputFormat::Json => {
-            print_json_output(&results, args.pretty, args.days)?;
+            print_json_output(&results, args.pretty, period, days)?;
         }
     }
 
@@ -273,12 +292,18 @@ struct CostResult {
 }
 
 /// Print text output
-fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_by: CostGroupBy) {
+fn print_text_output(
+    results: &[CostResult],
+    use_color: bool,
+    period: CostReportingPeriod,
+    group_by: CostGroupBy,
+) {
+    let label = period.label();
     for (i, result) in results.iter().enumerate() {
         let title = if result.token_history.is_some() {
-            format!("{} Token History (last {} days)", result.display_name, days)
+            format!("{} Token History ({label})", result.display_name)
         } else {
-            format!("{} Cost (last {} days)", result.display_name, days)
+            format!("{} Cost ({label})", result.display_name)
         };
         if use_color {
             println!("\x1b[1m{title}\x1b[0m");
@@ -287,9 +312,9 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
         }
 
         if let Some(history) = result.token_history {
-            print_local_token_history(history, days);
+            print_local_token_history(history);
         } else if group_by == CostGroupBy::Session && result.provider == "codex" {
-            print_codex_session_output(result, days);
+            print_codex_session_output(result, period);
         } else if group_by == CostGroupBy::Session {
             println!("  Session grouping is only available for Codex local conversations");
         } else if !result.supported {
@@ -297,7 +322,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
             println!("  (Only Codex and Claude have local logs)");
         } else if result.summary.sessions_count == 0 {
             if result.summary.known_zero {
-                println!("  No usage in the last {} days (scan complete)", days);
+                println!("  No usage in the selected period (scan complete)");
             } else {
                 println!("  No usage data found");
                 println!("  Check that you have used {} locally", result.display_name);
@@ -372,11 +397,11 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
     }
 }
 
-fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySummary, days: u32) {
+fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySummary) {
     use crate::spend_contract::LocalHistoryCoverage;
     match history.coverage {
         LocalHistoryCoverage::Complete if history.total_tokens == 0 => {
-            println!("  No token usage in the last {days} days (scan complete)");
+            println!("  No token usage in the selected period (scan complete)");
         }
         LocalHistoryCoverage::Complete => {
             println!("  Tokens:   {} total", format_number(history.total_tokens));
@@ -389,8 +414,10 @@ fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySu
     println!("  Local token history; dollar costs unavailable");
 }
 
-fn print_codex_session_output(result: &CostResult, days: u32) {
-    let index = crate::codex_workspaces::CodexWorkspacesIndex::new(days);
+fn print_codex_session_output(result: &CostResult, period: CostReportingPeriod) {
+    // The conversation index keeps rolling 1..=365 day windows, so All lists
+    // the most recent year; the heading below reports the window it used.
+    let index = crate::codex_workspaces::CodexWorkspacesIndex::new(rolling_window_days(period));
     let snapshot = match index.load_snapshot(false, |_| {}) {
         Ok(snapshot) => snapshot,
         Err(err) => {
@@ -454,13 +481,20 @@ fn short_session_id(value: &str) -> String {
 }
 
 /// Print JSON output
-fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Value> {
+fn build_json_payloads(
+    results: &[CostResult],
+    period: CostReportingPeriod,
+    days: u32,
+) -> Vec<serde_json::Value> {
     let settings = Settings::load();
     results
         .iter()
         .map(|r| {
             if let Some(history) = r.token_history {
-                return crate::spend_contract::local_token_history_json(&r.provider, history, days);
+                let mut payload =
+                    crate::spend_contract::local_token_history_json(&r.provider, history, days);
+                stamp_period(&mut payload, period);
+                return payload;
             }
             if !r.supported {
                 serde_json::json!({
@@ -478,10 +512,11 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
                         settings.hide_personal_info,
                         r.summary.clone(),
                     ));
-                serde_json::json!({
+                let mut payload = serde_json::json!({
                     "provider": r.provider,
                     "supported": true,
                     "days_scanned": days,
+                    "totals": cost_totals_json(&r.summary),
                     "cost": {"total_usd": r.summary.total_cost_usd, "currency": "USD"},
                     "tokens": {"input": r.summary.input_tokens, "output": r.summary.output_tokens, "cached": r.summary.cached_tokens},
                     "sessions_count": r.summary.sessions_count,
@@ -498,14 +533,21 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
                     }).collect::<serde_json::Map<_, _>>(),
                     "period": {"start": r.summary.period_start.map(|d| d.to_string()), "end": r.summary.period_end.map(|d| d.to_string())},
                     "spendContract": spend_contract
-                })
+                });
+                stamp_period(&mut payload, period);
+                payload
             }
         })
         .collect()
 }
 
-fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
-    let payloads = build_json_payloads(results, days);
+fn print_json_output(
+    results: &[CostResult],
+    pretty: bool,
+    period: CostReportingPeriod,
+    days: u32,
+) -> anyhow::Result<()> {
+    let payloads = build_json_payloads(results, period, days);
 
     let output = if pretty {
         serde_json::to_string_pretty(&payloads)?
@@ -646,6 +688,81 @@ mod tests {
         assert!(partial["tokens"]["total"].is_null());
         assert_eq!(partial["historyCoverage"], "partial");
     }
+    #[derive(clap::Parser)]
+    struct Wrapper {
+        #[command(flatten)]
+        args: CostArgs,
+    }
+
+    fn parse_args(argv: &[&str]) -> CostArgs {
+        use clap::Parser;
+        Wrapper::try_parse_from(std::iter::once("cost").chain(argv.iter().copied()))
+            .expect("cost args parse")
+            .args
+    }
+
+    #[test]
+    fn days_and_period_are_detectable_when_absent() {
+        let args = parse_args(&[]);
+        assert_eq!(args.days, None);
+        assert_eq!(args.period, None);
+        let args = parse_args(&["--period", "month-to-date", "--days", "7"]);
+        assert_eq!(args.days, Some(7));
+        assert_eq!(args.period.as_deref(), Some("month-to-date"));
+    }
+
+    #[test]
+    fn json_payload_carries_period_identity_and_totals() {
+        let summary = CostSummary {
+            total_cost_usd: 2.5,
+            input_tokens: 10,
+            output_tokens: 5,
+            sessions_count: 1,
+            ..Default::default()
+        };
+        let results = [CostResult {
+            provider: "claude".to_string(),
+            display_name: "Claude".to_string(),
+            summary,
+            supported: true,
+            token_history: None,
+        }];
+        let payloads = build_json_payloads(&results, CostReportingPeriod::MonthToDate, 12);
+        let payload = &payloads[0];
+        assert_eq!(payload["reportingPeriod"], "month-to-date");
+        assert_eq!(payload["historyLabel"], "Month to date");
+        assert_eq!(payload["days_scanned"], 12);
+        assert_eq!(payload["totals"]["totalCost"], 2.5);
+        assert_eq!(payload["totals"]["totalTokens"], 15);
+        // Existing fields keep their meaning.
+        assert_eq!(payload["cost"]["total_usd"], 2.5);
+        assert_eq!(payload["tokens"]["input"], 10);
+
+        let rolling = build_json_payloads(&results, CostReportingPeriod::Rolling(30), 30);
+        assert_eq!(rolling[0]["reportingPeriod"], "rolling:30");
+        assert_eq!(rolling[0]["historyLabel"], "Last 30 days");
+    }
+
+    #[test]
+    fn token_history_payload_is_stamped_with_the_period() {
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let results = [CostResult {
+            provider: "antigravity".to_string(),
+            display_name: "Antigravity".to_string(),
+            summary: CostSummary::default(),
+            supported: true,
+            token_history: Some(LocalTokenHistorySummary {
+                total_tokens: 3,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Complete,
+            }),
+        }];
+        let payloads = build_json_payloads(&results, CostReportingPeriod::AllAvailable, 20_000);
+        assert_eq!(payloads[0]["reportingPeriod"], "all");
+        assert_eq!(payloads[0]["historyLabel"], "All");
+        assert_eq!(payloads[0]["days_scanned"], 20_000);
+    }
+
     #[test]
     fn provider_native_only_flag_default_false() {
         // Default CostArgs has provider_native_only = false (backward compat).
