@@ -1,7 +1,9 @@
 //! Cookie Header Cache
 //!
 //! Caches cookie headers for providers to avoid repeated browser cookie extraction.
-//! Stores normalized cookie headers with timestamps and source labels.
+//! Stores normalized cookie headers with timestamps and source labels. Entries
+//! are session secrets, so they are written through `secure_file` (DPAPI on
+//! Windows, staged and published atomically) rather than as plaintext.
 
 // The cache API is currently unused by the crate (reserved for provider
 // cookie reuse), so every public item would trip dead_code.
@@ -11,10 +13,11 @@
 )]
 
 use crate::core::ProviderId;
+use crate::secure_file;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Cached cookie header entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,8 +52,11 @@ pub struct CookieHeaderCache;
 impl CookieHeaderCache {
     /// Load cached cookie header for a provider
     pub fn load(provider: ProviderId) -> Option<CookieHeaderEntry> {
-        let path = Self::cache_path(provider)?;
-        let data = fs::read_to_string(&path).ok()?;
+        Self::load_from(&Self::cache_path(provider)?)
+    }
+
+    fn load_from(path: &Path) -> Option<CookieHeaderEntry> {
+        let data = secure_file::read_string(path).ok()?;
         serde_json::from_str(&data).ok()
     }
 
@@ -73,14 +79,7 @@ impl CookieHeaderCache {
 
         let entry = CookieHeaderEntry::new(normalized, source_label);
         let path = Self::cache_path(provider).ok_or(CookieHeaderCacheError::PathNotAvailable)?;
-
-        // Create parent directory
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let json = serde_json::to_string_pretty(&entry)?;
-        fs::write(&path, json)?;
+        Self::store_to(&path, &entry)?;
 
         tracing::debug!(
             provider = %provider.cli_name(),
@@ -88,6 +87,17 @@ impl CookieHeaderCache {
             "Stored cookie header to cache"
         );
 
+        Ok(())
+    }
+
+    /// Persist `entry` to `path`, creating the parent directory. The write is
+    /// staged and published atomically, so a failure keeps the previous entry.
+    fn store_to(path: &Path, entry: &CookieHeaderEntry) -> Result<(), CookieHeaderCacheError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string_pretty(entry)?;
+        secure_file::write_string(path, &json)?;
         Ok(())
     }
 
@@ -194,5 +204,55 @@ mod tests {
 
         let whitespace = CookieHeaderCache::normalize_cookie_header("   ;  ;  ");
         assert!(whitespace.is_empty());
+    }
+
+    #[test]
+    fn store_round_trips_and_replaces_the_previous_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("codex-cookie.json");
+
+        CookieHeaderCache::store_to(&path, &CookieHeaderEntry::new("a=1", "Chrome")).unwrap();
+        CookieHeaderCache::store_to(&path, &CookieHeaderEntry::new("a=2", "Edge")).unwrap();
+
+        let loaded = CookieHeaderCache::load_from(&path).expect("entry");
+        assert_eq!(loaded.cookie_header, "a=2");
+        assert_eq!(loaded.source_label, "Edge");
+        let names: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("codex-cookie.json")]);
+    }
+
+    #[test]
+    fn failed_store_leaves_no_cookie_bytes_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory at the destination makes publishing fail after the
+        // staged sibling was fully written.
+        let blocked = dir.path().join("codex-cookie.json");
+        fs::create_dir(&blocked).unwrap();
+        let entry = CookieHeaderEntry::new("secret=leaked-cookie", "Chrome");
+
+        assert!(CookieHeaderCache::store_to(&blocked, &entry).is_err());
+
+        assert!(blocked.is_dir());
+        for sibling in fs::read_dir(dir.path()).unwrap() {
+            let sibling = sibling.unwrap().path();
+            if sibling.is_file() {
+                let leftover = fs::read(&sibling).unwrap();
+                assert!(!String::from_utf8_lossy(&leftover).contains("leaked-cookie"));
+            }
+        }
+    }
+
+    #[test]
+    fn load_still_reads_entries_written_as_plaintext_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("codex-cookie.json");
+        let entry = CookieHeaderEntry::new("legacy=1", "Chrome");
+        fs::write(&path, serde_json::to_string_pretty(&entry).unwrap()).unwrap();
+
+        let loaded = CookieHeaderCache::load_from(&path).expect("legacy entry");
+        assert_eq!(loaded.cookie_header, "legacy=1");
     }
 }
