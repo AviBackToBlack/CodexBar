@@ -17,6 +17,7 @@ import { useProviders } from "./useProviders";
 import { useSettings } from "./useSettings";
 import { useUpdateState } from "./useUpdateState";
 import { useLocale } from "./useLocale";
+import { useProviderSwitcherKeys } from "./useProviderSwitcherKeys";
 import { useSurfaceTarget } from "./useSurfaceMode";
 import { useTrayPanelLayout } from "./useTrayPanelLayout";
 import type { MenuFooterRow } from "../components/MenuSurface";
@@ -345,6 +346,15 @@ export function useTrayPanelController(state: BootstrapState) {
     },
     [],
   );
+  const sortedProviderIds = useMemo(
+    () => sorted.map((provider) => provider.providerId),
+    [sorted],
+  );
+  useProviderSwitcherKeys({
+    providerIds: sortedProviderIds,
+    selectedProviderId,
+    onSelect: handleGridClick,
+  });
   const handleReorder = useCallback((orderedIds: string[]) => {
     void reorderProviders(orderedIds).catch(() => {});
   }, []);

@@ -6,6 +6,7 @@ import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useUpdateState } from "../hooks/useUpdateState";
 import { useLocale } from "../hooks/useLocale";
+import { useProviderSwitcherKeys } from "../hooks/useProviderSwitcherKeys";
 import MenuCard from "../components/MenuCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import MenuSurface, {
@@ -89,14 +90,23 @@ export default function PopOutPanel({
     },
     [sorted, selectedProviderId, gridExpanded],
   );
-  const providerOrderKey = useMemo(
-    () => sorted.map((provider) => provider.providerId).join(","),
+  const sortedProviderIds = useMemo(
+    () => sorted.map((provider) => provider.providerId),
     [sorted],
+  );
+  const providerOrderKey = useMemo(
+    () => sortedProviderIds.join(","),
+    [sortedProviderIds],
   );
 
   const handleGridClick = useCallback((nextProviderId: string | null) => {
     setSelectedProviderId(nextProviderId);
   }, []);
+  useProviderSwitcherKeys({
+    providerIds: sortedProviderIds,
+    selectedProviderId,
+    onSelect: handleGridClick,
+  });
   const handleReorder = useCallback((orderedIds: string[]) => {
     void reorderProviders(orderedIds).catch(() => {});
   }, []);
