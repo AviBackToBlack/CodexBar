@@ -756,8 +756,10 @@ impl CostScanner {
     ///
     /// Reads the local `opencode.db` and maps rows onto the shared `CostSummary`
     /// (`total_cost_usd`, `by_model`, `sessions_count`, period) so the chart's
-    /// local-usage summary treats OpenCode Go like Codex/Claude. No token counts
-    /// are available from the SQLite reader, so token fields stay zero.
+    /// local-usage summary treats OpenCode Go like Codex/Claude. Recorded token
+    /// counts fill the token fields and `by_model_tokens` (costs stay the recorded
+    /// `cost`, never derived from tokens). Rows without usable tokens add nothing
+    /// to the sums, and `reasoning_tokens` stays `None` unless every row reports it.
     pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
         if is_cancelled(cancel) {
             return CostSummary::default();
@@ -766,9 +768,20 @@ impl CostScanner {
         let Some(local) = opencodego_local::model_cost_summary_scan(now, self.days) else {
             return CostSummary::default();
         };
+        let totals = local.tokens.to_model_token_counts().unwrap_or_default();
+        let by_model_tokens = local
+            .by_model_tokens
+            .iter()
+            .filter_map(|(model, sums)| Some((model.clone(), sums.to_model_token_counts()?)))
+            .collect();
         CostSummary {
             total_cost_usd: local.total_cost_usd,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cached_tokens: totals.cached_tokens,
+            reasoning_tokens: totals.reasoning_tokens,
             by_model: local.by_model,
+            by_model_tokens,
             sessions_count: local.request_count,
             period_start: local.period_start,
             period_end: local.period_end,
