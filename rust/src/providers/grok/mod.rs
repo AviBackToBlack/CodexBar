@@ -8,6 +8,7 @@ pub mod accounts;
 mod billing;
 mod credits_proxy;
 pub mod local_sessions;
+mod product_usage;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -137,6 +138,7 @@ impl GrokProvider {
         let BearerBilling {
             billing,
             subscription_tier,
+            product_usage,
         } = match self.fetch_bearer_billing(credentials).await {
             Ok(bearer) => bearer,
             Err(error) => {
@@ -165,6 +167,12 @@ impl GrokProvider {
             credentials.team_id.clone(),
             plan,
         );
+        // Reset-credit enrichment adds inventory only, so the breakdown survives it.
+        let result = product_usage::display_details(&product_usage)
+            .into_iter()
+            .fold(result, |result, detail| {
+                result.with_display_detail(Some(detail))
+            });
         Ok(match reset_credits {
             Some(credits) => result.with_inventory_item(credits),
             None => result,
@@ -837,3 +845,7 @@ mod tests;
 #[cfg(test)]
 #[path = "credits_proxy_tests.rs"]
 mod credits_proxy_tests;
+
+#[cfg(test)]
+#[path = "product_usage_tests.rs"]
+mod product_usage_tests;

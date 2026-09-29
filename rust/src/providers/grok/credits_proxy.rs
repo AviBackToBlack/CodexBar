@@ -15,6 +15,7 @@ use crate::core::ProviderError;
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
 use super::billing::GrokBillingSnapshot;
+use super::product_usage::{GrokProductUsage, LossyProductUsage};
 use super::{GrokCredentials, GrokProvider, grok_plan_display_name};
 
 pub(super) const CREDITS_PROXY_ENDPOINT: &str =
@@ -31,6 +32,9 @@ const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 pub(super) struct BearerBilling {
     pub(super) billing: GrokBillingSnapshot,
     pub(super) subscription_tier: Option<String>,
+    /// Product shares of the same payload's wire credit percent; empty for
+    /// every other percent source (on-demand ratio, period-only, gRPC-web).
+    pub(super) product_usage: Vec<GrokProductUsage>,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +60,8 @@ struct CreditsConfig {
     on_demand_used: Option<CreditsAmount>,
     #[serde(rename = "subscriptionTier")]
     subscription_tier: Option<String>,
+    #[serde(default, rename = "productUsage")]
+    product_usage: LossyProductUsage,
 }
 
 #[derive(Deserialize)]
@@ -126,9 +132,14 @@ pub(super) fn parse_credits_response(
     };
     let window_minutes = window_minutes(period_start, resets_at, now);
 
-    let used_percent = config
+    let wire_percent = config
         .credit_usage_percent
-        .filter(|percent| percent.is_finite())
+        .filter(|percent| percent.is_finite());
+    // Composition is checked against the raw percent, before display clamping.
+    let product_usage = wire_percent
+        .map(|percent| config.product_usage.composing(percent))
+        .unwrap_or_default();
+    let used_percent = wire_percent
         .or_else(|| {
             let cap = config.on_demand_cap?.val.filter(|cap| *cap > 0.0)?;
             Some(config.on_demand_used?.val? / cap * 100.0)
@@ -149,6 +160,7 @@ pub(super) fn parse_credits_response(
             window_minutes,
         },
         subscription_tier,
+        product_usage,
     })
 }
 
@@ -168,6 +180,8 @@ fn adopt_grpc_percent(proxy: BearerBilling, grpc: GrokBillingSnapshot) -> Bearer
             ..proxy.billing
         },
         subscription_tier: proxy.subscription_tier,
+        // The grok.com percent is a different total than any proxy share list.
+        product_usage: Vec::new(),
     }
 }
 
@@ -190,6 +204,7 @@ impl GrokProvider {
                 return Ok(BearerBilling {
                     billing,
                     subscription_tier: None,
+                    product_usage: Vec::new(),
                 });
             }
         };
