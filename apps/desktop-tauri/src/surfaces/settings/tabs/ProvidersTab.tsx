@@ -253,6 +253,7 @@ function providerSourceHintShort(
     case "xai":
     case "fireworks":
     case "meta":
+    case "vercel":
       return t("ProviderSourceApiShort");
     case "kiro":
       return t("ProviderSourceKiroEnvShort");

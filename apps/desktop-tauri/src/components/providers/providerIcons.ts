@@ -60,6 +60,7 @@ import stepfun from "./icons/ProviderIcon-stepfun.svg?raw";
 import sub2api from "./icons/ProviderIcon-sub2api.svg?raw";
 import t3chat from "./icons/ProviderIcon-t3chat.svg?raw";
 import venice from "./icons/ProviderIcon-venice.svg?raw";
+import vercel from "./icons/ProviderIcon-vercel.svg?raw";
 import vertexai from "./icons/ProviderIcon-vertexai.svg?raw";
 import warp from "./icons/ProviderIcon-warp.svg?raw";
 import windsurf from "./icons/ProviderIcon-windsurf.svg?raw";
@@ -148,6 +149,7 @@ const RAW: Record<string, string> = {
   sub2api: tint(sub2api),
   t3chat: tint(t3chat),
   venice: tint(venice),
+  vercel: tint(vercel),
   vertexai: tint(vertexai),
   warp: tint(warp),
   windsurf: tint(windsurf),
@@ -230,6 +232,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   stepfun:     { id: "stepfun",     brandColor: "#999999", fallbackLetter: "S", svgPath: RAW.stepfun },
   sub2api:     { id: "sub2api",     brandColor: "#2dc6d8", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#111827", fallbackLetter: "V", svgPath: RAW.venice },
+  vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
   litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },

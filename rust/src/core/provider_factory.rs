@@ -20,9 +20,9 @@ use crate::providers::{
     NousProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider,
     OpenRouterProvider, PerplexityProvider, PiProvider, PoeProvider, QoderProvider,
     QwenCloudProvider, ReplicateProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider,
-    T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider, VertexAIProvider, WarpProvider,
-    WayfinderProvider, WindsurfProvider, XaiProvider, ZaiProvider, ZedProvider, ZenMuxProvider,
-    ZoomMateProvider,
+    T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider, VercelProvider, VertexAIProvider,
+    WarpProvider, WayfinderProvider, WindsurfProvider, XaiProvider, ZaiProvider, ZedProvider,
+    ZenMuxProvider, ZoomMateProvider,
 };
 
 /// Instantiate the concrete [`Provider`] implementation for a given [`ProviderId`].
@@ -111,6 +111,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Meta => Box::new(MetaProvider::new()),
         ProviderId::Muse => Box::new(MuseProvider::new()),
         ProviderId::Nous => Box::new(NousProvider::new()),
+        ProviderId::Vercel => Box::new(VercelProvider::new()),
     }
 }
 

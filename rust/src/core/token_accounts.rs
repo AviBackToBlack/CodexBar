@@ -377,7 +377,8 @@ impl TokenAccountSupport {
             | ProviderId::Fireworks
             | ProviderId::Meta
             | ProviderId::Nous
-            | ProviderId::Muse => None,
+            | ProviderId::Muse
+            | ProviderId::Vercel => None,
         }
     }
 
