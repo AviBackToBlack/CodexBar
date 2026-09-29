@@ -25,17 +25,35 @@ pub struct CursorUsageResult {
 /// Cursor API client
 pub struct CursorApi {
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl CursorApi {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),
+            base_url: BASE_URL.to_string(),
+        }
+    }
+
+    /// Point every request at a local mock server.
+    #[cfg(test)]
+    pub(super) fn with_base_url(base_url: &str) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("the test client should build"),
+            base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
 
     pub(super) fn client(&self) -> &reqwest::Client {
         &self.client
+    }
+
+    pub(super) fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     /// Fetch usage information from Cursor API
@@ -76,7 +94,7 @@ impl CursorApi {
         &self,
         cookie_header: &str,
     ) -> Result<UsageSummary, ProviderError> {
-        let url = format!("{}/api/usage-summary", BASE_URL);
+        let url = format!("{}/api/usage-summary", self.base_url);
 
         let response = self
             .client
@@ -116,14 +134,14 @@ impl CursorApi {
         &self,
         cookie_header: &str,
     ) -> Result<Option<NamedRateWindow>, ProviderError> {
-        let url = format!("{}/api/dashboard/get-sand-usage-status", BASE_URL);
+        let url = format!("{}/api/dashboard/get-sand-usage-status", self.base_url);
         let response = self
             .client
             .post(&url)
             .header("Cookie", cookie_header)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
-            .header("Origin", BASE_URL)
+            .header("Origin", &self.base_url)
             .body("{}")
             .timeout(std::time::Duration::from_secs(5))
             .send()
@@ -139,7 +157,7 @@ impl CursorApi {
     }
 
     async fn fetch_user_info(&self, cookie_header: &str) -> Result<UserInfo, ProviderError> {
-        let url = format!("{}/api/auth/me", BASE_URL);
+        let url = format!("{}/api/auth/me", self.base_url);
 
         let response = self
             .client
