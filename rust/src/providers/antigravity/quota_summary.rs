@@ -333,16 +333,16 @@ fn group_scope(group: &QuotaSummaryGroup) -> String {
 }
 
 fn bucket_kind(bucket: &QuotaSummaryBucket) -> BucketKind {
-    let names = [
-        bucket.bucket_id.as_deref().or(bucket.id.as_deref()),
-        bucket.display_name.as_deref().or(bucket.name.as_deref()),
-    ];
-    let raw_candidates: &[Option<&str>] = match non_empty(bucket.window.as_deref()) {
-        Some(_) => &[non_empty(bucket.window.as_deref())],
-        None => &names,
+    // An explicit, non-empty `window` replaces the id/name candidates entirely.
+    let raw_candidates = match non_empty(bucket.window.as_deref()) {
+        Some(window) => [Some(window), None],
+        None => [
+            bucket.bucket_id.as_deref().or(bucket.id.as_deref()),
+            bucket.display_name.as_deref().or(bucket.name.as_deref()),
+        ],
     };
     let mut candidates = Vec::new();
-    for raw in raw_candidates.iter().flatten() {
+    for raw in raw_candidates.into_iter().flatten() {
         let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
         if normalized.is_empty() {
             continue;
@@ -603,53 +603,43 @@ mod tests {
         );
     }
 
+    fn single_bucket_snapshot(bucket_id: &str, display_name: &str, window: &str) -> UsageSnapshot {
+        let data = format!(
+            r#"{{"groups":[{{"displayName":"Gemini Models","buckets":[
+              {{"bucketId":"{bucket_id}","displayName":"{display_name}","window":"{window}","remainingFraction":0.8}}
+            ]}}]}}"#
+        );
+        parse_usage_snapshot(data.as_bytes()).unwrap()
+    }
+
     #[test]
     fn explicit_window_sets_cadence_for_opaque_bucket_ids() {
-        for (cadence, minutes, title) in [
-            ("weekly", Some(WEEKLY_MINUTES), "Gemini weekly"),
-            ("5h", Some(SESSION_MINUTES), "Gemini 5-hour"),
-        ] {
-            let data = format!(
-                r#"{{"groups":[{{"displayName":"Gemini Models","buckets":[
-                  {{"bucketId":"gemini-allowance","displayName":"Limit Remaining","window":"{cadence}","remainingFraction":1}}
-                ]}}]}}"#
-            );
-            let snapshot = parse_usage_snapshot(data.as_bytes()).unwrap();
-            let window = if minutes == Some(WEEKLY_MINUTES) {
-                snapshot.secondary.as_ref().unwrap()
-            } else {
-                &snapshot.primary
-            };
-            assert_eq!(window.window_minutes, minutes, "{title}");
-        }
+        let weekly = single_bucket_snapshot("gemini-allowance", "Limit Remaining", "weekly");
+        assert_eq!(
+            weekly.secondary.unwrap().window_minutes,
+            Some(WEEKLY_MINUTES)
+        );
+        assert!(weekly.primary.is_informational);
+
+        let session = single_bucket_snapshot("gemini-allowance", "Limit Remaining", "5h");
+        assert_eq!(session.primary.window_minutes, Some(SESSION_MINUTES));
     }
 
     #[test]
     fn explicit_window_replaces_legacy_bucket_names() {
-        for (cadence, minutes) in [("weekly", Some(WEEKLY_MINUTES)), ("unknown", None)] {
-            let data = format!(
-                r#"{{"groups":[{{"displayName":"Gemini Models","buckets":[
-                  {{"bucketId":"gemini-5h","displayName":"Five Hour Limit","window":"{cadence}","remainingFraction":0.8}}
-                ]}}]}}"#
-            );
-            let snapshot = parse_usage_snapshot(data.as_bytes()).unwrap();
-            let extra = &snapshot.extra_rate_windows;
-            match minutes {
-                Some(_) => {
-                    assert_eq!(snapshot.secondary.unwrap().window_minutes, minutes);
-                    assert!(extra.is_empty());
-                }
-                None => {
-                    assert!(snapshot.secondary.is_none());
-                    assert_eq!(extra.len(), 1, "unknown cadence stays an extra row");
-                    assert_eq!(extra[0].window.window_minutes, None);
-                }
-            }
-            assert!(
-                snapshot.primary.is_informational,
-                "no 5h bucket may be invented"
-            );
-        }
+        let weekly = single_bucket_snapshot("gemini-5h", "Five Hour Limit", "weekly");
+        assert_eq!(
+            weekly.secondary.unwrap().window_minutes,
+            Some(WEEKLY_MINUTES)
+        );
+        assert!(weekly.extra_rate_windows.is_empty());
+        assert!(weekly.primary.is_informational);
+
+        let unknown = single_bucket_snapshot("gemini-5h", "Five Hour Limit", "unknown");
+        assert!(unknown.secondary.is_none());
+        assert!(unknown.primary.is_informational);
+        assert_eq!(unknown.extra_rate_windows.len(), 1);
+        assert_eq!(unknown.extra_rate_windows[0].window.window_minutes, None);
     }
 
     #[test]
