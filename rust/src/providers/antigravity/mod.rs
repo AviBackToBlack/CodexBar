@@ -12,6 +12,7 @@ pub mod local_sessions;
 mod local_sessions_reader;
 mod local_sqlite;
 mod local_step_resolver;
+mod offline_reason;
 mod quota_summary;
 
 use legacy_status::{UserStatus, UserStatusResponse};
@@ -651,7 +652,8 @@ impl AntigravityProvider {
     /// A failed sign-in is actionable, so it always surfaces. Every other
     /// failure means the runtime/CLI is unavailable or inconclusive, so an
     /// available offline conversation-history snapshot is preferred over
-    /// discarding it for a transient error.
+    /// discarding it for a transient error. The offline snapshot carries a
+    /// fixed-text reason derived from the error type only.
     fn resolve_probe_failure(
         error: ProviderError,
         offline: Option<ProviderFetchResult>,
@@ -659,7 +661,11 @@ impl AntigravityProvider {
         if matches!(error, ProviderError::AuthRequired) {
             return Err(error);
         }
-        offline.ok_or(error)
+        offline
+            .map(|result| {
+                result.with_display_detail(offline_reason::live_unavailable_detail(&error))
+            })
+            .ok_or(error)
     }
 
     /// Map a managed-lifecycle outcome onto provider policy.
@@ -780,9 +786,10 @@ impl AntigravityProvider {
 
         match failure {
             Some(error) => Self::resolve_probe_failure(error, offline),
-            None => {
-                offline.ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()))
-            }
+            None => Self::resolve_probe_failure(
+                ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()),
+                offline,
+            ),
         }
     }
 
