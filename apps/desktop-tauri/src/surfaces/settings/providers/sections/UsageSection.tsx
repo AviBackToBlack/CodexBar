@@ -9,6 +9,7 @@ import { ProviderDisplayRow } from "../../../../components/ProviderDisplayRow";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
 import { isUsageItemVisible } from "../../../../lib/usageItemVisibility";
+import { resetDescriptionFallback, windowDetailText } from "../../../../lib/usageWindows";
 
 interface Props {
   provider: ProviderDetail;
@@ -121,9 +122,10 @@ function UsageBar({
   const usedPct = Number.isFinite(rate.usedPercent) ? Math.max(0, rate.usedPercent) : 0;
   const pct = Math.min(100, usedPct);
   const isInformational = rate.isInformational === true;
+  const detailText = windowDetailText(rate);
   const formattedReset = useFormattedResetTime(
     rate.resetsAt,
-    rate.resetDescription,
+    resetDescriptionFallback(rate),
     resetTimeRelative,
   );
   const resetHint = formattedReset
@@ -161,6 +163,7 @@ function UsageBar({
       {!isInformational && resetHint && (
         <span className="provider-usage-bar__reset">{resetHint}</span>
       )}
+      {detailText && <span className="provider-usage-bar__detail">{detailText}</span>}
     </div>
   );
 }

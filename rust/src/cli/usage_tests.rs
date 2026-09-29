@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::core::{
-    CostSnapshot, ProviderAccountData, ProviderDisplayDetail, ProviderInventoryItem, RateWindow,
-    TokenAccount, TokenAccountSupport, UsageSnapshot,
+    CostSnapshot, NamedRateWindow, ProviderAccountData, ProviderDisplayDetail,
+    ProviderInventoryItem, RateWindow, TokenAccount, TokenAccountSupport, UsageSnapshot,
 };
 use crate::providers::claude::claude_swap::ClaudeSwapAccount;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel};
@@ -323,4 +323,92 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
             .unwrap()
             .contains("coupon-token-secret")
     );
+}
+
+fn detail_window(used: f64, detail: &str, resets_at: Option<chrono::DateTime<Utc>>) -> RateWindow {
+    RateWindow::with_details(used, None, resets_at, Some(detail.to_string()))
+        .with_description_as_detail()
+}
+
+fn detail_backed_result(resets_at: Option<chrono::DateTime<Utc>>) -> ProviderFetchResult {
+    let mut usage = UsageSnapshot::new(detail_window(
+        75.0,
+        "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+        resets_at,
+    ))
+    .with_primary_label("Included API");
+    usage.extra_rate_windows.push(NamedRateWindow::new(
+        "mistral-monthly-plan",
+        "Monthly Plan",
+        detail_window(
+            13.0,
+            "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+            resets_at,
+        ),
+    ));
+    fetch_result(usage)
+}
+
+#[test]
+fn detail_backed_windows_print_reset_then_amounts_lines() {
+    let resets_at = Utc::now() + chrono::Duration::minutes(61);
+    let output = render_text(
+        ProviderId::Mistral,
+        &detail_backed_result(Some(resets_at)),
+        false,
+    );
+    let lines: Vec<&str> = output.lines().collect();
+
+    let primary = lines
+        .iter()
+        .position(|line| line.starts_with("  Included API:"))
+        .expect("primary line");
+    assert!(lines[primary].ends_with("75% used"));
+    assert!(lines[primary + 1].starts_with("    resets in "));
+    assert_eq!(
+        lines[primary + 2],
+        "    19.17 EUR / 25.50 EUR · 6.33 EUR remaining"
+    );
+    let plan = lines
+        .iter()
+        .position(|line| line.starts_with("  Monthly Plan:"))
+        .expect("plan line");
+    assert!(lines[plan].ends_with("13% used"));
+    assert!(lines[plan + 1].starts_with("    resets in "));
+    assert_eq!(
+        lines[plan + 2],
+        "    34.07 EUR / 255.00 EUR · 220.93 EUR remaining"
+    );
+    assert!(!output.contains("(resets in"));
+}
+
+#[test]
+fn detail_backed_windows_omit_reset_line_without_reset_date() {
+    let output = render_text(ProviderId::Mistral, &detail_backed_result(None), false);
+    let lines: Vec<&str> = output.lines().collect();
+
+    assert!(!output.contains("resets in"));
+    let plan = lines
+        .iter()
+        .position(|line| line.starts_with("  Monthly Plan:"))
+        .expect("plan line");
+    assert_eq!(
+        lines[plan + 1],
+        "    34.07 EUR / 255.00 EUR · 220.93 EUR remaining"
+    );
+}
+
+#[test]
+fn detail_backed_flag_stays_out_of_json_output() {
+    let json = render_json_result(ProviderId::Mistral, detail_backed_result(None), None);
+    let windows = json["usage"]["extra_rate_windows"]
+        .as_array()
+        .expect("extra windows");
+    assert_eq!(windows[0]["id"], "mistral-monthly-plan");
+    assert_eq!(
+        windows[0]["window"]["reset_description"],
+        "34.07 EUR / 255.00 EUR · 220.93 EUR remaining"
+    );
+    assert!(windows[0]["window"].get("descriptionIsDetail").is_none());
+    assert!(windows[0]["window"].get("description_is_detail").is_none());
 }
