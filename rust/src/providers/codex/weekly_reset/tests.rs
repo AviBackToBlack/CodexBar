@@ -317,3 +317,213 @@ fn consumed_credit_allows_immediate_confirmation() {
         ConfirmationDecision::Publish
     );
 }
+
+const WEEK_SECONDS: i64 = 7 * 24 * 60 * 60;
+
+/// Unused weekly window whose reset date sits `boundary_ahead` seconds after its own capture time.
+fn rolling_snapshot(
+    used: f64,
+    window_minutes: u32,
+    captured_seconds: i64,
+    boundary_ahead: i64,
+) -> UsageSnapshot {
+    let captured = now() + chrono::Duration::seconds(captured_seconds);
+    let weekly = RateWindow::with_details(
+        used,
+        Some(window_minutes),
+        Some(captured + chrono::Duration::seconds(boundary_ahead)),
+        None,
+    );
+    let mut snapshot = UsageSnapshot::new(RateWindow::new(20.0)).with_secondary(weekly);
+    snapshot.updated_at = captured;
+    snapshot.login_method = Some("ChatGPT Pro".to_string());
+    snapshot
+}
+
+fn rolling_current(offset_seconds: i64) -> UsageSnapshot {
+    rolling_snapshot(0.0, 7 * 24 * 60, offset_seconds, WEEK_SECONDS - 1)
+}
+
+/// Candidate created from two unused observations whose boundaries roll with capture time.
+fn rolling_state() -> AccountState {
+    let mut state = baseline();
+    let inv = inventory("credit-a");
+    let initial = rolling_snapshot(0.0, 7 * 24 * 60, 1, WEEK_SECONDS - 1);
+    let confirmation = rolling_snapshot(0.0, 7 * 24 * 60, 2, WEEK_SECONDS - 2);
+    assert_eq!(
+        confirmation_decision(
+            &mut state,
+            &initial,
+            Some(&inv),
+            &confirmation,
+            Some(&inv),
+            true,
+            now(),
+        ),
+        ConfirmationDecision::Preserve
+    );
+    assert!(state.candidate.is_some());
+    state
+}
+
+fn rolling_decision(
+    state: &AccountState,
+    current: &UsageSnapshot,
+    inv: &CreditInventory,
+    age_seconds: i64,
+) -> DelayedDecision {
+    let candidate = state.candidate.clone().unwrap();
+    delayed_candidate_decision(
+        state,
+        &candidate,
+        current,
+        Some(inv),
+        true,
+        now() + chrono::Duration::seconds(age_seconds),
+    )
+}
+
+#[test]
+fn unused_rolling_weekly_boundaries_confirm_across_refresh_intervals() {
+    let inv = inventory("credit-a");
+    for offset in [180, 300, 900] {
+        let state = rolling_state();
+        let current = rolling_current(offset);
+        assert_eq!(
+            rolling_decision(&state, &current, &inv, offset),
+            DelayedDecision::Publish,
+            "offset {offset}"
+        );
+    }
+    let state = rolling_state();
+    assert_eq!(
+        rolling_decision(&state, &rolling_current(30), &inv, 30),
+        DelayedDecision::Retain,
+        "minimum age still applies"
+    );
+    // Equivalent boundaries keep working exactly as before.
+    assert_eq!(
+        rolling_decision(
+            &state,
+            &rolling_snapshot(0.0, 7 * 24 * 60, 120, WEEK_SECONDS - 118),
+            &inv,
+            120
+        ),
+        DelayedDecision::Publish
+    );
+}
+
+#[test]
+fn ordinary_publication_after_rolling_confirmation_is_unchanged() {
+    let mut state = rolling_state();
+    let ordinary = rolling_snapshot(2.0, 7 * 24 * 60, 300, WEEK_SECONDS - 1);
+    assert_eq!(
+        initial_decision(
+            &mut state,
+            &ordinary,
+            Some(&inventory("credit-a")),
+            true,
+            now() + chrono::Duration::seconds(300),
+        ),
+        InitialDecision::Publish
+    );
+}
+
+#[test]
+fn rolling_weekly_confirmation_rejects_incompatible_observations() {
+    let inv = inventory("credit-a");
+    let week_minutes = 7 * 24 * 60;
+    let cases: Vec<(&str, UsageSnapshot)> = vec![
+        (
+            "nonzero usage",
+            rolling_snapshot(0.5, week_minutes, 300, WEEK_SECONDS - 1),
+        ),
+        (
+            "wrong window minutes",
+            rolling_snapshot(0.0, 300, 300, WEEK_SECONDS - 1),
+        ),
+        (
+            "boundary just outside capture plus one week",
+            rolling_snapshot(0.0, week_minutes, 300, WEEK_SECONDS + 121),
+        ),
+        (
+            "boundary far from capture plus one week",
+            rolling_snapshot(0.0, week_minutes, 300, 600_000),
+        ),
+    ];
+    for (name, current) in cases {
+        let state = rolling_state();
+        assert_eq!(
+            rolling_decision(&state, &current, &inv, 300),
+            DelayedDecision::Discard,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn rolling_weekly_confirmation_rejects_a_boundary_that_moves_backward() {
+    let inv = inventory("credit-a");
+    let mut state = rolling_state();
+    // Both windows stay within two minutes of capture plus one week, but the
+    // later observation resets earlier than the candidate.
+    let candidate = state.candidate.as_mut().unwrap();
+    candidate.weekly.resets_at =
+        Some(candidate.snapshot_updated_at + chrono::Duration::seconds(WEEK_SECONDS + 100));
+    let current = rolling_snapshot(0.0, 7 * 24 * 60, 62, WEEK_SECONDS - 100);
+    assert_eq!(
+        rolling_decision(&state, &current, &inv, 62),
+        DelayedDecision::Discard
+    );
+    // The same pair with a non-decreasing boundary confirms.
+    let current = rolling_snapshot(0.0, 7 * 24 * 60, 62, WEEK_SECONDS + 100);
+    assert_eq!(
+        rolling_decision(&state, &current, &inv, 62),
+        DelayedDecision::Publish
+    );
+}
+
+#[test]
+fn rolling_weekly_confirmation_rejects_nonzero_or_mismatched_candidate_window() {
+    let inv = inventory("credit-a");
+    for (name, mutate) in [
+        (
+            "candidate used",
+            (|weekly: &mut RateWindow| weekly.used_percent = 0.5) as fn(&mut RateWindow),
+        ),
+        ("candidate window minutes", |weekly| {
+            weekly.window_minutes = Some(300);
+        }),
+        ("candidate boundary not near a week", |weekly| {
+            weekly.resets_at = weekly.resets_at.map(|at| at + chrono::Duration::hours(1));
+        }),
+    ] {
+        let mut state = rolling_state();
+        if let Some(candidate) = state.candidate.as_mut() {
+            mutate(&mut candidate.weekly);
+        }
+        assert_eq!(
+            rolling_decision(&state, &rolling_current(300), &inv, 300),
+            DelayedDecision::Discard,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn rolling_weekly_confirmation_keeps_inventory_and_expiry_guards() {
+    let state = rolling_state();
+    let current = rolling_current(300);
+    assert_eq!(
+        rolling_decision(&state, &current, &inventory("credit-b"), 300),
+        DelayedDecision::Discard,
+        "inventory changed"
+    );
+    let inv = inventory("credit-a");
+    let current = rolling_current(31 * 60);
+    assert_eq!(
+        rolling_decision(&state, &current, &inv, 31 * 60),
+        DelayedDecision::Discard,
+        "candidate expired"
+    );
+}

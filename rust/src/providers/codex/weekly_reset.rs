@@ -15,6 +15,8 @@ const RESET_TOLERANCE_SECONDS: i64 = 2 * 60;
 const STABLE_BOUNDARY_TOLERANCE_SECONDS: i64 = 1;
 const CANDIDATE_MINIMUM_AGE_SECONDS: i64 = 60;
 const CANDIDATE_MAXIMUM_AGE_SECONDS: i64 = 30 * 60;
+const WEEKLY_WINDOW_MINUTES: u32 = 7 * 24 * 60;
+const WEEKLY_WINDOW_SECONDS: i64 = WEEKLY_WINDOW_MINUTES as i64 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -578,8 +580,7 @@ fn delayed_candidate_decision(
         );
         return DelayedDecision::Discard;
     }
-    if boundary_distance_seconds(&candidate.weekly, current_weekly).abs() >= RESET_TOLERANCE_SECONDS
-    {
+    if !delayed_boundaries_consistent(candidate, current_weekly, current.updated_at) {
         log_reset_diagnostic(
             "delayedCandidate",
             "discard",
@@ -663,6 +664,31 @@ fn boundary_distance_seconds(left: &RateWindow, right: &RateWindow) -> i64 {
 
 fn boundary_moves_backward(previous: &RateWindow, current: &RateWindow) -> bool {
     boundary_distance_seconds(previous, current) < -RESET_TOLERANCE_SECONDS
+}
+
+/// Delayed confirmation accepts equivalent boundaries, or an unused rolling
+/// weekly window whose reset date advances with each zero-use observation.
+fn delayed_boundaries_consistent(
+    candidate: &DelayedCandidate,
+    current_weekly: &RateWindow,
+    current_updated_at: DateTime<Utc>,
+) -> bool {
+    if boundary_distance_seconds(&candidate.weekly, current_weekly).abs() < RESET_TOLERANCE_SECONDS
+    {
+        return true;
+    }
+    is_unused_rolling_weekly(&candidate.weekly, candidate.snapshot_updated_at)
+        && is_unused_rolling_weekly(current_weekly, current_updated_at)
+        && boundary_distance_seconds(&candidate.weekly, current_weekly) >= 0
+}
+
+fn is_unused_rolling_weekly(window: &RateWindow, captured_at: DateTime<Utc>) -> bool {
+    window.used_percent == 0.0
+        && window.window_minutes == Some(WEEKLY_WINDOW_MINUTES)
+        && window.resets_at.is_some_and(|boundary| {
+            let ahead = boundary.signed_duration_since(captured_at).num_seconds();
+            (ahead - WEEKLY_WINDOW_SECONDS).abs() < RESET_TOLERANCE_SECONDS
+        })
 }
 
 fn supported_delayed_boundary(previous: &RateWindow, current: &RateWindow) -> bool {
