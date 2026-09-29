@@ -378,7 +378,7 @@ pub fn daily_model_costs(
     now: DateTime<Utc>,
     history_days: u32,
 ) -> Vec<DailyModelCost> {
-    let clamped = history_days.clamp(1, 365);
+    let clamped = crate::cost_reporting_period::clamp_window_days(history_days);
     let today = local_today_from_utc(now);
     let since = today - Duration::days(clamped as i64 - 1);
     let since_ms = Local
@@ -431,7 +431,7 @@ pub fn model_cost_summary_from_rows(
     now: DateTime<Utc>,
     days: u32,
 ) -> ModelCostSummary {
-    let clamped = days.clamp(1, 365);
+    let clamped = crate::cost_reporting_period::clamp_window_days(days);
     let today = local_today_from_utc(now);
     let since = today - Duration::days(clamped as i64 - 1);
     let since_ms = Local

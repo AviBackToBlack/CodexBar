@@ -21,14 +21,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
 use crate::codex_costs::{
-    add_codex_days_map_to_summary, add_codex_records_to_summary, codex_period_start,
-    codex_scan_dates, merge_codex_records_into_days,
+    add_codex_days_map_to_summary, add_codex_records_to_summary, codex_scan_dates,
+    merge_codex_records_into_days,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{
     CachedCostReport, CodexScanPauseReason, CostScanOptions, CostUsageCache, CostUsageDayRange,
     CostUsageFileUsage, JsonlScanner, ProviderId,
 };
+use crate::cost_reporting_period::{CostReportingPeriod, MAX_ROLLING_DAYS};
 use crate::providers::claude::quota_history::{
     ClaudeHistoryAttribution, ClaudeQuotaDedupKey, ClaudeQuotaHistoryRecord,
 };
@@ -39,6 +40,7 @@ mod claude_usage;
 mod codex;
 mod read_receipt;
 mod stats;
+mod window;
 use claude_pricing::ClaudeScanPricingResolver;
 #[cfg(test)]
 use claude_pricing::{ClaudePricing, FALLBACK_CLAUDE_MODEL};
@@ -487,7 +489,8 @@ impl ClaudeFileScanResult {
 
 #[derive(Debug, Clone)]
 pub struct CostScanner {
-    days: u32,
+    /// The window every scan resolves at its own start (never cached as dates).
+    period: CostReportingPeriod,
     options: CostScanOptions,
     cache_root: Option<PathBuf>,
     /// When set, bypass normal sessions-dir discovery (tests / inject roots).
@@ -497,12 +500,23 @@ pub struct CostScanner {
 impl CostScanner {
     /// Create a new scanner for the last N days (default 60s cache debounce).
     pub fn new(days: u32) -> Self {
+        Self::for_period(CostReportingPeriod::Rolling(days))
+    }
+
+    /// Create a scanner for a reporting period. `new(days)` is
+    /// `for_period(CostReportingPeriod::Rolling(days))`.
+    pub fn for_period(period: CostReportingPeriod) -> Self {
         Self {
-            days,
+            period,
             options: CostScanOptions::default(),
             cache_root: None,
             sessions_dirs_override: None,
         }
+    }
+
+    /// The reporting period this scanner resolves on every scan.
+    pub fn period(&self) -> CostReportingPeriod {
+        self.period
     }
 
     /// Override scan options (e.g. [`CostScanOptions::app_driven`] for force refresh).
@@ -533,16 +547,17 @@ impl CostScanner {
     }
 
     pub fn scan_pi_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
-        let today = Utc::now().date_naive();
+        let now = Utc::now();
+        let window = self.transcript_window(now, now.date_naive());
         let mut summary = CostSummary {
-            period_start: Some(today - Duration::days(self.days as i64)),
-            period_end: Some(today),
+            period_start: Some(window.start),
+            period_end: Some(window.end),
             ..CostSummary::default()
         };
         let mut seen_entries = HashSet::new();
         let evidence = crate::pi_session_cost::scan_pi_into(
             &mut summary,
-            self.days,
+            window.cutoff,
             cancel,
             &mut seen_entries,
         );
@@ -577,12 +592,12 @@ impl CostScanner {
     ) -> CostSummary {
         let projects_dir = self.get_claude_projects_dir();
         let mut summary = CostSummary::default();
-        let today = Utc::now().date_naive();
-        let start_date = today - Duration::days(self.days as i64);
-        let cutoff = Utc::now() - Duration::days(self.days as i64);
+        let now = Utc::now();
+        let window = self.transcript_window(now, now.date_naive());
+        let cutoff = window.cutoff;
 
-        summary.period_start = Some(start_date);
-        summary.period_end = Some(today);
+        summary.period_start = Some(window.start);
+        summary.period_end = Some(window.end);
 
         // Walk through projects directory, de-duplicating usage records
         // that appear across multiple files.
@@ -615,7 +630,7 @@ impl CostScanner {
             crate::pi_session_cost::scan_pi_compatible_into(
                 &mut summary,
                 crate::pi_session_cost::PiMappedProvider::Claude,
-                self.days,
+                cutoff,
                 cancel,
                 &mut seen_pi,
             );
@@ -643,17 +658,26 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
     ) -> ClaudeChartSnapshot {
         let projects_dir = self.get_claude_projects_dir();
-        let today = Local::now().date_naive();
-        let cutoff = Utc::now() - Duration::days(self.days as i64);
+        let now = Utc::now();
+        let window = self.transcript_window(now, Local::now().date_naive());
+        let cutoff = window.cutoff;
         let mut summary = CostSummary {
-            period_start: Some(today - Duration::days(self.days as i64)),
-            period_end: Some(today),
+            period_start: Some(window.start),
+            period_end: Some(window.end),
             ..CostSummary::default()
         };
         let mut daily_cost = HashMap::new();
         let mut daily_tokens = HashMap::new();
-        for days_ago in 0..self.days {
-            let date = today - Duration::days(days_ago as i64);
+        // The chart never shows more than a year of daily slots, so an
+        // all-available window does not allocate one per day since 1970.
+        let slot_days = match self.period {
+            CostReportingPeriod::Rolling(days) => days,
+            CostReportingPeriod::MonthToDate | CostReportingPeriod::AllAvailable => {
+                window.days.min(MAX_ROLLING_DAYS)
+            }
+        };
+        for days_ago in 0..slot_days {
+            let date = window.end - Duration::days(days_ago as i64);
             let key = date.format("%Y-%m-%d").to_string();
             daily_cost.insert(key.clone(), None);
             daily_tokens.insert(key, 0);
@@ -695,7 +719,7 @@ impl CostScanner {
         crate::pi_session_cost::scan_pi_compatible_into(
             &mut summary,
             crate::pi_session_cost::PiMappedProvider::Claude,
-            self.days,
+            cutoff,
             cancel,
             &mut HashSet::new(),
         );
@@ -763,7 +787,8 @@ impl CostScanner {
             return CostSummary::default();
         }
         let now = Utc::now();
-        let Some(local) = opencodego_local::model_cost_summary_scan(now, self.days) else {
+        let days = self.calendar_window(now, None).days;
+        let Some(local) = opencodego_local::model_cost_summary_scan(now, days) else {
             return CostSummary::default();
         };
         CostSummary {

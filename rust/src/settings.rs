@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::core::ProviderId;
+use crate::cost_reporting_period::CostReportingPeriod;
 
 /// Stable namespace used by the desktop bridge for quota metric rows.
 pub const USAGE_ITEM_METRIC_PREFIX: &str = "metric:";
@@ -369,6 +370,11 @@ pub struct Settings {
     /// Hide native Codex spend rows when an OpenCodex import is present.
     #[serde(default)]
     pub hide_native_codex_cost_when_open_codex_present: bool,
+
+    /// History window for local cost surfaces: `rolling:N`, `month-to-date`, or
+    /// `all` (upstream 0.67.0). Missing or unreadable values read as `rolling:30`.
+    #[serde(default)]
+    pub cost_reporting_period: CostReportingPeriod,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -595,6 +601,7 @@ impl Default for Settings {
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
             open_codex_usage_logs_enabled: false,
             hide_native_codex_cost_when_open_codex_present: false,
+            cost_reporting_period: CostReportingPeriod::default(),
         }
     }
 }

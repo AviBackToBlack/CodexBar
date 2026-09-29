@@ -141,7 +141,9 @@ fn summarize_paths(
     truncated: bool,
 ) -> LocalSessionSummary {
     let first_day = now.with_timezone(&Local).date_naive()
-        - Duration::days(i64::from(days.clamp(1, 365).saturating_sub(1)));
+        - Duration::days(i64::from(
+            crate::cost_reporting_period::clamp_window_days(days).saturating_sub(1),
+        ));
     let mut total_tokens = 0_u64;
     let mut sessions_with_usage = HashSet::new();
     let mut seen_response_ids = HashSet::new();

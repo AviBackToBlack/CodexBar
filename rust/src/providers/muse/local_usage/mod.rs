@@ -155,7 +155,7 @@ fn cache_root() -> PathBuf {
 }
 
 fn day_window(days: u32) -> (String, String) {
-    let days = days.clamp(1, 365);
+    let days = crate::cost_reporting_period::clamp_window_days(days);
     let today = Local::now().date_naive();
     (
         (today - chrono::Duration::days(i64::from(days - 1))).to_string(),

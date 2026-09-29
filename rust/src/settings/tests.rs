@@ -116,6 +116,42 @@ fn open_codex_usage_logs_default_off_and_round_trip() {
 }
 
 #[test]
+fn cost_reporting_period_defaults_to_thirty_days_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing cost_reporting_period defaults");
+    assert_eq!(
+        defaulted.cost_reporting_period,
+        CostReportingPeriod::Rolling(30)
+    );
+
+    for period in [
+        CostReportingPeriod::Rolling(90),
+        CostReportingPeriod::MonthToDate,
+        CostReportingPeriod::AllAvailable,
+    ] {
+        let settings = Settings {
+            cost_reporting_period: period,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize cost period");
+        assert!(json.contains(&format!(r#""cost_reporting_period":"{}""#, period.raw())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize cost period");
+        assert_eq!(loaded.cost_reporting_period, period);
+    }
+}
+
+#[test]
+fn unreadable_cost_reporting_period_loads_as_the_default() {
+    let loaded: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "cost_reporting_period": "weekly" }"#)
+            .expect("an unreadable period must not fail the whole settings file");
+    assert_eq!(
+        loaded.cost_reporting_period,
+        CostReportingPeriod::Rolling(30)
+    );
+}
+
+#[test]
 fn notification_sound_paths_round_trip_and_default_for_existing_settings() {
     let settings = Settings {
         notification_sound_theme: NotificationSoundTheme::CodexBar,

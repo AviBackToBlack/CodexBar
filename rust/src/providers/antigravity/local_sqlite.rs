@@ -139,7 +139,9 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
     }
 
     let first_day = now.with_timezone(&Local).date_naive()
-        - Duration::days(i64::from(days.clamp(1, 365).saturating_sub(1)));
+        - Duration::days(i64::from(
+            crate::cost_reporting_period::clamp_window_days(days).saturating_sub(1),
+        ));
     let mut complete = discovery_complete && budget.check();
     let mut events = Vec::new();
     let mut authoritative_database = false;

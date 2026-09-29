@@ -1,4 +1,5 @@
 use super::*;
+use crate::codex_costs::codex_period_start;
 use crate::core::{CodexSessionLineage, CostUsagePricing};
 use std::io::Write;
 
@@ -3039,3 +3040,6 @@ fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
 #[cfg(test)]
 #[path = "tests/paginated.rs"]
 mod paginated;
+
+#[path = "tests/period.rs"]
+mod period;

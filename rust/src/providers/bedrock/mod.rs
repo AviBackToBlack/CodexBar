@@ -3,7 +3,7 @@
 //! Fetches current-month Bedrock spend from AWS Cost Explorer using SigV4.
 
 use async_trait::async_trait;
-use chrono::{Datelike, Duration, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, TimeZone, Utc};
 use reqwest::Client;
 use serde_json::{Value, json};
 
@@ -11,6 +11,7 @@ use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256, sha256_hex,
 };
+use crate::cost_reporting_period::{CostReportingPeriod, CostTimeZone};
 
 const COST_EXPLORER_URL: &str = "https://ce.us-east-1.amazonaws.com";
 const COST_EXPLORER_TARGET: &str = "AWSInsightsIndexService.GetCostAndUsage";
@@ -656,17 +657,34 @@ fn parse_aws_profile_credentials(stdout: &[u8]) -> Result<AwsCredentials, Provid
     })
 }
 
-fn current_month_range() -> (String, String) {
-    let now = Utc::now();
-    let start = Utc
-        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
-        .single()
-        .unwrap_or(now);
-    let tomorrow = (now + Duration::days(1)).date_naive();
+/// Cost Explorer `TimePeriod` for daily buckets (upstream `dailyRange`).
+///
+/// Cost Explorer buckets are UTC, so the month is resolved in UTC. It exposes
+/// the current month plus thirteen earlier months, so `since` never reaches
+/// further back than that; the exclusive end is tomorrow. An all-available
+/// request passes any early `since` and gets the whole exposed range.
+fn daily_range(since: NaiveDate, now: DateTime<Utc>) -> (String, String) {
+    let month_start = utc_month_start(now);
+    let earliest = month_start
+        .checked_sub_months(Months::new(13))
+        .unwrap_or(month_start);
+    let tomorrow = now.date_naive() + Duration::days(1);
     (
-        start.format("%Y-%m-%d").to_string(),
+        since.max(earliest).format("%Y-%m-%d").to_string(),
         tomorrow.format("%Y-%m-%d").to_string(),
     )
+}
+
+fn utc_month_start(now: DateTime<Utc>) -> NaiveDate {
+    CostReportingPeriod::MonthToDate
+        .bounds(now, CostTimeZone::Named(chrono_tz::UTC), None)
+        .start
+}
+
+/// Current-month range: month to date through tomorrow (exclusive).
+fn current_month_range() -> (String, String) {
+    let now = Utc::now();
+    daily_range(utc_month_start(now), now)
 }
 
 fn end_of_current_month() -> Option<chrono::DateTime<Utc>> {
@@ -804,6 +822,49 @@ fn sanitized_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn utc(y: i32, m: u32, d: u32, h: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, m, d, h, 0, 0).single().unwrap()
+    }
+
+    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn daily_range_month_to_date_starts_at_utc_month_start() {
+        let now = utc(2026, 5, 15, 12);
+        let (start, end) = daily_range(utc_month_start(now), now);
+        assert_eq!(start, "2026-05-01");
+        assert_eq!(end, "2026-05-16");
+    }
+
+    #[test]
+    fn daily_range_month_start_uses_utc_not_local_time() {
+        // 23:30 UTC on the last day of April is still April in Cost Explorer.
+        let now = Utc
+            .with_ymd_and_hms(2026, 4, 30, 23, 30, 0)
+            .single()
+            .unwrap();
+        let (start, end) = daily_range(utc_month_start(now), now);
+        assert_eq!(start, "2026-04-01");
+        assert_eq!(end, "2026-05-01");
+    }
+
+    #[test]
+    fn daily_range_all_is_capped_at_current_month_plus_thirteen() {
+        let now = utc(2026, 5, 15, 12);
+        let (start, end) = daily_range(date(2000, 1, 1), now);
+        assert_eq!(start, "2025-04-01");
+        assert_eq!(end, "2026-05-16");
+    }
+
+    #[test]
+    fn daily_range_keeps_a_recent_since() {
+        let now = utc(2026, 5, 15, 12);
+        let (start, _) = daily_range(date(2026, 3, 10), now);
+        assert_eq!(start, "2026-03-10");
+    }
 
     #[test]
     fn parses_bedrock_cost_only() {
