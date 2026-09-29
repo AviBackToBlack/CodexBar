@@ -120,6 +120,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Deepgram | API Key | Project Usage |
 | Groq | API Key | Enterprise Metrics |
 | LLM Proxy | API Key | Quota Stats |
+| xKiro | API Key | Daily free tokens |
 
 </details>
 

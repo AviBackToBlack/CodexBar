@@ -48,6 +48,7 @@ import muse from "./icons/ProviderIcon-muse.svg?raw";
 import notion from "./icons/ProviderIcon-notion.svg?raw";
 import nous from "./icons/ProviderIcon-nous.svg?raw";
 import xai from "./icons/ProviderIcon-xai.svg?raw";
+import xkiro from "./icons/ProviderIcon-xkiro.svg?raw";
 import ollama from "./icons/ProviderIcon-ollama.svg?raw";
 import opencode from "./icons/ProviderIcon-opencode.svg?raw";
 import opencodego from "./icons/ProviderIcon-opencodego.svg?raw";
@@ -134,6 +135,7 @@ const RAW: Record<string, string> = {
   notion: tint(notion),
   nous: tint(nous),
   xai: tint(xai),
+  xkiro: tint(xkiro),
   mistral: tint(mistral),
   muse: tint(muse),
   ollama: tint(ollama),
@@ -240,6 +242,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   notion:      { id: "notion",      brandColor: "#337EA9", fallbackLetter: "N", svgPath: RAW.notion },
   nous:        { id: "nous",        brandColor: "#D6A55C", fallbackLetter: "N", svgPath: RAW.nous },
   xai:         { id: "xai",         brandColor: "#8e8e93", fallbackLetter: "X", svgPath: RAW.xai },
+  xkiro:       { id: "xkiro",       brandColor: "#52c99b", fallbackLetter: "X", svgPath: RAW.xkiro },
   meta:        { id: "meta",        brandColor: "#0467DF", fallbackLetter: "M", svgPath: RAW.meta },
 };
 
@@ -308,6 +311,7 @@ const ALIASES: Record<string, string> = {
   // xai is its own Management API provider (not an alias of consumer Grok).
   "x.ai": "xai",
   "x-ai": "xai",
+  "x-kiro": "xkiro",
   supergrok: "grok",
   "super-grok": "grok",
   "eleven labs": "elevenlabs",
