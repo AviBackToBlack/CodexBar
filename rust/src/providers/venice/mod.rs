@@ -18,7 +18,10 @@ const VENICE_BALANCE_URL: &str = "https://api.venice.ai/api/v1/billing/balance";
 const VENICE_SESSION_URL: &str = "https://outerface.venice.ai/api/user/session";
 const VENICE_CREDENTIAL_TARGET: &str = "codexbar-venice";
 const VENICE_SESSION_COOKIE: &str = "__venice-auth.session-token";
-const VENICE_COOKIE_DOMAINS: &[&str] = &["venice.ai", "outerface.venice.ai"];
+const VENICE_COOKIE_DOMAIN: &str = "venice.ai";
+const VENICE_CLERK_SESSION_COOKIE: &str = "__session";
+const VENICE_MISSING_CREDENTIALS_MESSAGE: &str = "Venice session cookie not found (__session, __session_<suffix>, or __venice-auth.session-token). Open a signed-in venice.ai tab and retry, or paste a fresh Cookie header.";
+const VENICE_INVALID_SESSION_MESSAGE: &str = "Venice browser session is invalid or expired. Keep a signed-in venice.ai tab active and retry; Clerk sessions last about 60 seconds. In Manual mode, paste a fresh Cookie header.";
 const VENICE_EXPIRATION_SKEW_SECS: i64 = 60;
 const MAX_VENICE_COOKIE_HEADER_LEN: usize = 1_048_576;
 const MAX_VENICE_COOKIE_VALUE_LEN: usize = 16_384;
@@ -108,17 +111,18 @@ impl VeniceProvider {
         &self,
         manual_cookie_header: Option<&str>,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let raw_cookie_header = match manual_cookie_header {
-            Some(header) => header.to_string(),
-            None => crate::providers::browser_cookie_header(VENICE_COOKIE_DOMAINS)?,
-        };
-        let cookie_header =
-            session_cookie_header(&raw_cookie_header).ok_or(ProviderError::NoCookies)?;
+        let credential = match manual_cookie_header {
+            Some(header) => session_credential_from_header(header),
+            None => match crate::providers::browser_cookies_for_domain(VENICE_COOKIE_DOMAIN) {
+                Ok(cookies) => session_credential_from_browser_cookies(&cookies),
+                Err(ProviderError::NoCookies) => None,
+                Err(error) => return Err(error),
+            },
+        }
+        .ok_or_else(|| ProviderError::Other(VENICE_MISSING_CREDENTIALS_MESSAGE.into()))?;
 
-        let response = self
-            .client
-            .get(VENICE_SESSION_URL)
-            .header("Cookie", cookie_header)
+        let response = credential
+            .apply(self.client.get(VENICE_SESSION_URL))
             .header("Accept", "application/json")
             .send()
             .await?;
@@ -126,7 +130,7 @@ impl VeniceProvider {
         if response.status() == reqwest::StatusCode::UNAUTHORIZED
             || response.status() == reqwest::StatusCode::FORBIDDEN
         {
-            return Err(ProviderError::AuthRequired);
+            return Err(invalid_session_error());
         }
         if !response.status().is_success() {
             return Err(ProviderError::Other(format!(
@@ -139,7 +143,7 @@ impl VeniceProvider {
             ProviderError::Parse(format!("Failed to parse Venice web session: {e}"))
         })?;
         if session.token.trim().is_empty() {
-            return Err(ProviderError::AuthRequired);
+            return Err(invalid_session_error());
         }
         let token = session.token.as_str();
         let claims = crate::codex_accounts::api::jwt_payload(token)
@@ -233,27 +237,104 @@ impl Provider for VeniceProvider {
     fn owns_browser_cookie_resolution(&self) -> bool {
         true
     }
+
+    /// Venice web credential failures carry upstream's recovery text in
+    /// `ProviderError::Other`; keep them classified as sign-in gates.
+    fn error_state_kind(&self, error: &ProviderError) -> crate::core::ProviderStateKind {
+        match error {
+            ProviderError::Other(message) if message == VENICE_MISSING_CREDENTIALS_MESSAGE => {
+                crate::core::ProviderStateKind::NeedsAuthentication
+            }
+            ProviderError::Other(message) if message == VENICE_INVALID_SESSION_MESSAGE => {
+                crate::core::ProviderStateKind::ExpiredSession
+            }
+            _ => error.state_kind(),
+        }
+    }
 }
 
-fn session_cookie_header(raw: &str) -> Option<String> {
+fn invalid_session_error() -> ProviderError {
+    ProviderError::Other(VENICE_INVALID_SESSION_MESSAGE.into())
+}
+
+/// Credential accepted by the Venice session endpoint.
+#[derive(Debug, PartialEq, Eq)]
+enum VeniceSessionCredential {
+    /// Legacy `__venice-auth.session-token` value, sent as a Cookie header.
+    Legacy(String),
+    /// Clerk `__session` / `__session_<suffix>` value, sent as a Bearer token
+    /// with no Cookie header.
+    Clerk(String),
+}
+
+impl VeniceSessionCredential {
+    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            Self::Legacy(value) => {
+                request.header("Cookie", format!("{VENICE_SESSION_COOKIE}={value}"))
+            }
+            Self::Clerk(value) => request.bearer_auth(value),
+        }
+    }
+}
+
+fn is_clerk_session_cookie_name(name: &str) -> bool {
+    name == VENICE_CLERK_SESSION_COOKIE
+        || name
+            .strip_prefix("__session_")
+            .is_some_and(|suffix| !suffix.is_empty())
+}
+
+/// Browser cookies are trusted only from the exact `venice.ai` host, so
+/// `clerk.venice.ai` cookies such as `__client` are never used. The shared
+/// extractor also returns subdomain cookies, hence the filter here.
+fn session_credential_from_browser_cookies(
+    cookies: &[crate::browser::cookies::Cookie],
+) -> Option<VeniceSessionCredential> {
+    session_credential(
+        cookies
+            .iter()
+            .filter(|cookie| {
+                cookie
+                    .domain
+                    .trim()
+                    .trim_matches('.')
+                    .eq_ignore_ascii_case(VENICE_COOKIE_DOMAIN)
+            })
+            .map(|cookie| (cookie.name.as_str(), cookie.value.as_str())),
+    )
+}
+
+fn session_credential_from_header(raw: &str) -> Option<VeniceSessionCredential> {
     if raw.len() > MAX_VENICE_COOKIE_HEADER_LEN {
         return None;
     }
+    session_credential(raw.split(';').filter_map(|part| part.split_once('=')))
+}
 
+/// The legacy cookie (exact, then contiguous chunks) wins over Clerk; among
+/// Clerk cookies the unsuffixed `__session` wins over the first suffixed one.
+fn session_credential<'a>(
+    pairs: impl Iterator<Item = (&'a str, &'a str)>,
+) -> Option<VeniceSessionCredential> {
     let mut exact = None;
+    let mut clerk: Option<(&str, &str)> = None;
     let mut chunks = BTreeMap::new();
     let chunk_prefix = format!("{VENICE_SESSION_COOKIE}.");
 
-    for part in raw.split(';') {
-        let Some((raw_name, raw_value)) = part.split_once('=') else {
-            continue;
-        };
+    for (raw_name, raw_value) in pairs {
         let name = raw_name.trim();
         let value = raw_value.trim();
         if value.is_empty()
             || value.len() > MAX_VENICE_COOKIE_VALUE_LEN
             || value.chars().any(char::is_control)
         {
+            continue;
+        }
+        if is_clerk_session_cookie_name(name) {
+            if clerk.is_none() || name == VENICE_CLERK_SESSION_COOKIE {
+                clerk = Some((name, value));
+            }
             continue;
         }
         if name == VENICE_SESSION_COOKIE {
@@ -276,17 +357,16 @@ fn session_cookie_header(raw: &str) -> Option<String> {
     }
 
     if let Some(value) = exact {
-        return Some(format!("{VENICE_SESSION_COOKIE}={value}"));
+        return Some(VeniceSessionCredential::Legacy(value));
     }
-    if chunks.is_empty() || chunks.keys().max() != Some(&(chunks.len() - 1)) {
-        // Chunked cookies are contiguous 0..len-1 by construction; a gap or a
-        // tail that starts above 0 means a partial or forged set, so the
-        // session token cannot be reassembled safely.
-        return None;
+    // Chunked cookies are contiguous 0..len-1 by construction; a gap or a
+    // tail that starts above 0 means a partial or forged set, so the session
+    // token cannot be reassembled safely and a Clerk cookie is used instead.
+    if !chunks.is_empty() && chunks.keys().max() == Some(&(chunks.len() - 1)) {
+        let values: Vec<String> = chunks.into_values().collect();
+        return Some(VeniceSessionCredential::Legacy(values.concat()));
     }
-
-    let values: Vec<String> = chunks.into_values().collect();
-    Some(format!("{VENICE_SESSION_COOKIE}={}", values.concat()))
+    clerk.map(|(_, value)| VeniceSessionCredential::Clerk(value.to_string()))
 }
 
 fn snapshot_from_web_claims(
@@ -294,9 +374,9 @@ fn snapshot_from_web_claims(
     now: DateTime<Utc>,
 ) -> Result<ProviderFetchResult, ProviderError> {
     let expiration =
-        epoch_value_to_datetime(claims.get("exp")).ok_or_else(|| ProviderError::AuthRequired)?;
+        epoch_value_to_datetime(claims.get("exp")).ok_or_else(invalid_session_error)?;
     if expiration < now - chrono::Duration::seconds(VENICE_EXPIRATION_SKEW_SECS) {
-        return Err(ProviderError::AuthRequired);
+        return Err(invalid_session_error());
     }
 
     if claims
@@ -475,45 +555,217 @@ mod tests {
         assert_eq!(snapshot.primary.used_percent, 75.0);
     }
 
+    fn legacy(value: &str) -> Option<VeniceSessionCredential> {
+        Some(VeniceSessionCredential::Legacy(value.to_string()))
+    }
+
+    fn clerk(value: &str) -> Option<VeniceSessionCredential> {
+        Some(VeniceSessionCredential::Clerk(value.to_string()))
+    }
+
+    fn browser_cookie(name: &str, domain: &str) -> crate::browser::cookies::Cookie {
+        crate::browser::cookies::Cookie {
+            name: name.to_string(),
+            value: "synthetic-session".to_string(),
+            domain: domain.to_string(),
+            path: "/".to_string(),
+            expires: None,
+            is_secure: true,
+            is_http_only: false,
+        }
+    }
+
     #[test]
     fn session_cookie_prefers_exact_and_reassembles_contiguous_chunks() {
         assert_eq!(
-            session_cookie_header(
+            session_credential_from_header(
                 "other=x; __venice-auth.session-token.0=ab; __venice-auth.session-token.1=cd"
             ),
-            Some("__venice-auth.session-token=abcd".to_string())
+            legacy("abcd")
         );
         assert_eq!(
-            session_cookie_header(
+            session_credential_from_header(
                 "__venice-auth.session-token.0=ab; __venice-auth.session-token.2=cd"
             ),
             None
         );
         assert_eq!(
-            session_cookie_header(
+            session_credential_from_header(
                 "__venice-auth.session-token=exact; __venice-auth.session-token.0=chunk"
             ),
-            Some("__venice-auth.session-token=exact".to_string())
+            legacy("exact")
         );
         assert_eq!(
-            session_cookie_header("__venice-auth.session-token.0=a\nsecret"),
+            session_credential_from_header("__venice-auth.session-token.0=a\nsecret"),
             None
         );
         assert_eq!(
-            session_cookie_header(
+            session_credential_from_header(
                 "__venice-auth.session-token=one; __venice-auth.session-token=two"
             ),
             None
         );
         assert_eq!(
-            session_cookie_header("__venice-auth.session-token.not-a-chunk=value"),
+            session_credential_from_header("__venice-auth.session-token.not-a-chunk=value"),
             None
         );
         let oversized = format!(
             "__venice-auth.session-token={}",
             "x".repeat(MAX_VENICE_COOKIE_VALUE_LEN + 1)
         );
-        assert_eq!(session_cookie_header(&oversized), None);
+        assert_eq!(session_credential_from_header(&oversized), None);
+    }
+
+    #[test]
+    fn clerk_session_family_is_accepted_and_sent_only_as_bearer() {
+        for name in ["__session", "__session_synthetic"] {
+            assert!(is_clerk_session_cookie_name(name));
+            let raw = format!(
+                "__client_uat=123; {name}=synthetic-session; __client=private; clerk_active_synthetic=1"
+            );
+            let credential = session_credential_from_header(&raw).unwrap();
+            assert_eq!(
+                credential,
+                VeniceSessionCredential::Clerk("synthetic-session".into())
+            );
+
+            let client = Client::new();
+            let request = credential
+                .apply(client.get(VENICE_SESSION_URL))
+                .header("Accept", "application/json")
+                .build()
+                .unwrap();
+            assert_eq!(request.method(), reqwest::Method::GET);
+            assert_eq!(request.url().as_str(), VENICE_SESSION_URL);
+            assert_eq!(
+                request.headers().get("Authorization").unwrap(),
+                "Bearer synthetic-session"
+            );
+            assert!(request.headers().get("Cookie").is_none());
+        }
+    }
+
+    #[test]
+    fn legacy_session_is_sent_as_cookie_without_authorization() {
+        let client = Client::new();
+        let request = legacy("legacy")
+            .unwrap()
+            .apply(client.get(VENICE_SESSION_URL))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("Cookie").unwrap(),
+            "__venice-auth.session-token=legacy"
+        );
+        assert!(request.headers().get("Authorization").is_none());
+    }
+
+    #[test]
+    fn legacy_session_retains_priority_over_clerk_including_numbered_chunks() {
+        assert_eq!(
+            session_credential_from_header("__session=clerk; __venice-auth.session-token=legacy"),
+            legacy("legacy")
+        );
+        assert_eq!(
+            session_credential_from_header(
+                "__session=clerk; __venice-auth.session-token.1=b; __venice-auth.session-token.0=a"
+            ),
+            legacy("ab")
+        );
+        assert_eq!(
+            session_credential_from_header("__session_synthetic=secondary; __session=primary"),
+            clerk("primary")
+        );
+        assert_eq!(
+            session_credential_from_header("__session=primary; __session_synthetic=secondary"),
+            clerk("primary")
+        );
+        assert_eq!(
+            session_credential_from_header("__session_a=first; __session_b=second"),
+            clerk("first")
+        );
+        // A repeated `__session` keeps the last value, as upstream does.
+        assert_eq!(
+            session_credential_from_header("__session=stale; __session=fresh"),
+            clerk("fresh")
+        );
+        // A partial legacy chunk set cannot be reassembled, so Clerk is used.
+        assert_eq!(
+            session_credential_from_header("__venice-auth.session-token.1=b; __session=clerk"),
+            clerk("clerk")
+        );
+    }
+
+    #[test]
+    fn browser_session_cookies_are_restricted_to_the_exact_venice_site() {
+        for (domain, accepted) in [
+            ("venice.ai", true),
+            (".venice.ai", true),
+            (".Venice.AI", true),
+            ("clerk.venice.ai", false),
+            (".clerk.venice.ai", false),
+            ("outerface.venice.ai", false),
+            ("notvenice.ai", false),
+        ] {
+            let cookies = [browser_cookie("__session", domain)];
+            assert_eq!(
+                session_credential_from_browser_cookies(&cookies),
+                accepted.then(|| VeniceSessionCredential::Clerk("synthetic-session".into())),
+                "{domain}"
+            );
+        }
+        let cookies = [
+            browser_cookie("__client", "clerk.venice.ai"),
+            browser_cookie("__session", "clerk.venice.ai"),
+            browser_cookie("__venice-auth.session-token", "venice.ai"),
+        ];
+        assert_eq!(
+            session_credential_from_browser_cookies(&cookies),
+            legacy("synthetic-session")
+        );
+    }
+
+    #[test]
+    fn non_session_clerk_and_authjs_cookies_cannot_authenticate() {
+        for name in [
+            "__client",
+            "__client_uat",
+            "__client_uat_synthetic",
+            "clerk_active_synthetic",
+            "__session_",
+            "__sessionevil",
+            "__Host-authjs.csrf-token",
+            "__Secure-authjs.callback-url",
+        ] {
+            assert!(!is_clerk_session_cookie_name(name), "{name}");
+            assert_eq!(
+                session_credential_from_header(&format!("{name}=synthetic")),
+                None,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_messages_explain_active_tab_and_missing_cookie_names() {
+        let missing = VENICE_MISSING_CREDENTIALS_MESSAGE;
+        assert!(missing.contains("__session"));
+        assert!(missing.contains("__venice-auth.session-token"));
+        assert!(VENICE_INVALID_SESSION_MESSAGE.contains("tab"));
+
+        let provider = VeniceProvider::new();
+        assert_eq!(
+            provider.error_state_kind(&ProviderError::Other(missing.into())),
+            crate::core::ProviderStateKind::NeedsAuthentication
+        );
+        assert_eq!(
+            provider.error_state_kind(&invalid_session_error()),
+            crate::core::ProviderStateKind::ExpiredSession
+        );
+        assert_eq!(
+            provider.error_state_kind(&ProviderError::Other("other".into())),
+            crate::core::ProviderStateKind::Unknown
+        );
     }
 
     #[test]
@@ -561,7 +813,7 @@ mod tests {
         expired.insert("exp".into(), Value::from(1_800_000_000));
         assert!(matches!(
             snapshot_from_web_claims(&expired, now),
-            Err(ProviderError::AuthRequired)
+            Err(ProviderError::Other(message)) if message == VENICE_INVALID_SESSION_MESSAGE
         ));
 
         let mut anonymous = web_claims();
