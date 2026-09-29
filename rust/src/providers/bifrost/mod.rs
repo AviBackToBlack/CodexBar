@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::{net::IpAddr, time::Duration};
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderDisplayDetail, ProviderError,
+    CostSnapshot, FetchContext, NamedRateWindow, Provider, ProviderDisplayDetail, ProviderError,
     ProviderFetchResult, ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
@@ -18,7 +18,10 @@ const CREDENTIAL_TARGET: &str = "codexbar-bifrost";
 const API_KEY_ENV: &str = "BIFROST_API_KEY";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_MODEL_ROWS: usize = 5;
 const QUOTA_PATH: &str = "/api/governance/virtual-keys/quota";
+
+mod model_labels;
 
 pub struct BifrostProvider {
     metadata: ProviderMetadata,
@@ -38,7 +41,6 @@ struct Budget {
     scope: Scope,
     source: Option<String>,
     used: f64,
-    usage_known: bool,
     limit: f64,
     reset: ResetTiming,
     models: Vec<Value>,
@@ -285,8 +287,8 @@ fn parse_usage(value: &Value, now: DateTime<Utc>) -> Result<ParsedUsage, Provide
                 if !limit.is_finite() || limit < 0.0 {
                     return Err(parse_error("invalid effective budget"));
                 }
-                let current_usage = optional_number(item, "current_usage")?;
-                let used = current_usage.unwrap_or(0.0);
+                // A missing current_usage is a known zero, as upstream.
+                let used = optional_number(item, "current_usage")?.unwrap_or(0.0);
                 if used < 0.0 {
                     return Err(parse_error("invalid current usage"));
                 }
@@ -306,7 +308,6 @@ fn parse_usage(value: &Value, now: DateTime<Utc>) -> Result<ParsedUsage, Provide
                     scope: scope.clone(),
                     source: optional_text(item, "source_name")?,
                     used,
-                    usage_known: current_usage.is_some(),
                     limit,
                     reset,
                     models,
@@ -356,6 +357,7 @@ fn parse_usage(value: &Value, now: DateTime<Utc>) -> Result<ParsedUsage, Provide
     }
     Ok(ParsedUsage {
         active,
+        key_name: optional_text(value, "virtual_key_name")?,
         budgets,
         limits,
     })
@@ -364,6 +366,7 @@ fn parse_usage(value: &Value, now: DateTime<Utc>) -> Result<ParsedUsage, Provide
 #[derive(Debug, Clone, PartialEq)]
 struct ParsedUsage {
     active: Option<bool>,
+    key_name: Option<String>,
     budgets: Vec<Budget>,
     limits: Vec<(Scope, Value, usize)>,
 }
@@ -406,7 +409,7 @@ fn add_scopes(
 }
 
 fn result_from_usage(usage: ParsedUsage) -> ProviderFetchResult {
-    let mut budget_windows = usage
+    let budget_windows = usage
         .budgets
         .iter()
         .filter(|budget| budget.limit > 0.0)
@@ -426,8 +429,7 @@ fn result_from_usage(usage: ParsedUsage) -> ProviderFetchResult {
                 budget.reset.window_minutes,
                 budget.reset.resets_at,
                 Some(budget_description(budget)),
-            )
-            .with_usage_known(budget.usage_known);
+            );
             (budget, title, window)
         })
         .collect::<Vec<_>>();
@@ -441,90 +443,28 @@ fn result_from_usage(usage: ParsedUsage) -> ProviderFetchResult {
         .unwrap_or_else(|| RateWindow::informational("No Bifrost budget quota reported"));
     let secondary = root_windows.get(1).map(|(_, _, window)| (*window).clone());
     let mut snapshot = UsageSnapshot::new(primary).with_login_method("API");
+    if let Some(key_name) = &usage.key_name {
+        snapshot = snapshot.with_email(key_name.clone());
+    }
+    if let Some(source) = first_root_budget(&usage).and_then(|first| first.source.as_deref()) {
+        snapshot = snapshot.with_organization(source);
+    }
     if let Some(secondary) = secondary {
         snapshot = snapshot.with_secondary(secondary);
     }
     let mut extra_windows = root_windows
         .iter()
         .skip(2)
-        .map(|(_, title, window)| {
-            (
-                format!(
-                    "bifrost-budget-{}",
-                    window.reset_description.as_deref().unwrap_or("extra")
-                ),
-                title.clone(),
-                window.clone(),
-            )
-        })
+        .map(|(budget, title, window)| budget_named_window(budget, title, window))
         .collect::<Vec<_>>();
     extra_windows.extend(
         budget_windows
-            .drain(..)
+            .iter()
             .filter(|(budget, _, _)| !budget.scope.id.is_empty())
-            .map(|(budget, title, window)| {
-                (
-                    format!("bifrost-{}budget-{}", budget.scope.id, budget.id),
-                    title,
-                    window,
-                )
-            }),
+            .map(|(budget, title, window)| budget_named_window(budget, title, window)),
     );
-
-    for (scope, limit, index) in &usage.limits {
-        let source = optional_text(limit, "source_name").ok().flatten();
-        for (key, title) in [("token", "Tokens"), ("request", "Requests")] {
-            let max = optional_number(limit, &format!("{key}_max_limit"))
-                .ok()
-                .flatten();
-            let reset_raw = optional_text(limit, &format!("{key}_reset_duration"))
-                .ok()
-                .flatten();
-            let Some(max_or_reset) = max
-                .filter(|max| *max > 0.0)
-                .or_else(|| reset_raw.as_ref().map(|_| 0.0))
-            else {
-                continue;
-            };
-            let used = optional_number(limit, &format!("{key}_current_usage"))
-                .ok()
-                .flatten()
-                .unwrap_or(0.0);
-            let reset = reset_timing(
-                reset_raw.as_deref(),
-                optional_text(limit, &format!("{key}_last_reset"))
-                    .ok()
-                    .flatten()
-                    .as_deref(),
-                Utc::now(),
-            );
-            let title = bounded(
-                &[scope.title.as_deref(), source.as_deref(), Some(title)]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            );
-            let window = RateWindow::with_details(
-                if max_or_reset > 0.0 {
-                    percent(used, max_or_reset)
-                } else {
-                    0.0
-                },
-                reset.window_minutes,
-                reset.resets_at,
-                reset.label.map(str::to_owned),
-            );
-            extra_windows.push((
-                format!("bifrost-{}{}s-{index}", scope.id, key),
-                title,
-                window,
-            ));
-        }
-    }
-    for (id, title, window) in extra_windows {
-        snapshot = snapshot.with_extra_rate_window(id, title, window);
-    }
+    extra_windows.extend(rate_limit_windows(&usage.limits));
+    snapshot.extra_rate_windows.extend(extra_windows);
     if usage.active == Some(false) {
         snapshot = snapshot.with_extra_rate_window(
             "bifrost-key-inactive",
@@ -534,11 +474,7 @@ fn result_from_usage(usage: ParsedUsage) -> ProviderFetchResult {
     }
 
     let mut result = ProviderFetchResult::new(snapshot, "api");
-    if let Some(first) = usage
-        .budgets
-        .iter()
-        .find(|budget| budget.scope.id.is_empty())
-    {
+    if let Some(first) = first_root_budget(&usage) {
         let mut cost = CostSnapshot::new(
             first.used,
             "USD",
@@ -585,59 +521,175 @@ fn result_from_usage(usage: ParsedUsage) -> ProviderFetchResult {
             result = result.with_display_detail(detail);
         }
     }
-    if let Some(first) = usage
-        .budgets
-        .iter()
-        .find(|budget| budget.scope.id.is_empty())
-    {
-        let mut models = first
-            .models
-            .iter()
-            .filter_map(|model| {
-                let name = optional_text(model, "model")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| "Model".into());
-                let provider = optional_text(model, "provider").ok().flatten();
-                let cost = optional_number(model, "total_cost").ok().flatten();
-                let tokens = optional_number(model, "total_tokens").ok().flatten();
-                (cost.unwrap_or(0.0) != 0.0 || tokens.unwrap_or(0.0) != 0.0)
-                    .then_some((name, provider, cost, tokens))
-            })
-            .collect::<Vec<_>>();
-        models.sort_by(|a, b| {
-            b.2.unwrap_or(0.0)
-                .total_cmp(&a.2.unwrap_or(0.0))
-                .then_with(|| b.3.unwrap_or(0.0).total_cmp(&a.3.unwrap_or(0.0)))
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        for (index, (name, provider, cost, tokens)) in models.iter().take(5).enumerate() {
-            let label = bounded(
-                &[provider.as_deref(), Some(name.as_str())]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-            );
-            let value = cost.map(usd).unwrap_or_else(|| "—".into());
-            let mut detail =
-                ProviderDisplayDetail::new(format!("bifrost-model-{index}"), label, value);
-            if let Some(tokens) = tokens {
-                detail = detail.and_then(|row| {
-                    row.with_secondary_value(format!("{} tokens", format_count(*tokens)))
-                });
-            }
+    if let Some(first) = first_root_budget(&usage) {
+        for detail in model_details(&first.models) {
             result = result.with_display_detail(detail);
-        }
-        if models.len() > 5 {
-            result = result.with_display_detail(ProviderDisplayDetail::new(
-                "bifrost-model-other",
-                "Other models",
-                (models.len() - 5).to_string(),
-            ));
         }
     }
     result
+}
+
+fn first_root_budget(usage: &ParsedUsage) -> Option<&Budget> {
+    usage
+        .budgets
+        .iter()
+        .find(|budget| budget.scope.id.is_empty())
+}
+
+fn budget_named_window(budget: &Budget, title: &str, window: &RateWindow) -> NamedRateWindow {
+    NamedRateWindow::new(
+        format!("bifrost-{}budget-{}", budget.scope.id, budget.id),
+        title,
+        window.clone(),
+    )
+}
+
+/// Token and request windows for every rate limit. A dimension with a reset
+/// duration but no positive max is reported as an unknown-usage window; a
+/// dimension with neither is unconfigured and skipped.
+fn rate_limit_windows(limits: &[(Scope, Value, usize)]) -> Vec<NamedRateWindow> {
+    let mut windows = Vec::new();
+    for (scope, limit, index) in limits {
+        let source = optional_text(limit, "source_name").ok().flatten();
+        for (key, title) in [("token", "Tokens"), ("request", "Requests")] {
+            let max = optional_number(limit, &format!("{key}_max_limit"))
+                .ok()
+                .flatten()
+                .filter(|max| *max > 0.0);
+            let reset_raw = optional_text(limit, &format!("{key}_reset_duration"))
+                .ok()
+                .flatten();
+            if max.is_none() && reset_raw.is_none() {
+                continue;
+            }
+            let used = optional_number(limit, &format!("{key}_current_usage"))
+                .ok()
+                .flatten()
+                .unwrap_or(0.0);
+            let reset = reset_timing(
+                reset_raw.as_deref(),
+                optional_text(limit, &format!("{key}_last_reset"))
+                    .ok()
+                    .flatten()
+                    .as_deref(),
+                Utc::now(),
+            );
+            let title = bounded(
+                &[scope.title.as_deref(), source.as_deref(), Some(title)]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            let known = max.is_some();
+            let window = RateWindow::with_details(
+                max.map_or(0.0, |max| percent(used, max)),
+                reset.window_minutes,
+                reset.resets_at,
+                reset.label.map(str::to_owned),
+            )
+            .with_usage_known(known);
+            windows.push(
+                NamedRateWindow::new(
+                    format!("bifrost-{}{}s-{index}", scope.id, key),
+                    title,
+                    window,
+                )
+                .with_usage_known(known),
+            );
+        }
+    }
+    windows
+}
+
+struct ModelRow {
+    raw: String,
+    provider: Option<String>,
+    cost: Option<f64>,
+    tokens: Option<f64>,
+}
+
+/// Spend rows for the first root budget, most expensive first, capped at
+/// `MAX_MODEL_ROWS` plus an "Other models" count.
+fn model_details(models: &[Value]) -> Vec<Option<ProviderDisplayDetail>> {
+    let mut rows = models
+        .iter()
+        .filter_map(|model| {
+            let cost = optional_number(model, "total_cost").ok().flatten();
+            // Upstream truncates the count and drops values outside i64.
+            let tokens = optional_number(model, "total_tokens")
+                .ok()
+                .flatten()
+                .filter(|tokens| tokens.abs() < 9_223_372_036_854_775_808.0)
+                .map(f64::trunc);
+            (cost.unwrap_or(0.0) != 0.0 || tokens.unwrap_or(0.0) != 0.0).then(|| ModelRow {
+                raw: optional_text(model, "model")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "Model".into()),
+                provider: optional_text(model, "provider").ok().flatten(),
+                cost,
+                tokens,
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| {
+        b.cost
+            .unwrap_or(0.0)
+            .total_cmp(&a.cost.unwrap_or(0.0))
+            .then_with(|| b.tokens.unwrap_or(0.0).total_cmp(&a.tokens.unwrap_or(0.0)))
+            .then_with(|| a.raw.cmp(&b.raw))
+    });
+    let total = rows.len();
+    let visible = &rows[..total.min(MAX_MODEL_ROWS)];
+    let names = visible
+        .iter()
+        .map(|row| model_labels::model_name(&row.raw))
+        .collect::<Vec<_>>();
+    // The provider prefix only helps when the visible rows mix providers.
+    let mut providers = visible.iter().filter_map(|row| row.provider.as_deref());
+    let mixed = providers
+        .next()
+        .is_some_and(|first| providers.any(|provider| provider != first));
+
+    let mut details = visible
+        .iter()
+        .zip(&names)
+        .enumerate()
+        .map(|(index, (row, name))| {
+            // Two rows sharing a short name fall back to the raw model id.
+            let duplicate = names.iter().filter(|other| *other == name).count() > 1;
+            let label = bounded(
+                &[
+                    mixed.then_some(row.provider.as_deref()).flatten(),
+                    Some(if duplicate { &row.raw } else { name }),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · "),
+            );
+            let value = row.cost.map(usd).unwrap_or_else(|| "—".into());
+            let detail = ProviderDisplayDetail::new(format!("bifrost-model-{index}"), label, value);
+            match row.tokens {
+                Some(tokens) => detail.and_then(|detail| {
+                    detail.with_secondary_value(format!(
+                        "{} tokens",
+                        model_labels::token_count(tokens)
+                    ))
+                }),
+                None => detail,
+            }
+        })
+        .collect::<Vec<_>>();
+    if total > MAX_MODEL_ROWS {
+        details.push(ProviderDisplayDetail::new(
+            "bifrost-model-other",
+            "Other models",
+            (total - MAX_MODEL_ROWS).to_string(),
+        ));
+    }
+    details
 }
 
 fn budget_description(budget: &Budget) -> String {
@@ -820,13 +872,6 @@ fn usd(value: f64) -> String {
 fn bounded(value: &str) -> String {
     value.chars().take(120).collect()
 }
-fn format_count(value: f64) -> String {
-    if value.fract() == 0.0 && value.abs() <= i64::MAX as f64 {
-        format!("{value:.0}")
-    } else {
-        format!("{value:.2}")
-    }
-}
 fn parse_error(reason: &str) -> ProviderError {
     ProviderError::Parse(format!(
         "Bifrost returned an unrecognized quota response ({reason})."
@@ -834,204 +879,4 @@ fn parse_error(reason: &str) -> ProviderError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-        time::timeout,
-    };
-
-    fn now() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
-    }
-
-    #[test]
-    fn component_rate_limits_take_precedence_over_aggregate_compatibility_field() {
-        let value = json!({
-            "rate_limit": { "token_max_limit": 900, "token_current_usage": 450, "token_reset_duration": "1h" },
-            "rate_limits": [
-                { "source_name": "provider-a", "token_max_limit": 100, "token_current_usage": 25, "token_reset_duration": "1h" },
-                { "source_name": "provider-b", "request_max_limit": 20, "request_current_usage": 5, "request_reset_duration": "1d" }
-            ]
-        });
-        let parsed = parse_usage(&value, now()).unwrap();
-        assert_eq!(parsed.limits.len(), 2);
-        assert_eq!(parsed.limits[0].1["token_max_limit"], 100);
-        assert_eq!(parsed.limits[1].1["request_max_limit"], 20);
-        assert!(
-            !parsed
-                .limits
-                .iter()
-                .any(|(_, limit, _)| limit["token_max_limit"] == 900)
-        );
-    }
-
-    #[test]
-    fn aggregate_rate_limit_is_fallback_when_components_are_absent() {
-        let parsed = parse_usage(&json!({
-            "rate_limit": { "token_max_limit": 50, "token_current_usage": 10, "token_reset_duration": "1h" }
-        }), now()).unwrap();
-        assert_eq!(parsed.limits.len(), 1);
-        assert_eq!(parsed.limits[0].1["token_max_limit"], 50);
-    }
-
-    #[test]
-    fn missing_current_usage_at_a_positive_rate_limit_is_known_zero() {
-        for (usage_field, id) in [
-            ("token_current_usage", "bifrost-tokens-0"),
-            ("request_current_usage", "bifrost-requests-0"),
-        ] {
-            let mut limit = json!({
-                "token_max_limit": 100,
-                "token_current_usage": 25,
-                "request_max_limit": 20,
-                "request_current_usage": 5
-            });
-            limit.as_object_mut().unwrap().remove(usage_field);
-            let result =
-                result_from_usage(parse_usage(&json!({ "rate_limit": limit }), now()).unwrap());
-            let named = result
-                .usage
-                .extra_rate_windows
-                .iter()
-                .find(|window| window.id == id)
-                .unwrap_or_else(|| panic!("missing named rate window {id}"));
-
-            assert_eq!(named.window.used_percent, 0.0, "{usage_field}");
-            assert!(named.usage_known, "{usage_field}");
-            assert!(named.window.usage_known(), "{usage_field}");
-        }
-    }
-
-    #[test]
-    fn validates_gateway_before_request_url_is_built() {
-        assert!(
-            quota_url_for_test("https://bifrost.example.com/base/")
-                .unwrap()
-                .as_str()
-                .starts_with("https://bifrost.example.com/base/api/governance/virtual-keys/quota")
-        );
-        assert!(quota_url_for_test("http://10.1.2.3:8080").is_ok());
-        assert!(quota_url_for_test("http://bifrost.example.com").is_err());
-        assert!(quota_url_for_test("https://user:secret@bifrost.example.com").is_err());
-        assert!(quota_url_for_test("ftp://10.1.2.3").is_err());
-    }
-
-    #[tokio::test]
-    async fn rejects_public_http_before_resolving_any_credential() {
-        let provider = BifrostProvider::new();
-        let ctx = FetchContext {
-            gateway_url: Some("http://public.example.com".into()),
-            ..FetchContext::default()
-        };
-        let error = provider.fetch_api(&ctx).await.unwrap_err();
-        assert!(error.to_string().contains("must use HTTPS"));
-    }
-
-    #[tokio::test]
-    async fn does_not_forward_virtual_key_through_gateway_redirects() {
-        let redirect_target = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let redirect_target_addr = redirect_target.local_addr().unwrap();
-        let gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let gateway_addr = gateway.local_addr().unwrap();
-        let gateway_task = tokio::spawn(async move {
-            let (mut stream, _) = gateway.accept().await.unwrap();
-            let mut request = vec![0; 4096];
-            let read = stream.read(&mut request).await.unwrap();
-            let request = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
-            assert!(request.contains("x-bf-vk: test-virtual-key"));
-            let response = format!(
-                "HTTP/1.1 302 Found\r\nLocation: http://{redirect_target_addr}/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
-            stream.write_all(response.as_bytes()).await.unwrap();
-        });
-        let redirect_target_task = tokio::spawn(async move {
-            timeout(Duration::from_millis(250), redirect_target.accept()).await
-        });
-
-        let provider = BifrostProvider::new();
-        let ctx = FetchContext {
-            gateway_url: Some(format!("http://{gateway_addr}")),
-            api_key: Some("test-virtual-key".into()),
-            ..FetchContext::default()
-        };
-        let error = provider.fetch_api(&ctx).await.unwrap_err();
-        assert!(error.to_string().contains("HTTP 302"));
-        gateway_task.await.unwrap();
-        assert!(redirect_target_task.await.unwrap().is_err());
-    }
-
-    #[test]
-    fn parses_fixed_reset_and_calendar_label_without_inventing_calendar_time() {
-        let fixed = reset_timing(Some("1h"), Some("2025-12-31T23:30:00Z"), now());
-        assert_eq!(fixed.window_minutes, Some(60));
-        assert_eq!(
-            fixed.resets_at.unwrap().to_rfc3339(),
-            "2026-01-01T00:30:00+00:00"
-        );
-        let calendar = reset_timing(Some("1M"), Some("2025-12-01T00:00:00Z"), now());
-        assert_eq!(calendar.label, Some("Monthly"));
-        assert_eq!(calendar.resets_at, None);
-        assert_eq!(calendar.window_minutes, None);
-        assert_eq!(parse_duration("1h30m"), Some(5_400.0));
-    }
-
-    #[test]
-    fn budgets_and_overrides_are_mapped_to_percent_and_spend() {
-        let parsed = parse_usage(
-            &json!({
-                "virtual_key_name": "Build key",
-                "budgets": [{ "id": "b1", "max_limit": 10, "current_usage": 5,
-                    "override_amount": 5, "override_mode": "forever", "source_name": "Team" }]
-            }),
-            now(),
-        )
-        .unwrap();
-        let result = result_from_usage(parsed);
-        assert!((result.usage.primary.used_percent - (100.0 / 3.0)).abs() < 0.001);
-        assert_eq!(result.cost.unwrap().limit, Some(15.0));
-    }
-
-    #[test]
-    fn shortest_root_budget_is_primary_and_cost_without_summing_budgets() {
-        let parsed = parse_usage(
-            &json!({
-                "budgets": [
-                    { "id": "monthly", "max_limit": 1_000, "current_usage": 200,
-                        "reset_duration": "1M" },
-                    { "id": "daily", "max_limit": 100, "current_usage": 10,
-                        "reset_duration": "1d" }
-                ]
-            }),
-            now(),
-        )
-        .unwrap();
-        let result = result_from_usage(parsed);
-
-        assert_eq!(result.usage.primary.used_percent, 10.0);
-        assert_eq!(
-            result.usage.primary.reset_description.as_deref(),
-            Some("Daily · $10.00 / $100.00")
-        );
-        let secondary = result.usage.secondary.as_ref().unwrap();
-        assert_eq!(secondary.used_percent, 20.0);
-        assert_eq!(
-            secondary.reset_description.as_deref(),
-            Some("Monthly · $200.00 / $1000.00")
-        );
-
-        let cost = result.cost.unwrap();
-        assert_eq!(cost.used, 10.0);
-        assert_eq!(cost.limit, Some(100.0));
-        assert_eq!(cost.period, "Daily");
-    }
-
-    #[test]
-    fn malformed_optional_scope_collection_fails_closed() {
-        assert!(parse_usage(&json!({ "provider_configs": {} }), now()).is_err());
-    }
-}
+mod tests;
