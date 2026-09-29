@@ -16,6 +16,7 @@ import {
 import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
+import ProjectConversations from "./ProjectConversations";
 
 export default function UsageSpendTab(_props: TabProps) {
   const { t } = useLocale();
@@ -471,24 +472,10 @@ function ProjectsPanel({
                 </button>
 
                 {isExpanded && (
-                  <div style={{ display: "grid", gap: 5, marginTop: 9, paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
-                    {contract.conversations
-                      .filter((session) => session.projectId === project.id)
-                      .map((session) => (
-                        <div
-                          key={session.id}
-                          style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 10 }}
-                        >
-                          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {session.displayTitle}
-                          </span>
-                          <span>
-                            {session.costEstimate.unknownTokens > 0 ? "~" : ""}
-                            ${session.costEstimate.knownUsd.toFixed(2)}
-                          </span>
-                        </div>
-                      ))}
-                  </div>
+                  <ProjectConversations
+                    conversations={contract.conversations.filter((session) => session.projectId === project.id)}
+                    t={t}
+                  />
                 )}
               </div>
             );

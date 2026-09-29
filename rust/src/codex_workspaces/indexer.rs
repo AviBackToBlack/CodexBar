@@ -12,9 +12,10 @@ use crate::codex_costs::codex_period_start;
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner, sha256_hex};
 
 use super::sidecar::{SidecarError, WorkspaceUsageSidecar};
+use super::thread_names::{SessionRef, thread_titles};
 use super::types::{
     CodexLocalProjectUsageSnapshot, CostEstimate, DailyPoint, Progress, ProgressPhase,
-    ProjectUsage, SessionUsage, SourceStatus, UsageTotals,
+    ProjectUsage, SessionUsage, SourceStatus, UsageTotals, untitled_session_label,
 };
 use super::{CHATS_DISPLAY_NAME, CHATS_PROJECT_ID};
 
@@ -214,6 +215,7 @@ impl CodexWorkspacesIndex {
             }
         }
 
+        apply_thread_titles(&mut session_buckets, &scope.codex_home);
         let mut projects = build_projects(&session_buckets);
         projects.sort_by(|a, b| {
             b.latest_activity
@@ -245,11 +247,7 @@ impl CodexWorkspacesIndex {
             .values()
             .map(SessionBucket::to_session_usage)
             .collect();
-        sessions.sort_by(|a, b| {
-            b.latest_activity
-                .cmp(&a.latest_activity)
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        sessions.sort_by(SessionUsage::rank_cmp);
 
         let snapshot = CodexLocalProjectUsageSnapshot {
             updated_at: Utc::now(),
@@ -359,7 +357,7 @@ impl SessionBucket {
                 .title
                 .clone()
                 .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| "Local Codex chat".to_string()),
+                .unwrap_or_else(|| untitled_session_label(&self.id)),
             cwd: self.cwd.clone(),
             started_at: self.started_at,
             latest_activity: self.latest_activity,
@@ -376,6 +374,30 @@ struct DailyAcc {
     cached_input_tokens: u64,
     known_usd: f64,
     unknown_tokens: u64,
+}
+
+/// Overlay Codex thread names (session index, then `threads.title`) after the scan.
+/// Titles never touch totals, cost, or project grouping.
+fn apply_thread_titles(buckets: &mut HashMap<String, SessionBucket>, codex_home: &Path) {
+    let titles = {
+        let refs: Vec<SessionRef<'_>> = buckets
+            .values()
+            .map(|bucket| SessionRef {
+                id: &bucket.id,
+                cwd: bucket.cwd.as_deref(),
+            })
+            .collect();
+        thread_titles(
+            codex_home,
+            non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+            &refs,
+        )
+    };
+    for (id, title) in titles {
+        if let Some(bucket) = buckets.get_mut(&id) {
+            bucket.title = Some(title);
+        }
+    }
 }
 
 fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage> {
@@ -412,11 +434,10 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 .into_iter()
                 .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
                 .map(|(m, _)| m);
-            let top_sessions = buckets
-                .iter()
-                .take(5)
-                .map(|b| b.to_session_usage())
-                .collect();
+            let mut top_sessions: Vec<SessionUsage> =
+                buckets.iter().map(|b| b.to_session_usage()).collect();
+            top_sessions.sort_by(SessionUsage::rank_cmp);
+            top_sessions.truncate(5);
             ProjectUsage {
                 id: first.project_id.clone(),
                 display_name: first.project_display_name.clone(),
@@ -955,10 +976,7 @@ mod tests {
         snap.redact_for_privacy();
         assert_eq!(snap.projects[0].display_name, "Workspace");
         assert!(snap.projects[0].path.is_none());
-        assert_eq!(
-            snap.projects[0].top_sessions[0].display_title,
-            "Local Codex chat"
-        );
+        assert_eq!(snap.projects[0].top_sessions[0].display_title, "Session s1");
         assert!(snap.projects[0].top_sessions[0].cwd.is_none());
     }
 }
