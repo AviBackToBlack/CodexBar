@@ -4,6 +4,7 @@ pub mod accounts;
 mod admin_api;
 pub mod claude_swap;
 mod cli_reset;
+mod cli_screen;
 mod oauth;
 pub mod quota_history;
 pub mod reset_observations;
@@ -319,7 +320,7 @@ async fn rerun_claude_usage_after_trust_prompt(
     probe_dir: std::path::PathBuf,
     combined: String,
 ) -> Result<String, ProviderError> {
-    if !is_workspace_trust_prompt(&strip_ansi(&combined).to_lowercase()) {
+    if !is_workspace_trust_prompt(&cli_screen::render(&combined, true).to_lowercase()) {
         return Ok(combined);
     }
 
@@ -672,12 +673,14 @@ impl ClaudeProvider {
 
         let claude_path = resolve_claude_cli_path()?;
         let combined = fetch_claude_cli_usage_text(claude_path).await?;
+        // Replay cursor redraws once; rendering is idempotent on rendered text.
+        let visible = cli_screen::render(&combined, true);
 
-        if let Some(error) = claude_cli_error_from_output(&combined) {
+        if let Some(error) = claude_cli_error_from_output(&visible) {
             return Err(error);
         }
 
-        let mut result = self.parse_cli_output(&combined)?;
+        let mut result = self.parse_cli_output(&visible)?;
         if let Some(identity) = auto_resume_identity() {
             result = result.with_account_identity(identity);
         }
@@ -686,7 +689,7 @@ impl ClaudeProvider {
 
     /// Parse Claude CLI /usage output
     fn parse_cli_output(&self, output: &str) -> Result<ProviderFetchResult, ProviderError> {
-        let clean = strip_ansi(output);
+        let clean = cli_screen::render(output, true);
         let clean_lower = clean.to_lowercase();
 
         if clean.trim().is_empty() {
@@ -701,7 +704,7 @@ impl ClaudeProvider {
             ));
         }
 
-        if is_cli_activity_stats_response(&clean_lower) {
+        if is_cli_activity_stats_response(&clean_lower) && !has_plan_limit_section(&clean_lower) {
             return Err(ProviderError::Other(
                 "Claude CLI /usage opened, but this Claude version returned local activity stats instead of plan limit percentages. Use Auto, OAuth, or Web mode for Claude limits.".to_string(),
             ));
@@ -1029,6 +1032,12 @@ fn is_workspace_trust_prompt(text: &str) -> bool {
     text.contains("quick safety check")
         && text.contains("trust this folder")
         && text.contains("yes, i trust this folder")
+}
+
+/// Current `/usage` panels show a local session summary above the plan limits,
+/// so the presence of a limit section outranks the activity-stats markers.
+fn has_plan_limit_section(text: &str) -> bool {
+    text.contains("current session") || text.contains("current week")
 }
 
 fn is_cli_activity_stats_response(text: &str) -> bool {
