@@ -544,8 +544,33 @@ fn malformed_entries_and_envelopes_point_to_usage_dashboard() {
 }
 
 #[test]
-fn non_array_limit_container_is_a_data_error() {
-    let error = serde_json::from_slice::<ZaiQuotaResponse>(br#"{"code":200,"data":{"limits":{}}}"#)
+fn quota_body_maps_shape_errors_to_dashboard_guidance_but_keeps_syntax_errors() {
+    let shape = parse_quota_body(br#"{"code":200,"data":{"limits":{}}}"#)
         .expect_err("object limits must not deserialize");
-    assert_eq!(error.classify(), serde_json::error::Category::Data);
+    assert!(
+        shape
+            .to_string()
+            .contains("Unsupported z.ai quota format. Check Usage Dashboard for plan usage."),
+        "{shape}"
+    );
+
+    let syntax = parse_quota_body(b"{not json").expect_err("syntax error");
+    assert!(!syntax.to_string().contains("Usage Dashboard"), "{syntax}");
+}
+
+#[test]
+fn recognized_entry_without_any_quota_signal_is_malformed() {
+    for entry in [
+        serde_json::json!({"type": "TOKENS_LIMIT"}),
+        serde_json::json!({"type": "TIME_LIMIT", "unit": 5, "number": 1}),
+    ] {
+        let error = parse_data(serde_json::json!({"limits": [entry]}))
+            .expect_err("signal-less entry must not fabricate 0%");
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported z.ai quota entry. Check Usage Dashboard for plan usage."),
+            "{error}"
+        );
+    }
 }

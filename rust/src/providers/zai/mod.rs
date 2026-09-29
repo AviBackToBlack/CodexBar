@@ -102,6 +102,22 @@ struct ZaiLimit {
     next_reset_time: Option<i64>,
 }
 
+impl ZaiLimit {
+    /// Whether the entry carries any usage figure to derive a percentage from.
+    fn has_quota_signal(&self) -> bool {
+        [
+            self.used,
+            self.usage,
+            self.current_value,
+            self.limit,
+            self.remaining,
+            self.percentage,
+        ]
+        .iter()
+        .any(Option::is_some)
+    }
+}
+
 const ZAI_UNSUPPORTED_FORMAT: &str =
     "Unsupported z.ai quota format. Check Usage Dashboard for plan usage.";
 const ZAI_UNSUPPORTED_ENTRY: &str =
@@ -129,24 +145,53 @@ fn is_time_limit_type(limit_type: Option<&str>) -> bool {
 /// Split raw limit entries into recognized limits and a skipped-entry count.
 ///
 /// Upstream 0.69.0 (#4091): a string `type` outside the known limit types is
-/// skipped without needing legacy fields; a missing or non-string `type`, or a
-/// recognized entry that does not deserialize, is a malformed entry.
+/// skipped without needing legacy fields; a missing or non-string `type`, a
+/// recognized entry that does not deserialize, or a recognized entry with no
+/// quota signal at all (which would fabricate a 0% window) is a malformed entry.
 fn recognized_limits(raw: &[serde_json::Value]) -> Result<(Vec<ZaiLimit>, usize), ProviderError> {
+    let unsupported_entry = || ProviderError::Parse(ZAI_UNSUPPORTED_ENTRY.to_string());
     let mut limits = Vec::with_capacity(raw.len());
     let mut skipped = 0;
     for entry in raw {
         let Some(limit_type) = entry.get("type").and_then(serde_json::Value::as_str) else {
-            return Err(ProviderError::Parse(ZAI_UNSUPPORTED_ENTRY.to_string()));
+            return Err(unsupported_entry());
         };
         if !is_token_limit_type(Some(limit_type)) && !is_time_limit_type(Some(limit_type)) {
             skipped += 1;
             continue;
         }
-        let limit = serde_json::from_value::<ZaiLimit>(entry.clone())
-            .map_err(|_| ProviderError::Parse(ZAI_UNSUPPORTED_ENTRY.to_string()))?;
+        let limit = ZaiLimit::deserialize(entry).map_err(|_| unsupported_entry())?;
+        if !limit.has_quota_signal() {
+            return Err(unsupported_entry());
+        }
         limits.push(limit);
     }
     Ok((limits, skipped))
+}
+
+/// Decode the quota envelope. A well-formed JSON body of the wrong shape is an
+/// unsupported format (points at the Usage Dashboard); a syntax error keeps
+/// the parser message.
+fn parse_quota_body(body: &[u8]) -> Result<ZaiQuotaResponse, ProviderError> {
+    serde_json::from_slice(body).map_err(|e| {
+        if e.classify() == serde_json::error::Category::Data {
+            ProviderError::Parse(ZAI_UNSUPPORTED_FORMAT.to_string())
+        } else {
+            ProviderError::Parse(e.to_string())
+        }
+    })
+}
+
+/// Detail row for quota the API returned but this client cannot show. The
+/// title mirrors upstream: "Additional quota" when recognized token windows
+/// exist, otherwise "Coding Plan usage".
+fn unavailable_quota_detail(has_token_limits: bool) -> Option<ProviderDisplayDetail> {
+    let (id, title) = if has_token_limits {
+        ("additional-quota", "Additional quota")
+    } else {
+        ("coding-plan-usage", "Coding Plan usage")
+    };
+    ProviderDisplayDetail::new(id, title, "Unavailable")?.with_secondary_value(ZAI_UNAVAILABLE_HINT)
 }
 
 /// z.ai provider
@@ -337,13 +382,7 @@ impl ZaiProvider {
             ));
         }
 
-        let quota: ZaiQuotaResponse = serde_json::from_slice(&resp_bytes).map_err(|e| {
-            if e.classify() == serde_json::error::Category::Data {
-                ProviderError::Parse(ZAI_UNSUPPORTED_FORMAT.to_string())
-            } else {
-                ProviderError::Parse(e.to_string())
-            }
-        })?;
+        let quota = parse_quota_body(&resp_bytes)?;
 
         let ZaiParsedQuota {
             mut usage,
@@ -513,19 +552,13 @@ impl ZaiProvider {
             usage = usage.with_extra_rate_window("zai-mcp", "MCP", make_window(mcp));
         }
 
-        let unavailable_detail = (limits.is_empty() || skipped_limits > 0).then(|| {
-            let (id, title) = if token_limits.is_empty() {
-                ("coding-plan-usage", "Coding Plan usage")
-            } else {
-                ("additional-quota", "Additional quota")
-            };
-            ProviderDisplayDetail::new(id, title, "Unavailable")
-                .and_then(|row| row.with_secondary_value(ZAI_UNAVAILABLE_HINT))
-        });
+        let unavailable_detail = (limits.is_empty() || skipped_limits > 0)
+            .then(|| unavailable_quota_detail(!token_limits.is_empty()))
+            .flatten();
 
         Ok(ZaiParsedQuota {
             usage,
-            unavailable_detail: unavailable_detail.flatten(),
+            unavailable_detail,
         })
     }
 
