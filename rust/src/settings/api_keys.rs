@@ -404,7 +404,7 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
                 "Get an API key from Atlas Cloud and set it in Preferences or ATLASCLOUD_API_KEY.",
             ),
             config_file_path: None,
-            dashboard_url: Some("https://www.atlascloud.ai/console"),
+            dashboard_url: Some(crate::providers::atlascloud::DASHBOARD_URL),
         },
         ProviderConfigInfo {
             id: ProviderId::ZenMux,

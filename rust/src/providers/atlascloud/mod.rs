@@ -6,14 +6,16 @@ use serde::Deserialize;
 use std::time::Duration;
 
 use crate::core::{
-    FetchContext, Provider, ProviderDisplayDetail, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    CostSnapshot, FetchContext, Provider, ProviderDisplayDetail, ProviderError,
+    ProviderFetchResult, ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
 const BALANCE_URL: &str = "https://api.atlascloud.ai/public/v1/balance";
 const CREDENTIAL_TARGET: &str = "codexbar-atlascloud";
 const API_KEY_ENV: &str = "ATLASCLOUD_API_KEY";
+/// Single canonical console URL, shared with the API-key settings catalog.
+pub const DASHBOARD_URL: &str = "https://www.atlascloud.ai/console";
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -44,7 +46,7 @@ impl AtlasCloudProvider {
                 supports_credits: false,
                 default_enabled: false,
                 is_primary: false,
-                dashboard_url: Some("https://atlascloud.ai/dashboard"),
+                dashboard_url: Some(DASHBOARD_URL),
                 status_page_url: None,
                 tertiary_label_key: None,
             },
@@ -87,12 +89,34 @@ impl AtlasCloudProvider {
             ProviderError::Parse(format!("Invalid Atlas Cloud response: {error}"))
         })?;
         let balance = parse_balance(body)?;
-        let detail = ProviderDisplayDetail::new("atlascloud-available", "Available", balance);
-        Ok(ProviderFetchResult::new(
-            UsageSnapshot::new(RateWindow::informational("Account balance")),
-            "api",
-        )
-        .with_display_detail(detail))
+        Ok(balance_result(balance))
+    }
+}
+
+/// Typed USD balance for balance formatting, Usage & Spend and currency
+/// conversion, plus a signed display row. `CostSnapshot::with_balance` clamps
+/// negatives to zero, so the row is what keeps a deficit (`-$1.25`) visible.
+fn balance_result(balance: f64) -> ProviderFetchResult {
+    let usage =
+        UsageSnapshot::new(RateWindow::informational("Account balance")).with_login_method("API");
+    let cost = CostSnapshot::new(0.0, "USD", "Atlas Cloud balance").with_balance(balance);
+    let detail = ProviderDisplayDetail::new(
+        "atlascloud-available",
+        "Available balance",
+        format_usd(balance),
+    );
+    ProviderFetchResult::new(usage, "api")
+        .with_cost(cost)
+        .with_display_detail(detail)
+}
+
+/// `$95.50` / `-$1.25`; a negative that rounds to zero shows no sign.
+fn format_usd(amount: f64) -> String {
+    let magnitude = format!("{:.2}", amount.abs());
+    if amount < 0.0 && magnitude != "0.00" {
+        format!("-${magnitude}")
+    } else {
+        format!("${magnitude}")
     }
 }
 
@@ -155,7 +179,7 @@ struct AvailableBalance {
     value: String,
 }
 
-fn parse_balance(body: &str) -> Result<String, ProviderError> {
+fn parse_balance(body: &str) -> Result<f64, ProviderError> {
     let response: BalanceResponse = serde_json::from_str(body)
         .map_err(|error| ProviderError::Parse(format!("Invalid Atlas Cloud response: {error}")))?;
     if response.object != "balance"
@@ -176,7 +200,7 @@ fn parse_balance(body: &str) -> Result<String, ProviderError> {
     if !parsed.is_finite() {
         return Err(parse_failure("available.value is not a finite number"));
     }
-    Ok(amount.to_owned())
+    Ok(parsed)
 }
 
 fn is_decimal(value: &str) -> bool {
