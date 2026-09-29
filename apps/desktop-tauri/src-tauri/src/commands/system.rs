@@ -214,6 +214,14 @@ fn dashboard_url_for_provider(provider_id: &str) -> Option<String> {
         );
     }
 
+    // The llmman dashboard is the configured daemon itself.
+    if provider_id == ProviderId::LLMMan.cli_name() {
+        let settings = Settings::load();
+        return Some(codexbar::providers::llmman::dashboard_url(Some(
+            settings.workspace_id(ProviderId::LLMMan),
+        )));
+    }
+
     // OpenRouter's Usage Dashboard is the Activity page. Resolve it from the
     // provider metadata before the legacy API-key catalog entry, which still
     // points at the credits settings page.

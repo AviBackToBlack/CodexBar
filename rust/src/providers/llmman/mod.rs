@@ -121,6 +121,14 @@ fn resolve_base_url(saved: Option<&str>) -> Result<String, ProviderError> {
     validated_llmman_base_url(&configured).map_err(ProviderError::Other)
 }
 
+/// The dashboard is the daemon itself, so it follows the configured base URL
+/// (saved value, else `LLMMAN_HOST`) and falls back to the default local
+/// daemon when that value is invalid.
+pub fn dashboard_url(saved: Option<&str>) -> String {
+    let base = resolve_base_url(saved).unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+    request_base(&base).to_string()
+}
+
 async fn fetch_daemon(
     client: &Client,
     base: &str,
@@ -335,7 +343,7 @@ fn loaded_model_rows(node: &Node) -> Vec<ProviderDisplayDetail> {
         };
         let row = match node.memory {
             0 => Some(row),
-            memory => row.with_progress(weight.min(&memory).to_owned() as f64, memory as f64),
+            memory => row.with_progress((*weight).min(memory) as f64, memory as f64),
         };
         rows.extend(row);
     }

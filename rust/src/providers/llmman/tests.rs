@@ -457,6 +457,22 @@ fn saved_base_url_is_validated() {
 }
 
 #[test]
+fn dashboard_follows_the_saved_daemon() {
+    assert_eq!(
+        dashboard_url(Some("192.168.1.10")),
+        "http://192.168.1.10:17434"
+    );
+    assert_eq!(
+        dashboard_url(Some("https://llmman.example.com/v1")),
+        "https://llmman.example.com"
+    );
+    assert_eq!(
+        dashboard_url(Some("http://public.example.com")),
+        "http://127.0.0.1:17434"
+    );
+}
+
+#[test]
 fn metadata_matches_upstream() {
     let provider = LLMManProvider::new();
     let metadata = provider.metadata();

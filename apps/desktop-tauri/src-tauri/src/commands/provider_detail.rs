@@ -79,6 +79,10 @@ pub(crate) fn build_provider_detail(
                 settings.api_region(id),
             )),
         )
+    } else if id == codexbar::core::ProviderId::LLMMan {
+        Some(codexbar::providers::llmman::dashboard_url(Some(
+            settings.workspace_id(id),
+        )))
     } else {
         metadata.dashboard_url.map(|s| s.to_string())
     };
