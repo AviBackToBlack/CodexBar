@@ -15,7 +15,7 @@ use crate::core::ProviderError;
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
 use super::billing::GrokBillingSnapshot;
-use super::product_usage::{GrokProductUsage, LossyProductUsage};
+use super::product_usage::LossyProductUsage;
 use super::{GrokCredentials, GrokProvider, grok_plan_display_name};
 
 pub(super) const CREDITS_PROXY_ENDPOINT: &str =
@@ -32,9 +32,6 @@ const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 pub(super) struct BearerBilling {
     pub(super) billing: GrokBillingSnapshot,
     pub(super) subscription_tier: Option<String>,
-    /// Product shares of the same payload's wire credit percent; empty for
-    /// every other percent source (on-demand ratio, period-only, gRPC-web).
-    pub(super) product_usage: Vec<GrokProductUsage>,
 }
 
 #[derive(Deserialize)]
@@ -158,9 +155,11 @@ pub(super) fn parse_credits_response(
             used_percent_is_implicit_zero: false,
             resets_at,
             window_minutes,
+            // Shares of this payload's wire percent; empty for every other
+            // percent source (on-demand ratio, period-only).
+            product_usage,
         },
         subscription_tier,
-        product_usage,
     })
 }
 
@@ -177,11 +176,12 @@ fn adopt_grpc_percent(proxy: BearerBilling, grpc: GrokBillingSnapshot) -> Bearer
             used_percent: grpc.used_percent,
             used_percent_is_wire_published: grpc.used_percent_is_wire_published,
             used_percent_is_implicit_zero: grpc.used_percent_is_implicit_zero,
+            // The grok.com percent is a different total than any proxy share
+            // list, so only the grok.com breakdown may accompany it.
+            product_usage: grpc.product_usage,
             ..proxy.billing
         },
         subscription_tier: proxy.subscription_tier,
-        // The grok.com percent is a different total than any proxy share list.
-        product_usage: Vec::new(),
     }
 }
 
@@ -204,7 +204,6 @@ impl GrokProvider {
                 return Ok(BearerBilling {
                     billing,
                     subscription_tier: None,
-                    product_usage: Vec::new(),
                 });
             }
         };

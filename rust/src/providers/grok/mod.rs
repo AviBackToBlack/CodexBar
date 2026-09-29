@@ -138,7 +138,6 @@ impl GrokProvider {
         let BearerBilling {
             billing,
             subscription_tier,
-            product_usage,
         } = match self.fetch_bearer_billing(credentials).await {
             Ok(bearer) => bearer,
             Err(error) => {
@@ -167,12 +166,6 @@ impl GrokProvider {
             credentials.team_id.clone(),
             plan,
         );
-        // Reset-credit enrichment adds inventory only, so the breakdown survives it.
-        let result = product_usage::display_details(&product_usage)
-            .into_iter()
-            .fold(result, |result, detail| {
-                result.with_display_detail(Some(detail))
-            });
         Ok(match reset_credits {
             Some(credits) => result.with_inventory_item(credits),
             None => result,
@@ -808,7 +801,13 @@ fn result_from_billing(
     usage.account_email = email;
     usage.account_organization = team_id;
     usage.login_method = login_method;
-    ProviderFetchResult::new(usage, source_label)
+    // Reset-credit enrichment adds inventory only, so the breakdown survives it.
+    product_usage::display_details(&billing.product_usage)
+        .into_iter()
+        .fold(
+            ProviderFetchResult::new(usage, source_label),
+            |result, detail| result.with_display_detail(Some(detail)),
+        )
 }
 
 /// Whether a cookie-path error should invalidate the cached browser session.
