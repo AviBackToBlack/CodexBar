@@ -36,7 +36,7 @@ impl CodexProvider {
                 supports_credits: true,
                 default_enabled: true,
                 is_primary: true,
-                dashboard_url: Some("https://chatgpt.com/codex/settings/usage"),
+                dashboard_url: Some("https://chatgpt.com/codex/cloud/settings/analytics#usage"),
                 status_page_url: Some("https://status.openai.com"),
                 tertiary_label_key: None,
             },
