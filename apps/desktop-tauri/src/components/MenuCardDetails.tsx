@@ -287,6 +287,26 @@ function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
 
   return { kind: "none" };
 }
+/**
+ * A window blocked by an exhausted longer pool reads fully used with no reset,
+ * pace, or reserve of its own; the pool's row owns the reset. Raw provider
+ * percentages stay untouched in the snapshot (upstream 0.69.0 #4091).
+ */
+function toBlockedSnapshot(snap: RateWindowSnapshot): RateWindowSnapshot {
+  return {
+    ...snap,
+    usedPercent: 100,
+    remainingPercent: 0,
+    isExhausted: true,
+    resetsAt: null,
+    resetDescription: null,
+    reservePercent: null,
+    reserveDescription: null,
+    reserveWillLastToReset: false,
+    reserveEtaSeconds: null,
+  };
+}
+
 type MetricRowDisplay = {
   resetTimeRelative: boolean;
   showResetWhenExhausted?: boolean;
@@ -304,7 +324,7 @@ type MetricRowDisplay = {
  */
 function MetricRow({
   title,
-  snap,
+  snap: rawSnap,
   exhaustedLabel,
   display,
   expanded,
@@ -322,6 +342,8 @@ function MetricRow({
   sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
 }) {
   const { t } = useLocale();
+  const blocked = rawSnap.blockedByMonthlyLimit === true;
+  const snap = blocked ? toBlockedSnapshot(rawSnap) : rawSnap;
   const {
     resetTimeRelative,
     showResetWhenExhausted = false,
@@ -353,7 +375,7 @@ function MetricRow({
     resetText !== null;
   const paceView = showPace ? getMetricPaceView(snap) : { kind: "none" as const };
   const reserveDescription = formatReserveDescription(snap, t);
-  const forecastText = formatSessionEquivalentEstimate(sessionEquivalentForecast);
+  const forecastText = blocked ? null : formatSessionEquivalentEstimate(sessionEquivalentForecast);
   return (
     <div className="menu-metric">
       <span className="menu-metric__title">{title}</span>
@@ -380,7 +402,10 @@ function MetricRow({
           <span className="menu-metric__reset">{resetText}</span>
         )}
       </div>
-      {!compactOverview && !isInformational && snap.isExhausted && (
+      {blocked && (
+        <div className="menu-metric__exhausted">{t("PanelBlockedByMonthlyLimit")}</div>
+      )}
+      {!blocked && !compactOverview && !isInformational && snap.isExhausted && (
         <div className="menu-metric__exhausted">{exhaustedLabel}</div>
       )}
       {!compactOverview && !isInformational && paceView.kind === "budget" && (

@@ -936,6 +936,7 @@ locale_keys! {
     PanelFiveHours,
     PanelTodayBudget,
     PanelReserveSuffix,
+    PanelBlockedByMonthlyLimit,
     PanelReserveLastsUntilReset,
     PanelReserveRunsOutInDaysHours,
     PanelReserveRunsOutInHours,

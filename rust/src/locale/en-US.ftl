@@ -599,6 +599,7 @@ PanelOneHour = 1h
 PanelFiveHours = 5h
 PanelTodayBudget = today
 PanelReserveSuffix = in reserve
+PanelBlockedByMonthlyLimit = Blocked by monthly limit
 PanelReserveLastsUntilReset = Lasts until reset
 PanelReserveRunsOutInDaysHours = Runs out in { "{}" }d { "{}" }h
 PanelReserveRunsOutInHours = Runs out in { "{}" }h

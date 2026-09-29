@@ -824,6 +824,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                blocked_by_monthly_limit: false,
             },
             primary_label: None,
             secondary: secondary_percent.map(|pct| crate::commands::RateWindowSnapshot {
@@ -838,6 +839,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                blocked_by_monthly_limit: false,
             }),
             secondary_label: None,
             model_specific: None,
@@ -853,6 +855,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                blocked_by_monthly_limit: false,
             }),
             tertiary_label: None,
             extra_rate_windows: Vec::new(),

@@ -125,6 +125,7 @@ describe("MenuCard", () => {
         PanelNow: "now",
         PanelOneHour: "1h",
         PanelFiveHours: "5h",
+        PanelBlockedByMonthlyLimit: "Blocked by monthly limit",
         PanelOnPaceBudget: "On-pace budget",
         PanelReserveSuffix: "in reserve",
         PanelThirtyDayCost: "30d cost",
@@ -583,6 +584,55 @@ describe("MenuCard", () => {
     expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
     expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
     expect(container.querySelector(".menu-metric__forecast")).not.toBeInTheDocument();
+  });
+
+  it("marks windows blocked by an exhausted monthly pool without touching the pool row", async () => {
+    const future = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const snapshot = provider(null);
+    snapshot.providerId = "kimi";
+    snapshot.displayName = "Kimi";
+    snapshot.primary = {
+      ...rateWindow(0, {
+        windowMinutes: 7 * 24 * 60,
+        resetsAt: future,
+        reservePercent: 30,
+      }),
+      blockedByMonthlyLimit: true,
+    };
+    snapshot.secondary = {
+      ...rateWindow(0, { windowMinutes: 5 * 60, resetsAt: future }),
+      blockedByMonthlyLimit: true,
+    };
+    snapshot.extraRateWindows = [
+      {
+        id: "kimi-monthly",
+        title: "Total usage",
+        window: rateWindow(100, {
+          windowMinutes: 30 * 24 * 60,
+          exhausted: true,
+          resetsAt: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+        }),
+      },
+    ];
+
+    const { container } = renderCard(snapshot, { showAsUsed: true });
+
+    expect(await screen.findAllByText("Blocked by monthly limit")).toHaveLength(2);
+    // Both blocked rows read fully used with no reset, pace, or reserve text.
+    expect(screen.getAllByText("100% used")).toHaveLength(3);
+    expect(container.querySelectorAll(".menu-metric__reset")).toHaveLength(1);
+    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
+    expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".menu-metric__exhausted")).toHaveLength(3);
+  });
+
+  it("keeps windows that are not blocked untouched", async () => {
+    const snapshot = provider(null, 0, {});
+    snapshot.providerId = "kimi";
+    renderCard(snapshot, { showAsUsed: true });
+
+    expect(await screen.findByText("0% used")).toBeInTheDocument();
+    expect(screen.queryByText("Blocked by monthly limit")).not.toBeInTheDocument();
   });
 
   it("renders local token and cost totals after chart data loads", async () => {

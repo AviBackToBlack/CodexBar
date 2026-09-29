@@ -442,6 +442,15 @@ impl ProviderId {
         }
     }
 
+    /// Id of the longer pool that blocks this provider's shorter windows once
+    /// exhausted (upstream 0.69.0 #4091). See [`super::BlockedWindows`].
+    pub fn blocking_quota_window_id(&self) -> Option<&'static str> {
+        match self {
+            ProviderId::Kimi => Some(crate::providers::kimi::MONTHLY_WINDOW_ID),
+            _ => None,
+        }
+    }
+
     /// Parse from CLI name string
     pub fn from_cli_name(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {

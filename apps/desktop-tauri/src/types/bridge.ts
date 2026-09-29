@@ -567,6 +567,8 @@ export interface RateWindowSnapshot {
   reserveDescription: string | null;
   reserveWillLastToReset?: boolean;
   reserveEtaSeconds?: number | null;
+  /** A longer exhausted pool (Kimi monthly) blocks this window; raw percentages stay the provider data. */
+  blockedByMonthlyLimit?: boolean;
 }
 
 export interface CostDailyPoint {

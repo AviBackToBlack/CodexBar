@@ -3,6 +3,7 @@ mod status;
 pub(crate) use status::{compact_tray_status_label, friendly_provider_error};
 
 use super::*;
+use codexbar::core::BlockedWindows;
 
 // ── Bridge snapshot types ────────────────────────────────────────────
 
@@ -31,6 +32,10 @@ pub struct RateWindowSnapshot {
     pub reserve_will_last_to_reset: bool,
     #[serde(default)]
     pub reserve_eta_seconds: Option<f64>,
+    /// A longer exhausted pool (Kimi's monthly membership) blocks this window.
+    /// Presentation-only: the raw percentages above stay the provider's data.
+    #[serde(default)]
+    pub blocked_by_monthly_limit: bool,
 }
 
 /// Serde default for [`RateWindowSnapshot::remaining_percent`] — the common
@@ -53,7 +58,13 @@ impl RateWindowSnapshot {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            blocked_by_monthly_limit: false,
         }
+    }
+
+    fn with_blocked(mut self, blocked: bool) -> Self {
+        self.blocked_by_monthly_limit = blocked;
+        self
     }
 
     /// Enrich with raw reserve info derived from pace analysis.
@@ -355,10 +366,12 @@ impl ProviderUsageSnapshot {
         });
         let secondary_pace = secondary_pace.flatten();
 
-        let primary_snap = RateWindowSnapshot::from_rate_window(&usage.primary);
+        let blocked = BlockedWindows::evaluate(id, usage, chrono::Utc::now());
+        let primary_snap =
+            RateWindowSnapshot::from_rate_window(&usage.primary).with_blocked(blocked.primary);
 
         let secondary_snap = usage.secondary.as_ref().map(|sw| {
-            let mut s = RateWindowSnapshot::from_rate_window(sw);
+            let mut s = RateWindowSnapshot::from_rate_window(sw).with_blocked(blocked.secondary);
             if let Some(ref p) = secondary_pace {
                 s = s.with_pace_reserve(p);
             }
@@ -394,14 +407,13 @@ impl ProviderUsageSnapshot {
                     .clone()
                     .unwrap_or_else(|| metadata.weekly_label.to_string())
             }),
-            model_specific: usage
-                .model_specific
-                .as_ref()
-                .map(RateWindowSnapshot::from_rate_window),
+            model_specific: usage.model_specific.as_ref().map(|w| {
+                RateWindowSnapshot::from_rate_window(w).with_blocked(blocked.model_specific)
+            }),
             tertiary: usage
                 .tertiary
                 .as_ref()
-                .map(RateWindowSnapshot::from_rate_window),
+                .map(|w| RateWindowSnapshot::from_rate_window(w).with_blocked(blocked.tertiary)),
             // F5 (upstream 0.48.0): label the tertiary lane by its duration cadence
             // so surfaces (MenuCard, CLI, tray) can show "Monthly" instead of the
             // generic "DetailWindowTertiary" slot key.
@@ -416,10 +428,12 @@ impl ProviderUsageSnapshot {
             extra_rate_windows: usage
                 .extra_rate_windows
                 .iter()
-                .map(|extra| NamedRateWindowSnapshot {
+                .zip(&blocked.extra)
+                .map(|(extra, &is_blocked)| NamedRateWindowSnapshot {
                     id: extra.id.clone(),
                     title: extra.title.clone(),
-                    window: RateWindowSnapshot::from_rate_window(&extra.window),
+                    window: RateWindowSnapshot::from_rate_window(&extra.window)
+                        .with_blocked(is_blocked),
                     fallback_lane: extra.fallback_lane,
                 })
                 .collect(),
@@ -518,6 +532,7 @@ impl ProviderUsageSnapshot {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                blocked_by_monthly_limit: false,
             },
             primary_label: Some(metadata.session_label.to_string()),
             secondary: None,
@@ -1017,6 +1032,7 @@ mod tests {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            blocked_by_monthly_limit: false,
         }
     }
 
