@@ -1,32 +1,18 @@
-export const SUPPORTED_CURRENCIES = [
-  "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD",
-  "INR", "CHF", "AED", "TRY",
-] as const;
+import { CURRENCY_CATALOG } from "./currencyCatalog.generated";
 
-export const FALLBACK_CURRENCY_RATES: Record<string, number> = {
-  USD: 1,
-  GBP: 0.79,
-  EUR: 0.92,
-  CZK: 21,
-  CNY: 7.27,
-  JPY: 154,
-  KRW: 1428.9,
-  CAD: 1.38,
-  AUD: 1.55,
-  HKD: 7.8,
-  TWD: 32.3,
-  SGD: 1.34,
-  INR: 84.5,
-  CHF: 0.8,
-  AED: 3.6725,
-  TRY: 48.5,
-};
+// The catalog (order, symbols, offline rates) is generated from rust/src/currency.rs.
+export const SUPPORTED_CURRENCIES: readonly string[] = CURRENCY_CATALOG.map((entry) => entry.code);
+
+export const FALLBACK_CURRENCY_RATES: Record<string, number> = Object.fromEntries(
+  CURRENCY_CATALOG.map((entry) => [entry.code, entry.fallbackRate]),
+);
+
+export const CURRENCY_PICKER_OPTIONS: ReadonlyArray<{ value: string; label: string }> =
+  CURRENCY_CATALOG.map((entry) => ({ value: entry.code, label: `${entry.code} (${entry.symbol})` }));
 
 export function normalizePreferredCurrency(value: string | null | undefined): string {
   const code = value?.trim().toUpperCase() || "AUTO";
-  return code === "AUTO" || SUPPORTED_CURRENCIES.includes(code as (typeof SUPPORTED_CURRENCIES)[number])
-    ? code
-    : "AUTO";
+  return code === "AUTO" || SUPPORTED_CURRENCIES.includes(code) ? code : "AUTO";
 }
 
 export function convertCurrencyAmount(
@@ -38,8 +24,7 @@ export function convertCurrencyAmount(
   if (!Number.isFinite(amount)) return null;
   const source = sourceCode.trim().toUpperCase();
   const target = targetCode.trim().toUpperCase();
-  if (!SUPPORTED_CURRENCIES.includes(source as (typeof SUPPORTED_CURRENCIES)[number]) ||
-      !SUPPORTED_CURRENCIES.includes(target as (typeof SUPPORTED_CURRENCIES)[number])) return null;
+  if (!SUPPORTED_CURRENCIES.includes(source) || !SUPPORTED_CURRENCIES.includes(target)) return null;
   if (source === target) return amount;
   const sourceRate = source === "USD" ? 1 : rates[source];
   const targetRate = target === "USD" ? 1 : rates[target];
@@ -77,7 +62,6 @@ export function formatDisplayCurrency(
     return new Intl.NumberFormat(undefined, {
       style: "currency",
       currency: preferred,
-      maximumFractionDigits: 2,
     }).format(converted);
   } catch {
     return `${converted.toFixed(2)} ${preferred}`;

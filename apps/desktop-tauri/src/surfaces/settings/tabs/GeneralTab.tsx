@@ -14,7 +14,7 @@ import type {
   UsageThresholdOverride,
 } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
-import { SUPPORTED_CURRENCIES } from "../../../lib/currency";
+import { CURRENCY_PICKER_OPTIONS } from "../../../lib/currency";
 import type { TabProps } from "../settingsTabs";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
@@ -274,10 +274,7 @@ export default function GeneralTab({
               ariaLabel={t("PreferredCurrencyLabel")}
               options={[
                 { value: "AUTO", label: "AUTO" },
-                ...SUPPORTED_CURRENCIES.map((code) => ({
-                  value: code,
-                  label: code === "TRY" ? "TRY (₺)" : code,
-                })),
+                ...CURRENCY_PICKER_OPTIONS,
               ]}
               onChange={(value) => set({ preferredCurrencyCode: value })}
             />

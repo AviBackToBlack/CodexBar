@@ -1,8 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use codexbar::currency::{
-    SUPPORTED_CURRENCY_CODES, convert_amount, fallback_rates, fetch_exchange_rates,
-    normalize_preferred_currency,
+    CURRENCIES, convert_amount, fallback_rates, fetch_exchange_rates, normalize_preferred_currency,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -102,12 +101,12 @@ fn cache_path() -> Option<PathBuf> {
 
 fn clean_rates(rates: HashMap<String, f64>) -> HashMap<String, f64> {
     let mut clean = HashMap::new();
-    for code in SUPPORTED_CURRENCY_CODES {
-        if let Some(rate) = rates.get(*code).copied()
+    for currency in CURRENCIES {
+        if let Some(rate) = rates.get(currency.code).copied()
             && rate.is_finite()
             && rate > 0.0
         {
-            clean.insert((*code).to_string(), rate);
+            clean.insert(currency.code.to_string(), rate);
         }
     }
     if clean
@@ -154,16 +153,15 @@ fn persist_rates(cached: &PersistedRates) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codexbar::currency::FALLBACK_RATES;
 
     #[test]
     fn fallback_table_covers_every_preferred_currency() {
         let rates = fallback_rates();
-        assert_eq!(rates.len(), FALLBACK_RATES.len());
-        for code in SUPPORTED_CURRENCY_CODES {
+        assert_eq!(rates.len(), CURRENCIES.len());
+        for currency in CURRENCIES {
             assert!(
                 rates
-                    .get(*code)
+                    .get(currency.code)
                     .is_some_and(|rate| rate.is_finite() && *rate > 0.0)
             );
         }

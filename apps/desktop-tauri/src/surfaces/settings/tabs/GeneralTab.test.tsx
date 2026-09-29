@@ -309,11 +309,16 @@ describe("GeneralTab language picker", () => {
 });
 
 describe("GeneralTab preferred currency picker", () => {
-  it("offers AUTO and every supported currency with the TRY symbol", () => {
+  it("offers AUTO then every catalog currency as CODE (symbol) in catalog order", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
     const select = screen.getByLabelText("PreferredCurrencyLabel");
     const options = Array.from(select.querySelectorAll("option"), (option) => option.textContent);
-    expect(options).toEqual(["AUTO", "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD", "INR", "CHF", "AED", "TRY (₺)"]);
+    expect(options).toEqual([
+      "AUTO", "USD ($)", "GBP (£)", "EUR (€)", "CZK (Kč)", "CNY (¥)", "JPY (¥)", "KRW (₩)",
+      "CAD ($)", "AUD ($)", "HKD ($)", "TWD (NT$)", "SGD ($)", "INR (₹)", "CHF (Fr.)",
+      "AED (د.إ)", "TRY (₺)", "NZD ($)", "SEK (kr)", "NOK (kr)", "DKK (kr)", "PLN (zł)",
+      "BRL (R$)", "MXN ($)", "ZAR (R)", "THB (฿)", "IDR (Rp)", "VND (₫)", "UAH (₴)",
+    ]);
   });
 
   it("persists an explicitly selected preferred currency", () => {

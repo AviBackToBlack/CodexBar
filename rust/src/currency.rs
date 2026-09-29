@@ -3,33 +3,91 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-pub const SUPPORTED_CURRENCY_CODES: &[&str] = &[
-    "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD", "INR",
-    "CHF", "AED", "TRY",
+/// One entry of the preferred-display-currency catalog.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurrencyInfo {
+    pub code: &'static str,
+    pub symbol: &'static str,
+    /// Offline USD-pivot rate used until live rates are available.
+    pub fallback_rate: f64,
+}
+
+const fn currency(code: &'static str, symbol: &'static str, fallback_rate: f64) -> CurrencyInfo {
+    CurrencyInfo {
+        code,
+        symbol,
+        fallback_rate,
+    }
+}
+
+/// Single source of truth for picker order, picker symbols, and offline rates.
+/// The frontend copy (`apps/desktop-tauri/src/lib/currencyCatalog.generated.ts`)
+/// is generated from this table by `render_typescript_catalog`.
+pub const CURRENCIES: &[CurrencyInfo] = &[
+    currency("USD", "$", 1.0),
+    currency("GBP", "£", 0.79),
+    currency("EUR", "€", 0.92),
+    currency("CZK", "Kč", 21.0),
+    currency("CNY", "¥", 7.27),
+    currency("JPY", "¥", 154.0),
+    currency("KRW", "₩", 1428.90),
+    currency("CAD", "$", 1.38),
+    currency("AUD", "$", 1.55),
+    currency("HKD", "$", 7.80),
+    currency("TWD", "NT$", 32.30),
+    currency("SGD", "$", 1.34),
+    currency("INR", "₹", 84.50),
+    currency("CHF", "Fr.", 0.80),
+    currency("AED", "د.إ", 3.6725),
+    currency("TRY", "₺", 48.5),
+    // Rates below are from open.er-api.com on 2026-09-24.
+    currency("NZD", "$", 1.761),
+    currency("SEK", "kr", 9.908),
+    currency("NOK", "kr", 9.480),
+    currency("DKK", "kr", 6.554),
+    currency("PLN", "zł", 3.838),
+    currency("BRL", "R$", 5.117),
+    currency("MXN", "$", 17.47),
+    currency("ZAR", "R", 16.36),
+    currency("THB", "฿", 33.37),
+    currency("IDR", "Rp", 17836.0),
+    currency("VND", "₫", 25962.0),
+    currency("UAH", "₴", 44.86),
 ];
 
-pub const FALLBACK_RATES: &[(&str, f64)] = &[
-    ("USD", 1.0),
-    ("GBP", 0.79),
-    ("EUR", 0.92),
-    ("CZK", 21.0),
-    ("CNY", 7.27),
-    ("JPY", 154.0),
-    ("KRW", 1428.90),
-    ("CAD", 1.38),
-    ("AUD", 1.55),
-    ("HKD", 7.80),
-    ("TWD", 32.30),
-    ("SGD", 1.34),
-    ("INR", 84.50),
-    ("CHF", 0.80),
-    ("AED", 3.6725),
-    ("TRY", 48.5),
-];
+pub fn is_supported_currency(code: &str) -> bool {
+    CURRENCIES.iter().any(|currency| currency.code == code)
+}
+
+/// Picker label in the catalog's `CODE (symbol)` form.
+pub fn picker_label(code: &str) -> Option<String> {
+    CURRENCIES
+        .iter()
+        .find(|currency| currency.code == code)
+        .map(|currency| format!("{} ({})", currency.code, currency.symbol))
+}
+
+/// Renders the catalog as the TypeScript module the settings picker and
+/// offline converter import, so both sides share this table.
+pub fn render_typescript_catalog() -> String {
+    let mut out = String::from(
+        "// Generated from rust/src/currency.rs (CURRENCIES). Do not edit by hand.\n\
+         // Regenerate: UPDATE_CURRENCY_CATALOG=1 cargo test -p codexbar currency_catalog\n\
+         export const CURRENCY_CATALOG = [\n",
+    );
+    for currency in CURRENCIES {
+        out.push_str(&format!(
+            "  {{ code: \"{}\", symbol: \"{}\", fallbackRate: {} }},\n",
+            currency.code, currency.symbol, currency.fallback_rate
+        ));
+    }
+    out.push_str("] as const;\n");
+    out
+}
 
 pub fn normalize_preferred_currency(value: &str) -> String {
     let code = value.trim().to_ascii_uppercase();
-    if code == "AUTO" || SUPPORTED_CURRENCY_CODES.contains(&code.as_str()) {
+    if code == "AUTO" || is_supported_currency(&code) {
         code
     } else {
         "AUTO".to_string()
@@ -37,9 +95,9 @@ pub fn normalize_preferred_currency(value: &str) -> String {
 }
 
 pub fn fallback_rates() -> HashMap<String, f64> {
-    FALLBACK_RATES
+    CURRENCIES
         .iter()
-        .map(|(code, rate)| ((*code).to_string(), *rate))
+        .map(|currency| (currency.code.to_string(), currency.fallback_rate))
         .collect()
 }
 
@@ -52,12 +110,12 @@ pub fn parse_exchange_rates(payload: &[u8]) -> Option<HashMap<String, f64>> {
     }
     let rates = value.get("rates")?.as_object()?;
     let mut parsed = HashMap::new();
-    for code in SUPPORTED_CURRENCY_CODES {
-        let Some(rate) = rates.get(*code).and_then(serde_json::Value::as_f64) else {
+    for currency in CURRENCIES {
+        let Some(rate) = rates.get(currency.code).and_then(serde_json::Value::as_f64) else {
             continue;
         };
         if rate.is_finite() && rate > 0.0 {
-            parsed.insert((*code).to_string(), rate);
+            parsed.insert(currency.code.to_string(), rate);
         }
     }
     if parsed
@@ -82,9 +140,7 @@ pub fn convert_amount(
     }
     let source = source_code.trim().to_ascii_uppercase();
     let target = target_code.trim().to_ascii_uppercase();
-    if !SUPPORTED_CURRENCY_CODES.contains(&source.as_str())
-        || !SUPPORTED_CURRENCY_CODES.contains(&target.as_str())
-    {
+    if !is_supported_currency(&source) || !is_supported_currency(&target) {
         return None;
     }
     if source == target {
@@ -183,5 +239,80 @@ mod tests {
         let mut malformed = rates;
         malformed.insert("TRY".into(), f64::NAN);
         assert_eq!(convert_amount(12.0, "USD", "TRY", &malformed), None);
+    }
+
+    const UPSTREAM_ADDED: &[(&str, &str, f64)] = &[
+        ("NZD", "$", 1.761),
+        ("SEK", "kr", 9.908),
+        ("NOK", "kr", 9.480),
+        ("DKK", "kr", 6.554),
+        ("PLN", "zł", 3.838),
+        ("BRL", "R$", 5.117),
+        ("MXN", "$", 17.47),
+        ("ZAR", "R", 16.36),
+        ("THB", "฿", 33.37),
+        ("IDR", "Rp", 17836.0),
+        ("VND", "₫", 25962.0),
+        ("UAH", "₴", 44.86),
+    ];
+
+    #[test]
+    fn added_currencies_follow_try_in_upstream_order_with_upstream_rates() {
+        let codes: Vec<&str> = CURRENCIES.iter().map(|currency| currency.code).collect();
+        let try_index = codes.iter().position(|code| *code == "TRY").unwrap();
+        assert_eq!(codes.len(), try_index + 1 + UPSTREAM_ADDED.len());
+        for (offset, (code, symbol, rate)) in UPSTREAM_ADDED.iter().enumerate() {
+            let entry = &CURRENCIES[try_index + 1 + offset];
+            assert_eq!(
+                (entry.code, entry.symbol, entry.fallback_rate),
+                (*code, *symbol, *rate)
+            );
+        }
+        assert_eq!(picker_label("VND").as_deref(), Some("VND (₫)"));
+        assert_eq!(picker_label("TRY").as_deref(), Some("TRY (₺)"));
+        assert_eq!(picker_label("BTC"), None);
+    }
+
+    #[test]
+    fn added_currencies_convert_through_the_usd_pivot_and_normalize() {
+        let rates = fallback_rates();
+        assert_eq!(rates.len(), CURRENCIES.len());
+        for (code, _, rate) in UPSTREAM_ADDED {
+            assert_eq!(normalize_preferred_currency(&code.to_lowercase()), *code);
+            let from_usd = convert_amount(10.0, "USD", code, &rates).unwrap();
+            assert!((from_usd - 10.0 * rate).abs() < 1e-9, "{code}");
+            let back = convert_amount(from_usd, code, "USD", &rates).unwrap();
+            assert!((back - 10.0).abs() < 1e-9, "{code}");
+        }
+        let cross = convert_amount(10.0, "EUR", "SEK", &rates).unwrap();
+        assert!((cross - (10.0 / 0.92) * 9.908).abs() < 1e-9);
+    }
+
+    #[test]
+    fn live_rate_parsing_keeps_added_currencies() {
+        let rates = parse_exchange_rates(
+            br#"{"result":"success","base_code":"USD","rates":{"USD":1,"VND":26000,"IDR":17900,"UAH":45,"XXX":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(rates.get("VND"), Some(&26000.0));
+        assert_eq!(rates.get("IDR"), Some(&17900.0));
+        assert_eq!(rates.get("UAH"), Some(&45.0));
+        assert!(!rates.contains_key("XXX"));
+    }
+
+    #[test]
+    fn currency_catalog_typescript_matches_the_checked_in_module() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../apps/desktop-tauri/src/lib/currencyCatalog.generated.ts");
+        let expected = render_typescript_catalog();
+        if std::env::var_os("UPDATE_CURRENCY_CATALOG").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            actual.replace("\r\n", "\n"),
+            expected,
+            "regenerate with UPDATE_CURRENCY_CATALOG=1 cargo test -p codexbar currency_catalog"
+        );
     }
 }
