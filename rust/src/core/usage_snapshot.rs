@@ -88,6 +88,19 @@ pub struct NamedRateWindow {
     /// selection metadata only; external snapshot JSON stays stable.
     #[serde(default = "named_rate_window_fallback_lane_default", skip_serializing)]
     pub fallback_lane: bool,
+    /// Tray-icon lane this window stands in for when the snapshot has no real
+    /// core window in that lane. The snapshot's own lanes stay unchanged.
+    /// In-memory selection metadata only; external snapshot JSON stays stable.
+    #[serde(default, skip_serializing)]
+    pub icon_fallback: Option<IconLane>,
+}
+
+/// Core lane of the tray icon that a provider-declared extra window may fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IconLane {
+    Primary,
+    Secondary,
 }
 
 /// One display-only item of provider-issued discrete inventory.
@@ -121,7 +134,13 @@ impl NamedRateWindow {
             window,
             usage_known: true,
             fallback_lane: false,
+            icon_fallback: None,
         }
+    }
+
+    pub fn with_icon_fallback(mut self, lane: IconLane) -> Self {
+        self.icon_fallback = Some(lane);
+        self
     }
 
     pub fn with_usage_known(mut self, usage_known: bool) -> Self {

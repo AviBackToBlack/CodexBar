@@ -1,8 +1,9 @@
 //! Canonical single-metric selection shared by native and webview surfaces.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 
-use codexbar::core::ProviderId;
+use codexbar::core::{IconLane, ProviderId};
 use codexbar::settings::{MetricPreference, Settings};
 
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
@@ -11,6 +12,10 @@ pub(crate) fn selected_usage_window(
     snapshot: &ProviderUsageSnapshot,
     settings: &Settings,
 ) -> RateWindowSnapshot {
+    select_window(&with_icon_fallbacks(snapshot), settings)
+}
+
+fn select_window(snapshot: &ProviderUsageSnapshot, settings: &Settings) -> RateWindowSnapshot {
     let provider = ProviderId::from_cli_name(&snapshot.provider_id);
     let preference = provider
         .map(|id| settings.get_provider_metric(id))
@@ -30,6 +35,43 @@ pub(crate) fn selected_usage_window(
     automatic_window(snapshot, provider).unwrap_or_else(|| snapshot.primary.clone())
 }
 
+/// Let provider-declared extra windows stand in for an absent core lane.
+///
+/// A lane is absent when the primary is informational or the secondary is
+/// missing; the provider's own `icon_fallback` hint names the extra window
+/// that fills it. Only this selection view changes: the snapshot the UI
+/// renders keeps its lanes as reported, and a lane with no hint stays absent.
+fn with_icon_fallbacks(snapshot: &ProviderUsageSnapshot) -> Cow<'_, ProviderUsageSnapshot> {
+    let fallback = |lane: IconLane| {
+        snapshot
+            .extra_rate_windows
+            .iter()
+            .find(|extra| extra.icon_fallback == Some(lane) && !extra.window.is_informational)
+            .map(|extra| extra.window.clone())
+    };
+    let primary = snapshot
+        .primary
+        .is_informational
+        .then(|| fallback(IconLane::Primary))
+        .flatten();
+    let secondary = snapshot
+        .secondary
+        .is_none()
+        .then(|| fallback(IconLane::Secondary))
+        .flatten();
+    if primary.is_none() && secondary.is_none() {
+        return Cow::Borrowed(snapshot);
+    }
+    let mut resolved = snapshot.clone();
+    if let Some(primary) = primary {
+        resolved.primary = primary;
+    }
+    if secondary.is_some() {
+        resolved.secondary = secondary;
+    }
+    Cow::Owned(resolved)
+}
+
 /// Select the primary tray metric and, when there are multiple meaningful core
 /// quotas, one distinct companion lane. Keeping this policy beside canonical
 /// metric selection prevents tray rendering from duplicating the selected lane.
@@ -37,7 +79,8 @@ pub(crate) fn selected_usage_icon_windows(
     snapshot: &ProviderUsageSnapshot,
     settings: &Settings,
 ) -> (RateWindowSnapshot, Option<RateWindowSnapshot>) {
-    let selected = selected_usage_window(snapshot, settings);
+    let snapshot = with_icon_fallbacks(snapshot);
+    let selected = select_window(&snapshot, settings);
     let meaningful_count = std::iter::once(&snapshot.primary)
         .chain(snapshot.secondary.iter())
         .chain(snapshot.tertiary.iter())
@@ -406,6 +449,7 @@ mod tests {
             title: "Credits used".to_string(),
             window: window(35.0),
             fallback_lane: true,
+            icon_fallback: None,
         }];
 
         assert_eq!(
@@ -425,6 +469,7 @@ mod tests {
             title: "Credits used".to_string(),
             window: window(90.0),
             fallback_lane: true,
+            icon_fallback: None,
         }];
 
         assert_eq!(
@@ -447,6 +492,7 @@ mod tests {
             title: "Credits used".to_string(),
             window: window(35.0),
             fallback_lane: true,
+            icon_fallback: None,
         }];
         let mut settings = Settings::default();
         let provider = ProviderId::from_cli_name(&snapshot.provider_id).expect("copilot provider");
@@ -468,6 +514,7 @@ mod tests {
             title: "Grok Bot".to_string(),
             window: window(95.0),
             fallback_lane: false,
+            icon_fallback: None,
         }];
 
         assert_eq!(
@@ -550,6 +597,7 @@ mod tests {
             title: "Claude/GPT weekly".to_string(),
             window: window(100.0),
             fallback_lane: false,
+            icon_fallback: None,
         }];
 
         let selected = selected_usage_window(&snapshot, &Settings::default());
@@ -570,6 +618,7 @@ mod tests {
             title: "Other".to_string(),
             window: window(100.0),
             fallback_lane: false,
+            icon_fallback: None,
         }];
 
         let selected = selected_usage_window(&snapshot, &Settings::default());
@@ -647,6 +696,7 @@ mod tests {
             title: "Daily Routines".to_string(),
             window: window(95.0),
             fallback_lane: false,
+            icon_fallback: None,
         }];
 
         let baseline = crate::commands::ProviderUsagePresentationSnapshot::new(
@@ -679,5 +729,173 @@ mod tests {
             "claude-routines"
         );
         assert!(restored.hidden_usage_item_ids.is_empty());
+    }
+
+    const AGENT_RESET: &str = "2026-08-16T05:00:00Z";
+
+    fn agent_window(used_percent: f64, minutes: u32) -> RateWindowSnapshot {
+        RateWindowSnapshot {
+            window_minutes: Some(minutes),
+            resets_at: Some(AGENT_RESET.to_string()),
+            ..window(used_percent)
+        }
+    }
+
+    fn agent_extra(
+        id: &str,
+        window: RateWindowSnapshot,
+        icon_fallback: Option<IconLane>,
+    ) -> crate::commands::NamedRateWindowSnapshot {
+        crate::commands::NamedRateWindowSnapshot {
+            id: id.to_string(),
+            title: id.to_string(),
+            window,
+            fallback_lane: false,
+            icon_fallback,
+        }
+    }
+
+    /// Bridge shape of a Doubao Coding Plan snapshot that also reports Agent
+    /// Plan lanes (`doubao-agent-*`), with optional Coding Plan session/weekly.
+    fn doubao_snapshot(
+        coding_session: Option<f64>,
+        coding_weekly: Option<f64>,
+    ) -> ProviderUsageSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.provider_id = "doubao".to_string();
+        snapshot.primary = coding_session.map_or_else(
+            || RateWindowSnapshot {
+                window_minutes: Some(300),
+                is_informational: true,
+                ..window(0.0)
+            },
+            window,
+        );
+        snapshot.secondary = coding_weekly.map(window);
+        snapshot.extra_rate_windows = vec![
+            agent_extra(
+                "doubao-agent-session",
+                agent_window(0.0, 300),
+                Some(IconLane::Primary),
+            ),
+            agent_extra(
+                "doubao-agent-weekly",
+                agent_window(31.0, 10_080),
+                Some(IconLane::Secondary),
+            ),
+            agent_extra("doubao-agent-monthly", agent_window(72.0, 43_200), None),
+        ];
+        snapshot
+    }
+
+    #[test]
+    fn doubao_icon_windows_fall_back_to_agent_plan_lanes() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Doubao, MetricPreference::Session);
+
+        for (has_session, has_weekly) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let snapshot = doubao_snapshot(has_session.then_some(10.0), has_weekly.then_some(20.0));
+            let (primary, secondary) = selected_usage_icon_windows(&snapshot, &settings);
+            let secondary = secondary.expect("secondary icon lane");
+
+            assert_eq!(primary.used_percent, if has_session { 10.0 } else { 0.0 });
+            assert_eq!(secondary.used_percent, if has_weekly { 20.0 } else { 31.0 });
+            assert!(!primary.is_informational);
+            assert_eq!(
+                primary.window_minutes,
+                if has_session { None } else { Some(300) }
+            );
+            assert_eq!(
+                secondary.window_minutes,
+                if has_weekly { None } else { Some(10_080) }
+            );
+            assert_eq!(
+                primary.resets_at.as_deref(),
+                (!has_session).then_some(AGENT_RESET)
+            );
+            assert_eq!(
+                secondary.resets_at.as_deref(),
+                (!has_weekly).then_some(AGENT_RESET)
+            );
+        }
+    }
+
+    #[test]
+    fn doubao_icon_fallback_does_not_change_the_reported_snapshot() {
+        let raw = doubao_snapshot(None, None);
+        let presentation = crate::commands::ProviderUsagePresentationSnapshot::new(
+            raw.clone(),
+            &Settings::default(),
+        );
+
+        assert!(presentation.snapshot.primary.is_informational);
+        assert!(presentation.snapshot.secondary.is_none());
+        assert!(presentation.snapshot.tertiary.is_none());
+        assert_eq!(
+            presentation
+                .snapshot
+                .extra_rate_windows
+                .iter()
+                .map(|extra| extra.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "doubao-agent-session",
+                "doubao-agent-weekly",
+                "doubao-agent-monthly"
+            ]
+        );
+        assert!(!presentation.selected_metric.is_informational);
+    }
+
+    #[test]
+    fn doubao_icon_windows_preserve_missing_lanes() {
+        let no_hints = |levels: &[(&str, f64, u32)]| {
+            let mut snapshot = doubao_snapshot(None, None);
+            snapshot.extra_rate_windows = levels
+                .iter()
+                .map(|(id, percent, minutes)| {
+                    agent_extra(id, agent_window(*percent, *minutes), None)
+                })
+                .collect();
+            snapshot
+        };
+        // Monthly and team buckets never stand in for the session/weekly lanes.
+        for id in ["doubao-agent-monthly", "doubao-agent-team-session"] {
+            let snapshot = no_hints(&[(id, 25.0, 300)]);
+            let resolved = with_icon_fallbacks(&snapshot);
+            assert!(matches!(resolved, Cow::Borrowed(_)), "{id}");
+            assert!(resolved.primary.is_informational, "{id}");
+            assert!(resolved.secondary.is_none(), "{id}");
+        }
+
+        // Agent weekly alone fills only the weekly lane; no session is invented.
+        let mut snapshot = doubao_snapshot(None, None);
+        snapshot
+            .extra_rate_windows
+            .retain(|extra| extra.id == "doubao-agent-weekly");
+        let resolved = with_icon_fallbacks(&snapshot);
+        assert!(resolved.primary.is_informational);
+        assert_eq!(resolved.secondary.as_ref().unwrap().used_percent, 31.0);
+
+        // Coding session alone (agent lanes absent): unchanged, nothing invented.
+        let mut snapshot = doubao_snapshot(Some(25.0), None);
+        snapshot.extra_rate_windows.clear();
+        let resolved = with_icon_fallbacks(&snapshot);
+        assert!(matches!(resolved, Cow::Borrowed(_)));
+        let (primary, companion) = selected_usage_icon_windows(&snapshot, &Settings::default());
+        assert_eq!(primary.used_percent, 25.0);
+        assert!(companion.is_none());
+    }
+
+    #[test]
+    fn icon_fallback_hints_are_ignored_while_the_core_lane_is_present() {
+        let snapshot = doubao_snapshot(Some(10.0), Some(20.0));
+        let resolved = with_icon_fallbacks(&snapshot);
+
+        assert!(matches!(resolved, Cow::Borrowed(_)));
+        assert_eq!(resolved.primary.used_percent, 10.0);
+        assert_eq!(resolved.secondary.as_ref().unwrap().used_percent, 20.0);
     }
 }

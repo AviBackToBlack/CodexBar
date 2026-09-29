@@ -13,8 +13,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::core::{
-    FetchContext, NamedRateWindow, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256, sha256_hex,
+    FetchContext, IconLane, NamedRateWindow, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256,
+    sha256_hex,
 };
 
 const DOUBAO_API_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
@@ -429,7 +430,9 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
         &["session", "5-hour", "five_hour", "5h"],
         Some(5 * 60),
     )
-    .unwrap_or_else(|| RateWindow::new(0.0));
+    // A missing Coding Plan session is not a measured 0%: keep the canonical
+    // informational placeholder so Agent Plan-only accounts do not draw one.
+    .unwrap_or_else(RateWindow::no_active_session);
     let mut snapshot = UsageSnapshot::new(primary);
     if let Some(weekly) = coding_plan_window(&usage, &["weekly", "week"], Some(7 * 24 * 60)) {
         snapshot = snapshot.with_secondary(weekly);
@@ -453,10 +456,10 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
             ],
             Some(5 * 60),
         ) {
-            snapshot.extra_rate_windows.push(NamedRateWindow::new(
-                format!("{id_prefix}-session"),
-                "5-hour",
-                w,
+            snapshot.extra_rate_windows.push(with_agent_icon_lane(
+                NamedRateWindow::new(format!("{id_prefix}-session"), "5-hour", w),
+                prefix,
+                IconLane::Primary,
             ));
         }
         if let Some(w) = coding_plan_window(
@@ -464,10 +467,10 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
             &[&format!("{prefix}weekly"), &format!("{prefix}week")],
             Some(7 * 24 * 60),
         ) {
-            snapshot.extra_rate_windows.push(NamedRateWindow::new(
-                format!("{id_prefix}-weekly"),
-                "Weekly",
-                w,
+            snapshot.extra_rate_windows.push(with_agent_icon_lane(
+                NamedRateWindow::new(format!("{id_prefix}-weekly"), "Weekly", w),
+                prefix,
+                IconLane::Secondary,
             ));
         }
         if let Some(w) = coding_plan_window(
@@ -489,6 +492,20 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
         snapshot.updated_at = update;
     }
     snapshot
+}
+
+/// Only the personal Agent Plan session/weekly lanes may stand in for a missing
+/// Coding Plan lane on the tray icon; team and monthly buckets never do.
+fn with_agent_icon_lane(
+    lane: NamedRateWindow,
+    level_prefix: &str,
+    icon_lane: IconLane,
+) -> NamedRateWindow {
+    if level_prefix == "agent_" {
+        lane.with_icon_fallback(icon_lane)
+    } else {
+        lane
+    }
 }
 
 fn coding_plan_window(
@@ -973,6 +990,9 @@ fn resolve_api_key(
         env_names.join(" / ")
     )))
 }
+
+#[cfg(test)]
+mod icon_lane_tests;
 
 #[cfg(test)]
 mod tests {

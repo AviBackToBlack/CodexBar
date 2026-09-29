@@ -663,6 +663,8 @@ export interface ProviderUsageSnapshot {
     window: RateWindowSnapshot;
     /** Provider-declared fallback lane; only fills in without a core quota window. */
     fallbackLane?: boolean;
+    /** Provider-declared tray-icon lane this window stands in for when that core lane is absent. */
+    iconFallback?: "primary" | "secondary";
   }>;
   /** Display-only discrete provider inventory; never used as quota math. */
   inventory?: ProviderInventoryItem[];
@@ -967,6 +969,8 @@ export interface ProviderDetail {
     window: RateWindowSnapshot;
     /** Provider-declared fallback lane; only fills in without a core quota window. */
     fallbackLane?: boolean;
+    /** Provider-declared tray-icon lane this window stands in for when that core lane is absent. */
+    iconFallback?: "primary" | "secondary";
   }>;
   /** Metric and extra rows exposed by the current provider snapshot. */
   usageItems?: ProviderUsageItem[];
