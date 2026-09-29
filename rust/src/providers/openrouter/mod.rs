@@ -33,6 +33,9 @@ const OPENROUTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3
 const OPENROUTER_KEY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const OPENROUTER_ACTIVITY_URL: &str = "https://openrouter.ai/api/v1/activity";
 const OPENROUTER_MANAGEMENT_ENV: &str = "OPENROUTER_MANAGEMENT_API_KEY";
+/// Shown when no primary key resolves. The optional Management key field never
+/// substitutes for the primary key when selecting an account for quota/balance.
+const MISSING_API_KEY_MESSAGE: &str = "Enter a regular API key or a Management API key in the API key field, or set OPENROUTER_API_KEY. In Settings, the optional Management API key field does not replace it.";
 
 /// Windows Credential Manager target for OpenRouter API token
 const OPENROUTER_CREDENTIAL_TARGET: &str = "codexbar-openrouter";
@@ -172,17 +175,11 @@ impl OpenRouterProvider {
         match keyring::Entry::new(OPENROUTER_CREDENTIAL_TARGET, "api_token") {
             Ok(entry) => match entry.get_password() {
                 Ok(token) => Ok(token),
-                Err(_) => std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                    ProviderError::NotInstalled(
-                        "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
-                    )
-                }),
+                Err(_) => std::env::var("OPENROUTER_API_KEY")
+                    .map_err(|_| ProviderError::NotInstalled(MISSING_API_KEY_MESSAGE.to_string())),
             },
-            Err(_) => std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                ProviderError::NotInstalled(
-                    "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
-                )
-            }),
+            Err(_) => std::env::var("OPENROUTER_API_KEY")
+                .map_err(|_| ProviderError::NotInstalled(MISSING_API_KEY_MESSAGE.to_string())),
         }
     }
 

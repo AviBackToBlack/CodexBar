@@ -842,7 +842,7 @@ ProviderAutoResumeAfterQuotaResetHelper = Reopen the exact local Codex or Claude
 
 OpenRouterManagementKeyTitle = OpenRouter spend history
 OpenRouterManagementKeyLabel = Management API key
-OpenRouterManagementKeyHelp = Optional. Used only for exact 30-day Activity spend from openrouter.ai. The primary OpenRouter API key remains separate. You can also set OPENROUTER_MANAGEMENT_API_KEY.
+OpenRouterManagementKeyHelp = Optional additional key for account Activity. Only needed to use a separate Management API key from the one in the required API key field above. You can also set OPENROUTER_MANAGEMENT_API_KEY.
 OpenRouterManagementKeyConfigured = Management key configured
 ClaudeAccountsTitle = Claude Code accounts
 ClaudeAccountsHint = Close Claude Code before switching, then reopen it. Claude Desktop uses a separate login.

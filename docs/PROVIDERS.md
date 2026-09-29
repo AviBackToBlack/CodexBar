@@ -87,6 +87,10 @@ Custom pricing overlays are exact-match overrides used only where the local spen
 
 OpenCode-held OpenAI/Codex OAuth can be reused for **remote Codex account quota** only when the Codex provider's `External OAuth sources` setting is explicitly enabled. Native Codex credentials still take precedence, an explicit `CODEX_HOME` stays isolated, and external credentials remain read-only. This does **not** import ordinary OpenCode sessions into Codex token or spend totals. OpenCode Go's local SQLite reader remains scoped to its own `opencode-go` assistant records; OpenAI API-platform usage is a separate provider.
 
+### OpenRouter keys
+
+The **API key** field (or `OPENROUTER_API_KEY`) is required and accepts either a regular API key or a Management API key. A Management key entered there also enables account Activity on the official OpenRouter API. The separate **Management API key** field (or `OPENROUTER_MANAGEMENT_API_KEY`) is an optional additional key for account Activity, only needed to use a Management key different from the one in the required field. Filling only the Management field does not select an account for quota or balance; with no primary key, the provider reports the missing-key message instead.
+
 ### z.ai Coding Plan quotas
 
 z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shortest known Coding Plan window becomes primary and the longest becomes secondary; `TIME_LIMIT` is the separate MCP lane. When absolute usage/remaining counts are available they determine the used percentage, otherwise the provider percentage is used, always clamped to 0–100%. This behavior is shared by the tray, provider detail, CLI, and other Windows surfaces.

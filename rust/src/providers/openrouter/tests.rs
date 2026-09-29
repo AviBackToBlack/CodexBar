@@ -387,3 +387,27 @@ fn parsed_key_wire_fields_decode() {
     assert_eq!(parsed.data.limit_remaining, Some(12.5));
     assert_eq!(parsed.data.limit_reset.as_deref(), Some("monthly"));
 }
+
+// Upstream 0.67.0 `OpenRouterSettingsError.missingToken` copy: a Management key
+// is a valid primary key, and the optional Management field never replaces it.
+#[test]
+fn missing_key_message_explains_primary_and_management_fields() {
+    assert_eq!(
+        MISSING_API_KEY_MESSAGE,
+        "Enter a regular API key or a Management API key in the API key field, or set OPENROUTER_API_KEY. In Settings, the optional Management API key field does not replace it."
+    );
+}
+
+#[test]
+fn api_key_field_help_says_management_keys_are_accepted() {
+    let info = crate::settings::get_api_key_providers()
+        .into_iter()
+        .find(|info| info.id == ProviderId::OpenRouter)
+        .expect("OpenRouter api key metadata");
+    assert_eq!(
+        info.api_key_help,
+        Some(
+            "Required. Enter a regular API key or a Management API key here. Management keys also enable account Activity on the official OpenRouter API."
+        )
+    );
+}
