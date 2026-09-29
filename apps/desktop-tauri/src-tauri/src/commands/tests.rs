@@ -1905,7 +1905,10 @@ fn external_url_validator_rejects_non_web_and_control_urls() {
 
 #[test]
 fn bootstrap_payload_exposes_every_provider_variant() {
-    let payload = super::get_bootstrap_state();
+    // Built from default settings instead of `Settings::load()` so a retired
+    // provider enabled in the developer's real settings.json cannot change
+    // the catalog size.
+    let payload = super::bootstrap_state_for(Settings::default());
 
     let catalog_ids: std::collections::HashSet<String> = payload
         .providers
