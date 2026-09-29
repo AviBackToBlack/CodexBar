@@ -19,6 +19,7 @@ pub mod login;
 #[cfg(windows)]
 pub mod managed_process;
 pub mod notifications;
+pub mod power_assertion;
 pub mod providers;
 pub mod secure_file;
 pub mod settings;

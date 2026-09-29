@@ -193,6 +193,17 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
             />
           </Field>
           <Field
+            label={t("AgentSessionsStayAwakeLabel")}
+            description={t("AgentSessionsStayAwakeHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.stayAwakeEnabled ?? false}
+              disabled={saving}
+              onChange={(v) => set({ stayAwakeEnabled: v })}
+            />
+          </Field>
+          <Field
             label={t("AgentSessionsSshHostsLabel")}
             description={t("AgentSessionsSshHostsHelper")}
           >

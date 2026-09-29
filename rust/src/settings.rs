@@ -220,6 +220,10 @@ pub struct Settings {
     #[serde(default)]
     pub agent_sessions_enabled: bool,
 
+    /// Keep the system awake (no idle sleep) while a local agent session is live.
+    #[serde(default)]
+    pub stay_awake_enabled: bool,
+
     /// SSH targets queried for remote agent sessions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_session_ssh_hosts: Vec<String>,
@@ -562,6 +566,7 @@ impl Default for Settings {
             global_shortcut: default_global_shortcut(), // Ctrl+Shift+U by default
             codex_custom_sessions_dirs: Vec::new(),
             agent_sessions_enabled: false,
+            stay_awake_enabled: false,
             agent_session_ssh_hosts: Vec::new(),
             hooks_enabled: false,
             http_proxy_enabled: false,

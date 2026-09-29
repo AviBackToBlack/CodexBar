@@ -208,6 +208,8 @@ export interface SettingsSnapshot {
   /** Extra Codex home or sessions directories scanned for local cost estimates. */
   codexCustomSessionsDirs: string[];
   agentSessionsEnabled?: boolean;
+  /** Hold system awake while a local agent session is live. */
+  stayAwakeEnabled?: boolean;
   agentSessionSshHosts?: string[];
   /** Master switch for external hooks (hooks.json next to settings). */
   hooksEnabled?: boolean;
@@ -316,6 +318,7 @@ export interface SettingsUpdate {
   globalShortcut?: string;
   codexCustomSessionsDirs?: string[];
   agentSessionsEnabled?: boolean;
+  stayAwakeEnabled?: boolean;
   agentSessionSshHosts?: string[];
   hooksEnabled?: boolean;
   httpProxyEnabled?: boolean;
