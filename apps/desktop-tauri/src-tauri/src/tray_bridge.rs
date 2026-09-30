@@ -250,11 +250,7 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
 /// - **Left-click** toggles the custom tray panel via the surface state machine.
 /// - **Right-click** opens the native context menu with shell actions.
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let menu = build_native_tray_menu(
-        app.handle(),
-        &crate::commands::get_provider_catalog_for_current_settings(),
-        &[],
-    )?;
+    let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
 
     // Embed the icon at compile time so it works regardless of working directory.
     let icon_bytes = include_bytes!("../../../../rust/icons/icon.png");
@@ -404,7 +400,7 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 
 /// Rebuild the native tray menu from current provider + settings state.
 pub(crate) fn rebuild_tray_menu(app: &AppHandle) {
-    let catalog = crate::commands::get_provider_catalog_for_current_settings();
+    let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
     let status_labels = if let Some(st) = app.try_state::<Mutex<AppState>>() {
         let guard = st.lock().unwrap();
@@ -425,7 +421,7 @@ pub fn update_tray_status_items(
     app: &AppHandle,
     snapshots: &[crate::commands::ProviderUsageSnapshot],
 ) {
-    let catalog = crate::commands::get_provider_catalog_for_current_settings();
+    let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
     let status_labels =
         TrayPresentationPlan::resolve(&settings, snapshots).status_labels(settings.ui_language);

@@ -138,43 +138,6 @@ pub fn activate(app: &AppHandle) {
     }
 }
 
-/// Show the containment proof surface behind the user's other windows and
-/// abort if Windows ever makes it the foreground window.
-pub fn activate_without_focus(app: &AppHandle) -> Result<(), String> {
-    let config = {
-        let st = app.state::<Mutex<AppState>>();
-        st.lock()
-            .map_err(|_| "containment proof state lock is poisoned".to_string())?
-            .proof_config
-            .clone()
-            .ok_or_else(|| "containment proof surface configuration is missing".to_string())?
-    };
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "containment proof main window is unavailable".to_string())?;
-    let hwnd = crate::proof_runtime::native_window_handle(&window)?;
-    crate::proof_runtime::start_foreground_guard(app.clone(), hwnd);
-
-    let target = config.surface_mode();
-    let position = match target {
-        SurfaceMode::Settings | SurfaceMode::PopOut => None,
-        _ => proof_window_position(app),
-    };
-    tracing::info!(
-        "containment-proof: showing surface={} tab={:?} without activation",
-        config.target_surface,
-        config.settings_tab,
-    );
-    let mode = shell::transition_to_target_without_activation(
-        app,
-        target,
-        config.surface_target(),
-        position,
-    )?;
-    tracing::info!("containment-proof: nonactivating transition succeeded → {mode:?}");
-    Ok(())
-}
-
 /// Bottom inset (physical px) kept between the proof panel's bottom edge and
 /// the monitor work-area bottom (#265).
 const PROOF_BOTTOM_INSET_PX: i32 = 8;
