@@ -10,7 +10,10 @@
 //!
 //! Ported from steipete/CodexBar `DeepInfraUsageFetcher`.
 
-use std::time::{Duration, Instant};
+use std::{
+    error::Error,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use reqwest::{Client, Response, StatusCode};
@@ -250,14 +253,14 @@ impl DeepInfraProvider {
             .await
             .map_err(|e| ProviderError::Parse(format!("Failed to parse DeepInfra response: {e}")))
     }
-}
 
-impl DeepInfraProvider {
     /// Send the billing GET, retrying once on a transient failure.
     ///
-    /// Retried: HTTP 408/429/500/502/503/504 and typed transport failures
-    /// (timeout, refused connection) as classified by
-    /// [`ProviderError::is_transport_failure`], which excludes TLS failures.
+    /// Retried: HTTP 408/429/500/502/503/504 and transport failures
+    /// (timeout, refused connection, DNS lookup failures). DNS failures are
+    /// identified from reqwest's connect-error source chain because
+    /// [`ProviderError::is_transport_failure`] deliberately excludes them.
+    /// TLS failures are not retried.
     /// 401/403 are returned to the caller unretried. The wait honors
     /// `Retry-After` (seconds, capped at 10 s, default 1 s), and no retry
     /// starts unless it can fit in the remaining `deadline`. Dropping the
@@ -290,7 +293,7 @@ impl DeepInfraProvider {
                         .get(reqwest::header::RETRY_AFTER)
                         .and_then(|value| value.to_str().ok()),
                 )),
-                Err(error) if error.is_transport_failure() => Some(retry_delay(None)),
+                Err(error) if is_retryable_transport_error(error) => Some(retry_delay(None)),
                 _ => None,
             };
             let Some(delay) = delay else {
@@ -311,11 +314,35 @@ impl DeepInfraProvider {
     }
 }
 
+fn is_retryable_transport_error(error: &ProviderError) -> bool {
+    error.is_transport_failure()
+        || matches!(error, ProviderError::Network(error) if is_dns_resolution_error(error))
+}
+
+fn is_dns_resolution_error(error: &reqwest::Error) -> bool {
+    if !error.is_connect() || error.is_body() || error.is_decode() {
+        return false;
+    }
+
+    // Reqwest 0.12 does not expose DNS failures as a typed variant. Its
+    // hyper-util connector labels the DNS cause in the source chain, allowing
+    // this provider-local retry policy to recognize it without broadening the
+    // shared transport classifier used by other providers.
+    let mut source = error.source();
+    while let Some(cause) = source {
+        if cause.to_string() == "dns error" {
+            return true;
+        }
+        source = cause.source();
+    }
+    false
+}
+
 /// Retry wait: `Retry-After` seconds (non-negative, capped at 10 s), else 1 s.
 fn retry_delay(retry_after: Option<&str>) -> Duration {
     retry_after
         .and_then(|value| value.trim().parse::<f64>().ok())
-        .filter(|seconds| *seconds >= 0.0)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
         .map(|seconds| {
             if seconds >= MAX_RETRY_DELAY.as_secs_f64() {
                 MAX_RETRY_DELAY
@@ -388,6 +415,19 @@ fn parse_snapshot_for_testing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct FailingDnsResolver(AtomicUsize);
+
+    impl reqwest::dns::Resolve for FailingDnsResolver {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(std::io::Error::other("synthetic DNS failure").into()) })
+        }
+    }
 
     fn checklist_json(
         stripe_balance: f64,
@@ -549,8 +589,15 @@ mod tests {
         assert_eq!(retry_delay(Some("0.5")), Duration::from_millis(500));
         assert_eq!(retry_delay(Some("0")), Duration::ZERO);
         assert_eq!(retry_delay(Some("99")), Duration::from_secs(10));
-        assert_eq!(retry_delay(Some("inf")), Duration::from_secs(10));
-        for unusable in ["-3", "nan", "soon", "", "Wed, 21 Oct 2026 07:28:00 GMT"] {
+        for unusable in [
+            "-3",
+            "nan",
+            "inf",
+            "1e9999",
+            "soon",
+            "",
+            "Wed, 21 Oct 2026 07:28:00 GMT",
+        ] {
             assert_eq!(retry_delay(Some(unusable)), Duration::from_secs(1));
         }
     }
@@ -700,6 +747,30 @@ mod tests {
         // One default 1 s wait proves the transport failure was retried once.
         assert!(started.elapsed() >= Duration::from_millis(900));
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn dns_lookup_failure_is_retried_once_without_network_access() {
+        let resolver = Arc::new(FailingDnsResolver(AtomicUsize::new(0)));
+        let mut provider = DeepInfraProvider::new();
+        provider.client = Client::builder()
+            .no_proxy()
+            .dns_resolver(Arc::clone(&resolver))
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .unwrap();
+
+        let error = provider
+            .fetch_json::<ChecklistResponse>(
+                "http://deepinfra.invalid/payment/checklist",
+                "sk-test",
+                far_deadline(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProviderError::Network(_)), "got: {error:?}");
+        assert_eq!(resolver.0.load(Ordering::SeqCst), 2);
     }
 
     #[test]
