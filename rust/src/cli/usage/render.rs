@@ -326,15 +326,21 @@ fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow,
 
     let bar = render_progress_bar(window.used_percent, 20, use_color);
     let countdown = window.format_countdown();
+    let reset_suffix = match (window.description_is_detail, countdown.as_deref()) {
+        (false, Some(countdown)) => format!(" (resets in {countdown})"),
+        _ => String::new(),
+    };
+    lines.push(format!(
+        "  {:<8} {} {} used{}",
+        format!("{}:", label),
+        bar,
+        format_percent(window.used_percent),
+        reset_suffix,
+    ));
+
     if window.description_is_detail {
         // The description is a detail line (for example spend amounts), so
         // the reset stays on its own line and only exists with a real date.
-        lines.push(format!(
-            "  {:<8} {} {} used",
-            format!("{}:", label),
-            bar,
-            format_percent(window.used_percent),
-        ));
         if let Some(countdown) = countdown {
             lines.push(format!("    resets in {countdown}"));
         }
@@ -346,19 +352,7 @@ fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow,
         {
             lines.push(format!("    {detail}"));
         }
-        return;
     }
-
-    let reset = countdown
-        .map(|c| format!(" (resets in {})", c))
-        .unwrap_or_default();
-    lines.push(format!(
-        "  {:<8} {} {} used{}",
-        format!("{}:", label),
-        bar,
-        format_percent(window.used_percent),
-        reset
-    ));
 }
 
 fn append_secondary_window_line(

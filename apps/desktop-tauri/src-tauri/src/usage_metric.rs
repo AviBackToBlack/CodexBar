@@ -63,6 +63,7 @@ fn same_window(left: &RateWindowSnapshot, right: &RateWindowSnapshot) -> bool {
         && left.window_minutes == right.window_minutes
         && left.resets_at == right.resets_at
         && left.reset_description == right.reset_description
+        && left.description_is_detail == right.description_is_detail
         && left.is_informational == right.is_informational
 }
 
