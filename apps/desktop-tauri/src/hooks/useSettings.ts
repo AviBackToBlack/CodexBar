@@ -40,10 +40,10 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
   }, [initial]);
 
   // Live-sync when settings change in ANOTHER window. The detached Settings
-  // window and the main/PopOut window are separate webviews with separate
+  // window and the tray-panel flyout are separate webviews with separate
   // React state, so the in-window CustomEvent below never reaches them. Rust
   // broadcasts "settings-changed" after every persisted update; re-fetch the
-  // snapshot so this surface (e.g. the PopOut window scale) re-renders live.
+  // snapshot so this surface (e.g. the tray zoom) re-renders live.
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | undefined;

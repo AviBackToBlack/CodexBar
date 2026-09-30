@@ -300,14 +300,13 @@ describe("TrayPanel provider grid", () => {
     // TrayPanel is now hosted exclusively in the dedicated `flyout` OS
     // window (see App.tsx's isFlyoutWindow() routing), so it must not depend
     // on `main`'s surface-mode machine to know it's "open" — that machine
-    // can never report "trayPanel" anymore (main only holds
-    // Hidden/PopOut/Settings post-refactor). Overriding the snapshot mock to
-    // something else confirms the fixed-size restore + reveal gate
+    // can report something other than "trayPanel". Overriding the snapshot
+    // mock to another mode confirms the fixed-size restore + reveal gate
     // (isFlyoutOpen, hardcoded true in TrayPanel.tsx) is no longer wired to
     // useSurfaceMode() at all.
     tauriMocks.getCurrentSurfaceState.mockResolvedValue({
-      mode: "popOut",
-      target: { kind: "dashboard" },
+      mode: "settings",
+      target: { kind: "settings", tab: "general" },
     });
 
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
@@ -786,6 +785,41 @@ describe("TrayPanel provider grid", () => {
     expect(grid?.classList.contains("provider-grid--no-icons")).toBe(true);
     expect(container.querySelector(".provider-icon")).toBeNull();
     expect(container.querySelector(".provider-grid__icon-overview")).toBeNull();
+  });
+
+  it("renders the default tray panel layout with no legacy window chrome", async () => {
+    // Pins the one dashboard layout: tray-variant surface, icon-first
+    // provider switcher, and the Zoom / Refresh / Settings... / About / Quit
+    // footer. The retired PopOut layout had a "CodexBar" title bar with
+    // window controls and a Settings / About / Quit footer without Zoom or
+    // Refresh.
+    const { container } = renderTrayPanel([
+      provider("claude", "Claude", 35),
+      provider("codex", "Codex", 20),
+    ]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".menu-surface__footer-zoom")).not.toBeNull();
+    });
+
+    const surface = container.querySelector(".menu-surface");
+    expect(surface?.classList.contains("menu-surface--tray")).toBe(true);
+    expect(container.querySelector(".menu-surface--popout")).toBeNull();
+    expect(container.querySelector(".popout-titlebar")).toBeNull();
+    expect(container.querySelector(".popout-scale-shell")).toBeNull();
+    expect(container.querySelector(".provider-grid")).not.toBeNull();
+
+    const footerLabels = Array.from(
+      container.querySelectorAll(".menu-surface__footer > *"),
+    ).map((el) => el.textContent ?? "");
+    expect(footerLabels[0]).toContain("Zoom");
+    expect(footerLabels.slice(1).map((label) => label.replace(/Ctrl\+.*/, ""))).toEqual([
+      "↻Refresh",
+      "⚙Settings...",
+      "ⓘAbout CodexBar",
+      "⌧Quit",
+    ]);
+    expect(tauriMocks.setSurfaceMode).not.toHaveBeenCalled();
   });
 
   it("renders the tray footer zoom slider above Refresh and persists trayScalePercent after the debounce", async () => {
