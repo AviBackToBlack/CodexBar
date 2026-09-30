@@ -251,7 +251,8 @@ impl BedrockProvider {
 
     fn credentials_from_profile(profile: &str) -> Result<AwsCredentials, ProviderError> {
         let aws = aws_cli_path()?;
-        let output = std::process::Command::new(&aws)
+        let mut command = std::process::Command::new(&aws);
+        command
             .args([
                 "configure",
                 "export-credentials",
@@ -260,7 +261,16 @@ impl BedrockProvider {
                 "--format",
                 "process",
             ])
-            .env_remove("AWS_PROFILE")
+            .env_remove("AWS_PROFILE");
+        // Runs during background refreshes: keep the CLI's console window
+        // hidden so it does not flash up or take focus.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = command
             .output()
             .map_err(|e| ProviderError::Other(format!("Failed to run AWS CLI: {e}")))?;
 

@@ -51,13 +51,21 @@ fn should_hide_close_request(mode: SurfaceMode) -> bool {
 ///
 /// Spawned because building the flyout window synchronously can deadlock on
 /// Windows (see `shell::flyout_window::open_or_focus`).
+///
+/// Launch and relaunch are not clicks in CodexBar, so the panel only asks
+/// Windows for the foreground (`Activation::IfAllowed`): a launch from Start
+/// or Explorer gets focus, a login-time or background launch does not.
 fn open_primary_window(app: &tauri::AppHandle, delay: Duration) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        if let Err(error) = shell::flyout_window::open_or_focus(&app, None) {
+        if let Err(error) = shell::flyout_window::open_or_focus(
+            &app,
+            None,
+            shell::activation::Activation::IfAllowed,
+        ) {
             tracing::warn!(%error, "failed to open the tray panel window");
         }
     });
@@ -151,6 +159,16 @@ fn main() {
         );
         initial_state.provider_cache.push(snapshot);
         initial_state.provider_cache_updated_at = Some(std::time::Instant::now());
+    }
+
+    let context = tauri::generate_context!();
+    if is_proof_mode {
+        // Proof runs show surfaces for automation but never take focus.
+        shell::activation::suppress_all();
+    } else {
+        // If CodexBar is already running, the single-instance plugin hands
+        // this launch off to it; pass our foreground permission along first.
+        shell::activation::grant_foreground_to_running_instance(&context.config().identifier);
     }
 
     tauri::Builder::default()
@@ -415,7 +433,7 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("failed to run CodexBar desktop shell");
 }
 

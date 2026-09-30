@@ -1,4 +1,5 @@
 use super::*;
+use crate::shell::activation::Activation;
 
 // ── Surface-mode commands ────────────────────────────────────────────
 
@@ -11,8 +12,15 @@ pub fn set_surface_mode(
     let mode = SurfaceMode::parse(&mode).ok_or_else(|| format!("unknown surface mode: {mode}"))?;
     let target = validate_surface_target(mode, target)?;
 
-    crate::shell::transition_to_target(window.app_handle(), mode, target, None)
-        .map(|mode| mode.as_str().to_string())
+    // The frontend only calls this from a click (e.g. a Settings tab).
+    crate::shell::transition_to_target(
+        window.app_handle(),
+        mode,
+        target,
+        None,
+        Activation::UserAction,
+    )
+    .map(|mode| mode.as_str().to_string())
 }
 
 #[tauri::command]
@@ -66,7 +74,7 @@ pub async fn open_settings_window(app: tauri::AppHandle, tab: String) -> Result<
 /// on Windows.
 #[tauri::command]
 pub async fn open_flyout_window(app: tauri::AppHandle) -> Result<(), String> {
-    crate::shell::flyout_window::open_or_focus(&app, None)
+    crate::shell::flyout_window::open_or_focus(&app, None, Activation::UserAction)
 }
 
 /// Reveal the flyout window after the frontend's first layout pass. Called by
@@ -75,6 +83,8 @@ pub async fn open_flyout_window(app: tauri::AppHandle) -> Result<(), String> {
 /// blank/backing frame.
 ///
 /// No-ops when the flyout window doesn't exist or no one-shot reveal is pending.
+/// The window takes focus only as far as the pending reveal's activation
+/// allows (see `shell::activation`).
 #[tauri::command]
 pub fn reveal_tray_panel_window(
     app: tauri::AppHandle,
@@ -86,17 +96,16 @@ pub fn reveal_tray_panel_window(
         return Ok(());
     };
     let mut guard = state.lock().map_err(|e| e.to_string())?;
-    if !guard.take_pending_flyout_reveal() {
+    let Some(activation) = guard.take_pending_flyout_reveal() else {
         return Ok(());
-    }
+    };
     drop(guard);
     window.show().map_err(|e| e.to_string())?;
     state
         .lock()
         .map_err(|e| e.to_string())?
         .mark_tray_panel_shown(std::time::Instant::now());
-    window.set_focus().map_err(|e| e.to_string())?;
-    Ok(())
+    crate::shell::activation::apply(&window, activation)
 }
 
 #[tauri::command]

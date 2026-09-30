@@ -460,15 +460,24 @@ impl HookRunner {
         }
 
         let env = build_hook_environment(base_env, event);
-        let mut child = Command::new(&rule.executable)
+        let mut command = Command::new(&rule.executable);
+        command
             .args(&rule.arguments)
             .env_clear()
             .envs(env)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("launch failed: {e}"))?;
+            .stderr(Stdio::null());
+        // Hooks fire on background events and their output is discarded:
+        // without this, a console hook opens a console window over the app the
+        // user is working in.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = command.spawn().map_err(|e| format!("launch failed: {e}"))?;
 
         if let Some(mut stdin) = child.stdin.take() {
             // Fire-and-forget payload delivery: a hook that closed stdin early

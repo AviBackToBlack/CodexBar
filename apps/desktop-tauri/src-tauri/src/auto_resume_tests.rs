@@ -86,22 +86,24 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn cmd_wrapper_preserves_exact_resume_arguments() {
+    fn batch_shims_keep_exact_resume_arguments() {
+        // cmd.exe wrapping for `.cmd` shims happens at launch, in
+        // `codexbar::host::console_launch`, which tests its own quoting.
         let command = build_resume_command(
             &target(ProviderId::Claude),
             PathBuf::from(r"C:\Program Files\Claude\claude.cmd"),
         )
         .unwrap();
 
-        assert_eq!(command.program, PathBuf::from("cmd.exe"));
-        assert_eq!(&command.args[..3], ["/d", "/s", "/c"]);
         assert_eq!(
-            command.args[3],
-            r#""C:\Program Files\Claude\claude.cmd" "--resume" "12345678-1234-1234-1234-123456789abc""#
+            command.program,
+            PathBuf::from(r"C:\Program Files\Claude\claude.cmd")
         );
-        assert!(!command.args[3].contains("prompt"));
+        assert_eq!(
+            command.args,
+            ["--resume", "12345678-1234-1234-1234-123456789abc"]
+        );
     }
 
     #[test]

@@ -15,7 +15,9 @@
 //!
 //! In proof mode the shell immediately transitions to the requested surface
 //! and suppresses blur-dismiss so the window stays visible for automated
-//! screenshot capture.
+//! screenshot capture. Surfaces are shown without being activated: no
+//! `set_focus`, no foreground change (see `shell::activation::suppress_all`),
+//! so a proof run never takes focus from the app the user is working in.
 //!
 //! `CODEXBAR_SEED_USAGE_JSON=<abs-path>` additionally seeds one synthetic,
 //! bridge-shaped Codex [`ProviderUsageSnapshot`] into the provider cache at
@@ -30,6 +32,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::commands::{CostSnapshotBridge, ProviderUsageSnapshot, RateWindowSnapshot};
 use crate::shell;
+use crate::shell::activation::Activation;
 use crate::state::AppState;
 use crate::surface::SurfaceMode;
 use crate::surface_target::{SurfaceTarget, is_supported_settings_tab};
@@ -116,7 +119,8 @@ pub fn activate(app: &AppHandle) {
     if target == SurfaceMode::PopOut {
         tracing::info!("proof-harness: opening the tray-panel flyout window");
         // Called from the async setup task, so building the window is safe.
-        if let Err(err) = shell::flyout_window::open_or_focus(app, None) {
+        // Proof automation must never take focus from the user's app.
+        if let Err(err) = shell::flyout_window::open_or_focus(app, None, Activation::Never) {
             tracing::error!("proof-harness: flyout open FAILED: {err}");
         }
         return;
@@ -134,7 +138,13 @@ pub fn activate(app: &AppHandle) {
         position,
     );
 
-    match shell::transition_to_target(app, target, config.surface_target(), position) {
+    match shell::transition_to_target(
+        app,
+        target,
+        config.surface_target(),
+        position,
+        Activation::Never,
+    ) {
         Ok(mode) => tracing::info!("proof-harness: transition succeeded → {mode:?}"),
         Err(err) => tracing::error!("proof-harness: transition FAILED: {err}"),
     }

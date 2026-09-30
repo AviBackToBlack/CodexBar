@@ -9,6 +9,7 @@ use crate::surface::{SurfaceMode, SurfaceTransition, WindowProperties};
 use crate::surface_target::SurfaceTarget;
 
 use super::SHELL_TRANSITION_SERIAL;
+use super::activation::Activation;
 use super::transition::{SurfaceSnapshot, apply_transition, current_surface_snapshot};
 
 pub(super) struct HideToTrayPlan {
@@ -22,10 +23,11 @@ pub fn apply_window_properties(
     window: &WebviewWindow,
     mode: SurfaceMode,
     props: &WindowProperties,
+    activation: Activation,
 ) -> Result<(), String> {
     let needs_show = apply_window_layout(window, mode, props)?;
     if needs_show {
-        show_window(window)?;
+        show_window(window, activation)?;
     }
     Ok(())
 }
@@ -149,12 +151,12 @@ fn capped_logical_size(window: &WebviewWindow, width: f64, height: f64) -> (f64,
     (width.min(max_width), height.min(max_height))
 }
 
-/// Make the window visible and give it input focus.
-pub fn show_window(window: &WebviewWindow) -> Result<(), String> {
-    let map_err = |e: tauri::Error| e.to_string();
-    window.show().map_err(map_err)?;
-    window.set_focus().map_err(map_err)?;
-    Ok(())
+/// Make the window visible, then focus it as far as `activation` allows (see
+/// [`super::activation`]). `main` is created with `"focus": false`, so `show`
+/// itself never activates it.
+pub fn show_window(window: &WebviewWindow, activation: Activation) -> Result<(), String> {
+    window.show().map_err(|e| e.to_string())?;
+    super::activation::apply(window, activation)
 }
 
 pub fn hide_to_tray_if_current<P>(
@@ -181,7 +183,16 @@ where
     };
 
     if let Some(transition) = plan.transition {
-        apply_transition(app, &window, &transition, &plan.previous, plan.target, None).map(Some)
+        apply_transition(
+            app,
+            &window,
+            &transition,
+            &plan.previous,
+            plan.target,
+            None,
+            Activation::Never,
+        )
+        .map(Some)
     } else {
         let _ = window.hide();
         Ok(Some(SurfaceMode::Hidden))

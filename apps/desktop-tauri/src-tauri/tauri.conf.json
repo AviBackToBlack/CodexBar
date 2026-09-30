@@ -23,6 +23,7 @@
         "decorations": false,
         "shadow": false,
         "visible": false,
+        "focus": false,
         "skipTaskbar": true,
         "alwaysOnTop": true,
         "theme": "Dark",
