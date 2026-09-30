@@ -1,7 +1,11 @@
+import type { LocaleKey } from "../../../../i18n/keys";
+
 export interface UsageSourceOption {
   value: string;
   label: string;
+  labelKey?: LocaleKey;
   description: string;
+  descriptionKey?: LocaleKey;
 }
 
 export interface UsageSourcePolicy {
@@ -55,9 +59,27 @@ const POLICIES: Readonly<Record<string, UsageSourcePolicy>> = {
   },
   zed: {
     options: [
-      { value: "auto", label: "Auto", description: "Uses the Zed editor credential; the browser session is used only when Browser session is selected." },
-      { value: "oauth", label: "API", description: "Uses the Zed editor credential only." },
-      { value: "web", label: "Browser session", description: "Reads token spend from the zed.dev browser session or manual cookie header only, with no editor-credential fallback." },
+      {
+        value: "auto",
+        label: "Auto",
+        labelKey: "ProviderSourceAutoShort",
+        description: "Uses the Zed editor credential; the browser session is used only when Browser session is selected.",
+        descriptionKey: "ProviderZedUsageSourceAutoHelp",
+      },
+      {
+        value: "oauth",
+        label: "API",
+        labelKey: "ProviderSourceApiShort",
+        description: "Uses the Zed editor credential only.",
+        descriptionKey: "ProviderZedUsageSourceApiHelp",
+      },
+      {
+        value: "web",
+        label: "Browser session",
+        labelKey: "ProviderZedBrowserSession",
+        description: "Reads token spend from the zed.dev browser session or manual cookie header only, with no editor-credential fallback.",
+        descriptionKey: "ProviderZedUsageSourceWebHelp",
+      },
     ],
   },
   gitkraken: {
