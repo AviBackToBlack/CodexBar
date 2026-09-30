@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use codexbar::core::ProviderId;
-
 use crate::surface::SurfaceMode;
 
 // Must mirror the frontend `SettingsTabId` union
@@ -83,19 +81,13 @@ impl SurfaceTarget {
     }
 }
 
-pub fn is_supported_provider_id(provider_id: &str) -> bool {
-    ProviderId::all()
-        .iter()
-        .any(|provider| provider.cli_name() == provider_id)
-}
-
 pub fn is_supported_settings_tab(tab: &str) -> bool {
     SETTINGS_TAB_IDS.contains(&tab)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SurfaceTarget, is_supported_provider_id, is_supported_settings_tab};
+    use super::{SurfaceTarget, is_supported_settings_tab};
     use serde_json::json;
 
     #[test]
@@ -167,13 +159,6 @@ mod tests {
             .mode(),
             crate::surface::SurfaceMode::Settings
         );
-    }
-
-    #[test]
-    fn supported_provider_ids_match_catalog() {
-        assert!(is_supported_provider_id("codex"));
-        assert!(is_supported_provider_id("bedrock"));
-        assert!(!is_supported_provider_id("not-a-provider"));
     }
 
     #[test]

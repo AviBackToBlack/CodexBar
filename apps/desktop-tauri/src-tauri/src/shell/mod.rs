@@ -19,7 +19,7 @@ mod tests;
 
 pub(crate) use position::inferred_tray_panel_position_for_monitor_size;
 pub use position::{remember_current_geometry_if_eligible, tray_panel_position};
-pub use transition::{reopen_to_target, transition_to_target};
+pub use transition::transition_to_target;
 pub use window::hide_to_tray_if_current;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
