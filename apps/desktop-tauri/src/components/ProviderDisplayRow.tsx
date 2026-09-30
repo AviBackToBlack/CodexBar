@@ -1,5 +1,34 @@
 import type { ProviderDisplayDetail } from "../types/bridge";
 
+const MAX_ROWS_PER_SECTION = 24;
+
+export interface ProviderDisplayDetailGroup {
+  id: number;
+  title: string | null;
+  rows: ProviderDisplayDetail[];
+}
+
+/** Group consecutive provider details and cap each rendered section. */
+export function groupProviderDisplayDetails(
+  details: ProviderDisplayDetail[],
+): ProviderDisplayDetailGroup[] {
+  const groups: ProviderDisplayDetailGroup[] = [];
+  for (const detail of details) {
+    const title = detail.sectionTitle ?? null;
+    const current = groups[groups.length - 1];
+    if (
+      current &&
+      current.title === title &&
+      current.rows.length < MAX_ROWS_PER_SECTION
+    ) {
+      current.rows.push(detail);
+    } else {
+      groups.push({ id: groups.length, title, rows: [detail] });
+    }
+  }
+  return groups;
+}
+
 /**
  * One transient provider detail line: "{title}: {value} [secondary]"
  * plus an optional clamped progress bar.
@@ -34,11 +63,21 @@ export function ProviderDisplayRow({
       <div className={lineClassName}>
         <span>{detail.title}: {detail.value}</span>
         {detail.secondaryValue && secondaryClassName && (
-          <span className={secondaryClassName}>{detail.secondaryValue}</span>
+          <>
+            {" "}
+            <span className={secondaryClassName}>{detail.secondaryValue}</span>
+          </>
         )}
       </div>
       {progressPercent != null && (
-        <div className={trackClassName} aria-label={`${detail.title} progress`}>
+        <div
+          className={trackClassName}
+          role="progressbar"
+          aria-label={`${detail.title} progress`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+        >
           <div className={fillClassName} style={{ width: `${progressPercent}%` }} />
         </div>
       )}

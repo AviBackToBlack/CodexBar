@@ -85,12 +85,14 @@ fn key_usage_keeps_overlapping_budgets_and_reservations_separate() {
     assert_eq!(result.source_label, "api");
 
     assert_eq!(detail(&result, "key").value(), "Developer CLI");
+    assert_eq!(detail(&result, "key").section_title(), Some("Aixy key"));
     assert_eq!(detail(&result, "project").value(), "Engineering");
     assert_eq!(
         detail(&result, "observed").value(),
         "2026-09-24T12:00:00.000Z"
     );
     let hard = detail(&result, "budget-0");
+    assert_eq!(hard.section_title(), Some("Applicable budgets"));
     assert_eq!(hard.title(), "Project · Monthly · Shared · Hard");
     assert_eq!(hard.value(), "$70.00 / $100.00 remaining");
     assert_eq!(
@@ -106,6 +108,7 @@ fn key_usage_keeps_overlapping_budgets_and_reservations_separate() {
     assert_eq!(detail(&result, "tokens-7d").value(), "1,200");
     assert_eq!(detail(&result, "spend-7d").value(), "$1.25");
     let coverage = detail(&result, "coverage-7d");
+    assert_eq!(coverage.section_title(), Some("Last 7 days · this key"));
     assert_eq!(coverage.value(), "10 / 12 requests");
     assert_eq!(coverage.secondary_value(), Some("2 partial"));
 }
@@ -337,11 +340,11 @@ fn usage_url_supports_every_documented_base_form() {
         ),
         ("aixy.example.com", "https://aixy.example.com/v1/usage"),
         ("http://localhost:8080", "http://localhost:8080/v1/usage"),
-        ("http://10.1.2.3:8080/v1", "http://10.1.2.3:8080/v1/usage"),
         (
             "http://gateway.local/team",
             "http://gateway.local/team/v1/usage",
         ),
+        ("http://10.1.2.3:8080/v1", "http://10.1.2.3:8080/v1/usage"),
     ] {
         assert_eq!(usage_url(base).unwrap().as_str(), expected, "{base}");
     }

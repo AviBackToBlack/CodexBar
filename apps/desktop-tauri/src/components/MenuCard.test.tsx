@@ -601,6 +601,80 @@ describe("MenuCard", () => {
     expect(details.open).toBe(true);
   });
 
+  it("renders provider detail rows once with separated secondary values and accessible progress", async () => {
+    const snapshot = provider(null);
+    snapshot.providerId = "aixy";
+    snapshot.displayName = "Aixy";
+    snapshot.displayDetails = [
+      {
+        id: "budget-0",
+        sectionTitle: "Applicable budgets",
+        title: "Project · Monthly · Shared · Hard",
+        value: "$70.00 / $100.00 remaining",
+        secondaryValue: "$20.00 spent · $10.00 reserved",
+        progress: { used: 30, total: 100 },
+      },
+    ];
+
+    const { container } = renderCard(snapshot);
+
+    await screen.findByRole("progressbar", {
+      name: "Project · Monthly · Shared · Hard progress",
+    });
+    expect(container.querySelectorAll(".menu-card__provider-details")).toHaveLength(1);
+    expect(container.textContent).toContain(
+      "$70.00 / $100.00 remaining $20.00 spent · $10.00 reserved",
+    );
+    expect(
+      screen.getByRole("progressbar", {
+        name: "Project · Monthly · Shared · Hard progress",
+      }),
+    ).toHaveAttribute("aria-valuenow", "30");
+  });
+
+  it("hides provider display details in compact overview cards", () => {
+    const snapshot = provider(null);
+    snapshot.providerId = "aixy";
+    snapshot.displayDetails = [
+      {
+        id: "budget-0",
+        sectionTitle: "Applicable budgets",
+        title: "Project · Monthly · Shared · Hard",
+        value: "$70.00 / $100.00 remaining",
+        secondaryValue: "$20.00 spent · $10.00 reserved",
+        progress: { used: 30, total: 100 },
+      },
+    ];
+
+    const { container } = renderCard(snapshot, { compactOverview: true });
+
+    expect(container.querySelector(".menu-card__provider-details")).not.toBeInTheDocument();
+  });
+
+  it("splits provider detail sections after 24 rows", async () => {
+    const snapshot = provider(null);
+    snapshot.providerId = "aixy";
+    snapshot.displayDetails = Array.from({ length: 25 }, (_, index) => ({
+      id: `budget-${index}`,
+      sectionTitle: "Applicable budgets",
+      title: `Budget ${index}`,
+      value: "$0.00 remaining",
+      secondaryValue: null,
+      progress: null,
+    }));
+
+    const { container } = renderCard(snapshot);
+
+    await screen.findAllByRole("heading", { name: "Applicable budgets" });
+    const sections = container.querySelectorAll(".menu-card__provider-details");
+    expect(sections).toHaveLength(2);
+    expect(
+      screen.getAllByRole("heading", { name: "Applicable budgets" }),
+    ).toHaveLength(2);
+    expect(sections[0].querySelectorAll(".menu-card__cost-line")).toHaveLength(24);
+    expect(sections[1].querySelectorAll(".menu-card__cost-line")).toHaveLength(1);
+  });
+
   it("places Claude accounts above metrics and the collapsed usage details", async () => {
     tauriMocks.claudeAccountsList.mockResolvedValue([
       { id: "a", email: "a@example.com", organization: "Personal", isActive: true, isSaved: true },

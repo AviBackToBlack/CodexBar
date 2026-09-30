@@ -206,6 +206,8 @@ pub struct ProviderDisplayProgressSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderDisplayDetailSnapshot {
     pub id: String,
+    #[serde(default)]
+    pub section_title: Option<String>,
     pub title: String,
     pub value: String,
     pub secondary_value: Option<String>,
@@ -438,6 +440,7 @@ impl ProviderUsageSnapshot {
                 .iter()
                 .map(|detail| ProviderDisplayDetailSnapshot {
                     id: detail.id().to_string(),
+                    section_title: detail.section_title().map(ToOwned::to_owned),
                     title: detail.title().to_string(),
                     value: detail.value().to_string(),
                     secondary_value: detail.secondary_value().map(ToOwned::to_owned),

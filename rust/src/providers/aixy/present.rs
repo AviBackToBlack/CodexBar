@@ -81,22 +81,24 @@ fn rate_window(budget: &Budget) -> RateWindow {
 
 fn details(usage: &KeyUsage) -> Vec<Option<ProviderDisplayDetail>> {
     let mut rows = vec![
-        ProviderDisplayDetail::new("key", "Key", &usage.key_label),
-        ProviderDisplayDetail::new("project", "Project", &usage.project_label),
+        ProviderDisplayDetail::new("key", "Key", &usage.key_label)
+            .and_then(|row| row.with_section_title("Aixy key")),
+        ProviderDisplayDetail::new("project", "Project", &usage.project_label)
+            .and_then(|row| row.with_section_title("Aixy key")),
         ProviderDisplayDetail::new(
             "observed",
             "Observed",
             usage.as_of.to_rfc3339_opts(SecondsFormat::Millis, true),
-        ),
+        )
+        .and_then(|row| row.with_section_title("Aixy key")),
     ];
     rows.extend(usage.budgets.iter().enumerate().map(budget_row));
     match &usage.totals {
         Some(totals) => rows.extend(totals_rows(totals)),
-        None => rows.push(ProviderDisplayDetail::new(
-            "usage-7d",
-            "Usage (last 7 days)",
-            "Unavailable",
-        )),
+        None => rows.push(
+            ProviderDisplayDetail::new("usage-7d", "Usage (last 7 days)", "Unavailable")
+                .and_then(|row| row.with_section_title("Last 7 days · this key")),
+        ),
     }
     rows
 }
@@ -105,7 +107,8 @@ fn budget_row((index, budget): (usize, &Budget)) -> Option<ProviderDisplayDetail
     let id = format!("budget-{index}");
     let (Some(remaining), Some(spent), true) = (budget.remaining, budget.spent, budget.known)
     else {
-        return ProviderDisplayDetail::new(id, &budget.title, "Unavailable");
+        return ProviderDisplayDetail::new(id, &budget.title, "Unavailable")
+            .and_then(|row| row.with_section_title("Applicable budgets"));
     };
     let spent = if budget.hard {
         format!("{} spent · {} reserved", usd(spent), usd(budget.reserved))
@@ -119,6 +122,7 @@ fn budget_row((index, budget): (usize, &Budget)) -> Option<ProviderDisplayDetail
     )
     .and_then(|row| row.with_secondary_value(spent))
     .and_then(|row| row.with_progress(budget.used_percent, 100.0))
+    .and_then(|row| row.with_section_title("Applicable budgets"))
 }
 
 fn totals_rows(totals: &Totals) -> Vec<Option<ProviderDisplayDetail>> {
@@ -127,19 +131,22 @@ fn totals_rows(totals: &Totals) -> Vec<Option<ProviderDisplayDetail>> {
             "requests-7d",
             "Requests (last 7 days)",
             count(totals.requests),
-        ),
+        )
+        .and_then(|row| row.with_section_title("Last 7 days · this key")),
         ProviderDisplayDetail::new(
             "tokens-7d",
             "Tokens (last 7 days)",
             count(totals.total_tokens),
-        ),
+        )
+        .and_then(|row| row.with_section_title("Last 7 days · this key")),
         ProviderDisplayDetail::new(
             "spend-7d",
             "Attributed spend (last 7 days)",
             totals
                 .spend_usd
                 .map_or_else(|| "Unavailable".to_owned(), usd),
-        ),
+        )
+        .and_then(|row| row.with_section_title("Last 7 days · this key")),
         ProviderDisplayDetail::new(
             "coverage-7d",
             "Cost coverage (last 7 days)",
@@ -151,7 +158,8 @@ fn totals_rows(totals: &Totals) -> Vec<Option<ProviderDisplayDetail>> {
         )
         .and_then(|row| {
             row.with_secondary_value(format!("{} partial", count(totals.partial_requests)))
-        }),
+        })
+        .and_then(|row| row.with_section_title("Last 7 days · this key")),
     ]
 }
 

@@ -18,6 +18,7 @@ use crate::core::ProviderFetchResult;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderDisplayDetail {
     id: String,
+    section_title: Option<String>,
     title: String,
     value: String,
     secondary_value: Option<String>,
@@ -40,6 +41,7 @@ impl ProviderDisplayDetail {
     ) -> Option<Self> {
         let row = Self {
             id: id.into(),
+            section_title: None,
             title: title.into(),
             value: value.into(),
             secondary_value: None,
@@ -49,6 +51,16 @@ impl ProviderDisplayDetail {
             && is_display_shape(&row.title, 128)
             && is_display_shape(&row.value, 512);
         valid.then_some(row)
+    }
+
+    /// Attach an optional display section title; rejects invalid text.
+    pub fn with_section_title(mut self, title: impl Into<String>) -> Option<Self> {
+        let title = title.into();
+        if !is_display_shape(&title, 128) {
+            return None;
+        }
+        self.section_title = Some(title);
+        Some(self)
     }
 
     /// Attach a validated secondary value; rejects invalid text.
@@ -72,6 +84,10 @@ impl ProviderDisplayDetail {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    pub fn section_title(&self) -> Option<&str> {
+        self.section_title.as_deref()
     }
 
     pub fn title(&self) -> &str {
