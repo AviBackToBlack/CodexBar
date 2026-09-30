@@ -89,6 +89,8 @@ pub struct TokenSums {
     pub total: u64,
     rows: u32,
     unusable_rows: u32,
+    rows_with_input: u32,
+    rows_with_output: u32,
     rows_with_reasoning: u32,
 }
 
@@ -127,6 +129,12 @@ impl TokenSums {
         self.cache_read = cache_read;
         self.cache_write = cache_write;
         self.total = total;
+        if tokens.input.is_some() {
+            self.rows_with_input = self.rows_with_input.saturating_add(1);
+        }
+        if tokens.output.is_some() {
+            self.rows_with_output = self.rows_with_output.saturating_add(1);
+        }
         if tokens.reasoning.is_some() {
             self.rows_with_reasoning = self.rows_with_reasoning.saturating_add(1);
         }
@@ -142,6 +150,19 @@ impl TokenSums {
         (self.rows > 0 && self.unusable_rows == 0).then_some(self.total)
     }
 
+    /// Input + output tokens, only when every row recorded both classes.
+    pub fn complete_input_output(&self) -> Option<u64> {
+        if self.rows > 0
+            && self.unusable_rows == 0
+            && self.rows_with_input == self.rows
+            && self.rows_with_output == self.rows
+        {
+            self.input.checked_add(self.output)
+        } else {
+            None
+        }
+    }
+
     /// Reasoning tokens, only when every row in the bucket recorded them.
     pub fn complete_reasoning(&self) -> Option<u64> {
         (self.rows > 0 && self.rows_with_reasoning == self.rows).then_some(self.reasoning)
@@ -149,12 +170,17 @@ impl TokenSums {
 
     /// Shared cost-summary token counts. `cached_tokens` follows the local
     /// Claude/Pi convention (cache read + cache write) because the shared
-    /// summary has no separate cache-write class. `None` when no row had usable tokens.
+    /// summary has no separate cache-write class. `None` when no row had usable
+    /// tokens or the combined cache count cannot be represented.
     pub fn to_model_token_counts(&self) -> Option<ModelTokenCounts> {
-        self.has_usable_rows().then(|| ModelTokenCounts {
+        if !self.has_usable_rows() {
+            return None;
+        }
+        let cached_tokens = self.cache_read.checked_add(self.cache_write)?;
+        Some(ModelTokenCounts {
             input_tokens: self.input,
             output_tokens: self.output,
-            cached_tokens: self.cache_read.saturating_add(self.cache_write),
+            cached_tokens,
             reasoning_tokens: self.complete_reasoning(),
         })
     }

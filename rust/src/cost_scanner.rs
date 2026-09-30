@@ -760,19 +760,29 @@ impl CostScanner {
     /// counts fill the token fields and `by_model_tokens` (costs stay the recorded
     /// `cost`, never derived from tokens). Rows without usable tokens add nothing
     /// to the sums, and `reasoning_tokens` stays `None` unless every row reports it.
-    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+    fn scan_opencodego_model_cost_summary_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<opencodego_local::ModelCostSummary> {
         if is_cancelled(cancel) {
-            return CostSummary::default();
+            return None;
         }
         let now = Utc::now();
-        let Some(local) = opencodego_local::model_cost_summary_scan(now, self.days) else {
+        opencodego_local::model_cost_summary_scan(now, self.days)
+    }
+
+    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let Some(local) = self.scan_opencodego_model_cost_summary_with_cancel(cancel) else {
             return CostSummary::default();
         };
         let totals = local.tokens.to_model_token_counts().unwrap_or_default();
         let by_model_tokens = local
             .by_model_tokens
             .iter()
-            .filter_map(|(model, sums)| Some((model.clone(), sums.to_model_token_counts()?)))
+            .filter_map(|(model, sums)| {
+                sums.to_model_token_counts()
+                    .map(|counts| (model.clone(), counts))
+            })
             .collect();
         CostSummary {
             total_cost_usd: local.total_cost_usd,
@@ -787,6 +797,17 @@ impl CostScanner {
             period_end: local.period_end,
             ..CostSummary::default()
         }
+    }
+
+    /// Return the exact local input + output token total for Usage & Spend.
+    /// `None` when any contributing row lacks usable input/output counts.
+    pub fn scan_opencodego_usage_tokens_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<u64> {
+        self.scan_opencodego_model_cost_summary_with_cancel(cancel)?
+            .tokens
+            .complete_input_output()
     }
 
     fn get_claude_projects_dir(&self) -> PathBuf {

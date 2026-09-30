@@ -72,6 +72,51 @@ fn row_tokens_resolve_total_or_sum_all_five_components() {
 }
 
 #[test]
+fn input_output_total_requires_complete_class_counts_for_every_row() {
+    let full = parse(FULL).unwrap();
+    let older = parse(NO_TOTAL).unwrap();
+    let mut sums = TokenSums::default();
+    sums.add(Some(&full));
+    sums.add(Some(&older));
+    assert_eq!(sums.complete_input_output(), Some(135));
+
+    let total_only = parse(r#"{"total":7}"#).unwrap();
+    let mut sums = TokenSums::default();
+    sums.add(Some(&total_only));
+    assert_eq!(sums.complete_total(), Some(7));
+    assert_eq!(sums.complete_input_output(), None);
+
+    sums.add(None);
+    assert_eq!(sums.complete_input_output(), None);
+}
+
+#[test]
+fn input_output_total_is_unknown_when_the_sum_overflows() {
+    let max = i64::MAX;
+    let json = format!(r#"{{"total":0,"input":{max},"output":1}}"#);
+    let counts = parse(&json).unwrap();
+    let mut sums = TokenSums::default();
+    sums.add(Some(&counts));
+    sums.add(Some(&counts));
+    assert_eq!(sums.complete_input_output(), None);
+}
+
+#[test]
+fn shared_cache_count_is_omitted_when_read_plus_write_overflows() {
+    let max = i64::MAX;
+    let counts = parse(&format!(
+        r#"{{"total":1,"cache":{{"read":{max},"write":{max}}}}}"#
+    ))
+    .unwrap();
+    let mut sums = TokenSums::default();
+    for _ in 0..2 {
+        sums.add(Some(&counts));
+    }
+    assert!(sums.complete_total().is_some());
+    assert_eq!(sums.to_model_token_counts(), None);
+}
+
+#[test]
 fn row_tokens_reject_unresolvable_negative_malformed_and_overflowing_rows() {
     // No total and a missing component: nothing to resolve.
     assert_eq!(parse(r#"{"input":1,"output":2}"#), None);
@@ -165,6 +210,7 @@ fn rows_without_usable_tokens_leave_the_day_incomplete_not_zero() {
     let daily = daily_model_costs(&rows, now(), 30);
     let tokens = &daily[0].tokens;
     assert_eq!(tokens.complete_total(), None);
+    assert_eq!(tokens.complete_input_output(), None);
     assert_eq!(tokens.complete_reasoning(), None);
     assert!(tokens.has_usable_rows());
     assert_eq!(tokens.total, 1600);

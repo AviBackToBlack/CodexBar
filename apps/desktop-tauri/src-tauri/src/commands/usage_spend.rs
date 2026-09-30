@@ -561,10 +561,9 @@ fn build_usage_spend_summary(
                 // Cost stays the provider's; recorded local tokens fill the token columns.
                 let mut spend = cached_spend(cached_snapshot);
                 spend.seven_day_tokens =
-                    opencodego_local_tokens(&CostScanner::new(7).scan_opencodego_with_cancel(None));
-                spend.thirty_day_tokens = opencodego_local_tokens(
-                    &CostScanner::new(30).scan_opencodego_with_cancel(None),
-                );
+                    CostScanner::new(7).scan_opencodego_usage_tokens_with_cancel(None);
+                spend.thirty_day_tokens =
+                    CostScanner::new(30).scan_opencodego_usage_tokens_with_cancel(None);
                 spend
             }
             "cursor" => {
@@ -711,14 +710,6 @@ fn total_token_mix(mix: &codexbar::spend_contract::SpendTokenMix) -> Option<u64>
     saw.then_some(total)
 }
 
-/// Input + output tokens (the Claude row convention) recorded in the local OpenCode
-/// Go history. `None` when no row in the window carried usable tokens, so an
-/// unknown count is never shown as zero.
-fn opencodego_local_tokens(summary: &CostSummary) -> Option<u64> {
-    (!summary.by_model_tokens.is_empty())
-        .then(|| summary.input_tokens.saturating_add(summary.output_tokens))
-}
-
 fn cached_spend(snapshot: Option<&ProviderUsageSnapshot>) -> SpendValues {
     let Some(snapshot) = snapshot else {
         return SpendValues {
@@ -843,27 +834,6 @@ mod cache_key_tests {
         let public = usage_spend_cache_key_with_privacy(&[], 30, false, false, false);
         let private = usage_spend_cache_key_with_privacy(&[], 30, false, false, true);
         assert_ne!(public, private);
-    }
-
-    #[test]
-    fn opencodego_tokens_are_unknown_until_a_row_recorded_them() {
-        use codexbar::cost_scanner::ModelTokenCounts;
-
-        assert_eq!(opencodego_local_tokens(&CostSummary::default()), None);
-        let mut summary = CostSummary {
-            input_tokens: 110,
-            output_tokens: 25,
-            ..CostSummary::default()
-        };
-        summary.by_model_tokens.insert(
-            "kimi-k2".to_string(),
-            ModelTokenCounts {
-                input_tokens: 110,
-                output_tokens: 25,
-                ..ModelTokenCounts::default()
-            },
-        );
-        assert_eq!(opencodego_local_tokens(&summary), Some(135));
     }
 
     #[test]
