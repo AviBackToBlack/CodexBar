@@ -22,7 +22,7 @@ const fn currency(code: &'static str, symbol: &'static str, fallback_rate: f64) 
 
 /// Single source of truth for picker order, picker symbols, and offline rates.
 /// The frontend copy (`apps/desktop-tauri/src/lib/currencyCatalog.generated.ts`)
-/// is generated from this table by `render_typescript_catalog`.
+/// is checked against this table by the catalog sync test.
 pub const CURRENCIES: &[CurrencyInfo] = &[
     currency("USD", "$", 1.0),
     currency("GBP", "£", 0.79),
@@ -59,26 +59,22 @@ pub fn is_supported_currency(code: &str) -> bool {
     CURRENCIES.iter().any(|currency| currency.code == code)
 }
 
-/// Picker label in the catalog's `CODE (symbol)` form.
-pub fn picker_label(code: &str) -> Option<String> {
-    CURRENCIES
-        .iter()
-        .find(|currency| currency.code == code)
-        .map(|currency| format!("{} ({})", currency.code, currency.symbol))
-}
-
 /// Renders the catalog as the TypeScript module the settings picker and
-/// offline converter import, so both sides share this table.
-pub fn render_typescript_catalog() -> String {
+/// offline converter import, so both sides share this table. This is only
+/// needed by the sync test and the opt-in regeneration path.
+#[cfg(test)]
+fn render_typescript_catalog() -> String {
     let mut out = String::from(
         "// Generated from rust/src/currency.rs (CURRENCIES). Do not edit by hand.\n\
-         // Regenerate: UPDATE_CURRENCY_CATALOG=1 cargo test -p codexbar currency_catalog\n\
+         // Regenerate (PowerShell): $env:UPDATE_CURRENCY_CATALOG = '1'; cargo test -p codexbar currency_catalog\n\
          export const CURRENCY_CATALOG = [\n",
     );
     for currency in CURRENCIES {
+        let code = serde_json::to_string(currency.code).expect("currency codes serialize");
+        let symbol = serde_json::to_string(currency.symbol).expect("currency symbols serialize");
         out.push_str(&format!(
-            "  {{ code: \"{}\", symbol: \"{}\", fallbackRate: {} }},\n",
-            currency.code, currency.symbol, currency.fallback_rate
+            "  {{ code: {code}, symbol: {symbol}, fallbackRate: {} }},\n",
+            currency.fallback_rate
         ));
     }
     out.push_str("] as const;\n");
@@ -268,9 +264,6 @@ mod tests {
                 (*code, *symbol, *rate)
             );
         }
-        assert_eq!(picker_label("VND").as_deref(), Some("VND (₫)"));
-        assert_eq!(picker_label("TRY").as_deref(), Some("TRY (₺)"));
-        assert_eq!(picker_label("BTC"), None);
     }
 
     #[test]
@@ -312,7 +305,7 @@ mod tests {
         assert_eq!(
             actual.replace("\r\n", "\n"),
             expected,
-            "regenerate with UPDATE_CURRENCY_CATALOG=1 cargo test -p codexbar currency_catalog"
+            "set UPDATE_CURRENCY_CATALOG=1, then rerun `cargo test -p codexbar currency_catalog`"
         );
     }
 }

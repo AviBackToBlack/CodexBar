@@ -1,5 +1,5 @@
 // Generated from rust/src/currency.rs (CURRENCIES). Do not edit by hand.
-// Regenerate: UPDATE_CURRENCY_CATALOG=1 cargo test -p codexbar currency_catalog
+// Regenerate (PowerShell): $env:UPDATE_CURRENCY_CATALOG = '1'; cargo test -p codexbar currency_catalog
 export const CURRENCY_CATALOG = [
   { code: "USD", symbol: "$", fallbackRate: 1 },
   { code: "GBP", symbol: "£", fallbackRate: 0.79 },
