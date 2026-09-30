@@ -278,6 +278,24 @@ fn history_is_dropped_but_the_summary_kept_for_a_bucket_that_does_not_end_after_
 }
 
 #[test]
+fn history_is_dropped_when_aggregated_counts_exceed_javascript_integer_precision() {
+    let max_safe_count = 9_007_199_254_740_991;
+    let costs = [cost_bucket_at(NOW - DAY, 3.0, None)];
+    let completions = [completions_bucket(
+        NOW - DAY,
+        vec![
+            completion(Some("gpt-5.2"), max_safe_count, 0, 0),
+            completion(Some("gpt-5.2"), max_safe_count, 0, 0),
+        ],
+    )];
+
+    let result = result_from_admin_usage(&costs, &completions, now(), None).unwrap();
+
+    assert!(result.open_ai_api_usage.is_none());
+    assert_eq!(result.cost.unwrap().used, 3.0);
+}
+
+#[test]
 fn history_is_dropped_beyond_ten_thousand_breakdown_rows() {
     let models = |count: usize| -> Vec<OpenAiApiModelUsage> {
         (0..count)

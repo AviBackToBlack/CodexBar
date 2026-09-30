@@ -484,13 +484,13 @@ fn result_from_admin_usage(
     let daily = history::daily_usage(costs, completions, now, HISTORY_DAYS)?;
 
     let cost_total: f64 = daily.iter().map(|day| day.cost_usd).sum();
-    let request_total: u64 = daily.iter().map(|day| day.requests).sum();
-    let token_total: u64 = daily.iter().map(|day| day.total_tokens).sum();
-    let mut model_tokens: HashMap<&str, u64> = HashMap::new();
+    let request_total: u128 = daily.iter().map(|day| u128::from(day.requests)).sum();
+    let token_total: u128 = daily.iter().map(|day| u128::from(day.total_tokens)).sum();
+    let mut model_tokens: HashMap<&str, u128> = HashMap::new();
     let mut line_item_costs: HashMap<&str, f64> = HashMap::new();
     for day in &daily {
         for model in &day.models {
-            *model_tokens.entry(&model.name).or_default() += model.total_tokens;
+            *model_tokens.entry(&model.name).or_default() += u128::from(model.total_tokens);
         }
         for item in &day.line_items {
             *line_item_costs.entry(&item.name).or_default() += item.cost_usd;

@@ -49,7 +49,7 @@ impl DayAccumulator {
         }
     }
 
-    fn finish(self) -> OpenAiApiDailyUsage {
+    fn finish(self) -> Result<OpenAiApiDailyUsage, ProviderError> {
         let mut line_items: Vec<_> = self
             .lines
             .into_iter()
@@ -63,37 +63,46 @@ impl DayAccumulator {
         let mut models: Vec<_> = self
             .models
             .into_iter()
-            .map(|(name, totals)| OpenAiApiModelUsage {
-                name,
-                requests: totals.requests,
-                input_tokens: totals.input,
-                cached_input_tokens: totals.cached,
-                output_tokens: totals.output,
-                total_tokens: totals.input.saturating_add(totals.output),
+            .map(|(name, totals)| {
+                Ok(OpenAiApiModelUsage {
+                    name,
+                    requests: totals.requests,
+                    input_tokens: totals.input,
+                    cached_input_tokens: totals.cached,
+                    output_tokens: totals.output,
+                    total_tokens: checked_count_sum(
+                        totals.input,
+                        totals.output,
+                        "model total_tokens",
+                    )?,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, ProviderError>>()?;
         models.sort_by(|a, b| {
             b.total_tokens
                 .cmp(&a.total_tokens)
                 .then_with(|| a.name.cmp(&b.name))
         });
-        let sum = |field: fn(&OpenAiApiModelUsage) -> u64| {
-            models
-                .iter()
-                .fold(0_u64, |sum, model| sum.saturating_add(field(model)))
+        let sum = |field: fn(&OpenAiApiModelUsage) -> u64, name: &str| {
+            models.iter().try_fold(0_u64, |sum, model| {
+                checked_count_sum(sum, field(model), name)
+            })
         };
-        OpenAiApiDailyUsage {
+        Ok(OpenAiApiDailyUsage {
             start_time: self.start,
             end_time: self.end,
             cost_usd: self.cost,
-            requests: sum(|model| model.requests),
-            input_tokens: sum(|model| model.input_tokens),
-            cached_input_tokens: sum(|model| model.cached_input_tokens),
-            output_tokens: sum(|model| model.output_tokens),
-            total_tokens: sum(|model| model.total_tokens),
+            requests: sum(|model| model.requests, "daily requests")?,
+            input_tokens: sum(|model| model.input_tokens, "daily input_tokens")?,
+            cached_input_tokens: sum(
+                |model| model.cached_input_tokens,
+                "daily cached_input_tokens",
+            )?,
+            output_tokens: sum(|model| model.output_tokens, "daily output_tokens")?,
+            total_tokens: sum(|model| model.total_tokens, "daily total_tokens")?,
             line_items,
             models,
-        }
+        })
     }
 }
 
@@ -135,14 +144,18 @@ pub(super) fn daily_usage(
                 .models
                 .entry(display_name(result.model.as_deref(), DEFAULT_MODEL))
                 .or_default();
-            model.requests = model.requests.saturating_add(requests);
-            model.input = model
-                .input
-                .saturating_add(input.saturating_add(audio_input));
-            model.cached = model.cached.saturating_add(cached);
-            model.output = model
-                .output
-                .saturating_add(output.saturating_add(audio_output));
+            model.requests = checked_count_sum(model.requests, requests, "model requests")?;
+            model.input = checked_count_sum(
+                model.input,
+                checked_count_sum(input, audio_input, "input_tokens")?,
+                "model input_tokens",
+            )?;
+            model.cached = checked_count_sum(model.cached, cached, "model cached_input_tokens")?;
+            model.output = checked_count_sum(
+                model.output,
+                checked_count_sum(output, audio_output, "output_tokens")?,
+                "model output_tokens",
+            )?;
         }
     }
 
@@ -151,7 +164,7 @@ pub(super) fn daily_usage(
         .into_values()
         .filter(|day| day.start <= now)
         .map(DayAccumulator::finish)
-        .collect();
+        .collect::<Result<_, ProviderError>>()?;
     let excess = daily.len().saturating_sub(history_days as usize);
     daily.drain(..excess);
     Ok(daily)
@@ -170,6 +183,12 @@ pub(super) fn usage_history(
         tracing::warn!("Dropping OpenAI API daily history: a bucket does not end after it starts");
         return None;
     }
+    if daily.iter().any(|day| !counts_fit_js_number(day)) {
+        tracing::warn!(
+            "Dropping OpenAI API daily history: an aggregate count exceeds the JavaScript safe-integer range"
+        );
+        return None;
+    }
     let entries: usize = daily
         .iter()
         .map(|day| day.line_items.len() + day.models.len())
@@ -182,6 +201,38 @@ pub(super) fn usage_history(
         history_days,
         project_id: project_id.map(ToOwned::to_owned),
         daily,
+    })
+}
+
+fn counts_fit_js_number(day: &OpenAiApiDailyUsage) -> bool {
+    let safe = |count| count <= MAX_SAFE_COUNT;
+    [
+        day.requests,
+        day.input_tokens,
+        day.cached_input_tokens,
+        day.output_tokens,
+        day.total_tokens,
+    ]
+    .into_iter()
+    .all(safe)
+        && day.models.iter().all(|model| {
+            [
+                model.requests,
+                model.input_tokens,
+                model.cached_input_tokens,
+                model.output_tokens,
+                model.total_tokens,
+            ]
+            .into_iter()
+            .all(safe)
+        })
+}
+
+fn checked_count_sum(left: u64, right: u64, field: &str) -> Result<u64, ProviderError> {
+    left.checked_add(right).ok_or_else(|| {
+        ProviderError::Parse(format!(
+            "OpenAI API completions {field} total exceeds the supported integer range"
+        ))
     })
 }
 

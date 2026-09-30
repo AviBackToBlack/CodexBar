@@ -666,8 +666,9 @@ pub struct ProviderFetchResult {
     pub wayfinder_usage: Option<WayfinderUsageSnapshot>,
 
     /// Per-day OpenAI Admin API history for the daily usage chart. Set only by the
-    /// Admin usage path; the balance fallback has no per-day data.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Admin usage path; the balance fallback has no per-day data. It is projected
+    /// through the frontend bridge and intentionally excluded from core serialization.
+    #[serde(skip)]
     pub open_ai_api_usage: Option<OpenAiApiUsageHistory>,
 
     /// Transient non-quota inventory for provider-specific display.
@@ -801,6 +802,25 @@ mod tests {
 
         let decoded: ProviderFetchResult = serde_json::from_value(encoded).unwrap();
         assert!(decoded.inventory.is_empty());
+    }
+
+    #[test]
+    fn openai_api_history_is_transient_and_not_serialized() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        let result = ProviderFetchResult::new(usage, "admin-api").with_open_ai_api_usage(
+            OpenAiApiUsageHistory {
+                history_days: 30,
+                project_id: Some("proj_abc".to_string()),
+                daily: Vec::new(),
+            },
+        );
+
+        assert!(result.open_ai_api_usage.is_some());
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert!(encoded.get("open_ai_api_usage").is_none());
+
+        let decoded: ProviderFetchResult = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.open_ai_api_usage.is_none());
     }
 
     #[test]
