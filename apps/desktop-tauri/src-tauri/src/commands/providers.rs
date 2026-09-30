@@ -7,7 +7,6 @@ use super::warning_identity::WarningIdentity;
 use super::*;
 use chrono::{Local, Utc};
 use codexbar::core::HookUsageWindow;
-use codexbar::notifications::CredentialAlertPolicy;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -388,6 +387,11 @@ async fn do_refresh_providers_with_policy(
     let settings = Settings::load();
     let enabled_ids = settings.get_enabled_provider_ids();
     let refresh_ids = scope.provider_ids(&settings, &enabled_ids);
+    if let Ok(mut guard) = state.lock() {
+        guard
+            .notification_manager
+            .retire_credential_episodes_except(&enabled_ids);
+    }
     if refresh_ids.is_empty() {
         return Ok(ProviderRefreshOutcome::Skipped {
             reason: ProviderRefreshSkipReason::NoEnabledProviders,
@@ -521,7 +525,6 @@ fn spawn_provider_refreshes(
             .and_then(ProviderAccountData::active_account)
             .map(|account| account.id);
         let hooks_enabled = inputs.settings.hooks_enabled;
-        let credential_alerts = CredentialAlertPolicy::from_settings(&inputs.settings);
 
         handles.push(tokio::spawn(async move {
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
@@ -534,7 +537,6 @@ fn spawn_provider_refreshes(
                 generation,
                 token_account_id,
                 hooks_enabled,
-                credential_alerts,
             )
             .await;
         }));
@@ -568,7 +570,6 @@ async fn refresh_provider(
     generation: u64,
     token_account_id: Option<uuid::Uuid>,
     hooks_enabled: bool,
-    credential_alerts: CredentialAlertPolicy,
 ) {
     let (snapshot, account_identity, failure_policy) =
         fetch_provider_snapshot(id, ctx, token_account_id).await;
@@ -608,6 +609,14 @@ async fn refresh_provider(
                     .provider_cache_updated_at_by_provider
                     .insert(id, std::time::Instant::now());
             }
+            // Read consent after the fetch completes, so a toggle change made
+            // while the request was in flight takes effect for this outcome.
+            let credential_alerts = match fetch_attempt {
+                FetchAttempt::Failed(kind) if kind.needs_sign_in() => Some(
+                    codexbar::notifications::CredentialAlertPolicy::from_settings(&Settings::load()),
+                ),
+                _ => None,
+            };
             credential_alerts::observe_attempt(
                 &mut guard.notification_manager,
                 credential_alerts,
@@ -966,11 +975,6 @@ fn update_tray_and_notifications(
     crate::tray_bridge::update_tray_status_items(app, &cached);
     crate::tray_bridge::update_tray_icon_and_tooltip(app, &cached);
     notify_usage_thresholds(state, settings, token_accounts, &cached);
-    if let Ok(mut guard) = state.lock() {
-        guard
-            .notification_manager
-            .retire_credential_episodes_except(&settings.get_enabled_provider_ids());
-    }
     Ok(())
 }
 
@@ -1080,16 +1084,32 @@ pub(super) fn quota_notification_account_identity(
 ) -> String {
     ProviderId::from_cli_name(&snapshot.provider_id)
         .map(|provider| {
-            WarningIdentity::new(
+            quota_notification_account_identity_for(
                 provider,
                 &snapshot.source_label,
                 snapshot.account_email.as_deref(),
                 snapshot.account_organization.as_deref(),
                 token_account_id,
             )
-            .threshold_key()
         })
         .unwrap_or_default()
+}
+
+pub(super) fn quota_notification_account_identity_for(
+    provider: ProviderId,
+    source_label: &str,
+    account_email: Option<&str>,
+    account_organization: Option<&str>,
+    token_account_id: Option<uuid::Uuid>,
+) -> String {
+    WarningIdentity::new(
+        provider,
+        source_label,
+        account_email,
+        account_organization,
+        token_account_id,
+    )
+    .threshold_key()
 }
 
 fn notify_predictive_pace(

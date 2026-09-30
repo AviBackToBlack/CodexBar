@@ -20,7 +20,7 @@ use super::models::{
     AccountUsageSnapshot, CodexExtraUsageCost, CreditsBalanceSnapshot, UsageWindowSnapshot,
     WindowRole,
 };
-use crate::core::credentialed_http_client_builder;
+use crate::core::{ProviderStateKind, credentialed_http_client_builder};
 use crate::providers::openai::OpenAISubscriptionFetchResult;
 
 #[path = "subscription.rs"]
@@ -36,11 +36,30 @@ const UNAUTHORIZED_MESSAGE: &str = "The Codex usage API request returned unautho
 #[derive(Debug, Error)]
 pub enum CodexApiError {
     #[error("{0}")]
+    AuthenticationRequired(String),
+    #[error("{0}")]
+    SessionExpired(String),
+    #[error("{0}")]
+    PermissionDenied(String),
+    #[error("{0}")]
     Message(String),
     #[error("network error: {0}")]
     Network(String),
     #[error("failed to parse Codex payload: {0}")]
     Parse(String),
+}
+
+impl CodexApiError {
+    /// Classify account API failures before their display text is flattened.
+    pub fn state_kind(&self) -> ProviderStateKind {
+        match self {
+            Self::AuthenticationRequired(_) => ProviderStateKind::NeedsAuthentication,
+            Self::SessionExpired(_) => ProviderStateKind::ExpiredSession,
+            Self::PermissionDenied(_) | Self::Message(_) | Self::Network(_) | Self::Parse(_) => {
+                ProviderStateKind::Unknown
+            }
+        }
+    }
 }
 
 // ── Quota fetching ──────────────────────────────────────────────────────────
@@ -121,7 +140,7 @@ impl CodexAccountApi {
                 verify_live_data,
             )
             .await;
-        if !matches!(&result, Err(CodexApiError::Message(msg)) if msg == UNAUTHORIZED_MESSAGE)
+        if !matches!(&result, Err(CodexApiError::SessionExpired(_)))
             || credentials.refresh_token.is_empty()
         {
             return result;
@@ -333,10 +352,15 @@ impl CodexAccountApi {
             .map_err(|e| CodexApiError::Network(e.to_string()))?;
         if !response.status().is_success() {
             let status = response.status();
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                || status == reqwest::StatusCode::FORBIDDEN
-            {
-                return Err(CodexApiError::Message(UNAUTHORIZED_MESSAGE.to_string()));
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(CodexApiError::SessionExpired(
+                    UNAUTHORIZED_MESSAGE.to_string(),
+                ));
+            }
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err(CodexApiError::PermissionDenied(
+                    "The Codex usage API request was forbidden.".to_string(),
+                ));
             }
             let body = response.text().await.unwrap_or_default().trim().to_string();
             let msg = if body.is_empty() {
@@ -670,6 +694,26 @@ fn credits_equivalent(
 mod tests {
     use super::*;
     use base64::Engine;
+
+    #[test]
+    fn credential_error_states_exclude_permission_and_transport_failures() {
+        assert_eq!(
+            CodexApiError::AuthenticationRequired("missing credentials".to_string()).state_kind(),
+            ProviderStateKind::NeedsAuthentication
+        );
+        assert_eq!(
+            CodexApiError::SessionExpired("unauthorized".to_string()).state_kind(),
+            ProviderStateKind::ExpiredSession
+        );
+        assert_eq!(
+            CodexApiError::PermissionDenied("forbidden".to_string()).state_kind(),
+            ProviderStateKind::Unknown
+        );
+        assert_eq!(
+            CodexApiError::Network("offline".to_string()).state_kind(),
+            ProviderStateKind::Unknown
+        );
+    }
 
     #[tokio::test]
     async fn active_fetches_use_and_sync_ambient_credentials_even_when_usage_fails() {

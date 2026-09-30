@@ -397,12 +397,24 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
         .map(|(locale, resource)| (locale, resource_key_names(resource)))
         .collect();
     let locale_key_names: HashSet<&str> = LocaleKey::ALL.iter().map(|(_, name)| *name).collect();
+    let credential_expiry_keys = [
+        "CredentialExpiryNotifications",
+        "CredentialExpiryNotificationsHelper",
+        "CredentialExpiryTitle",
+        "CredentialExpiryBody",
+    ];
 
     for (locale, keys) in &resource_keys {
         for name in keys {
             assert!(
                 locale_key_names.contains(name),
                 "unknown Fluent key {name} in {locale}"
+            );
+        }
+        for name in credential_expiry_keys {
+            assert!(
+                keys.contains(name),
+                "missing credential-expiry localization {name} in {locale}"
             );
         }
     }

@@ -45,7 +45,9 @@ pub fn load_credentials(codex_home_path: &Path) -> Result<AuthCredentials, Codex
     let auth_path = codex_home_path.join("auth.json");
     let content = std::fs::read_to_string(&auth_path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            CodexApiError::Message("No `auth.json` was found for this account.".to_string())
+            CodexApiError::AuthenticationRequired(
+                "No `auth.json` was found for this account.".to_string(),
+            )
         } else {
             CodexApiError::Parse(format!("Failed to read the auth file: {e}"))
         }
@@ -77,7 +79,7 @@ pub fn parse_credentials_json(content: &str) -> Result<AuthCredentials, CodexApi
         .get("tokens")
         .and_then(|v| v.as_object())
         .ok_or_else(|| {
-            CodexApiError::Message(
+            CodexApiError::AuthenticationRequired(
                 "The required token fields are missing from `auth.json`.".to_string(),
             )
         })?;
@@ -87,7 +89,7 @@ pub fn parse_credentials_json(content: &str) -> Result<AuthCredentials, CodexApi
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            CodexApiError::Message(
+            CodexApiError::AuthenticationRequired(
                 "The required token fields are missing from `auth.json`.".to_string(),
             )
         })?

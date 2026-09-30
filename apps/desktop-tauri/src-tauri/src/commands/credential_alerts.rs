@@ -32,7 +32,7 @@ impl FetchAttempt {
 /// only source of account identity when the fetch itself failed.
 pub(super) fn observe_attempt(
     manager: &mut NotificationManager,
-    policy: CredentialAlertPolicy,
+    policy: Option<CredentialAlertPolicy>,
     id: ProviderId,
     token_account_id: Option<uuid::Uuid>,
     attempt: FetchAttempt,
@@ -45,11 +45,13 @@ pub(super) fn observe_attempt(
             manager.observe_credential_recovery(id, &account);
         }
         FetchAttempt::Failed(kind) => {
-            let account = quota_notification_account_identity(
-                last_good.unwrap_or(published),
-                token_account_id,
-            );
-            manager.observe_credential_failure(policy, id, &account, kind);
+            if let Some(policy) = policy {
+                let account = quota_notification_account_identity(
+                    last_good.unwrap_or(published),
+                    token_account_id,
+                );
+                manager.observe_credential_failure(policy, id, &account, kind);
+            }
         }
     }
 }
@@ -104,7 +106,7 @@ mod tests {
 
         observe_attempt(
             &mut manager,
-            policy,
+            Some(policy),
             ProviderId::Codex,
             None,
             FetchAttempt::of(&failure),
@@ -113,7 +115,7 @@ mod tests {
         );
         observe_attempt(
             &mut manager,
-            policy,
+            Some(policy),
             ProviderId::Codex,
             None,
             FetchAttempt::Succeeded,

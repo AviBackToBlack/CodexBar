@@ -416,6 +416,18 @@ mod tests {
     }
 
     #[test]
+    fn no_enabled_providers_retires_all_episodes() {
+        let mut manager = NotificationManager::new();
+        let toasts = Toasts::new();
+        let auth = ProviderStateKind::NeedsAuthentication;
+
+        assert!(toasts.fail(&mut manager, ProviderId::Codex, ACCOUNT, auth, true));
+        manager.retire_credential_episodes_except(&[]);
+        assert!(toasts.fail(&mut manager, ProviderId::Codex, ACCOUNT, auth, true));
+        assert_eq!(toasts.count(), 2);
+    }
+
+    #[test]
     fn policy_requires_master_switch_and_credential_toggle() {
         let mut settings = Settings {
             show_notifications: true,

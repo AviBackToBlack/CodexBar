@@ -650,6 +650,10 @@ PredictivePaceWarnings = 预测配额告警
 PredictivePaceWarningsHelper = 当 Codex 或 Claude 的用量可能在重置前耗尽时提醒
 PredictivePaceWarningTitle = { "{}" } { "{}" } 配额告警
 PredictivePaceWarningBody = 配额可能在 { "{}" } 内耗尽
+CredentialExpiryNotifications = 凭据过期提醒
+CredentialExpiryNotificationsHelper = 提供商账户需要重新登录时提醒一次
+CredentialExpiryTitle = { "{}" }需要重新登录
+CredentialExpiryBody = 打开 CodexBar 查看账户错误并重新登录。
 ShowResetWhenExhausted = 耗尽时显示重置时间
 ShowResetWhenExhaustedHelper = 用量百分比耗尽时,用实时重置倒计时替换显示
 
