@@ -39,6 +39,7 @@ pub(crate) fn invalidate_account_usage(
     state.is_refreshing = false;
     state.provider_refresh_started_at = None;
     state.transient_provider_failure_counts.remove(&id);
+    state.last_good_owners.remove(&id);
     state.auto_resume.clear_provider(id);
     state
         .provider_cache
@@ -335,6 +336,9 @@ pub(crate) fn invalidate_provider_refresh_and_prune_disabled(
         .transient_provider_failure_counts
         .retain(|id, _| enabled_ids.contains(id));
     guard
+        .last_good_owners
+        .retain(|id, _| enabled_ids.contains(id));
+    guard
         .provider_cache_updated_at_by_provider
         .retain(|id, _| enabled_ids.contains(id));
     guard.auto_resume.clear_disabled(enabled_ids);
@@ -565,7 +569,7 @@ async fn refresh_provider(
     token_account_id: Option<uuid::Uuid>,
     hooks_enabled: bool,
 ) {
-    let (snapshot, account_identity, failure_policy) =
+    let (snapshot, account_identity, retention) =
         fetch_provider_snapshot(id, ctx, token_account_id).await;
     let fresh_snapshot = snapshot.error.is_none();
 
@@ -584,8 +588,12 @@ async fn refresh_provider(
                 &mut guard,
                 id,
                 snapshot,
-                failure_policy,
+                retention.policy,
+                &retention.failure_ownership,
             );
+            if fresh_snapshot {
+                record_last_good_owner(&mut guard, id, retention.fresh_owner);
+            }
             // F6 (upstream 0.48.0): backfill missing reset timestamps from the
             // cached snapshot before persisting and publishing.
             let cached = guard
@@ -762,7 +770,30 @@ pub(super) fn preserve_last_good_transient_failure(
     error: &codexbar::core::ProviderError,
 ) -> ProviderUsageSnapshot {
     let policy = instantiate_provider(id).last_good_failure_policy_for_error(error);
-    preserve_last_good_transient_failure_with_policy(guard, id, snapshot, Some(policy))
+    preserve_last_good_transient_failure_with_policy(
+        guard,
+        id,
+        snapshot,
+        Some(policy),
+        &error.failure_ownership(),
+    )
+}
+
+/// Remember which live session produced the fresh snapshot now cached for
+/// `id`, or forget any earlier owner when the fresh snapshot has none.
+pub(super) fn record_last_good_owner(
+    guard: &mut AppState,
+    id: ProviderId,
+    owner: Option<codexbar::core::LastGoodOwner>,
+) {
+    match owner {
+        Some(owner) => {
+            guard.last_good_owners.insert(id, owner);
+        }
+        None => {
+            guard.last_good_owners.remove(&id);
+        }
+    }
 }
 
 fn preserve_last_good_transient_failure_with_policy(
@@ -770,6 +801,7 @@ fn preserve_last_good_transient_failure_with_policy(
     id: ProviderId,
     snapshot: ProviderUsageSnapshot,
     policy: Option<codexbar::core::LastGoodFailurePolicy>,
+    ownership: &codexbar::core::FailureOwnership,
 ) -> ProviderUsageSnapshot {
     let Some(error) = snapshot.error.as_deref() else {
         guard.transient_provider_failure_counts.remove(&id);
@@ -778,6 +810,12 @@ fn preserve_last_good_transient_failure_with_policy(
 
     let policy = policy.unwrap_or(codexbar::core::LastGoodFailurePolicy::Replace);
     if policy == codexbar::core::LastGoodFailurePolicy::Replace {
+        guard.transient_provider_failure_counts.remove(&id);
+        return snapshot;
+    }
+    // A failure tied to a live session may keep only a snapshot that the same
+    // session produced. Anything else shows the error.
+    if !ownership.allows_retention(guard.last_good_owners.get(&id)) {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
     }
@@ -841,20 +879,28 @@ fn preserve_last_good_transient_failure_with_policy(
     }
 }
 
+/// What a refresh tells the shell about keeping or replacing the last good
+/// snapshot.
+#[derive(Default)]
+struct RefreshRetention {
+    /// Failure handling when a prior good snapshot exists.
+    policy: Option<codexbar::core::LastGoodFailurePolicy>,
+    /// Session the failed request belonged to, when the provider can tell.
+    failure_ownership: codexbar::core::FailureOwnership,
+    /// Session that produced a fresh snapshot.
+    fresh_owner: Option<codexbar::core::LastGoodOwner>,
+}
+
 async fn fetch_provider_snapshot(
     id: ProviderId,
     ctx: FetchContext,
     token_account_id: Option<uuid::Uuid>,
-) -> (
-    ProviderUsageSnapshot,
-    Option<String>,
-    Option<codexbar::core::LastGoodFailurePolicy>,
-) {
+) -> (ProviderUsageSnapshot, Option<String>, RefreshRetention) {
     let provider = instantiate_provider(id);
     let metadata = provider.metadata().clone();
     let started = std::time::Instant::now();
 
-    let (mut snapshot, account_identity, failure_policy) =
+    let (mut snapshot, account_identity, retention) =
         match tokio::time::timeout(provider_fetch_timeout(id, &ctx), provider.fetch_usage(&ctx))
             .await
         {
@@ -868,7 +914,10 @@ async fn fetch_provider_snapshot(
                         token_account_id,
                     ),
                     account_identity,
-                    None,
+                    RefreshRetention {
+                        fresh_owner: result.last_good_owner.clone(),
+                        ..RefreshRetention::default()
+                    },
                 )
             }
             Ok(Err(e)) => {
@@ -881,7 +930,11 @@ async fn fetch_provider_snapshot(
                         provider.error_state_kind(&e),
                     ),
                     None,
-                    Some(policy),
+                    RefreshRetention {
+                        policy: Some(policy),
+                        failure_ownership: e.failure_ownership(),
+                        fresh_owner: None,
+                    },
                 )
             }
             Err(_) => {
@@ -895,13 +948,17 @@ async fn fetch_provider_snapshot(
                         provider.error_state_kind(&error),
                     ),
                     None,
-                    Some(policy),
+                    RefreshRetention {
+                        policy: Some(policy),
+                        failure_ownership: error.failure_ownership(),
+                        fresh_owner: None,
+                    },
                 )
             }
         };
 
     record_provider_fetch_duration(id, &mut snapshot, started);
-    (snapshot, account_identity, failure_policy)
+    (snapshot, account_identity, retention)
 }
 
 fn record_provider_fetch_duration(
