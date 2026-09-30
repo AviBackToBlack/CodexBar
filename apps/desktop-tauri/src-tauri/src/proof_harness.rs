@@ -27,6 +27,7 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+use codexbar::core::ProviderId;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
@@ -140,6 +141,13 @@ pub fn activate(app: &AppHandle) {
         Ok(mode) => tracing::info!("proof-harness: transition succeeded → {mode:?}"),
         Err(err) => tracing::error!("proof-harness: transition FAILED: {err}"),
     }
+}
+
+/// Seeded snapshots must use an exact bridge provider id, not a CLI alias.
+fn is_seedable_provider_id(provider_id: &str) -> bool {
+    ProviderId::all()
+        .iter()
+        .any(|provider| provider.cli_name() == provider_id)
 }
 
 /// Bottom inset (physical px) kept between the proof panel's bottom edge and
@@ -343,7 +351,7 @@ pub fn parse_seed_usage_snapshots(
 
     let mut providers = HashSet::with_capacity(snapshots.len());
     for snapshot in &mut snapshots {
-        if !is_supported_provider_id(&snapshot.provider_id) {
+        if !is_seedable_provider_id(&snapshot.provider_id) {
             return Err(format!(
                 "unsupported snapshot providerId '{}', ignoring",
                 snapshot.provider_id
@@ -679,6 +687,8 @@ mod tests {
         for json in [
             "[]".to_string(),
             serde_json::json!([seed_snapshot("unknown-provider", 1.0)]).to_string(),
+            // CLI aliases are not bridge provider ids.
+            serde_json::json!([seed_snapshot("openai", 1.0)]).to_string(),
             serde_json::json!([seed_snapshot("codex", 1.0), seed_snapshot("codex", 2.0)])
                 .to_string(),
             r#"[{"providerId":"codex","primary":{"usedPercent":1e400}}]"#.to_string(),
