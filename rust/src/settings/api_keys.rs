@@ -529,7 +529,9 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             name: "LLM Proxy",
             requires_api_key: true,
             api_key_env_var: Some("LLM_PROXY_API_KEY + LLM_PROXY_BASE_URL"),
-            api_key_help: Some("Set an LLM Proxy API key and base URL for quota-stats."),
+            api_key_help: Some(
+                "Set an LLM Proxy API key and base URL (Settings or LLM_PROXY_BASE_URL) for quota-stats.",
+            ),
             config_file_path: None,
             dashboard_url: None,
         },

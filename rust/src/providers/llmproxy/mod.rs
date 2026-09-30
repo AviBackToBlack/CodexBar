@@ -14,6 +14,7 @@ use crate::core::{
 };
 
 const LLM_PROXY_CREDENTIAL_TARGET: &str = "codexbar-llmproxy";
+const LLM_PROXY_BASE_URL_ENV: &str = "LLM_PROXY_BASE_URL";
 
 #[derive(Debug, Deserialize)]
 struct QuotaStatsResponse {
@@ -30,6 +31,7 @@ struct ProviderStats {
     tokens: Option<TokenStats>,
     #[serde(rename = "approx_cost")]
     approximate_cost: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_quota_groups")]
     quota_groups: Option<QuotaGroups>,
 }
 
@@ -53,6 +55,16 @@ struct SummaryStats {
 enum QuotaGroups {
     List(Vec<QuotaGroup>),
     Map(HashMap<String, QuotaGroup>),
+}
+
+/// Upstream treats malformed `quota_groups` as absent without discarding the
+/// rest of the provider's usage (`llmproxy.ts`, native decoding note).
+fn lenient_quota_groups<'de, D>(deserializer: D) -> Result<Option<QuotaGroups>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok().flatten())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,7 +130,7 @@ impl LLMProxyProvider {
     ) -> Result<ProviderFetchResult, ProviderError> {
         let response = self
             .client
-            .get(quota_stats_url(base_url)?)
+            .get(quota_stats_url(base_url))
             .bearer_auth(api_key)
             .header("Accept", "application/json")
             .send()
@@ -172,7 +184,7 @@ impl Provider for LLMProxyProvider {
                     LLM_PROXY_CREDENTIAL_TARGET,
                     &["LLM_PROXY_API_KEY"],
                 )?;
-                let base_url = resolve_base_url()?;
+                let base_url = resolve_base_url(ctx)?;
                 self.fetch_api(&api_key, base_url).await
             }
             SourceMode::Web | SourceMode::Cli => {
@@ -186,27 +198,69 @@ impl Provider for LLMProxyProvider {
     }
 }
 
-fn resolve_base_url() -> Result<Url, ProviderError> {
-    let raw = std::env::var("LLM_PROXY_BASE_URL").map_err(|_| {
-        ProviderError::NotInstalled(
-            "LLM Proxy base URL not found. Set LLM_PROXY_BASE_URL in the environment.".to_string(),
-        )
-    })?;
-    crate::providers::validated_https_url(&raw, "LLM Proxy")
+/// The Settings value wins; `LLM_PROXY_BASE_URL` is the fallback.
+fn resolve_base_url(ctx: &FetchContext) -> Result<Url, ProviderError> {
+    let raw = ctx
+        .workspace_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::var(LLM_PROXY_BASE_URL_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+        .ok_or_else(|| {
+            ProviderError::NotInstalled(format!(
+                "LLM Proxy base URL not found. Add one in Settings or set {LLM_PROXY_BASE_URL_ENV}."
+            ))
+        })?;
+    crate::providers::validated_https_or_private_http_url(&raw, "LLM Proxy")
 }
 
-fn quota_stats_url(base_url: Url) -> Result<Url, ProviderError> {
-    let path = base_url.path().trim_matches('/');
-    let versioned = if path.split('/').next_back() == Some("v1") {
-        base_url
+/// Build `{base}/v1/quota-stats`, keeping any query/fragment at the end.
+///
+/// `/v1` is appended only when the percent-decoded path does not already end
+/// in `/v1` (upstream `llmproxy.ts`).
+fn quota_stats_url(mut base_url: Url) -> Url {
+    let query = base_url.query().map(str::to_owned);
+    let fragment = base_url.fragment().map(str::to_owned);
+    base_url.set_query(None);
+    base_url.set_fragment(None);
+
+    let path = base_url.path().trim_end_matches('/').to_string();
+    let version = if percent_decode(&path).ends_with("/v1") {
+        ""
     } else {
-        base_url
-            .join("v1/")
-            .map_err(|e| ProviderError::Other(format!("Invalid LLM Proxy URL: {e}")))?
+        "/v1"
     };
-    versioned
-        .join("quota-stats")
-        .map_err(|e| ProviderError::Other(format!("Invalid LLM Proxy quota-stats URL: {e}")))
+    base_url.set_path(&format!("{path}{version}/quota-stats"));
+    base_url.set_query(query.as_deref());
+    base_url.set_fragment(fragment.as_deref());
+    base_url
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut idx = 0;
+    while idx < bytes.len() {
+        let decoded = (bytes[idx] == b'%')
+            .then(|| bytes.get(idx + 1..idx + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        if let Some(byte) = decoded {
+            out.push(byte);
+            idx += 3;
+        } else {
+            out.push(bytes[idx]);
+            idx += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn parse_summary(data: &[u8]) -> Result<LLMProxySummary, ProviderError> {
@@ -468,6 +522,135 @@ mod tests {
         let snapshot = snapshot_from_summary(&summary);
         assert_eq!(snapshot.primary.used_percent, 74.5);
         assert_eq!(snapshot.extra_rate_windows.len(), 2);
+    }
+
+    fn stats_url(raw: &str) -> String {
+        let base = crate::providers::validated_https_or_private_http_url(raw, "LLM Proxy").unwrap();
+        quota_stats_url(base).to_string()
+    }
+
+    #[test]
+    fn quota_stats_url_appends_v1_only_when_missing() {
+        assert_eq!(
+            stats_url("https://proxy.example.com"),
+            "https://proxy.example.com/v1/quota-stats"
+        );
+        assert_eq!(
+            stats_url("https://proxy.example.com/"),
+            "https://proxy.example.com/v1/quota-stats"
+        );
+        assert_eq!(
+            stats_url("https://proxy.example.com/v1"),
+            "https://proxy.example.com/v1/quota-stats"
+        );
+        assert_eq!(
+            stats_url("https://proxy.example.com/v1//"),
+            "https://proxy.example.com/v1/quota-stats"
+        );
+        assert_eq!(
+            stats_url("https://proxy.example.com/gateway"),
+            "https://proxy.example.com/gateway/v1/quota-stats"
+        );
+        // Percent-decoded path already ends in /v1.
+        assert_eq!(
+            stats_url("https://proxy.example.com/%76%31"),
+            "https://proxy.example.com/%76%31/quota-stats"
+        );
+    }
+
+    #[test]
+    fn quota_stats_url_keeps_query_and_fragment_at_the_end() {
+        assert_eq!(
+            stats_url("https://proxy.example.com?team=a"),
+            "https://proxy.example.com/v1/quota-stats?team=a"
+        );
+        assert_eq!(
+            stats_url("https://proxy.example.com/v1/?team=a#frag"),
+            "https://proxy.example.com/v1/quota-stats?team=a#frag"
+        );
+        assert_eq!(
+            stats_url("https://proxy.example.com/gw#frag"),
+            "https://proxy.example.com/gw/v1/quota-stats#frag"
+        );
+    }
+
+    #[test]
+    fn base_url_policy_allows_https_and_private_network_http_only() {
+        for ok in [
+            "https://proxy.example.com",
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+            "http://[::1]:8000",
+            "http://10.0.0.5",
+            "http://172.16.4.2",
+            "http://192.168.1.10:8000",
+            "http://169.254.1.1",
+            "http://proxy.local",
+            "http://[fd00::1]",
+        ] {
+            assert!(
+                crate::providers::validated_https_or_private_http_url(ok, "LLM Proxy").is_ok(),
+                "rejected {ok}"
+            );
+        }
+        for bad in [
+            "http://proxy.example.com",
+            "http://172.32.0.1",
+            "http://8.8.8.8",
+            "ftp://proxy.local",
+            "https://user:pass@proxy.example.com",
+            "http://user@192.168.1.10",
+            "",
+        ] {
+            assert!(
+                crate::providers::validated_https_or_private_http_url(bad, "LLM Proxy").is_err(),
+                "accepted {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_base_url_wins_over_env() {
+        let ctx = FetchContext {
+            workspace_id: Some(" http://192.168.1.10:8000 ".into()),
+            ..FetchContext::default()
+        };
+        assert_eq!(
+            resolve_base_url(&ctx).unwrap().as_str(),
+            "http://192.168.1.10:8000/"
+        );
+    }
+
+    #[test]
+    fn malformed_quota_groups_are_absent_without_dropping_usage() {
+        let summary = parse_summary(
+            br#"{
+                "providers": {
+                    "a": {"total_requests": 5, "quota_groups": "nope"},
+                    "b": {"total_requests": 7, "quota_groups": null},
+                    "c": {"total_requests": 11, "quota_groups": [1, 2]},
+                    "d": {"total_requests": 13, "quota_groups": {"x": {"remaining_percent": "bad"}}},
+                    "e": {"total_requests": 17, "quota_groups": [{"remaining_percent": 40.0}]}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(summary.total_requests, 53);
+        assert_eq!(summary.minimum_remaining_percent, Some(40.0));
+    }
+
+    #[test]
+    fn accepts_array_and_object_quota_groups() {
+        let summary = parse_summary(
+            br#"{
+                "providers": {
+                    "a": {"quota_groups": [{"remaining_percent": 30.0}]},
+                    "b": {"quota_groups": {"k": {"remaining_percent": 20.0}}}
+                }
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(summary.minimum_remaining_percent, Some(20.0));
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub fn validate_provider_workspace_value(
         }
         ProviderId::LiteLLM => validate_token_endpoint(trimmed, "LiteLLM base URL", |_| true),
         ProviderId::Sub2Api => validate_sub2api_base_url(trimmed),
+        ProviderId::LLMProxy => validate_llmproxy_base_url(trimmed),
         _ => Ok(trimmed.to_string()),
     }
 }
@@ -64,6 +65,13 @@ pub fn validate_provider_workspace_value(
 fn validate_sub2api_base_url(raw: &str) -> Result<String, String> {
     match crate::providers::sub2api::validated_sub2api_base_url(raw) {
         Ok(url) => Ok(url.to_string().trim_end_matches('/').to_string()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn validate_llmproxy_base_url(raw: &str) -> Result<String, String> {
+    match crate::providers::validated_https_or_private_http_url(raw, "LLM Proxy") {
+        Ok(url) => Ok(url.to_string()),
         Err(err) => Err(err.to_string()),
     }
 }
@@ -217,6 +225,33 @@ mod tests {
                 "accepted {value}"
             );
         }
+    }
+
+    #[test]
+    fn validates_llmproxy_base_url() {
+        assert_eq!(
+            validate_provider_workspace_value(
+                ProviderId::LLMProxy,
+                " https://proxy.example.com/v1?team=a "
+            )
+            .unwrap(),
+            "https://proxy.example.com/v1?team=a"
+        );
+        assert!(
+            validate_provider_workspace_value(ProviderId::LLMProxy, "http://192.168.1.10:8000")
+                .is_ok()
+        );
+        assert!(
+            validate_provider_workspace_value(ProviderId::LLMProxy, "http://proxy.example.com")
+                .is_err()
+        );
+        assert!(
+            validate_provider_workspace_value(
+                ProviderId::LLMProxy,
+                "https://user:pass@proxy.example.com"
+            )
+            .is_err()
+        );
     }
 
     #[test]
