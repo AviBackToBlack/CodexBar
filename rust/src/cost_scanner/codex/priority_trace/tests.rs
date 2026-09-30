@@ -6,6 +6,8 @@ use crate::cost_scanner::{CostScanOptions, CostScanner};
 use chrono::Local;
 use std::path::PathBuf;
 
+mod scanner;
+
 fn request_body(turn: &str, tier: &str, model: &str) -> String {
     format!(
         "session_loop{{thread_id=thread-1}}:turn{{turn.id={turn}}}: \
@@ -134,6 +136,76 @@ fn parses_completed_events() {
     assert_eq!(parsed.model, "gpt-5.5");
     let other = completed_body("turn-1", "gpt-5.5").replace("response.completed", "response.x");
     assert!(parse_completed_trace_row(&other).is_none());
+}
+
+#[test]
+fn request_fields_of_another_type_are_absent_not_fatal() {
+    // Upstream casts each field with `as? String`: a numeric model is absent,
+    // but the turn is still a Priority turn.
+    let numeric_model = "turn.id=t1 websocket request: \
+         {\"type\":\"response.create\",\"model\":5,\"service_tier\":\"priority\"}";
+    let parsed = parse_priority_trace_row(None, numeric_model).unwrap();
+    assert_eq!(parsed.turn_id, "t1");
+    assert_eq!(parsed.model, None);
+
+    let numeric_tier = "turn.id=t1 websocket request: \
+         {\"type\":\"response.create\",\"model\":\"gpt-5.5\",\"service_tier\":1}";
+    assert!(parse_priority_trace_row(None, numeric_tier).is_none());
+
+    // Without the object guard serde would read an array positionally.
+    let array = "turn.id=t1 websocket request: \
+         [\"response.create\",\"priority\",\"t1\",\"gpt-5.5\"]";
+    assert!(parse_priority_trace_row(None, array).is_none());
+}
+
+#[test]
+fn completed_event_without_an_object_response_is_ignored() {
+    let string_response = "turn.id=t1 websocket event: \
+         {\"type\":\"response.completed\",\"response\":\"gpt-5.5\"}";
+    assert!(parse_completed_trace_row(string_response).is_none());
+
+    let numeric_model = "turn.id=t1 websocket event: \
+         {\"type\":\"response.completed\",\"response\":{\"model\":5}}";
+    assert!(parse_completed_trace_row(numeric_model).is_none());
+
+    let array = "turn.id=t1 websocket event: \
+         [\"response.completed\",{\"model\":\"gpt-5.5\"}]";
+    assert!(parse_completed_trace_row(array).is_none());
+}
+
+fn local_midnight(year: i32, month: u32, day: u32) -> i64 {
+    NaiveDate::from_ymd_opt(year, month, day)
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .and_then(|midnight| midnight.and_local_timezone(Local).earliest())
+        .map(|midnight| midnight.timestamp())
+        .unwrap()
+}
+
+#[test]
+fn text_timestamps_parse_seconds_or_day_keys() {
+    assert_eq!(text_timestamp("42"), Some(42));
+    assert_eq!(text_timestamp(" 42 "), Some(42));
+    let midnight = local_midnight(2026, 9, 4);
+    assert_eq!(text_timestamp("2026-09-04 12:34:56.789"), Some(midnight));
+    assert_eq!(text_timestamp("2026-09-04T12:34:56Z"), Some(midnight));
+    assert_eq!(text_timestamp("2026-09-04"), Some(midnight));
+    assert_eq!(text_timestamp("garbage"), None);
+    assert_eq!(text_timestamp("2026-13-40 00:00:00"), None);
+    assert_eq!(text_timestamp(""), None);
+}
+
+#[test]
+fn text_timestamp_rows_count_from_their_local_day() {
+    let db = TraceDb::new(&[]);
+    db.execute(&format!(
+        "insert into logs (ts, feedback_log_body) values ('2026-09-04 12:00:00', '{}')",
+        request_body("turn-1", "priority", "gpt-5.5")
+    ));
+    let cursor = resolve(&db, None).cursor.unwrap();
+    assert_eq!(
+        cursor.turn("turn-1").and_then(|turn| turn.timestamp),
+        Some(local_midnight(2026, 9, 4))
+    );
 }
 
 #[test]
