@@ -13,7 +13,7 @@
 
 use super::snappy;
 use super::varint::{read_u32_le, read_u64_le, read_varint32, read_varint64};
-use super::{MAX_BLOCK_BYTES, Record};
+use super::{MAX_BLOCK_BYTES, MAX_RECORDS_PER_DIRECTORY, Record};
 
 const FOOTER_SIZE: usize = 48;
 const TABLE_MAGIC: u64 = 0xdb47_7524_8b80_fb57;
@@ -35,6 +35,10 @@ pub(super) enum TableError {
     UnsupportedCompression(u8),
     #[error("block is malformed")]
     BadBlock,
+    #[error("block exceeds the configured size limit")]
+    BlockTooLarge,
+    #[error("block output buffer could not be allocated")]
+    AllocationFailed,
     #[error("snappy block failed to decode: {0}")]
     Snappy(#[from] snappy::SnappyError),
 }
@@ -64,7 +68,19 @@ impl BlockHandle {
 ///
 /// A data block that cannot be decoded is skipped (and counted in the returned failure count) so
 /// one bad block does not hide the rest of the table; a bad footer or index block is an error.
+#[cfg(test)]
 pub(super) fn read_table(data: &[u8], emit: &mut impl FnMut(Record)) -> Result<usize, TableError> {
+    read_table_until(data, &mut |record| {
+        emit(record);
+        true
+    })
+    .map(|(skipped, _)| skipped)
+}
+
+pub(super) fn read_table_until(
+    data: &[u8],
+    emit: &mut impl FnMut(Record) -> bool,
+) -> Result<(usize, bool), TableError> {
     let footer_start = data
         .len()
         .checked_sub(FOOTER_SIZE)
@@ -77,52 +93,103 @@ pub(super) fn read_table(data: &[u8], emit: &mut impl FnMut(Record)) -> Result<u
     let (index, _) = BlockHandle::parse(&footer[used..]).ok_or(TableError::BadFooter)?;
 
     let index_block = read_block(data, index)?;
+    validate_index_block(&index_block)?;
     let mut skipped_blocks = 0usize;
     for (_separator, handle_bytes) in BlockEntries::new(&index_block)? {
-        let entry = BlockHandle::parse(handle_bytes)
-            .map(|(handle, _)| handle)
-            .ok_or(TableError::BadBlock);
-        let block = entry.and_then(|handle| read_block(data, handle));
+        let (handle, _) = BlockHandle::parse(handle_bytes).ok_or(TableError::BadBlock)?;
+        let block = read_block(data, handle);
         let Ok(block) = block else {
             skipped_blocks += 1;
             continue;
         };
-        if emit_block_records(&block, emit).is_err() {
-            skipped_blocks += 1;
+        match validate_data_block(&block).and_then(|_| emit_block_records(&block, emit)) {
+            Ok(true) => {}
+            Ok(false) => return Ok((skipped_blocks, false)),
+            Err(_) => skipped_blocks += 1,
         }
     }
-    Ok(skipped_blocks)
+    Ok((skipped_blocks, true))
 }
 
-fn emit_block_records(block: &[u8], emit: &mut impl FnMut(Record)) -> Result<(), TableError> {
-    for (internal_key, value) in BlockEntries::new(block)? {
+fn validate_index_block(block: &[u8]) -> Result<(), TableError> {
+    let mut entries = BlockEntries::new(block)?;
+    let mut entry_count = 0usize;
+    for (_separator, handle_bytes) in entries.by_ref() {
+        entry_count += 1;
+        if entry_count > MAX_RECORDS_PER_DIRECTORY {
+            return Err(TableError::BadBlock);
+        }
+        let (_, used) = BlockHandle::parse(handle_bytes).ok_or(TableError::BadBlock)?;
+        if used != handle_bytes.len() {
+            return Err(TableError::BadBlock);
+        }
+    }
+    if entries.failed {
+        return Err(TableError::BadBlock);
+    }
+    Ok(())
+}
+
+fn validate_data_block(block: &[u8]) -> Result<(), TableError> {
+    let mut entries = BlockEntries::new(block)?;
+    let mut entry_count = 0usize;
+    for (internal_key, _value) in entries.by_ref() {
+        entry_count += 1;
+        if entry_count > MAX_RECORDS_PER_DIRECTORY {
+            return Err(TableError::BadBlock);
+        }
+        if internal_key.len() < 8 {
+            return Err(TableError::BadBlock);
+        }
+    }
+    if entries.failed {
+        return Err(TableError::BadBlock);
+    }
+    Ok(())
+}
+
+fn emit_block_records(
+    block: &[u8],
+    emit: &mut impl FnMut(Record) -> bool,
+) -> Result<bool, TableError> {
+    let mut entries = BlockEntries::new(block)?;
+    for (internal_key, value) in entries.by_ref() {
         let Some(split) = internal_key.len().checked_sub(8) else {
             return Err(TableError::BadBlock);
         };
         let (user_key, trailer) = internal_key.split_at(split);
         let packed = read_u64_le(trailer, 0).ok_or(TableError::BadBlock)?;
         let value = match packed & 0xff {
-            KIND_VALUE => Some(value.to_vec()),
+            KIND_VALUE => Some(copy_bytes(value)?),
             KIND_DELETE => None,
             _ => continue,
         };
-        emit(Record {
-            key: user_key.to_vec(),
+        if !emit(Record {
+            key: copy_bytes(user_key)?,
             sequence: packed >> 8,
             value,
-        });
+        }) {
+            return Ok(false);
+        }
     }
-    Ok(())
+    if entries.failed {
+        return Err(TableError::BadBlock);
+    }
+    Ok(true)
 }
 
 /// Return the decompressed contents of the block at `handle` (without its trailer).
 fn read_block(data: &[u8], handle: BlockHandle) -> Result<Vec<u8>, TableError> {
+    let table_data_end = data
+        .len()
+        .checked_sub(FOOTER_SIZE)
+        .ok_or(TableError::BadHandle)?;
     let end = handle
         .offset
         .checked_add(handle.size)
         .and_then(|end| end.checked_add(BLOCK_TRAILER_SIZE))
         .ok_or(TableError::BadHandle)?;
-    if data.len() < end {
+    if end > table_data_end {
         return Err(TableError::BadHandle);
     }
     let contents_end = end - BLOCK_TRAILER_SIZE;
@@ -131,10 +198,20 @@ fn read_block(data: &[u8], handle: BlockHandle) -> Result<Vec<u8>, TableError> {
         .ok_or(TableError::BadHandle)?;
     let compression = data[contents_end];
     match compression {
-        COMPRESSION_NONE => Ok(raw.to_vec()),
+        COMPRESSION_NONE if raw.len() <= MAX_BLOCK_BYTES => copy_bytes(raw),
+        COMPRESSION_NONE => Err(TableError::BlockTooLarge),
         COMPRESSION_SNAPPY => Ok(snappy::decompress(raw, MAX_BLOCK_BYTES)?),
         other => Err(TableError::UnsupportedCompression(other)),
     }
+}
+
+fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, TableError> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| TableError::AllocationFailed)?;
+    output.extend_from_slice(bytes);
+    Ok(output)
 }
 
 /// Iterator over the `(key, value)` entries of a decoded block, undoing prefix compression.
@@ -148,6 +225,9 @@ impl<'a> BlockEntries<'a> {
     fn new(block: &'a [u8]) -> Result<Self, TableError> {
         let restart_count =
             read_u32_le(block, block.len().saturating_sub(4)).ok_or(TableError::BadBlock)? as usize;
+        if restart_count == 0 || restart_count > MAX_RECORDS_PER_DIRECTORY {
+            return Err(TableError::BadBlock);
+        }
         let restarts_len = restart_count
             .checked_mul(4)
             .and_then(|len| len.checked_add(4))
@@ -156,6 +236,22 @@ impl<'a> BlockEntries<'a> {
             .len()
             .checked_sub(restarts_len)
             .ok_or(TableError::BadBlock)?;
+        let mut restart_position = entries_end;
+        let mut previous_restart = 0usize;
+        for index in 0..restart_count {
+            let restart =
+                usize::try_from(read_u32_le(block, restart_position).ok_or(TableError::BadBlock)?)
+                    .map_err(|_| TableError::BadBlock)?;
+            if (index == 0 && restart != 0)
+                || restart < previous_restart
+                || restart > entries_end
+                || (entries_end > 0 && restart == entries_end)
+            {
+                return Err(TableError::BadBlock);
+            }
+            previous_restart = restart;
+            restart_position += 4;
+        }
         Ok(Self {
             entries: &block[..entries_end],
             key: Vec::new(),
@@ -174,7 +270,12 @@ impl<'a> Iterator for BlockEntries<'a> {
         let parsed = parse_entry(self.entries, &self.key);
         match parsed {
             Some((key, value, rest)) => {
-                self.key.clone_from(&key);
+                self.key.clear();
+                if self.key.try_reserve(key.len()).is_err() {
+                    self.failed = true;
+                    return None;
+                }
+                self.key.extend_from_slice(&key);
                 self.entries = rest;
                 Some((key, value))
             }
@@ -201,7 +302,9 @@ fn parse_entry<'a>(
     if shared > previous_key.len() || body.len() < payload_len {
         return None;
     }
-    let mut key = Vec::with_capacity(shared + non_shared);
+    let key_len = shared.checked_add(non_shared)?;
+    let mut key = Vec::new();
+    key.try_reserve_exact(key_len).ok()?;
     key.extend_from_slice(&previous_key[..shared]);
     key.extend_from_slice(&body[..non_shared]);
     Some((key, &body[non_shared..payload_len], &body[payload_len..]))
