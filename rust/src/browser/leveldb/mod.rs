@@ -13,8 +13,9 @@
 //! - Checksums are not verified and only the bytewise comparator is assumed (which is what
 //!   `Local Storage` uses; a full scan does not depend on ordering anyway).
 //! - Blocks using a compression type other than none/Snappy are skipped.
-//! - Files larger than [`MAX_FILE_BYTES`] and blocks that inflate beyond [`MAX_BLOCK_BYTES`] are
-//!   skipped so a corrupt profile cannot exhaust memory.
+//! - Files larger than [`MAX_FILE_BYTES`] and decoded table blocks larger than
+//!   [`MAX_BLOCK_BYTES`] are skipped to bound each input allocation. The returned snapshot still
+//!   grows with the database's live data.
 
 pub mod local_storage;
 mod log;
@@ -27,11 +28,12 @@ mod tests;
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::io::Read;
 use std::path::Path;
 
 /// Largest single log or table file that will be read into memory.
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
-/// Largest decompressed table block accepted.
+/// Largest decoded table block accepted.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 
 /// One live key/value pair of the database.
@@ -124,11 +126,19 @@ impl FileKind {
 }
 
 fn read_bounded_file(path: &Path) -> std::io::Result<Vec<u8>> {
-    let size = std::fs::metadata(path)?.len();
+    let file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
     if size > MAX_FILE_BYTES {
         return Err(std::io::Error::other(format!(
             "file is {size} bytes, over the {MAX_FILE_BYTES} byte limit"
         )));
     }
-    std::fs::read(path)
+    let mut data = Vec::new();
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > MAX_FILE_BYTES {
+        return Err(std::io::Error::other(format!(
+            "file grew beyond the {MAX_FILE_BYTES} byte limit while being read"
+        )));
+    }
+    Ok(data)
 }
