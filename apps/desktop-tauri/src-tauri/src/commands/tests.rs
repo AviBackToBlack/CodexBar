@@ -1182,6 +1182,16 @@ fn provider_fetch_timeout_allows_slower_authenticated_providers() {
         super::provider_fetch_timeout(ProviderId::DeepSeek, &ctx),
         std::time::Duration::from_secs(35)
     );
+
+    let optional_litellm_ctx = FetchContext {
+        web_timeout: 30,
+        optional_details_enabled: true,
+        ..FetchContext::default()
+    };
+    assert_eq!(
+        super::provider_fetch_timeout(ProviderId::LiteLLM, &optional_litellm_ctx),
+        std::time::Duration::from_secs(40)
+    );
 }
 
 #[test]

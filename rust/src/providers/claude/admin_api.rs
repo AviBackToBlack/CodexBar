@@ -333,9 +333,7 @@ fn result_from_admin_usage(
         "Last 30 days",
     ));
     if workspace_spend {
-        for row in workspace_spend_rows(costs) {
-            result = result.with_display_detail(Some(row));
-        }
+        result = result.with_display_details(workspace_spend_rows(costs));
     }
     result
 }

@@ -155,6 +155,7 @@ fn is_iso_day(value: &str) -> bool {
             4 | 7 => *byte == b'-',
             _ => byte.is_ascii_digit(),
         })
+        && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
 }
 
 fn detail_rows(totals: BTreeMap<String, Totals>) -> Vec<ProviderDisplayDetail> {

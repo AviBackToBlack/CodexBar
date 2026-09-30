@@ -596,20 +596,6 @@ export default function MenuCardDetails({
           ))}
         </section>
       )}
-      {!provider.error && hasDisplayDetails && !compactOverview && (
-        <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => {
-            const heading = displaySectionHeading(provider.displayDetails ?? [], index);
-            return (
-              <Fragment key={`${detail.id}-${index}`}>
-                {heading && <div className="menu-card__group-title">{heading}</div>}
-                <DisplayDetailRow detail={detail} />
-              </Fragment>
-            );
-          })}
-        </section>
-      )}
-
       {!provider.error && hasDisplayDetails && (
         <section className="menu-card__group menu-card__provider-details">
           {provider.displayDetails?.map((detail, index) => {

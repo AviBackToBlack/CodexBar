@@ -153,6 +153,7 @@ async fn unsafe_and_invalid_counters_are_omitted() {
     for counters in [
         r#"{"prompt_tokens":0,"completion_tokens":0,"total_tokens":1e100,"api_requests":0}"#,
         r#"{"prompt_tokens":0,"completion_tokens":0,"total_tokens":9007199254740992,"api_requests":0}"#,
+        r#"{"prompt_tokens":0,"completion_tokens":0,"total_tokens":9007199254740992.0,"api_requests":0}"#,
         r#"{"prompt_tokens":-1,"completion_tokens":0,"total_tokens":0,"api_requests":0}"#,
         r#"{"prompt_tokens":1.5,"completion_tokens":0,"total_tokens":0,"api_requests":0}"#,
         r#"{"prompt_tokens":"1","completion_tokens":0,"total_tokens":0,"api_requests":0}"#,
@@ -233,6 +234,12 @@ async fn days_outside_the_window_are_omitted() {
         let body = page(date, "{}", 1, 1);
         assert!(run(vec![(1, 200, body)]).await.is_empty(), "{date}");
     }
+}
+
+#[tokio::test]
+async fn impossible_calendar_days_are_omitted() {
+    let body = page("2026-09-00", &format!(r#"{{"m":{COUNTERS}}}"#), 1, 1);
+    assert!(run(vec![(1, 200, body)]).await.is_empty());
 }
 
 #[tokio::test]

@@ -759,6 +759,21 @@ mod tests {
     }
 
     #[test]
+    fn display_details_batch_keeps_order_and_skips_duplicate_ids() {
+        let rows = ["a", "b", "a"]
+            .into_iter()
+            .filter_map(|id| ProviderDisplayDetail::new(id, id, "1"));
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(1.0)), "api")
+            .with_display_details(rows);
+        let ids: Vec<_> = result
+            .display_details()
+            .iter()
+            .map(|row| row.id())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
     fn display_detail_sections_are_validated() {
         let row = ProviderDisplayDetail::new("a", "Alpha", "1").unwrap();
         assert_eq!(row.section(), None);

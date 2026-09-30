@@ -88,11 +88,9 @@ impl Provider for LiteLLMProvider {
                 {
                     // Optional history must never fail the budget fetch.
                     let today = chrono::Utc::now().date_naive();
-                    for row in
-                        model_activity::fetch(&self.client, &endpoint, &key, &user_id, today).await
-                    {
-                        result = result.with_display_detail(Some(row));
-                    }
+                    result = result.with_display_details(
+                        model_activity::fetch(&self.client, &endpoint, &key, &user_id, today).await,
+                    );
                 }
                 Ok(result)
             }

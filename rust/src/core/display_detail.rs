@@ -141,6 +141,16 @@ impl ProviderFetchResult {
         self
     }
 
+    /// Attach several validated rows in order; see [`Self::with_display_detail`].
+    pub fn with_display_details(
+        self,
+        details: impl IntoIterator<Item = ProviderDisplayDetail>,
+    ) -> Self {
+        details.into_iter().fold(self, |result, detail| {
+            result.with_display_detail(Some(detail))
+        })
+    }
+
     pub fn display_details(&self) -> &[ProviderDisplayDetail] {
         &self.display_details
     }
