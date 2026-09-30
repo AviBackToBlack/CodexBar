@@ -66,11 +66,11 @@ pub enum ConfigCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum PreferencesAction {
-    /// Write portable preferences to a JSON file
+    /// Write portable preferences as JSON (to stdout unless --file is given)
     Export {
         /// Destination file
         #[arg(long)]
-        file: std::path::PathBuf,
+        file: Option<std::path::PathBuf>,
     },
     /// Apply a preferences file; restart a running CodexBar afterwards
     Import {
@@ -105,14 +105,19 @@ pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
 /// Export or import the portable preferences document.
 fn transfer_preferences(action: PreferencesAction) -> anyhow::Result<()> {
     match action {
-        PreferencesAction::Export { file: path } => {
+        PreferencesAction::Export { file } => {
             let document = PreferencesDocument::from_settings(&Settings::load())?;
-            document.write_file(&path)?;
-            println!(
-                "Config: exported {} preferences to {}",
-                document.len(),
-                path.display()
-            );
+            match file {
+                Some(path) => {
+                    document.write_file(&path)?;
+                    println!(
+                        "Config: exported {} preferences to {}",
+                        document.len(),
+                        path.display()
+                    );
+                }
+                None => print!("{}", document.to_json()),
+            }
         }
         PreferencesAction::Import { file: path } => {
             let document = PreferencesDocument::read_file(&path)?;
@@ -543,7 +548,15 @@ mod tests {
         assert!(matches!(
             export.command,
             ConfigCommand::Preferences {
-                action: PreferencesAction::Export { .. }
+                action: PreferencesAction::Export { file: Some(_) }
+            }
+        ));
+        let stdout = ConfigArgs::try_parse_from(["config", "preferences", "export"])
+            .expect("export without --file parses");
+        assert!(matches!(
+            stdout.command,
+            ConfigCommand::Preferences {
+                action: PreferencesAction::Export { file: None }
             }
         ));
         let import =

@@ -149,6 +149,54 @@ fn export_is_deterministic_and_sorted() {
 }
 
 #[test]
+fn export_skips_provider_preferences_unknown_to_this_build() {
+    let mut settings = customized_settings();
+    settings
+        .enabled_providers
+        .insert("future-provider".to_string());
+    settings.provider_metrics.insert(
+        "future-provider".to_string(),
+        crate::settings::MetricPreference::Weekly,
+    );
+    settings.provider_usage_thresholds.insert(
+        "future-provider:weekly".to_string(),
+        UsageThresholdOverride {
+            high: Some(65.0),
+            critical: None,
+        },
+    );
+
+    let exported = PreferencesDocument::from_settings(&settings)
+        .expect("stale provider IDs do not prevent export");
+    let json: Value = serde_json::from_str(&exported.to_json()).expect("valid JSON");
+    let preferences = json.get("preferences").expect("preferences object");
+
+    assert!(
+        !preferences["enabled_providers"]
+            .as_array()
+            .expect("provider list")
+            .iter()
+            .any(|id| id == "future-provider")
+    );
+    assert!(
+        preferences["provider_metrics"]
+            .get("future-provider")
+            .is_none()
+    );
+    assert!(
+        preferences["provider_usage_thresholds"]
+            .get("future-provider:weekly")
+            .is_none()
+    );
+    assert!(preferences["provider_metrics"].get("claude").is_some());
+    assert!(
+        preferences["provider_usage_thresholds"]
+            .get("codex:weekly")
+            .is_some()
+    );
+}
+
+#[test]
 fn rejection_matrix_names_the_offending_key() {
     let cases = [
         (

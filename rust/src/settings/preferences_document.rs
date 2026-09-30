@@ -164,10 +164,9 @@ fn refresh_interval_secs(value: &Value) -> bool {
 }
 
 fn percent(value: &Value) -> bool {
-    value.is_number()
-        && value
-            .as_f64()
-            .is_some_and(|number| number.is_finite() && (0.0..=100.0).contains(&number))
+    value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && (0.0..=100.0).contains(&number))
 }
 
 fn known_provider_ids() -> HashSet<&'static str> {
@@ -279,6 +278,22 @@ impl PreferencesDocument {
             if let Some(value) = all.remove(*key) {
                 preferences.insert((*key).to_string(), value);
             }
+        }
+        // Settings can retain provider IDs written by a newer or older build.
+        // They are not portable to this build, so omit those entries instead
+        // of making an otherwise valid export fail strict document validation.
+        let known = known_provider_ids();
+        if let Some(Value::Array(ids)) = preferences.get_mut("enabled_providers") {
+            ids.retain(|id| id.as_str().is_some_and(|id| known.contains(id)));
+        }
+        if let Some(Value::Object(metrics)) = preferences.get_mut("provider_metrics") {
+            metrics.retain(|provider, _| known.contains(provider.as_str()));
+        }
+        if let Some(Value::Object(thresholds)) = preferences.get_mut("provider_usage_thresholds") {
+            thresholds.retain(|key, _| {
+                let provider = key.split_once(':').map_or(key.as_str(), |(id, _)| id);
+                known.contains(provider)
+            });
         }
         if let Some(Value::Array(ids)) = preferences.get_mut("enabled_providers") {
             // `enabled_providers` is a set; keep exports deterministic.

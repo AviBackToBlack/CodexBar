@@ -51,7 +51,7 @@ codexbar config path
 printf '%s' $env:OPENROUTER_API_KEY | codexbar config set-api-key -p openrouter --stdin
 
 # Portable preferences (also under Settings > Advanced)
-codexbar config preferences export --file prefs.json
+codexbar config preferences export --file prefs.json   # omit --file to print to stdout
 codexbar config preferences import --file prefs.json
 ```
 
