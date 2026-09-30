@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::core::{
     CodexPriorityOverlay, CodexSourceRowCache, CodexSourceUsageRow, CostUsageCache,
-    CostUsagePricing, RateWindow, priced_model,
+    CostUsagePricing, RateWindow, row_priced_model,
 };
 
 const NOMINAL_WEEK_MINUTES: i64 = 7 * 24 * 60;
@@ -370,7 +370,7 @@ fn slice_from_row(row: &CodexSourceUsageRow, overlay: Option<&CodexPriorityOverl
     let input = u64::try_from(row.input.max(0)).unwrap_or(0);
     let output = u64::try_from(row.output.max(0)).unwrap_or(0);
     let tokens = Some(input.saturating_add(output));
-    let cost_usd = priced_model(&row.pricing, row.turn_id.as_deref(), overlay).and_then(|model| {
+    let cost_usd = row_priced_model(row, overlay).and_then(|model| {
         let date = timestamp.map(|value| value.with_timezone(&Local).date_naive())?;
         let cached = u64::try_from(row.cached.max(0)).unwrap_or(0).min(input);
         if model.ends_with("-priority") {
@@ -414,14 +414,16 @@ fn legacy_day_slices(cache: &CostUsageCache) -> Vec<Slice> {
             let cached = u64::try_from(packed.get(1).copied().unwrap_or(0).max(0))
                 .unwrap_or(0)
                 .min(input);
-            let cost_usd = CostUsagePricing::codex_cost_usd_at_date(
+            let cost_usd = CostUsagePricing::codex_day_aggregate_cost_usd(
                 model,
                 input,
                 cached,
                 output,
-                NaiveDate::parse_from_str(day, "%Y-%m-%d")
-                    .ok()
-                    .unwrap_or_else(|| start.with_timezone(&Local).date_naive()),
+                Some(
+                    NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                        .ok()
+                        .unwrap_or_else(|| start.with_timezone(&Local).date_naive()),
+                ),
             );
             slices.push(Slice {
                 start,

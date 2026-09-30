@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use chrono::{Local, NaiveDate};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
@@ -67,11 +68,14 @@ impl PriorityTraceResolution {
 }
 
 /// Resolve Priority turns from `database_path`, continuing `previous` when it
-/// is still valid for this database.
+/// is still valid for this database. `expect_existing_database` is true when
+/// this same path supplied evidence on an earlier scan (upstream
+/// `expectExistingDatabase`).
 pub(super) fn resolve_priority_turns(
     database_path: &Path,
     previous: Option<CodexPriorityTurnsCursor>,
     coverage_since_epoch: i64,
+    expect_existing_database: bool,
     cancel: Option<&AtomicBool>,
 ) -> PriorityTraceResolution {
     let path_key = database_path.to_string_lossy().to_string();
@@ -79,9 +83,10 @@ pub(super) fn resolve_priority_turns(
     let previous = previous.filter(|cursor| cursor.database_path == path_key);
 
     let Ok(metadata) = std::fs::metadata(database_path) else {
-        // A missing optional source is normal, but should be retried on the
-        // next cost scan even when no trace evidence has been cached yet.
-        return PriorityTraceResolution::keep(previous, true);
+        // A missing optional source is normal until this same path has
+        // supplied evidence; after that its absence is a validation failure
+        // that keeps the previous evidence and retries on the next scan.
+        return PriorityTraceResolution::keep(previous, expect_existing_database);
     };
     let Some(identity) = JsonlScanner::codex_file_identity(database_path, &metadata) else {
         return PriorityTraceResolution::keep(previous, true);
@@ -249,9 +254,25 @@ fn column_timestamp(row: &rusqlite::Row<'_>, index: usize) -> Option<i64> {
             reason = "whole-second trace timestamp"
         )]
         ValueRef::Real(value) => Some(value as i64),
-        ValueRef::Text(bytes) => std::str::from_utf8(bytes).ok()?.trim().parse().ok(),
+        ValueRef::Text(bytes) => text_timestamp(std::str::from_utf8(bytes).ok()?),
         _ => None,
     }
+}
+
+/// A text `ts` value in Unix seconds. Upstream keys a non-integer text
+/// timestamp by its leading `YYYY-MM-DD`, so such a row counts from the local
+/// midnight of that day; coverage expiry then treats it like upstream's
+/// day-key window check instead of retaining it forever.
+fn text_timestamp(text: &str) -> Option<i64> {
+    let text = text.trim();
+    if let Ok(seconds) = text.parse::<i64>() {
+        return Some(seconds);
+    }
+    let day = NaiveDate::parse_from_str(text.get(..10)?, "%Y-%m-%d").ok()?;
+    day.and_hms_opt(0, 0, 0)?
+        .and_local_timezone(Local)
+        .earliest()
+        .map(|midnight| midnight.timestamp())
 }
 
 enum Accumulation {
@@ -595,7 +616,7 @@ fn prune_deleted_sources(conn: &Connection, state: &mut CodexPriorityTurnsCursor
 
 fn prune_completed(
     retained: &HashSet<i64>,
-    models: &mut HashMap<String, BTreeMap<i64, String>>,
+    models: &mut BTreeMap<String, BTreeMap<i64, String>>,
 ) -> bool {
     let mut pruned = false;
     models.retain(|_, by_row| {

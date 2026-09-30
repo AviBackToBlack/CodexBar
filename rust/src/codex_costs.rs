@@ -361,27 +361,17 @@ fn add_codex_tokens_to_summary(
         return Some(0.0);
     }
 
-    let priced = pricing_day
-        .and_then(|day| {
-            CostUsagePricing::codex_cost_usd_at_date(
-                &model_key,
-                tokens.input,
-                tokens.cached,
-                tokens.output,
-                day,
-            )
-        })
-        .or_else(|| {
-            CostUsagePricing::codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output)
-        });
-    let uses_fallback_pricing = priced.is_none();
-    let cost = codex_cost_usd_for_day(
+    let priced = CostUsagePricing::codex_day_aggregate_cost_usd(
         &model_key,
         tokens.input,
         tokens.cached,
         tokens.output,
         pricing_day,
     );
+    let uses_fallback_pricing = priced.is_none();
+    let cost = priced.unwrap_or_else(|| {
+        codex_cost_usd_fallback(&model_key, tokens.input, tokens.cached, tokens.output)
+    });
     if uses_fallback_pricing {
         summary.unknown_models.insert(model_key.clone());
         match &mut summary.model_pricing_completeness {
@@ -484,26 +474,8 @@ fn codex_cost_usd_for_day(
     if CostUsagePricing::is_codex_unattributed_model(model) {
         return 0.0;
     }
-    let priced = pricing_day
-        .and_then(|day| CostUsagePricing::codex_cost_usd_at_date(model, input, cached, output, day))
-        .or_else(|| CostUsagePricing::codex_cost_usd(model, input, cached, output));
-    if let Some(cost) = priced {
-        return cost;
-    }
-
-    let normalized = CostUsagePricing::normalize_codex_model(model);
-    if normalized.contains("fast") || normalized.contains("priority") {
-        let fast = pricing_day
-            .and_then(|day| {
-                CostUsagePricing::codex_fast_cost_usd_at_date(model, input, cached, output, day)
-            })
-            .or_else(|| CostUsagePricing::codex_fast_cost_usd(model, input, cached, output));
-        if let Some(cost) = fast {
-            return cost;
-        }
-    }
-
-    codex_cost_usd_fallback(model, input, cached, output)
+    CostUsagePricing::codex_day_aggregate_cost_usd(model, input, cached, output, pricing_day)
+        .unwrap_or_else(|| codex_cost_usd_fallback(model, input, cached, output))
 }
 
 fn codex_cost_usd_fallback(model: &str, input: u64, cached: u64, output: u64) -> f64 {

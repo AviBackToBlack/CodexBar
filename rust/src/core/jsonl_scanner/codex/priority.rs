@@ -11,7 +11,7 @@
 //! baked into the persisted source-row pricing evidence, so cached-price
 //! recovery keeps comparing like with like.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +43,9 @@ pub struct CodexPriorityCursorAnchor {
 }
 
 /// Durable scan cursor for one trace database.
+///
+/// Every map is ordered so the serialized cursor is byte-stable across
+/// processes; an unchanged cursor must not look like a cache change.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexPriorityTurnsCursor {
     pub database_path: String,
@@ -56,13 +59,13 @@ pub struct CodexPriorityTurnsCursor {
     pub anchors: Vec<CodexPriorityCursorAnchor>,
     /// Source trace rows behind each Priority turn, keyed by rowid.
     #[serde(default)]
-    pub request_sources: HashMap<String, BTreeMap<i64, CodexPriorityTurnMetadata>>,
+    pub request_sources: BTreeMap<String, BTreeMap<i64, CodexPriorityTurnMetadata>>,
     /// `response.completed` models for known Priority turns, keyed by rowid.
     #[serde(default)]
-    pub priority_completed_models: HashMap<String, BTreeMap<i64, String>>,
+    pub priority_completed_models: BTreeMap<String, BTreeMap<i64, String>>,
     /// Completions seen before their request (bounded, oldest evicted first).
     #[serde(default)]
-    pub completed_models: HashMap<String, BTreeMap<i64, String>>,
+    pub completed_models: BTreeMap<String, BTreeMap<i64, String>>,
     #[serde(default)]
     pub completed_order: VecDeque<String>,
 }

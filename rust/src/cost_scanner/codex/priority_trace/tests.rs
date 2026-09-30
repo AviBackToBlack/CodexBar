@@ -49,15 +49,19 @@ impl TraceDb {
         db
     }
 
+    /// Insert rows in one transaction, like upstream `insertTestLogs`.
     fn insert(&self, rows: &[(i64, String)]) {
-        let conn = Connection::open(&self.path).unwrap();
+        let mut conn = Connection::open(&self.path).unwrap();
+        let transaction = conn.transaction().unwrap();
         for (ts, body) in rows {
-            conn.execute(
-                "insert into logs (ts, feedback_log_body) values (?1, ?2)",
-                params![ts, body],
-            )
-            .unwrap();
+            transaction
+                .execute(
+                    "insert into logs (ts, feedback_log_body) values (?1, ?2)",
+                    params![ts, body],
+                )
+                .unwrap();
         }
+        transaction.commit().unwrap();
     }
 
     fn execute(&self, sql: &str) {
@@ -69,7 +73,7 @@ impl TraceDb {
 }
 
 fn resolve(db: &TraceDb, previous: Option<CodexPriorityTurnsCursor>) -> PriorityTraceResolution {
-    resolve_priority_turns(&db.path, previous, 0, None)
+    resolve_priority_turns(&db.path, previous, 0, false, None)
 }
 
 fn noise(count: usize) -> Vec<(i64, String)> {
@@ -210,7 +214,7 @@ fn deleted_source_rows_drop_their_turns() {
 fn cancelled_cold_scan_reports_pending_without_evidence() {
     let db = TraceDb::new(&[(2_000, request_body("turn-1", "priority", "gpt-5.5"))]);
     let cancel = AtomicBool::new(true);
-    let resolution = resolve_priority_turns(&db.path, None, 0, Some(&cancel));
+    let resolution = resolve_priority_turns(&db.path, None, 0, false, Some(&cancel));
     assert!(resolution.validation_pending);
     assert!(
         resolution
@@ -220,20 +224,23 @@ fn cancelled_cold_scan_reports_pending_without_evidence() {
 }
 
 #[test]
-fn missing_database_keeps_prior_evidence_without_error() {
+fn missing_database_is_pending_only_after_it_supplied_evidence() {
     let db = TraceDb::new(&[(2_000, request_body("turn-1", "priority", "gpt-5.5"))]);
     let cursor = resolve(&db, None).cursor.unwrap();
 
+    // A path that never held a database is a normal optional source.
     let missing = db.path.with_file_name("absent.sqlite");
-    let none = resolve_priority_turns(&missing, None, 0, None);
-    assert!(none.cursor.is_none());
-    assert!(none.validation_pending);
+    let never = resolve_priority_turns(&missing, None, 0, false, None);
+    assert!(never.cursor.is_none());
+    assert!(!never.validation_pending);
 
+    // Once the path supplied evidence, its absence keeps that evidence and
+    // retries (upstream `expectExistingDatabase`).
     let mut previous = cursor;
     previous.database_path = missing.to_string_lossy().to_string();
-    let kept = resolve_priority_turns(&missing, Some(previous), 0, None);
+    let kept = resolve_priority_turns(&missing, Some(previous.clone()), 0, true, None);
     assert!(kept.validation_pending);
-    assert_eq!(kept.cursor.unwrap().request_sources.len(), 1);
+    assert_eq!(kept.cursor, Some(previous));
 }
 
 #[test]
@@ -241,7 +248,7 @@ fn unreadable_database_is_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(CODEX_TRACE_DATABASE_FILE);
     std::fs::write(&path, b"not a sqlite database").unwrap();
-    let resolution = resolve_priority_turns(&path, None, 0, None);
+    let resolution = resolve_priority_turns(&path, None, 0, false, None);
     assert!(resolution.cursor.is_none());
     assert!(resolution.validation_pending);
 }
@@ -272,7 +279,7 @@ fn coverage_window_skips_older_history() {
         (100, request_body("ancient", "priority", "gpt-5.5")),
         (5_000, request_body("recent", "priority", "gpt-5.5")),
     ]);
-    let cursor = resolve_priority_turns(&db.path, None, 1_000, None)
+    let cursor = resolve_priority_turns(&db.path, None, 1_000, false, None)
         .cursor
         .unwrap();
     assert!(cursor.turn("ancient").is_none());
@@ -289,7 +296,7 @@ fn advancing_coverage_prunes_expired_turns_without_restarting_the_cursor() {
     let last_row_id = first.last_row_id;
     assert!(first.turn("expired").is_some());
 
-    let updated = resolve_priority_turns(&db.path, Some(first), 1_500, None)
+    let updated = resolve_priority_turns(&db.path, Some(first), 1_500, false, None)
         .cursor
         .unwrap();
 

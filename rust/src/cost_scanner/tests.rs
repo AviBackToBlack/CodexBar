@@ -1561,6 +1561,10 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
         .get_mut(&path_key)
         .expect("source rows persisted");
     assert_eq!(source_rows.rows.len(), 1);
+    // Cached evidence that disagrees with the source: a Priority row on a
+    // model with a Fast lane, so the recovered row keeps a `-priority` key
+    // (a Priority row without a Fast lane would price at its Standard base).
+    source_rows.rows[0].pricing.pricing_model = Some("gpt-5.5".to_string());
     source_rows.rows[0].pricing.pricing_mode = Some("priority".to_string());
     first_cache.last_scan_unix_ms = 1;
     JsonlScanner::save_cache(ProviderId::Codex, &mut first_cache, Some(&cache_root));
@@ -1581,7 +1585,7 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
     let (_, _, second_cache) = scanner.scan_codex_detailed_with_cache(None);
     let usage = second_cache.files.get(&path_key).expect("file cache");
     let day = Local::now().format("%Y-%m-%d").to_string();
-    assert_eq!(usage.days[&day]["gpt-5-priority"], vec![100, 0, 5]);
+    assert_eq!(usage.days[&day]["gpt-5.5-priority"], vec![100, 0, 5]);
     assert_eq!(
         usage.days[&day][CostUsagePricing::CODEX_UNATTRIBUTED_MODEL],
         vec![100, 0, 5]

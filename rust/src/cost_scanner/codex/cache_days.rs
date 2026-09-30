@@ -1,6 +1,7 @@
 use super::*;
 use crate::core::{
-    CodexPriorityOverlay, CodexSourceUsageRow, CodexUsageRecord, CostUsagePricing, priced_model,
+    CodexPriorityOverlay, CodexSourceUsageRow, CodexUsageRecord, CostUsagePricing,
+    row_priced_model,
 };
 use std::collections::BTreeMap;
 
@@ -8,12 +9,24 @@ type DayModels = HashMap<String, HashMap<String, Vec<i64>>>;
 
 pub(super) fn rebuild_cache_days(cache: &mut CostUsageCache) {
     cache.days.clear();
+    let files = &cache.files;
+    cache.codex_fork_rows.retain(|path, _| {
+        files.get(path).is_some_and(|usage| {
+            (usage.codex_forked_from_id.is_some() || usage.codex_lineage.uses_parent_baseline())
+                && !usage.codex_unresolved_fork_parent
+        })
+    });
     let cursor = cache.codex_priority_turns_cursor.as_ref();
     for (path, usage) in &cache.files {
+        let rows = cache
+            .codex_source_rows
+            .get(path)
+            .map(|source| source.rows.as_slice())
+            .or_else(|| cache.codex_fork_rows.get(path).map(Vec::as_slice));
         let overlaid = cursor
             .and_then(|cursor| cursor.overlay_for_file(Path::new(path)))
-            .zip(cache.codex_source_rows.get(path))
-            .and_then(|(overlay, source)| priority_days(&source.rows, &usage.days, &overlay));
+            .zip(rows)
+            .and_then(|(overlay, rows)| priority_days(rows, &usage.days, &overlay));
         let file_days = overlaid.as_ref().unwrap_or(&usage.days);
         for (day, models) in file_days {
             let day_entry = cache.days.entry(day.clone()).or_default();
@@ -109,7 +122,7 @@ fn days_from_codex_source_rows_with_priority(
 ) -> DayModels {
     let mut days: DayModels = HashMap::new();
     for row in rows {
-        let model = priced_model(&row.pricing, row.turn_id.as_deref(), overlay)
+        let model = row_priced_model(row, overlay)
             .unwrap_or_else(|| CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string());
         let record = CodexUsageRecord {
             day_key: row.day_key.clone(),

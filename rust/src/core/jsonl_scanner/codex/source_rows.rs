@@ -74,6 +74,24 @@ pub(crate) fn priced_model(
     )
 }
 
+/// The model one source row prices under: [`priced_model`], except that a
+/// Priority row the Fast lane cannot serve (too long for its model, or a
+/// model without a Fast lane) prices at its Standard base model. Upstream
+/// charges such a row the base cost because no Priority rate applies.
+pub(crate) fn row_priced_model(
+    row: &CodexSourceUsageRow,
+    overlay: Option<&CodexPriorityOverlay<'_>>,
+) -> Option<String> {
+    let model = priced_model(&row.pricing, row.turn_id.as_deref(), overlay)?;
+    let input = u64::try_from(row.input.max(0)).unwrap_or(0);
+    if pricing_mode_of_model(&model) == "priority"
+        && !CostUsagePricing::codex_fast_lane_covers(&model, input)
+    {
+        return Some(model_of_pricing_mode(&model));
+    }
+    Some(model)
+}
+
 /// Re-read the bounded reporting partition to obtain request-row order.
 /// The normal scanner still owns aggregate parsing and its byte budget;
 /// this path is used only after a complete file pass has established that
