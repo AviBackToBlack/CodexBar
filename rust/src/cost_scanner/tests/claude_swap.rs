@@ -67,7 +67,10 @@ fn two_swap_homes_contribute_once_across_copied_and_shared_history() {
             ("4-missing", home.path().join("gone")),
         ] {
             std::fs::create_dir_all(sessions.join(slot)).unwrap();
-            let _ = std::os::windows::fs::symlink_dir(target, sessions.join(slot).join("projects"));
+            drop(std::os::windows::fs::symlink_dir(
+                target,
+                sessions.join(slot).join("projects"),
+            ));
         }
     }
 
