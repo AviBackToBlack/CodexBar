@@ -338,39 +338,46 @@ impl CodexApi {
     fn load_credentials_once(&self) -> Result<CodexCredentials, ProviderError> {
         let auth_path = self.get_auth_path();
 
-        if !auth_path.exists() {
-            // Upstream 0.50.0 #2679: when the CLI targets Amazon Bedrock or
-            // another custom backend without ChatGPT auth, sign-in guidance
-            // is wrong — rate limits simply are not available there.
-            if self.uses_custom_backend() {
-                return Err(ProviderError::NotInstalled(
-                    "Codex uses a custom backend (chatgpt_base_url / model_provider) without \
-                     ChatGPT auth. ChatGPT rate limits are unavailable for this setup."
-                        .to_string(),
-                ));
-            }
-            return Err(ProviderError::NotInstalled(
-                "Codex auth.json not found. Run `codex login` in a terminal to sign in."
-                    .to_string(),
-            ));
-        }
-
-        let modified = std::fs::metadata(&auth_path)
-            .ok()
-            .and_then(|metadata| metadata.modified().ok());
+        let metadata =
+            std::fs::metadata(&auth_path).map_err(|error| self.credential_file_error(error))?;
+        let modified = metadata.modified().ok();
         if let Some(cached) = Self::cached_credentials(&auth_path, modified) {
             Self::enforce_external_oauth_gate(&cached)?;
             return Ok(cached);
         }
 
-        let content = std::fs::read_to_string(&auth_path).map_err(|e| {
-            ProviderError::Other(format!("Failed to read Codex credentials: {}", e))
-        })?;
+        let content = std::fs::read_to_string(&auth_path)
+            .map_err(|error| self.credential_file_error(error))?;
 
         let credentials = Self::parse_credentials_json(&content)?;
         Self::enforce_external_oauth_gate(&credentials)?;
         Self::store_cached_credentials(auth_path, modified, credentials.clone());
         Ok(credentials)
+    }
+
+    fn missing_credentials_error(&self) -> ProviderError {
+        // Upstream 0.50.0 #2679: when the CLI targets Amazon Bedrock or
+        // another custom backend without ChatGPT auth, sign-in guidance
+        // is wrong — rate limits simply are not available there.
+        if self.uses_custom_backend() {
+            return ProviderError::NotInstalled(
+                "Codex uses a custom backend (chatgpt_base_url / model_provider) without \
+                 ChatGPT auth. ChatGPT rate limits are unavailable for this setup."
+                    .to_string(),
+            );
+        }
+
+        ProviderError::NotInstalled(
+            "Codex auth.json not found. Run `codex login` in a terminal to sign in.".to_string(),
+        )
+    }
+
+    fn credential_file_error(&self, error: std::io::Error) -> ProviderError {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return self.missing_credentials_error();
+        }
+
+        ProviderError::Other(format!("Failed to read Codex credentials: {error}"))
     }
 
     fn parse_credentials_json(content: &str) -> Result<CodexCredentials, ProviderError> {
