@@ -131,14 +131,14 @@ impl Credits {
 
     fn summary(&self) -> String {
         match (self.remaining, self.total) {
-            (Some(remaining), Some(total)) => {
+            (Some(remaining), Some(total)) if total > 0.0 => {
                 format!(
                     "{} / {} credits left",
                     format_amount(remaining),
                     format_amount(total)
                 )
             }
-            (Some(remaining), None) => format!("{} credits left", format_amount(remaining)),
+            (Some(remaining), _) => format!("{} credits left", format_amount(remaining)),
             (None, Some(total)) => format!("{} credits total", format_amount(total)),
             (None, None) => String::new(),
         }
@@ -154,8 +154,9 @@ impl Credits {
                     (used / total * 100.0).clamp(0.0, 100.0),
                     None,
                     self.renewal,
-                    Some(description),
+                    Some(description.clone()),
                 )
+                .with_detail_description(description)
             }
             None => RateWindow::informational(description),
         };

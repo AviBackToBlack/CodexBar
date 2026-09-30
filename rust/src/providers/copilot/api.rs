@@ -495,6 +495,7 @@ impl UsableQuota {
             window_minutes: None,
             resets_at: reset,
             reset_description,
+            detail_description: None,
             is_informational: false,
             usage_known: true,
         }

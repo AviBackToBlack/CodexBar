@@ -70,6 +70,7 @@ fn monthly_credits_become_one_meter_with_the_remaining_balance() {
         primary.reset_description.as_deref(),
         Some("125 / 500 credits left")
     );
+    assert_eq!(primary.detail_description(), Some("125 / 500 credits left"));
     assert_eq!(result.usage.login_method.as_deref(), Some("Pro"));
     assert!(result.usage.subscription.is_none());
     assert!(result.display_details().is_empty());
@@ -138,12 +139,37 @@ fn zero_allowance_keeps_rows_and_renewal_without_a_meter() {
     );
     assert!(result.usage.primary.is_informational);
     assert_eq!(result.usage.primary.resets_at, None);
+    assert_eq!(
+        result.usage.primary.reset_description.as_deref(),
+        Some("0 credits left")
+    );
+    assert_eq!(result.usage.primary.detail_description(), None);
     assert_eq!(detail_pairs(&result), vec![("Left", "0"), ("Total", "0")]);
     assert_eq!(
         result.usage.subscription.as_ref().and_then(|s| s.renews_at),
         Some(chrono::Utc.with_ymd_and_hms(2026, 10, 18, 0, 0, 0).unwrap())
     );
     assert_eq!(result.usage.login_method.as_deref(), Some("Max"));
+}
+
+#[test]
+fn a_zero_or_missing_total_does_not_appear_in_the_balance_summary() {
+    let zero_total = result(r#"{"remaining_balance_credits":"12.5","total_balance_credits":"0"}"#);
+    assert_eq!(
+        zero_total.usage.primary.reset_description.as_deref(),
+        Some("12.5 credits left")
+    );
+    assert_eq!(
+        detail_pairs(&zero_total),
+        vec![("Left", "12.5"), ("Total", "0")]
+    );
+
+    let missing_total = result(r#"{"remaining_balance_credits":"12.5"}"#);
+    assert_eq!(
+        missing_total.usage.primary.reset_description.as_deref(),
+        Some("12.5 credits left")
+    );
+    assert_eq!(detail_pairs(&missing_total), vec![("Left", "12.5")]);
 }
 
 #[test]

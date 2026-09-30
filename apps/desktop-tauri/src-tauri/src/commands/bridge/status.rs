@@ -31,6 +31,11 @@ fn compact_reset_description(
             .map(|dt| dt.with_timezone(&chrono::Utc))?;
         return Some(format_compact_reset_countdown(dt, lang));
     }
+    // A window with its own detail line (e.g. a credit balance) carries that
+    // text in `reset_description` too; it is not a reset phrase.
+    if window.detail_description.is_some() {
+        return None;
+    }
 
     window
         .reset_description

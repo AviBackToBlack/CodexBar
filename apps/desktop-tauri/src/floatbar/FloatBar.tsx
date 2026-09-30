@@ -221,10 +221,12 @@ function ProviderPill({
   const label = state.isProblem ? stateLabel : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
-    rateWindow.resetDescription,
+    rateWindow.detailDescription ? null : rateWindow.resetDescription,
     resetRelative,
   );
+  const detailDescription = rateWindow.detailDescription?.trim() || null;
   const resetSuffix = resetText ? `\n${resetText}` : "";
+  const detailSuffix = detailDescription ? `\n${detailDescription}` : "";
   const inlineReset = resetText
     ? inlineResetTime(resetText, rateWindow.resetsAt, resetRelative)
     : null;
@@ -237,7 +239,7 @@ function ProviderPill({
       title={
         state.isProblem
           ? `${provider.displayName}: ${stateLabel}`
-          : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
+          : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}${detailSuffix}`
       }
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}

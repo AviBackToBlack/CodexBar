@@ -550,6 +550,7 @@ export interface RateWindowSnapshot {
   windowMinutes: number | null;
   resetsAt: string | null;
   resetDescription: string | null;
+  detailDescription?: string | null;
   isExhausted: boolean;
   isInformational?: boolean;
   reservePercent: number | null;

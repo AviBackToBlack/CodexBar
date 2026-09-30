@@ -173,6 +173,7 @@ mod tests {
             window_minutes: None,
             resets_at: None,
             reset_description: None,
+            detail_description: None,
             is_exhausted: false,
             is_informational: false,
             reserve_percent: None,

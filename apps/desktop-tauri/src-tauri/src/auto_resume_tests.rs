@@ -36,6 +36,7 @@ mod tests {
             window_minutes: Some(300),
             resets_at: Some(Utc::now().to_rfc3339()),
             reset_description: None,
+            detail_description: None,
             is_exhausted: exhausted,
             is_informational: informational,
             reserve_percent: None,

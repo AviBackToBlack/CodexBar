@@ -123,7 +123,7 @@ function UsageBar({
   const isInformational = rate.isInformational === true;
   const formattedReset = useFormattedResetTime(
     rate.resetsAt,
-    rate.resetDescription,
+    rate.detailDescription ? null : rate.resetDescription,
     resetTimeRelative,
   );
   const resetHint = formattedReset
@@ -131,6 +131,7 @@ function UsageBar({
       ? formattedReset
       : `${t("MetricResetsIn")} ${formattedReset}`
     : null;
+  const detailDescription = rate.detailDescription?.trim() || null;
 
   return (
     <div className="provider-usage-bar">
@@ -160,6 +161,9 @@ function UsageBar({
       )}
       {!isInformational && resetHint && (
         <span className="provider-usage-bar__reset">{resetHint}</span>
+      )}
+      {!isInformational && detailDescription && (
+        <span className="provider-usage-bar__reset">{detailDescription}</span>
       )}
     </div>
   );

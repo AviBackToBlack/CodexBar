@@ -19,6 +19,8 @@ pub struct RateWindowSnapshot {
     pub resets_at: Option<String>,
     #[serde(default)]
     pub reset_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_description: Option<String>,
     #[serde(default)]
     pub is_exhausted: bool,
     #[serde(default)]
@@ -47,6 +49,7 @@ impl RateWindowSnapshot {
             window_minutes: rw.window_minutes,
             resets_at: rw.resets_at.map(|dt| dt.to_rfc3339()),
             reset_description: rw.reset_description.clone(),
+            detail_description: rw.detail_description().map(str::to_owned),
             is_exhausted: rw.is_exhausted(),
             is_informational: rw.is_informational,
             reserve_percent: None,
@@ -512,6 +515,7 @@ impl ProviderUsageSnapshot {
                 window_minutes: None,
                 resets_at: None,
                 reset_description: None,
+                detail_description: None,
                 is_exhausted: false,
                 is_informational: false,
                 reserve_percent: None,
@@ -974,6 +978,7 @@ mod tests {
             window_minutes,
             resets_at: resets_at.map(|dt| dt.to_rfc3339()),
             reset_description,
+            detail_description: None,
             is_exhausted: false,
             is_informational: false,
             reserve_percent: None,
@@ -1007,6 +1012,25 @@ mod tests {
             compact_tray_status_label(&window, Language::English),
             "8% • Resets in 2h 05m"
         );
+    }
+
+    #[test]
+    fn detail_description_crosses_the_bridge_and_is_not_a_reset_phrase() {
+        let rw = RateWindow::with_details(25.0, None, None, Some("750 / 1000 credits left".into()))
+            .with_detail_description("750 / 1000 credits left");
+        let window = RateWindowSnapshot::from_rate_window(&rw);
+
+        assert_eq!(
+            window.detail_description.as_deref(),
+            Some("750 / 1000 credits left")
+        );
+        let json = serde_json::to_value(&window).unwrap();
+        assert_eq!(json["detailDescription"], "750 / 1000 credits left");
+        assert_eq!(compact_tray_status_label(&window, Language::English), "25%");
+
+        let plain = RateWindowSnapshot::from_rate_window(&RateWindow::new(10.0));
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("detailDescription").is_none());
     }
 
     #[test]

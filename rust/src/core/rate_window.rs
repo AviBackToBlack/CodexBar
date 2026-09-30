@@ -88,6 +88,10 @@ pub struct RateWindow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset_description: Option<String>,
 
+    /// Additional display text that should appear separately from reset time.
+    #[serde(skip)]
+    pub(crate) detail_description: Option<String>,
+
     /// Whether this row is an informational value rather than a quota.
     #[serde(default)]
     pub is_informational: bool,
@@ -111,6 +115,7 @@ impl RateWindow {
             window_minutes: None,
             resets_at: None,
             reset_description: None,
+            detail_description: None,
             is_informational: false,
             usage_known: true,
         }
@@ -151,9 +156,22 @@ impl RateWindow {
             window_minutes,
             resets_at,
             reset_description,
+            detail_description: None,
             is_informational: false,
             usage_known: true,
         }
+    }
+
+    /// Optional detail line that is independent from the reset schedule.
+    pub fn detail_description(&self) -> Option<&str> {
+        self.detail_description.as_deref()
+    }
+
+    /// Attach a detail line (for example a credit balance) that surfaces show
+    /// under the meter, separately from the reset time.
+    pub fn with_detail_description(mut self, detail: impl Into<String>) -> Self {
+        self.detail_description = Some(detail.into());
+        self
     }
 
     pub(crate) fn with_usage_known(mut self, usage_known: bool) -> Self {

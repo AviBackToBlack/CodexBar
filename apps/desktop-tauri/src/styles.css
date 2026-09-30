@@ -3779,7 +3779,8 @@ html:has(.menu-surface--tray) {
   max-width: 100%;
 }
 .menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset {
+.menu-surface--tray .menu-metric__reset,
+.menu-surface--tray .menu-metric__detail {
   font-size: 10px;
 }
 .menu-surface--tray .menu-metric__reserve {
@@ -4322,6 +4323,12 @@ html:has(.menu-surface--tray) {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.menu-metric__detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow-wrap: break-word;
 }
 
 .menu-metric__exhausted {
@@ -5051,7 +5058,8 @@ html:has(.menu-surface--tray) {
 }
 
 .menu-metric__pct,
-.menu-metric__reset {
+.menu-metric__reset,
+.menu-metric__detail {
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,

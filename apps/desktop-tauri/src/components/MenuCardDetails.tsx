@@ -339,10 +339,11 @@ function MetricRow({
   const level = levelOf(remain, snap.isExhausted);
   const resetText = useFormattedResetTime(
     snap.resetsAt,
-    isInformational ? null : snap.resetDescription,
+    isInformational || snap.detailDescription ? null : snap.resetDescription,
     resetTimeRelative,
     resetFormatMode ?? "reset",
   );
+  const detailDescription = snap.detailDescription?.trim() || null;
   const infoPrimary = snap.resetDescription?.trim() || resetText || "—";
   const resetTarget = snap.resetsAt ? Date.parse(snap.resetsAt) : Number.NaN;
   const replacesPercent =
@@ -380,6 +381,9 @@ function MetricRow({
           <span className="menu-metric__reset">{resetText}</span>
         )}
       </div>
+      {!compactOverview && !isInformational && detailDescription && (
+        <div className="menu-metric__detail">{detailDescription}</div>
+      )}
       {!compactOverview && !isInformational && snap.isExhausted && (
         <div className="menu-metric__exhausted">{exhaustedLabel}</div>
       )}

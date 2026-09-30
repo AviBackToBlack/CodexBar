@@ -1314,6 +1314,7 @@ mod reset_backfill_tests {
             window_minutes: Some(300),
             resets_at: resets_at.map(String::from),
             reset_description: None,
+            detail_description: None,
             is_exhausted: false,
             is_informational: false,
             reserve_percent: None,
