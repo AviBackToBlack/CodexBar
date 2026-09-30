@@ -54,31 +54,25 @@ pub(super) struct ManualCredential {
     pub(super) cookie_header: String,
 }
 
-/// Which pasted form selected the site; decides where the cookie comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RouteKind {
-    Curl,
-    HttpRequest,
-    PlainCookie,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Route {
-    Site(QoderSite, RouteKind),
+    Site {
+        site: QoderSite,
+        cookie_header: Option<String>,
+    },
     Invalid,
 }
 
 /// Resolve a manual header to its site and normalized cookie header, or `None`
 /// when the routing is invalid or no cookie can be extracted.
 pub(super) fn manual_credential(raw: &str) -> Option<ManualCredential> {
-    let Route::Site(site, kind) = manual_route(raw) else {
+    let Route::Site {
+        site,
+        cookie_header: Some(cookie_header),
+    } = manual_route(raw)
+    else {
         return None;
     };
-    let cookie_header = match kind {
-        RouteKind::Curl => super::normalize_cookie_header(&curl_cookie_value(raw)?),
-        RouteKind::HttpRequest => super::normalize_cookie_header(&http_cookie_value(raw)?),
-        RouteKind::PlainCookie => plain_cookie_header(raw),
-    }?;
     Some(ManualCredential {
         site,
         cookie_header,
@@ -88,7 +82,7 @@ pub(super) fn manual_credential(raw: &str) -> Option<ManualCredential> {
 #[cfg(test)]
 pub(super) fn site_for_manual_header(raw: &str) -> Option<QoderSite> {
     match manual_route(raw) {
-        Route::Site(site, _) => Some(site),
+        Route::Site { site, .. } => Some(site),
         Route::Invalid => None,
     }
 }
@@ -131,10 +125,10 @@ fn plain_cookie_route(raw: &str) -> Route {
         }
         routed = Some(site);
     }
-    Route::Site(
-        routed.unwrap_or(QoderSite::International),
-        RouteKind::PlainCookie,
-    )
+    Route::Site {
+        site: routed.unwrap_or(QoderSite::International),
+        cookie_header: plain_cookie_header(raw),
+    }
 }
 
 /// A `Domain=` attribute only routes the credential; it is not a cookie, so it
@@ -233,7 +227,11 @@ fn http_request_route(raw: &str) -> Option<Route> {
         (None, Some(host)) => host,
         (None, None) => return Some(Route::Invalid),
     };
-    Some(Route::Site(site, RouteKind::HttpRequest))
+    Some(Route::Site {
+        site,
+        cookie_header: http_cookie_value(raw)
+            .and_then(|cookie| super::normalize_cookie_header(&cookie)),
+    })
 }
 
 fn host_header_sites(raw: &str) -> Vec<Option<QoderSite>> {
@@ -266,7 +264,8 @@ fn curl_request_route(raw: &str) -> Option<Route> {
         return tokens
             .iter()
             .any(|token| is_curl_executable_token(token))
-            .then_some(Route::Invalid);
+            .then_some(Route::Invalid)
+            .or_else(|| contains_curl_executable_text(raw).then_some(Route::Invalid));
     };
     if !tokens.iter().all(|token| is_token_text_safe(token)) {
         return Some(Route::Invalid);
@@ -300,37 +299,38 @@ fn curl_request_route(raw: &str) -> Option<Route> {
         return Some(Route::Invalid);
     };
 
-    let Some(header_sites) = curl_header_values(&tokens, curl_index).and_then(|headers| {
-        headers
-            .iter()
-            .map(|header| inspect_curl_header_host(header))
-            .filter_map(|inspection| match inspection {
-                HostInspection::Ignored => None,
-                HostInspection::Site(site) => Some(Some(site)),
-                HostInspection::Invalid => Some(None),
-            })
-            .collect::<Option<Vec<_>>>()
-    }) else {
+    let Some(headers) = curl_header_values(&tokens, curl_index) else {
+        return Some(Route::Invalid);
+    };
+    let Some(header_sites) = headers
+        .iter()
+        .map(|header| inspect_curl_header_host(header))
+        .filter_map(|inspection| match inspection {
+            HostInspection::Ignored => None,
+            HostInspection::Site(site) => Some(Some(site)),
+            HostInspection::Invalid => Some(None),
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
         return Some(Route::Invalid);
     };
     if header_sites.iter().any(|site| *site != target_site) {
         return Some(Route::Invalid);
     }
-    Some(Route::Site(target_site, RouteKind::Curl))
+    Some(Route::Site {
+        site: target_site,
+        cookie_header: curl_cookie_value(&headers)
+            .and_then(|cookie| super::normalize_cookie_header(&cookie)),
+    })
 }
 
-fn curl_cookie_value(raw: &str) -> Option<String> {
-    let preprocessed = preprocessed_curl_shell_text(raw)?;
-    let tokens = shell_tokens(&preprocessed);
-    let curl_index = curl_command_index(&tokens)?;
-    curl_header_values(&tokens, curl_index)?
-        .into_iter()
-        .find_map(|header| {
-            let (name, value) = header.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case("cookie")
-                .then(|| value.trim().to_string())
-        })
+fn curl_cookie_value(headers: &[String]) -> Option<String> {
+    headers.iter().find_map(|header| {
+        let (name, value) = header.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("cookie")
+            .then(|| value.trim().to_string())
+    })
 }
 
 fn curl_command_index(tokens: &[String]) -> Option<usize> {
@@ -345,10 +345,10 @@ fn is_curl_executable_token(token: &str) -> bool {
         return false;
     }
     let executable = token
-        .split('/')
+        .split(['/', '\\'])
         .rfind(|segment| !segment.is_empty())
         .unwrap_or(token);
-    executable.eq_ignore_ascii_case("curl")
+    executable.eq_ignore_ascii_case("curl") || executable.eq_ignore_ascii_case("curl.exe")
 }
 
 fn contains_curl_executable_text(text: &str) -> bool {
@@ -361,7 +361,8 @@ fn contains_curl_executable_text(text: &str) -> bool {
     }
     PATTERN
         .get_or_init(|| {
-            Regex::new(r"(?i)(^|[\s;])(?:[^\s;=]+/)?curl($|[\s;])").expect("curl text regex")
+            Regex::new(r#"(?i)(^|[\s;'"`])(?:[^;=]*[/\\])?curl(?:\.exe)?($|[\s;'"`])"#)
+                .expect("curl text regex")
         })
         .is_match(text)
 }

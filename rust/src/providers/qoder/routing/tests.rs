@@ -420,6 +420,24 @@ fn manual_credential_binds_cookie_to_its_routed_site() {
 }
 
 #[test]
+fn windows_curl_executables_route_by_their_url() {
+    assert_eq!(
+        site("curl.exe https://qoder.com.cn -H 'Cookie: sid=abc'"),
+        Some(QoderSite::China)
+    );
+    // A backslash path is mangled by POSIX shell tokenization; it must fail
+    // closed instead of falling through to plain-cookie routing.
+    assert_eq!(
+        site("C:\\Windows\\System32\\curl.exe https://qoder.com.cn -H 'Cookie: sid=abc'"),
+        None
+    );
+    let credential =
+        manual_credential("curl.exe https://qoder.com.cn -H 'Cookie: sid=abc'").unwrap();
+    assert_eq!(credential.site, QoderSite::China);
+    assert_eq!(credential.cookie_header, "sid=abc");
+}
+
+#[test]
 fn manual_domain_attribute_routes_but_is_not_sent_as_a_cookie() {
     let credential = manual_credential("sid=abc; Domain=.qoder.com.cn").unwrap();
     assert_eq!(credential.site, QoderSite::China);
