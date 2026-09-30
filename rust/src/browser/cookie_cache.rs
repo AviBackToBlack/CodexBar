@@ -239,8 +239,11 @@ mod tests {
         for sibling in fs::read_dir(dir.path()).unwrap() {
             let sibling = sibling.unwrap().path();
             if sibling.is_file() {
-                let leftover = fs::read(&sibling).unwrap();
-                assert!(!String::from_utf8_lossy(&leftover).contains("leaked-cookie"));
+                assert_eq!(
+                    fs::metadata(&sibling).unwrap().len(),
+                    0,
+                    "failed store must truncate the staged cookie secret"
+                );
             }
         }
     }

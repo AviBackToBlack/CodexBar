@@ -1191,22 +1191,19 @@ fn legacy_visibility_setters_preserve_other_explicit_hidden_items() {
     );
 }
 
-/// Cookie-denial settings written through the desktop's `Settings::save` path
-/// (`secure_file::write_string` of the pretty JSON) must be read back as denied
-/// by `Settings::load` (`secure_file::read_string` + JSON parse), which is what
-/// every CLI code path uses.
+/// Cookie-denial settings must survive the same path-based persistence used by
+/// `Settings::save` and `Settings::load`, including the secure-file wrapper
+/// shared by desktop and CLI settings.
 #[test]
-fn cookie_denial_survives_the_secure_write_and_load_path() {
+fn cookie_denial_round_trips_through_settings_persistence() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     let mut settings = Settings::default();
     settings.set_cookie_source(ProviderId::Codex, "off");
     settings.set_openai_web_extras(ProviderId::Codex, false);
-    let json = serde_json::to_string_pretty(&settings).unwrap();
 
-    crate::secure_file::write_string(&path, &json).unwrap();
-    let content = crate::secure_file::read_string(&path).unwrap();
-    let loaded: Settings = serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap();
+    settings.save_to_path(&path).unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
 
     assert_eq!(loaded.cookie_source(ProviderId::Codex), "off");
     assert!(!loaded.openai_web_extras(ProviderId::Codex));

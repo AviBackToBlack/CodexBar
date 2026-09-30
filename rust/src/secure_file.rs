@@ -288,10 +288,10 @@ mod tests {
         for entry in std::fs::read_dir(dir.path()).unwrap() {
             let entry_path = entry.unwrap().path();
             if entry_path.is_file() {
-                let leftover = std::fs::read(&entry_path).unwrap();
-                assert!(
-                    !String::from_utf8_lossy(&leftover).contains("leaked-value"),
-                    "staged secret must not survive a failed publish"
+                assert_eq!(
+                    std::fs::metadata(&entry_path).unwrap().len(),
+                    0,
+                    "failed publish must truncate the staged secret"
                 );
             }
         }

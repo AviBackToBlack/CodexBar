@@ -181,7 +181,17 @@ fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
         options.mode(0o600);
     }
     let mut file = options.open(&staged)?;
-    let written = file.write_all(contents);
+    let written = (|| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // `OpenOptionsExt::mode` is filtered through umask. Restore the
+            // promised mode before writing, as `secure_file` does.
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(contents)?;
+        file.sync_all()
+    })();
     drop(file);
     let result = written.and_then(|()| std::fs::rename(&staged, &destination));
     if result.is_err() {
