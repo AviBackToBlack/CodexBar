@@ -63,9 +63,9 @@ pub struct CostArgs {
     #[arg(long = "summary-only")]
     pub summary_only: bool,
 
-    /// Antigravity only: when a recorded model has no known public price, run
-    /// one bounded models.dev pricing refresh and rescan. Routine reads never
-    /// download pricing.
+    /// Antigravity only: when a recorded model has no known public price, wait
+    /// for one bounded models.dev pricing refresh and rescan. Without it the
+    /// CLI starts no pricing download.
     #[arg(long)]
     pub refresh: bool,
 }

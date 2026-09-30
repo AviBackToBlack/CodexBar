@@ -60,7 +60,7 @@ pub fn models_dev_target(model: &str, normalized: String) -> Option<(&'static st
     Some((provider, normalized))
 }
 
-fn models_dev_targets(model: &str, normalized: String) -> Vec<(&'static str, String)> {
+pub(crate) fn models_dev_targets(model: &str, normalized: String) -> Vec<(&'static str, String)> {
     let Some(primary) = models_dev_target(model, normalized) else {
         return Vec::new();
     };

@@ -1,6 +1,7 @@
 use super::{local_sessions_reader as local_sessions, local_sqlite};
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
@@ -40,17 +41,6 @@ fn summarize_local_usage_from(
             jsonl_fallback()
         }
     }
-}
-
-pub(super) fn summarize_local_usage_from_explicit_roots(
-    database_roots: &[PathBuf],
-    jsonl_sessions_root: &Path,
-    now: DateTime<Utc>,
-    days: u32,
-) -> LocalTokenHistorySummary {
-    summarize_local_usage_from(database_roots, now, days, || {
-        local_sessions::summarize_jsonl_at(jsonl_sessions_root, now, days)
-    })
 }
 
 /// Last complete summary per scan scope (roots plus window). A later partial
@@ -96,25 +86,57 @@ pub fn summarize_local_usage(days: u32) -> LocalTokenHistorySummary {
     };
     let roots = configured_database_roots(&home);
     let tokscale_sessions = local_sessions::configured_tokscale_sessions(&home);
-    let fresh = summarize_local_usage_from_explicit_roots(&roots, &tokscale_sessions, now, days);
+    let fresh = summarize_local_usage_from(&roots, now, days, || {
+        local_sessions::summarize_jsonl_at(&tokscale_sessions, now, days)
+    });
     COMPLETE_HISTORY.resolve(&retention_scope(&roots, &tokscale_sessions, days), fresh)
 }
 
-/// CLI `cost --refresh`: when a recorded model has no known public price, run
-/// one bounded pricing refresh and rescan. Routine reads never download pricing.
+/// Pricing refresh for a routine read, which never waits on the network
+/// (upstream 0.64 app and `serve`). When the scanned history records a model
+/// with no known public price, returns one bounded models.dev refresh for the
+/// caller to spawn; the next read picks up the new prices. Empty or fully
+/// priced history returns None and never starts a download.
+pub fn background_pricing_refresh(
+    history: &LocalTokenHistorySummary,
+) -> Option<impl Future<Output = bool> + Send + use<>> {
+    super::cost::unpriced_model_pricing_refresh(&history.cost_estimate)
+}
+
+/// CLI `cost`: with `refresh`, a scan with unpriced models waits for one
+/// bounded models.dev refresh and rescans (upstream `--refresh`). Without it
+/// the CLI starts no download, because the process exits before a background
+/// refresh could finish.
 pub async fn summarize_local_usage_with_pricing_refresh(
     days: u32,
     refresh: bool,
 ) -> LocalTokenHistorySummary {
     let first = summarize_local_usage(days);
-    if !refresh || !super::cost::refresh_unpriced_model_pricing(&first.cost_estimate).await {
+    if !refresh {
         return first;
     }
-    let rescanned = summarize_local_usage(days);
-    // A pricing download must not replace a complete scan with one that became
-    // partial in the meantime.
-    if first.coverage == LocalHistoryCoverage::Complete
-        && rescanned.coverage != LocalHistoryCoverage::Complete
+    let pricing_refresh = super::cost::unpriced_model_pricing_refresh(&first.cost_estimate);
+    rescan_after_pricing_refresh(first, pricing_refresh, || summarize_local_usage(days)).await
+}
+
+async fn rescan_after_pricing_refresh(
+    first: LocalTokenHistorySummary,
+    pricing_refresh: Option<impl Future<Output = bool>>,
+    rescan: impl FnOnce() -> LocalTokenHistorySummary,
+) -> LocalTokenHistorySummary {
+    let Some(pricing_refresh) = pricing_refresh else {
+        return first;
+    };
+    // Offline or still unknown: keep the unpriced usage as scanned.
+    if !pricing_refresh.await {
+        return first;
+    }
+    let rescanned = rescan();
+    // A pricing download must not replace a scan with vanished history, or a
+    // complete scan with one that became partial in the meantime.
+    if rescanned.coverage == LocalHistoryCoverage::Unavailable
+        || (first.coverage == LocalHistoryCoverage::Complete
+            && rescanned.coverage != LocalHistoryCoverage::Complete)
     {
         return first;
     }
@@ -325,5 +347,65 @@ mod tests {
             retention.resolve("scope", LocalTokenHistorySummary::default()),
             LocalTokenHistorySummary::default()
         );
+    }
+
+    /// Upstream 0.64 `AntigravityPricingRefreshTests`: an explicit refresh
+    /// reprices through a rescan, offline pricing keeps the unpriced usage,
+    /// and a rescan cannot replace a complete first scan with a partial one.
+    #[tokio::test]
+    async fn explicit_refresh_rescans_only_when_pricing_became_available() {
+        use crate::spend_contract::LocalCostEstimate;
+        let unpriced = LocalTokenHistorySummary {
+            total_tokens: 396,
+            session_count: 1,
+            coverage: LocalHistoryCoverage::Complete,
+            ..Default::default()
+        };
+        let repriced = LocalTokenHistorySummary {
+            cost_estimate: LocalCostEstimate {
+                known_subtotal_usd: Some(0.5),
+                ..Default::default()
+            },
+            ..unpriced.clone()
+        };
+        let partial = LocalTokenHistorySummary {
+            total_tokens: 198,
+            session_count: 1,
+            coverage: LocalHistoryCoverage::Partial,
+            lower_bound: true,
+            ..Default::default()
+        };
+        let no_rescan = || -> LocalTokenHistorySummary { panic!("must not rescan") };
+
+        // Nothing unpriced: no refresh and no rescan.
+        let kept = rescan_after_pricing_refresh(
+            unpriced.clone(),
+            None::<std::future::Ready<bool>>,
+            no_rescan,
+        )
+        .await;
+        assert_eq!(kept, unpriced);
+        // Offline pricing keeps the unpriced usage without a rescan.
+        let offline =
+            rescan_after_pricing_refresh(unpriced.clone(), Some(async { false }), no_rescan).await;
+        assert_eq!(offline, unpriced);
+        // Pricing became available: the rescan's prices are published.
+        let refreshed =
+            rescan_after_pricing_refresh(unpriced.clone(), Some(async { true }), || {
+                repriced.clone()
+            })
+            .await;
+        assert_eq!(refreshed, repriced);
+        // A rescan that became partial or lost its source keeps the complete scan.
+        for rescanned in [partial.clone(), LocalTokenHistorySummary::default()] {
+            let kept =
+                rescan_after_pricing_refresh(unpriced.clone(), Some(async { true }), || rescanned)
+                    .await;
+            assert_eq!(kept, unpriced);
+        }
+        // A partial first scan takes a complete rescan.
+        let upgraded =
+            rescan_after_pricing_refresh(partial, Some(async { true }), || repriced.clone()).await;
+        assert_eq!(upgraded, repriced);
     }
 }

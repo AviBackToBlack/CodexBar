@@ -68,7 +68,13 @@ pub async fn cost_response(provider: Option<&str>) -> String {
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
         if provider_id == ProviderId::Antigravity {
-            let history = crate::providers::antigravity::local_sessions::summarize(30);
+            use crate::providers::antigravity::local_sessions;
+            let history = local_sessions::summarize(30);
+            // Upstream 0.64 `serve` refreshes unknown-model pricing in the
+            // background; a later `/cost` read picks up the new prices.
+            if let Some(refresh) = local_sessions::background_pricing_refresh(&history) {
+                tokio::spawn(refresh);
+            }
             results.push(crate::spend_contract::local_token_history_json(
                 "antigravity",
                 &history,

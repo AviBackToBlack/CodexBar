@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatUsageSpendReportingDay,
   formatSpendMetric,
+  formatUsd,
   filterUsageSpendSummaryForOverview,
   renderUsageSpendSharePng,
   usageSpendShareFooter,
@@ -16,11 +17,22 @@ describe("usage spend sharing", () => {
   });
 
   it("marks a lower-bound token count with a floor sign and leaves exact counts bare", () => {
-    const floor = formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125, true);
-    expect(floor).toContain("≥1,500 tokens");
+    const floor = formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125, undefined, true);
+    expect(floor).toContain(`≥${(1_500).toLocaleString()} tokens`);
     expect(floor).toMatch(/^≥.* known/);
-    const exact = formatSpendMetric(null, 1_500, "USD", "tokens", null, false);
-    expect(exact).toBe("1,500 tokens");
+    const exact = formatSpendMetric(null, 1_500, "USD", "tokens", null, undefined, false);
+    expect(exact).toBe(`${(1_500).toLocaleString()} tokens`);
+  });
+
+  it("keeps the localized subtotal label next to a lower-bound token count", () => {
+    const metric = formatSpendMetric(null, 500, "USD", "Token", 6, "{} (teilweise)", true);
+    expect(metric).toBe(`${formatUsd(6, "USD")} (teilweise) · ≥500 Token`);
+  });
+
+  it("uses the caller's localized subtotal label", () => {
+    const metric = formatSpendMetric(null, 500, "USD", "Token", 6, "{} (teilweise)");
+    expect(metric).toBe(`${formatUsd(6, "USD")} (teilweise) · 500 Token`);
+    expect(metric).not.toContain("known");
   });
 
   it("renders a complete known-zero total instead of a subtotal", () => {

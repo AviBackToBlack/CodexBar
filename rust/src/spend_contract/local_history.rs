@@ -70,8 +70,8 @@ pub struct LocalCostEstimate {
     /// a subtotal when one or more requests are unpriced.
     pub known_subtotal_usd: Option<f64>,
     pub coverage: CostCoverageCounts,
-    /// Recorded model names with no public price. Local-only input for an
-    /// explicit pricing refresh; never part of the wire contract.
+    /// Recorded model names with no public price. Local-only input for a
+    /// pricing refresh; never part of the wire contract.
     #[serde(skip)]
     pub unpriced_models: BTreeSet<String>,
 }
