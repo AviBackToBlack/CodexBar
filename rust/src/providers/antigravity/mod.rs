@@ -784,13 +784,9 @@ impl AntigravityProvider {
             }
         }
 
-        match failure {
-            Some(error) => Self::resolve_probe_failure(error, offline),
-            None => Self::resolve_probe_failure(
-                ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()),
-                offline,
-            ),
-        }
+        let error =
+            failure.unwrap_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()));
+        Self::resolve_probe_failure(error, offline)
     }
 
     fn locate_agy_binary() -> Option<PathBuf> {
