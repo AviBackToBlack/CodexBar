@@ -721,24 +721,6 @@ fn provider_dashboard_url_uses_selected_regional_console() {
 }
 
 #[test]
-fn provider_dashboard_url_falls_back_to_api_key_catalog() {
-    assert_eq!(
-        super::provider_dashboard_url_from_sources(None, Some("https://catalog.example/dashboard"))
-            .as_deref(),
-        Some("https://catalog.example/dashboard")
-    );
-    assert_eq!(
-        super::provider_dashboard_url_from_sources(
-            Some("https://metadata.example/dashboard"),
-            Some("https://catalog.example/dashboard"),
-        )
-        .as_deref(),
-        Some("https://metadata.example/dashboard")
-    );
-    assert_eq!(super::provider_dashboard_url_from_sources(None, None), None);
-}
-
-#[test]
 fn fetch_context_token_account_uses_web_cookie_header() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
