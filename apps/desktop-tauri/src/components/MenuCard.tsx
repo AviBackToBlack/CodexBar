@@ -238,9 +238,16 @@ export default function MenuCard({
       resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });
   }
-  const visibleMetrics = metrics
-    .filter((metric) => isUsageItemVisible(provider.hiddenUsageItemIds, metric.id))
-    .slice(0, compactOverview ? 2 : metrics.length);
+  const shownMetrics = metrics.filter((metric) =>
+    isUsageItemVisible(provider.hiddenUsageItemIds, metric.id),
+  );
+  // The compact overview only has room for two rows. An informational
+  // placeholder (e.g. "No active 5h session") must not take one of them while
+  // two measured lanes exist.
+  const measuredMetrics = shownMetrics.filter((metric) => metric.snap.isInformational !== true);
+  const visibleMetrics = compactOverview
+    ? (measuredMetrics.length >= 2 ? measuredMetrics : shownMetrics).slice(0, 2)
+    : shownMetrics;
 
   const presence = describeCard(
     provider,

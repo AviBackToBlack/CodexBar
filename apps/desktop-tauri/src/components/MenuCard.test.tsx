@@ -327,6 +327,22 @@ describe("MenuCard", () => {
     expect(document.querySelector(".menu-card__more")).toBeNull();
   });
 
+  it("keeps an informational placeholder out of the compact Overview while two lanes are measured", async () => {
+    const snapshot = provider(null, 0);
+    snapshot.primary = { ...rateWindow(0), isInformational: true, resetDescription: "No active 5h session" };
+    snapshot.extraRateWindows = [
+      { id: "doubao-agent-session", title: "5-hour", window: rateWindow(42, { windowMinutes: 300 }) },
+      { id: "doubao-agent-weekly", title: "Weekly", window: rateWindow(67, { windowMinutes: 10080 }) },
+    ];
+
+    renderCard(snapshot, { compactOverview: true });
+
+    expect(await screen.findByText("58% left")).toBeInTheDocument();
+    expect(screen.getByText("33% left")).toBeInTheDocument();
+    expect(document.querySelectorAll(".menu-metric")).toHaveLength(2);
+    expect(screen.queryByText("No active 5h session")).not.toBeInTheDocument();
+  });
+
   it("localizes Claude scoped weekly extra-window labels", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({ ClaudeScopedWeeklyLabel: "{} weekly" }));
     const snapshot = provider(null, 20);

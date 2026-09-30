@@ -42,34 +42,49 @@ fn select_window(snapshot: &ProviderUsageSnapshot, settings: &Settings) -> RateW
 /// that fills it. Only this selection view changes: the snapshot the UI
 /// renders keeps its lanes as reported, and a lane with no hint stays absent.
 fn with_icon_fallbacks(snapshot: &ProviderUsageSnapshot) -> Cow<'_, ProviderUsageSnapshot> {
-    let fallback = |lane: IconLane| {
-        snapshot
-            .extra_rate_windows
-            .iter()
-            .find(|extra| extra.icon_fallback == Some(lane) && !extra.window.is_informational)
-            .map(|extra| extra.window.clone())
-    };
     let primary = snapshot
         .primary
         .is_informational
-        .then(|| fallback(IconLane::Primary))
+        .then(|| icon_fallback_window(snapshot, IconLane::Primary))
         .flatten();
     let secondary = snapshot
         .secondary
         .is_none()
-        .then(|| fallback(IconLane::Secondary))
+        .then(|| icon_fallback_window(snapshot, IconLane::Secondary))
         .flatten();
     if primary.is_none() && secondary.is_none() {
         return Cow::Borrowed(snapshot);
     }
     let mut resolved = snapshot.clone();
     if let Some(primary) = primary {
-        resolved.primary = primary;
+        resolved.primary = primary.clone();
     }
-    if secondary.is_some() {
-        resolved.secondary = secondary;
+    if let Some(secondary) = secondary {
+        resolved.secondary = Some(secondary.clone());
     }
     Cow::Owned(resolved)
+}
+
+/// Provider-declared extra window that stands in for an absent core lane.
+pub(crate) fn icon_fallback_window(
+    snapshot: &ProviderUsageSnapshot,
+    lane: IconLane,
+) -> Option<&RateWindowSnapshot> {
+    snapshot
+        .extra_rate_windows
+        .iter()
+        .find(|extra| extra.icon_fallback == Some(lane) && !extra.window.is_informational)
+        .map(|extra| &extra.window)
+}
+
+/// Whether the provider maps extra windows onto the tray icon lanes. Such a
+/// provider's icon is its two lanes; its other extra windows (team, monthly)
+/// never take part in Automatic selection.
+fn declares_icon_lanes(snapshot: &ProviderUsageSnapshot) -> bool {
+    snapshot
+        .extra_rate_windows
+        .iter()
+        .any(|extra| extra.icon_fallback.is_some())
 }
 
 /// Select the primary tray metric and, when there are multiple meaningful core
@@ -80,6 +95,15 @@ pub(crate) fn selected_usage_icon_windows(
     settings: &Settings,
 ) -> (RateWindowSnapshot, Option<RateWindowSnapshot>) {
     let snapshot = with_icon_fallbacks(snapshot);
+    if declares_icon_lanes(&snapshot) && icon_metric_is_automatic(&snapshot, settings) {
+        return (
+            snapshot.primary.clone(),
+            snapshot
+                .secondary
+                .clone()
+                .filter(|window| !window.is_informational),
+        );
+    }
     let selected = select_window(&snapshot, settings);
     let meaningful_count = std::iter::once(&snapshot.primary)
         .chain(snapshot.secondary.iter())
@@ -99,6 +123,13 @@ pub(crate) fn selected_usage_icon_windows(
         .find(|window| !same_window(window, &selected))
         .cloned();
     (selected, companion)
+}
+
+fn icon_metric_is_automatic(snapshot: &ProviderUsageSnapshot, settings: &Settings) -> bool {
+    ProviderId::from_cli_name(&snapshot.provider_id)
+        .map(|id| settings.get_provider_metric(id))
+        .unwrap_or_default()
+        == MetricPreference::Automatic
 }
 
 fn same_window(left: &RateWindowSnapshot, right: &RateWindowSnapshot) -> bool {
@@ -189,7 +220,7 @@ fn automatic_window(
         .chain(snapshot.model_specific.iter())
         .chain(snapshot.tertiary.iter())
         .any(|window| !window.is_informational);
-    if policy.uses_extra_windows {
+    if policy.uses_extra_windows && !declares_icon_lanes(snapshot) {
         windows.extend(
             snapshot
                 .extra_rate_windows
@@ -887,6 +918,38 @@ mod tests {
         let (primary, companion) = selected_usage_icon_windows(&snapshot, &Settings::default());
         assert_eq!(primary.used_percent, 25.0);
         assert!(companion.is_none());
+    }
+
+    #[test]
+    fn doubao_automatic_icon_uses_agent_lanes_not_team_windows() {
+        let mut snapshot = doubao_snapshot(None, None);
+        snapshot.extra_rate_windows = vec![
+            agent_extra(
+                "doubao-agent-session",
+                agent_window(42.0, 300),
+                Some(IconLane::Primary),
+            ),
+            agent_extra(
+                "doubao-agent-weekly",
+                agent_window(67.0, 10_080),
+                Some(IconLane::Secondary),
+            ),
+            agent_extra("doubao-agent-team-session", agent_window(91.0, 300), None),
+            agent_extra("doubao-agent-team-weekly", agent_window(88.0, 10_080), None),
+        ];
+        let settings = Settings::default();
+
+        let (top, bottom) = selected_usage_icon_windows(&snapshot, &settings);
+        assert_eq!(top.used_percent, 42.0);
+        assert_eq!(bottom.expect("bottom lane").used_percent, 67.0);
+        assert_eq!(
+            selected_usage_window(&snapshot, &settings).used_percent,
+            67.0
+        );
+        assert_eq!(
+            crate::tray_bridge::headline_window(&snapshot).used_percent,
+            42.0
+        );
     }
 
     #[test]

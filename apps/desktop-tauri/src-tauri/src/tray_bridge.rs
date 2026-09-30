@@ -590,11 +590,16 @@ fn provider_status_label(
 ///
 /// Shared by the tray menu rows (`provider_status_label`) and the tray tooltip
 /// (`build_tooltip`) so the two cannot drift apart.
-fn headline_window(
+pub(crate) fn headline_window(
     snapshot: &crate::commands::ProviderUsageSnapshot,
 ) -> &crate::commands::RateWindowSnapshot {
     if snapshot.provider_id == "codex" {
         codex_lane_headline_window(snapshot)
+    } else if snapshot.primary.is_informational {
+        // Provider-declared icon lanes (Doubao Agent Plan) stand in for an
+        // absent core session, matching the tray icon.
+        crate::usage_metric::icon_fallback_window(snapshot, codexbar::core::IconLane::Primary)
+            .unwrap_or(&snapshot.primary)
     } else {
         &snapshot.primary
     }
