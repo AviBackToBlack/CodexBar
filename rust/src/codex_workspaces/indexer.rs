@@ -12,7 +12,7 @@ use crate::codex_costs::codex_period_start;
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner, sha256_hex};
 
 use super::sidecar::{SidecarError, WorkspaceUsageSidecar};
-use super::thread_names::{SessionRef, thread_titles};
+use super::thread_names::apply_session_names_and_ranking;
 use super::types::{
     CodexLocalProjectUsageSnapshot, CostEstimate, DailyPoint, Progress, ProgressPhase,
     ProjectUsage, SessionUsage, SourceStatus, UsageTotals, untitled_session_label,
@@ -40,10 +40,9 @@ pub struct CodexLocalDataScope {
 }
 
 impl CodexLocalDataScope {
-    /// `CODEX_HOME` → `CODEX_SQLITE_HOME` → `~/.codex`.
+    /// `CODEX_HOME` → `~/.codex`; the SQLite override is only for thread metadata.
     pub fn resolve() -> Option<Self> {
         let home = non_empty_env("CODEX_HOME")
-            .or_else(|| non_empty_env("CODEX_SQLITE_HOME"))
             .map(PathBuf::from)
             .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))?;
         Some(Self::from_home(home))
@@ -149,6 +148,11 @@ impl CodexWorkspacesIndex {
             match sidecar.load_latest_snapshot(scope.scope_signature(), self.history_days) {
                 Ok(Some(mut cached)) => {
                     cached.source_status = source_status;
+                    apply_session_names_and_ranking(
+                        &mut cached,
+                        &scope.codex_home,
+                        non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+                    );
                     return Ok(cached);
                 }
                 Ok(None) => {}
@@ -215,7 +219,6 @@ impl CodexWorkspacesIndex {
             }
         }
 
-        apply_thread_titles(&mut session_buckets, &scope.codex_home);
         let mut projects = build_projects(&session_buckets);
         projects.sort_by(|a, b| {
             b.latest_activity
@@ -243,13 +246,12 @@ impl CodexWorkspacesIndex {
             .collect();
         daily.sort_by(|a, b| a.day.cmp(&b.day));
 
-        let mut sessions: Vec<SessionUsage> = session_buckets
+        let sessions: Vec<SessionUsage> = session_buckets
             .values()
             .map(SessionBucket::to_session_usage)
             .collect();
-        sessions.sort_by(SessionUsage::rank_cmp);
 
-        let snapshot = CodexLocalProjectUsageSnapshot {
+        let mut snapshot = CodexLocalProjectUsageSnapshot {
             updated_at: Utc::now(),
             history_days: self.history_days,
             scope_signature: scope.scope_signature().to_string(),
@@ -261,6 +263,11 @@ impl CodexWorkspacesIndex {
             daily,
             source_status,
         };
+        apply_session_names_and_ranking(
+            &mut snapshot,
+            &scope.codex_home,
+            non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+        );
 
         progress(Progress::phase(ProgressPhase::Saving));
         sidecar.publish_snapshot(&snapshot)?;
@@ -376,30 +383,6 @@ struct DailyAcc {
     unknown_tokens: u64,
 }
 
-/// Overlay Codex thread names (session index, then `threads.title`) after the scan.
-/// Titles never touch totals, cost, or project grouping.
-fn apply_thread_titles(buckets: &mut HashMap<String, SessionBucket>, codex_home: &Path) {
-    let titles = {
-        let refs: Vec<SessionRef<'_>> = buckets
-            .values()
-            .map(|bucket| SessionRef {
-                id: &bucket.id,
-                cwd: bucket.cwd.as_deref(),
-            })
-            .collect();
-        thread_titles(
-            codex_home,
-            non_empty_env("CODEX_SQLITE_HOME").as_deref(),
-            &refs,
-        )
-    };
-    for (id, title) in titles {
-        if let Some(bucket) = buckets.get_mut(&id) {
-            bucket.title = Some(title);
-        }
-    }
-}
-
 fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage> {
     let mut by_project: HashMap<String, Vec<&SessionBucket>> = HashMap::new();
     for session in sessions.values() {
@@ -434,10 +417,6 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 .into_iter()
                 .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
                 .map(|(m, _)| m);
-            let mut top_sessions: Vec<SessionUsage> =
-                buckets.iter().map(|b| b.to_session_usage()).collect();
-            top_sessions.sort_by(SessionUsage::rank_cmp);
-            top_sessions.truncate(5);
             ProjectUsage {
                 id: first.project_id.clone(),
                 display_name: first.project_display_name.clone(),
@@ -448,7 +427,7 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 session_count: buckets.len() as u32,
                 latest_activity: latest,
                 top_model,
-                top_sessions,
+                top_sessions: Vec::new(),
             }
         })
         .collect()

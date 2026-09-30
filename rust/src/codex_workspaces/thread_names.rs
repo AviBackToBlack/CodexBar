@@ -1,7 +1,7 @@
 //! Codex thread names for indexed sessions (upstream 0.68.0 `CodexThreadMetadataReader`).
 //!
-//! Codex keeps thread names outside the rollout files, so they are overlaid after
-//! the usage scan. Order: `session_index.jsonl` in the Codex home (latest line
+//! Codex keeps thread names outside the rollout files, so they are overlaid onto
+//! usage snapshots. Order: `session_index.jsonl` in the Codex home (latest line
 //! wins), then `threads.title` in the newest `state_<n>.sqlite`. Everything is
 //! read-only and best effort: any failure leaves the session untitled.
 
@@ -14,12 +14,15 @@ use std::time::Duration;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::Deserialize;
 
+use super::types::{CodexLocalProjectUsageSnapshot, SessionUsage, untitled_session_label};
+
 /// Lines longer than this in `session_index.jsonl` are skipped.
 const SESSION_INDEX_MAX_LINE_BYTES: u64 = 64 * 1024;
 /// Only the head of `config.toml` is read when looking for `sqlite_home`.
 const CONFIG_PREFIX_BYTES: u64 = 256 * 1024;
 const BUSY_TIMEOUT: Duration = Duration::from_millis(100);
 const DEFAULT_STATE_DATABASE: &str = "state_5.sqlite";
+const PROJECT_TOP_SESSION_LIMIT: usize = 5;
 
 /// A session whose thread name is wanted: its id and original working directory.
 pub(super) struct SessionRef<'a> {
@@ -47,11 +50,17 @@ pub(super) fn thread_titles(
     }
     let ids: HashSet<&str> = sessions.iter().map(|s| s.id).collect();
     let mut titles = indexed_thread_names(&codex_home.join("session_index.jsonl"), &ids);
+    if titles.len() == ids.len() {
+        return titles;
+    }
 
     let configured_home = configured_sqlite_home(codex_home);
     let mut newest_by_dir: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut ids_by_database: HashMap<PathBuf, Vec<&str>> = HashMap::new();
     for session in sessions {
+        if titles.contains_key(session.id) {
+            continue;
+        }
         let dir = sqlite_home(
             codex_home,
             configured_home.as_deref(),
@@ -74,6 +83,80 @@ pub(super) fn thread_titles(
         }
     }
     titles
+}
+
+/// Apply metadata names and ranking to fresh and cached snapshots.
+/// Names never touch totals, cost, or project grouping.
+pub(super) fn apply_session_names_and_ranking(
+    snapshot: &mut CodexLocalProjectUsageSnapshot,
+    codex_home: &Path,
+    env_sqlite_home: Option<&str>,
+) {
+    let has_sessions = !snapshot.sessions.is_empty();
+    let titles = {
+        let mut seen = HashSet::new();
+        let mut refs = Vec::new();
+        for session in &snapshot.sessions {
+            if seen.insert(session.id.as_str()) {
+                refs.push(SessionRef {
+                    id: &session.id,
+                    cwd: session.cwd.as_deref(),
+                });
+            }
+        }
+        if !has_sessions {
+            for session in snapshot
+                .projects
+                .iter()
+                .flat_map(|project| project.top_sessions.iter())
+            {
+                if seen.insert(session.id.as_str()) {
+                    refs.push(SessionRef {
+                        id: &session.id,
+                        cwd: session.cwd.as_deref(),
+                    });
+                }
+            }
+        }
+        thread_titles(codex_home, env_sqlite_home, &refs)
+    };
+
+    for session in &mut snapshot.sessions {
+        apply_thread_title(session, &titles);
+    }
+    snapshot.sessions.sort_by(SessionUsage::rank_cmp);
+
+    if has_sessions {
+        let mut top_sessions_by_project: HashMap<String, Vec<SessionUsage>> = HashMap::new();
+        for session in &snapshot.sessions {
+            let top_sessions = top_sessions_by_project
+                .entry(session.project_id.clone())
+                .or_default();
+            if top_sessions.len() < PROJECT_TOP_SESSION_LIMIT {
+                top_sessions.push(session.clone());
+            }
+        }
+        for project in &mut snapshot.projects {
+            project.top_sessions = top_sessions_by_project
+                .remove(&project.id)
+                .unwrap_or_default();
+        }
+    } else {
+        for project in &mut snapshot.projects {
+            for session in &mut project.top_sessions {
+                apply_thread_title(session, &titles);
+            }
+            project.top_sessions.sort_by(SessionUsage::rank_cmp);
+            project.top_sessions.truncate(PROJECT_TOP_SESSION_LIMIT);
+        }
+    }
+}
+
+fn apply_thread_title(session: &mut SessionUsage, titles: &HashMap<String, String>) {
+    session.display_title = titles
+        .get(&session.id)
+        .cloned()
+        .unwrap_or_else(|| untitled_session_label(&session.id));
 }
 
 /// `session_index.jsonl`: `{"id": ..., "thread_name": ...}` per line, latest wins.
@@ -206,7 +289,10 @@ fn newest_state_database(dir: &Path) -> PathBuf {
                     .strip_prefix("state_")?
                     .strip_suffix(".sqlite")?
                     .parse::<u64>()
-                    .unwrap_or(0);
+                    .ok()?;
+                if !entry.metadata().ok()?.is_file() {
+                    return None;
+                }
                 Some((version, entry.path()))
             })
             .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
