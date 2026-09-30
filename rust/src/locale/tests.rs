@@ -323,6 +323,40 @@ fn test_locale_key_russian() {
 }
 
 #[test]
+fn provider_switcher_shortcut_strings_are_translated_in_design_locales() {
+    let keys = [
+        LocaleKey::SwitcherShortcutsTitle,
+        LocaleKey::SwitcherShortcutsHelper,
+        LocaleKey::SwitcherShortcutPrevious,
+        LocaleKey::SwitcherShortcutNext,
+        LocaleKey::SwitcherShortcutSelect,
+        LocaleKey::SwitcherShortcutNone,
+        LocaleKey::SwitcherShortcutRecordingHint,
+        LocaleKey::SwitcherShortcutReset,
+        LocaleKey::SwitcherShortcutErrorUnknown,
+        LocaleKey::SwitcherShortcutErrorDuplicate,
+        LocaleKey::SwitcherShortcutErrorReserved,
+        LocaleKey::SwitcherShortcutErrorInvalid,
+    ];
+    let languages = [
+        (Language::Spanish, "es-MX"),
+        (Language::Japanese, "ja-JP"),
+        (Language::Korean, "ko-KR"),
+        (Language::Russian, "ru-RU"),
+    ];
+
+    for (language, locale) in languages {
+        for key in keys {
+            assert_ne!(
+                get_text(language, key),
+                get_text(Language::English, key),
+                "{key:?} is falling back to English in {locale}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_locale_key_turkish() {
     assert_eq!(get_text(Language::Turkish, LocaleKey::TabGeneral), "Genel");
     assert_eq!(

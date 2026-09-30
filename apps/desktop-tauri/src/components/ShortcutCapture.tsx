@@ -16,6 +16,8 @@ interface ShortcutCaptureProps {
   recordingHint?: string;
   /** Overrides the text shown when `value` is empty. */
   emptyLabel?: string;
+  /** Names the capture group and its action buttons for assistive technology. */
+  accessibleLabel?: string;
 }
 
 const MODIFIER_KEYS = new Set([
@@ -78,6 +80,7 @@ export function ShortcutCapture({
   compose = composeAccelerator,
   recordingHint,
   emptyLabel,
+  accessibleLabel,
 }: ShortcutCaptureProps) {
   const { t } = useLocale();
   const [recording, setRecording] = useState(false);
@@ -128,7 +131,11 @@ export function ShortcutCapture({
     : value || (emptyLabel ?? t("ShortcutEmptyPlaceholder"));
 
   return (
-    <div className="shortcut-capture">
+    <div
+      className="shortcut-capture"
+      role={accessibleLabel ? "group" : undefined}
+      aria-label={accessibleLabel}
+    >
       <div
         ref={chipRef}
         tabIndex={-1}
@@ -137,7 +144,12 @@ export function ShortcutCapture({
           (recording ? " shortcut-capture__chip--recording" : "") +
           (!value && !recording ? " shortcut-capture__chip--empty" : "")
         }
+        role="status"
         aria-live="polite"
+        aria-atomic="true"
+        aria-label={
+          accessibleLabel ? `${accessibleLabel}: ${chipText}` : undefined
+        }
       >
         {chipText}
       </div>
@@ -146,6 +158,15 @@ export function ShortcutCapture({
           type="button"
           className="shortcut-capture__button"
           disabled={disabled || recording}
+          aria-label={
+            accessibleLabel
+              ? `${accessibleLabel}: ${
+                  recording
+                    ? t("ShortcutRecordingLabel")
+                    : t("ShortcutRecordButton")
+                }`
+              : undefined
+          }
           onClick={() => setRecording(true)}
         >
           {recording ? t("ShortcutRecordingLabel") : t("ShortcutRecordButton")}
@@ -154,6 +175,11 @@ export function ShortcutCapture({
           type="button"
           className="shortcut-capture__button shortcut-capture__button--ghost"
           disabled={disabled || recording || !value}
+          aria-label={
+            accessibleLabel
+              ? `${accessibleLabel}: ${t("ShortcutClearButton")}`
+              : undefined
+          }
           onClick={onClear}
         >
           {t("ShortcutClearButton")}

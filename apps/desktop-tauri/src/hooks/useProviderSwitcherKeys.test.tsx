@@ -104,6 +104,29 @@ describe("useProviderSwitcherKeys", () => {
     expect(onSelect).toHaveBeenCalledTimes(2);
   });
 
+  it("uses updated shortcuts without reinstalling the key listener", () => {
+    const onSelect = vi.fn();
+    const { rerender } = renderHook(
+      ({ shortcuts }: { shortcuts: Record<string, string> }) =>
+        useProviderSwitcherKeys({
+          providerIds: IDS,
+          selectedProviderId: null,
+          onSelect,
+          shortcuts,
+        }),
+      { initialProps: { shortcuts: { next: "shift+right" } } },
+    );
+
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", shiftKey: true });
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+
+    rerender({ shortcuts: { next: "alt+2" } });
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(window, { key: "2", code: "Digit2", altKey: true });
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+  });
+
   it("falls back to the defaults for an invalid stored map", () => {
     const onSelect = vi.fn();
     renderHook(() =>

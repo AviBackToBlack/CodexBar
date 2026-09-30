@@ -73,6 +73,7 @@ export default function SwitcherShortcutsSection({
                 compose={shortcutFromEvent}
                 recordingHint={t("SwitcherShortcutRecordingHint")}
                 emptyLabel={t("SwitcherShortcutNone")}
+                accessibleLabel={label(action)}
                 onCommit={(shortcut) => assign(action, shortcut)}
                 onClear={() => assign(action, SWITCHER_SHORTCUT_NONE)}
               />

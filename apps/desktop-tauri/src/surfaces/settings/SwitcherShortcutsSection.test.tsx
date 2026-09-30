@@ -26,7 +26,7 @@ function renderSection(
 /** Start recording on row `index` (previous = 0, next = 1, select1 = 2, ...). */
 function startRecording(index: number) {
   fireEvent.click(
-    screen.getAllByRole("button", { name: "ShortcutRecordButton" })[index],
+    screen.getAllByRole("button", { name: /: ShortcutRecordButton$/ })[index],
   );
 }
 
@@ -40,13 +40,31 @@ describe("SwitcherShortcutsSection", () => {
   it("shows one row per action with the resolved shortcuts", () => {
     renderSection({ next: "none", select2: "ctrl+alt+2" });
 
-    expect(screen.getAllByRole("button", { name: "ShortcutRecordButton" })).toHaveLength(11);
+    expect(screen.getAllByRole("button", { name: /: ShortcutRecordButton$/ })).toHaveLength(11);
     expect(screen.getByText("SwitcherShortcutPrevious")).toBeInTheDocument();
     expect(screen.getByText("SwitcherShortcutNext")).toBeInTheDocument();
     expect(screen.getByText("SwitcherShortcutSelect 9")).toBeInTheDocument();
     expect(screen.getByText("left")).toBeInTheDocument();
     expect(screen.getByText("ctrl+alt+2")).toBeInTheDocument();
     expect(screen.getByText("SwitcherShortcutNone")).toBeInTheDocument();
+  });
+
+  it("gives each capture control a row-specific accessible name", () => {
+    renderSection();
+
+    expect(
+      screen.getByRole("button", {
+        name: "SwitcherShortcutNext: ShortcutRecordButton",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "SwitcherShortcutNext: ShortcutClearButton",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("status", { name: "SwitcherShortcutNext: right" }),
+    ).toBeInTheDocument();
   });
 
   it("saves a recorded key as an override", async () => {
@@ -111,7 +129,7 @@ describe("SwitcherShortcutsSection", () => {
     renderSection({}, true);
 
     expect(screen.getByRole("button", { name: "SwitcherShortcutReset" })).toBeDisabled();
-    for (const button of screen.getAllByRole("button", { name: "ShortcutRecordButton" })) {
+    for (const button of screen.getAllByRole("button", { name: /: ShortcutRecordButton$/ })) {
       expect(button).toBeDisabled();
     }
   });

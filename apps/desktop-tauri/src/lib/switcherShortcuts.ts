@@ -161,17 +161,18 @@ export type SwitcherKeyEvent = Pick<
 
 /**
  * Canonical shortcut string for a key event, or null when the event cannot
- * be expressed in the grammar (bare modifier, Windows key, punctuation other
- * than `,`, ...). Letters and digits come from `code` so Shift+1 stays `1`.
+ * be expressed in the grammar (bare modifier, Windows key, unsupported
+ * punctuation, ...). Letters come from `key` so shortcuts follow the active
+ * keyboard layout; top-row digits and comma come from `code` so Shift+1 stays
+ * `1` and Shift+, stays a comma on US layouts.
  */
 export function shortcutFromEvent(event: SwitcherKeyEvent): string | null {
   if (event.metaKey) return null;
-  let key: string | undefined = /^(?:Digit|Key)([0-9A-Z])$/
-    .exec(event.code)?.[1]
-    ?.toLowerCase();
+  let key: string | undefined = /^Digit([0-9])$/.exec(event.code)?.[1];
   if (key === undefined) {
     if (event.key === "ArrowLeft") key = "left";
     else if (event.key === "ArrowRight") key = "right";
+    else if (event.code === "Comma" || event.code === "NumpadComma") key = ",";
     else if (/^[a-z0-9,]$/i.test(event.key)) key = event.key.toLowerCase();
   }
   if (key === undefined) return null;

@@ -23,6 +23,7 @@ fn normalize_orders_modifiers_and_folds_cmd() {
     assert_eq!(normalize("alt+cmd+2").unwrap(), "ctrl+alt+2");
     assert_eq!(normalize("cmd+3").unwrap(), "ctrl+3");
     assert_eq!(normalize("Alt+,").unwrap(), "alt+,");
+    assert_eq!(normalize("Shift+Ctrl+,").unwrap(), "ctrl+shift+,");
     assert_eq!(normalize("NONE").unwrap(), NONE);
     assert_eq!(normalize("left").unwrap(), "left");
     assert_eq!(normalize("shift+right").unwrap(), "shift+right");
