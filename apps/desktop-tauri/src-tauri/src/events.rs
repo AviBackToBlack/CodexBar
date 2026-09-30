@@ -20,6 +20,7 @@ pub const REFRESH_COMPLETE: &str = "refresh-complete";
 pub const UPDATE_STATE_CHANGED: &str = "update-state-changed";
 pub const LOCALE_CHANGED: &str = "locale-changed";
 pub const SETTINGS_CHANGED: &str = "settings-changed";
+pub const STAY_AWAKE_CHANGED: &str = "stay-awake-changed";
 pub const CODEX_ACCOUNTS_UPDATED: &str = "codex-accounts-updated";
 pub const LOGIN_PHASE: &str = "login-phase";
 
@@ -110,6 +111,10 @@ pub fn emit_update_state_changed(app: &AppHandle, payload: &UpdateStatePayload) 
 /// do not share React state. Payload-less; listeners re-fetch the snapshot.
 pub fn emit_settings_changed(app: &AppHandle) {
     let _emit_settings = app.emit(SETTINGS_CHANGED, ());
+}
+
+pub fn emit_stay_awake_changed(app: &AppHandle, held: bool) {
+    let _emit_stay_awake = app.emit(STAY_AWAKE_CHANGED, held);
 }
 
 pub fn emit_login_phase(app: &AppHandle, provider_id: &str, phase: &str, auth_link: Option<&str>) {

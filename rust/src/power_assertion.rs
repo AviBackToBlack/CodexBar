@@ -53,6 +53,9 @@ impl<A: PowerAssertion> StayAwake<A> {
     /// Apply the user setting. Turning it off releases immediately; turning it
     /// on acquires nothing until a scan reports a live session.
     pub fn set_enabled(&mut self, enabled: bool) -> bool {
+        if self.shut_down {
+            return false;
+        }
         self.enabled = enabled;
         if enabled { false } else { self.release() }
     }
@@ -148,15 +151,26 @@ mod windows_impl {
     impl PowerAssertion for SystemPowerAssertion {
         fn acquire(&mut self) -> bool {
             let (reply, answer) = mpsc::channel();
-            let Some(worker) = self.worker() else {
+            let Some(requests) = self.worker().map(|worker| worker.requests.clone()) else {
                 return false;
             };
-            if worker.requests.send(Request::Hold(reply)).is_err() {
+            if requests.send(Request::Hold(reply)).is_err() {
                 // The thread is gone; the next attempt starts a fresh one.
                 self.worker = None;
                 return false;
             }
-            answer.recv_timeout(ACQUIRE_TIMEOUT).unwrap_or(false)
+            match answer.recv_timeout(ACQUIRE_TIMEOUT) {
+                Ok(acquired) => acquired,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // A timed-out reply does not cancel the queued Win32 call.
+                    // Clear after it so a late success cannot strand the hold.
+                    if requests.send(Request::Clear).is_err() {
+                        self.worker = None;
+                    }
+                    false
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            }
         }
 
         fn release(&mut self) {

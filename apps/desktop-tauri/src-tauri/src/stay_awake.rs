@@ -37,12 +37,22 @@ pub fn is_held() -> bool {
     controller().is_held()
 }
 
+#[tauri::command]
+pub fn get_stay_awake_status() -> bool {
+    is_held()
+}
+
+fn publish_status_change(app: &tauri::AppHandle) {
+    crate::tray_bridge::rebuild_tray_menu(app);
+    crate::events::emit_stay_awake_changed(app, is_held());
+}
+
 /// Apply a saved settings change: turning Stay Awake off releases right away,
 /// turning it on triggers a scan without waiting for the next interval.
 pub fn settings_changed(app: &tauri::AppHandle, enabled: bool) {
     let changed = controller().set_enabled(enabled);
     if changed {
-        crate::tray_bridge::rebuild_tray_menu(app);
+        publish_status_change(app);
     }
     if enabled {
         WAKE.notify_one();
@@ -86,6 +96,6 @@ async fn scan_once(app: &tauri::AppHandle) {
             }
         };
     if changed {
-        crate::tray_bridge::rebuild_tray_menu(app);
+        publish_status_change(app);
     }
 }

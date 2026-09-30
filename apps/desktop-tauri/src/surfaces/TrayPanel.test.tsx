@@ -6,6 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
   getSettingsSnapshot: vi.fn(),
+  getStayAwakeStatus: vi.fn().mockResolvedValue(false),
   updateSettings: vi.fn(),
   getUpdateState: vi.fn(),
   checkForUpdates: vi.fn(),

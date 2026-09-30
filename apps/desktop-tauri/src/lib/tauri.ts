@@ -87,6 +87,10 @@ export function getSettingsSnapshot(): Promise<SettingsSnapshot> {
   return invoke<SettingsSnapshot>("get_settings_snapshot");
 }
 
+export function getStayAwakeStatus(): Promise<boolean> {
+  return invoke<boolean>("get_stay_awake_status");
+}
+
 export function updateSettings(
   patch: SettingsUpdate,
 ): Promise<SettingsSnapshot> {

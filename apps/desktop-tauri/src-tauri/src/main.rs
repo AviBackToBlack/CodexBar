@@ -160,6 +160,7 @@ fn main() {
             commands::get_bootstrap_state,
             commands::get_provider_catalog,
             commands::get_settings_snapshot,
+            stay_awake::get_stay_awake_status,
             commands::list_agent_sessions,
             commands::focus_agent_session,
             commands::update_settings,

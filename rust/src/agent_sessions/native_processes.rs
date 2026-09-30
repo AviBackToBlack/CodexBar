@@ -27,7 +27,7 @@ impl LocalAgentSessionScanner {
 #[cfg(windows)]
 fn snapshot_processes() -> Result<Vec<AgentProcessRecord>, String> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Foundation::{ERROR_NO_MORE_FILES, HANDLE};
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
@@ -48,25 +48,30 @@ fn snapshot_processes() -> Result<Vec<AgentProcessRecord>, String> {
     };
     let mut records = Vec::new();
     // SAFETY: the snapshot handle is live and `entry.dwSize` is correct.
-    if unsafe { Process32FirstW(handle, &mut entry) }.is_ok() {
-        loop {
-            let len = entry
-                .szExeFile
-                .iter()
-                .position(|&unit| unit == 0)
-                .unwrap_or(entry.szExeFile.len());
-            let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
-            records.push(WindowsProcessOutputParser::record(
-                entry.th32ProcessID,
-                entry.th32ParentProcessID,
-                None,
-                Some(name),
-                None,
-            ));
-            // SAFETY: `entry` is valid for the next snapshot entry.
-            if unsafe { Process32NextW(handle, &mut entry) }.is_err() {
-                break;
-            }
+    match unsafe { Process32FirstW(handle, &mut entry) } {
+        Ok(()) => {}
+        Err(error) if error.code() == ERROR_NO_MORE_FILES.to_hresult() => return Ok(records),
+        Err(error) => return Err(format!("process enumeration failed: {error}")),
+    }
+    loop {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+        records.push(WindowsProcessOutputParser::record(
+            entry.th32ProcessID,
+            entry.th32ParentProcessID,
+            None,
+            Some(name),
+            None,
+        ));
+        // SAFETY: `entry` is valid for the next snapshot entry.
+        match unsafe { Process32NextW(handle, &mut entry) } {
+            Ok(()) => {}
+            Err(error) if error.code() == ERROR_NO_MORE_FILES.to_hresult() => break,
+            Err(error) => return Err(format!("process enumeration failed: {error}")),
         }
     }
     Ok(records)
