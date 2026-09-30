@@ -17,7 +17,7 @@ O Win-CodexBar é um aplicativo para a bandeja do sistema do Windows que mantém
 
 ## Destaques
 
-- **56 provedores**, incluindo Codex, Claude, Copilot, OpenRouter, Cursor, Gemini, DeepSeek, MiniMax, Kiro, Antigravity, Groq, Qoder, Sakana AI, CrossModel e muitos outros.
+- **51 provedores**, incluindo Codex, Claude, Copilot, OpenRouter, Cursor, Gemini, DeepSeek, MiniMax, Kiro, Antigravity, Groq e muitos outros.
 - **Fluxo centrado na bandeja**, com uma grade compacta de provedores, cartões de uso, ação de atualização, atalho para as configurações e controle para sair.
 - **Configurações por provedor** para selecionar fontes de dados, credenciais, importação de cookies, contas de token, chaves de API, regiões e preferências de exibição na bandeja.
 - **Proteção de credenciais no Windows** para chaves de API, cookies manuais e contas de token gerenciados pelo aplicativo, usando DPAPI no escopo do usuário quando disponível.
@@ -56,11 +56,9 @@ A distribuição pelo Winget foi aprovada no [microsoft/winget-pkgs](https://git
 
 Para o Claude, cookies do navegador/sessionKey são recomendados porque correspondem ao uso exibido na página de configurações do Claude. OAuth e CLI continuam disponíveis como alternativas. Para provedores baseados em CLI, como Codex e Gemini, primeiro faça login pela CLI do provedor.
 
-## Versão mais recente
+## Histórico de versões
 
-A **v0.33.2** corrige o fechamento do painel da bandeja para que ele seja fechado ao perder o foco ou ao pressionar Escape, sem reabrir imediatamente pelo mesmo clique no ícone da bandeja.
-
-Consulte o histórico completo em [CHANGELOG.md](CHANGELOG.md).
+Consulte todas as alterações em [CHANGELOG.md](CHANGELOG.md).
 
 ## Provedores compatíveis
 
