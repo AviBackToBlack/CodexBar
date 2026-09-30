@@ -522,7 +522,8 @@ pub use codex::priority::{
     CodexPriorityTurnMetadata, CodexPriorityTurnsCursor,
 };
 pub(crate) use codex::source_rows::{
-    read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
+    priced_model, read_source_rows, recover_rows, row_cache, row_cache_matches,
+    row_cache_needs_recovery,
 };
 
 impl JsonlScanner {

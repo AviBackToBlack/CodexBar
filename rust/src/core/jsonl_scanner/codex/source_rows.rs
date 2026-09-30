@@ -51,6 +51,29 @@ pub(crate) fn model_of_pricing_mode(model: &str) -> String {
     }
 }
 
+/// Apply the row's stored pricing mode and optional trace evidence.
+pub(crate) fn priced_model(
+    pricing: &CodexSourcePricingEvidence,
+    turn_id: Option<&str>,
+    overlay: Option<&CodexPriorityOverlay<'_>>,
+) -> Option<String> {
+    let model = pricing
+        .pricing_model
+        .as_deref()
+        .filter(|model| !model.is_empty())?;
+    let model =
+        if pricing.pricing_mode.as_deref() == Some("priority") && !model.ends_with("-priority") {
+            format!("{model}-priority")
+        } else {
+            model.to_string()
+        };
+    Some(
+        overlay
+            .and_then(|overlay| overlay.priority_model(turn_id, &model))
+            .unwrap_or(model),
+    )
+}
+
 /// Re-read the bounded reporting partition to obtain request-row order.
 /// The normal scanner still owns aggregate parsing and its byte budget;
 /// this path is used only after a complete file pass has established that

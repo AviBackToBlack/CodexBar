@@ -1,5 +1,7 @@
 use super::*;
-use crate::core::{CodexPriorityOverlay, CodexSourceUsageRow, CodexUsageRecord, CostUsagePricing};
+use crate::core::{
+    CodexPriorityOverlay, CodexSourceUsageRow, CodexUsageRecord, CostUsagePricing, priced_model,
+};
 use std::collections::BTreeMap;
 
 type DayModels = HashMap<String, HashMap<String, Vec<i64>>>;
@@ -76,20 +78,12 @@ fn priority_days(
     parsed_days: &DayModels,
     overlay: &CodexPriorityOverlay<'_>,
 ) -> Option<DayModels> {
-    if !rows
-        .iter()
-        .any(|row| row_pricing_model(row, Some(overlay)).1)
-    {
-        return None;
-    }
     let plain = days_from_codex_source_rows_with_priority(rows, None);
     if day_token_totals(&plain) != day_token_totals(parsed_days) {
         return None;
     }
-    Some(days_from_codex_source_rows_with_priority(
-        rows,
-        Some(overlay),
-    ))
+    let overlaid = days_from_codex_source_rows_with_priority(rows, Some(overlay));
+    (overlaid != plain).then_some(overlaid)
 }
 
 fn day_token_totals(days: &DayModels) -> BTreeMap<&str, (i64, i64, i64)> {
@@ -105,35 +99,6 @@ fn day_token_totals(days: &DayModels) -> BTreeMap<&str, (i64, i64, i64)> {
     totals
 }
 
-/// The model a source row prices under, and whether Priority trace evidence
-/// changed it.
-fn row_pricing_model(
-    row: &CodexSourceUsageRow,
-    overlay: Option<&CodexPriorityOverlay<'_>>,
-) -> (String, bool) {
-    let model = match row.pricing.pricing_model.as_deref() {
-        Some(model) if !model.is_empty() => {
-            if row.pricing.pricing_mode.as_deref() == Some("priority")
-                && !model.ends_with("-priority")
-            {
-                format!("{model}-priority")
-            } else {
-                model.to_string()
-            }
-        }
-        _ => {
-            return (
-                CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string(),
-                false,
-            );
-        }
-    };
-    match overlay.and_then(|overlay| overlay.priority_model(row.turn_id.as_deref(), &model)) {
-        Some(priority) => (priority, true),
-        None => (model, false),
-    }
-}
-
 pub(super) fn days_from_codex_source_rows(rows: &[CodexSourceUsageRow]) -> DayModels {
     days_from_codex_source_rows_with_priority(rows, None)
 }
@@ -144,7 +109,8 @@ fn days_from_codex_source_rows_with_priority(
 ) -> DayModels {
     let mut days: DayModels = HashMap::new();
     for row in rows {
-        let (model, _) = row_pricing_model(row, overlay);
+        let model = priced_model(&row.pricing, row.turn_id.as_deref(), overlay)
+            .unwrap_or_else(|| CostUsagePricing::CODEX_UNATTRIBUTED_MODEL.to_string());
         let record = CodexUsageRecord {
             day_key: row.day_key.clone(),
             timestamp: row.timestamp,

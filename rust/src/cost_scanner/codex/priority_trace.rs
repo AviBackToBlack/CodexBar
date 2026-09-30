@@ -79,20 +79,16 @@ pub(super) fn resolve_priority_turns(
     let previous = previous.filter(|cursor| cursor.database_path == path_key);
 
     let Ok(metadata) = std::fs::metadata(database_path) else {
-        // A missing optional source is normal until this path has supplied
-        // evidence; once it has, the evidence stays but validation is pending.
-        let pending = previous.is_some();
-        return PriorityTraceResolution::keep(previous, pending);
+        // A missing optional source is normal, but should be retried on the
+        // next cost scan even when no trace evidence has been cached yet.
+        return PriorityTraceResolution::keep(previous, true);
     };
     let Some(identity) = JsonlScanner::codex_file_identity(database_path, &metadata) else {
         return PriorityTraceResolution::keep(previous, true);
     };
     let conn = match open_readonly_sqlite_connection(database_path, DEFAULT_SQLITE_BUSY_TIMEOUT) {
         Ok(conn) => conn,
-        Err(error) => {
-            tracing::debug!(%error, "Codex trace database could not be opened");
-            return PriorityTraceResolution::keep(previous, true);
-        }
+        Err(_) => return PriorityTraceResolution::keep(previous, true),
     };
     // The file may have been replaced between the identity read and the open.
     let identity_after = std::fs::metadata(database_path)
@@ -102,7 +98,6 @@ pub(super) fn resolve_priority_turns(
         return PriorityTraceResolution::keep(previous, true);
     }
     let Some(max_row_id) = max_logs_row_id(&conn) else {
-        tracing::debug!("Codex trace database has no readable logs table");
         return PriorityTraceResolution::keep(previous, true);
     };
 
@@ -124,6 +119,9 @@ pub(super) fn resolve_priority_turns(
             AnchorValidation::Valid { needs_refresh } => anchors_need_refresh = needs_refresh,
             AnchorValidation::Invalid => state = None,
         }
+    }
+    if let Some(cursor) = &mut state {
+        advance_coverage(cursor, coverage_since_epoch);
     }
 
     let had_state = state.is_some();
@@ -180,6 +178,32 @@ pub(super) fn resolve_priority_turns(
         );
     }
     PriorityTraceResolution::keep(Some(resolved), false)
+}
+
+/// Move a retained cursor with the active scan window and discard turn
+/// evidence that can no longer match any scanned session rows.
+fn advance_coverage(state: &mut CodexPriorityTurnsCursor, coverage_since_epoch: i64) {
+    if coverage_since_epoch <= state.coverage_since_epoch {
+        return;
+    }
+    state.coverage_since_epoch = coverage_since_epoch;
+    let mut expired_turns = Vec::new();
+    state.request_sources.retain(|turn_id, sources| {
+        sources.retain(|_, metadata| {
+            metadata
+                .timestamp
+                .is_none_or(|timestamp| timestamp >= coverage_since_epoch)
+        });
+        if sources.is_empty() {
+            expired_turns.push(turn_id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    for turn_id in expired_turns {
+        state.priority_completed_models.remove(&turn_id);
+    }
 }
 
 /// Best-effort rollback; the read-only connection has nothing to lose.
@@ -306,7 +330,7 @@ fn absorb_row(
     body: &str,
 ) {
     if let Some(completed) = parse_completed_trace_row(body) {
-        if state.turns.contains_key(&completed.turn_id) {
+        if state.turn(&completed.turn_id).is_some() {
             state
                 .priority_completed_models
                 .entry(completed.turn_id)
@@ -325,7 +349,6 @@ fn absorb_row(
         return;
     };
     let turn_id = parsed.turn_id.clone();
-    state.turns.insert(turn_id.clone(), parsed.clone());
     state
         .request_sources
         .entry(turn_id.clone())
@@ -345,9 +368,12 @@ fn store_pending_completed_models(
     models: BTreeMap<i64, String>,
 ) {
     if !state.completed_models.contains_key(turn_id) {
-        state.completed_order.push(turn_id.to_string());
+        state.completed_order.push_back(turn_id.to_string());
         if state.completed_order.len() > CODEX_PRIORITY_COMPLETED_MODEL_RETENTION_LIMIT {
-            let evicted = state.completed_order.remove(0);
+            let evicted = state
+                .completed_order
+                .pop_front()
+                .expect("queue length checked");
             state.completed_models.remove(&evicted);
         }
     }
@@ -369,29 +395,43 @@ enum AnchorLookup {
     Failed,
 }
 
-fn anchor_digest(timestamp: i64, body: Option<&[u8]>) -> String {
+fn hash_anchor_value(hasher: &mut Sha256, value: ValueRef<'_>) {
+    match value {
+        ValueRef::Null => hasher.update([0]),
+        ValueRef::Integer(value) => {
+            hasher.update([1]);
+            hasher.update(value.to_le_bytes());
+        }
+        ValueRef::Real(value) => {
+            hasher.update([2]);
+            hasher.update(value.to_bits().to_le_bytes());
+        }
+        ValueRef::Text(value) => {
+            hasher.update([3]);
+            hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+            hasher.update(value);
+        }
+        ValueRef::Blob(value) => {
+            hasher.update([4]);
+            hasher.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+            hasher.update(value);
+        }
+    }
+}
+
+fn row_anchor_digest(row: &rusqlite::Row<'_>, timestamp_index: usize, body_index: usize) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(format!("{timestamp}\n").as_bytes());
-    if let Some(body) = body {
-        hasher.update(body);
+    if let Ok(timestamp) = row.get_ref(timestamp_index) {
+        hash_anchor_value(&mut hasher, timestamp);
+    }
+    if let Ok(body) = row.get_ref(body_index) {
+        hash_anchor_value(&mut hasher, body);
     }
     hasher
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-fn row_anchor_digest(row: &rusqlite::Row<'_>, timestamp_index: usize, body_index: usize) -> String {
-    let timestamp = match row.get_ref(timestamp_index) {
-        Ok(ValueRef::Integer(value)) => value,
-        _ => 0,
-    };
-    let body = match row.get_ref(body_index) {
-        Ok(ValueRef::Text(bytes) | ValueRef::Blob(bytes)) => Some(bytes),
-        _ => None,
-    };
-    anchor_digest(timestamp, body)
 }
 
 /// Sample four rows across the scanned range (a quarter, half, three
@@ -537,14 +577,10 @@ fn prune_deleted_sources(conn: &Connection, state: &mut CodexPriorityTurnsCursor
         pruned = true;
         if kept.is_empty() {
             state.request_sources.remove(&turn_id);
-            state.turns.remove(&turn_id);
             if let Some(models) = state.priority_completed_models.remove(&turn_id) {
                 store_pending_completed_models(state, &turn_id, models);
             }
         } else {
-            if let Some((_, latest)) = kept.iter().next_back() {
-                state.turns.insert(turn_id.clone(), latest.clone());
-            }
             state.request_sources.insert(turn_id, kept);
         }
     }

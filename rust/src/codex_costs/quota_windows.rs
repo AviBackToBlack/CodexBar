@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::core::{
     CodexPriorityOverlay, CodexSourceRowCache, CodexSourceUsageRow, CostUsageCache,
-    CostUsagePricing, RateWindow,
+    CostUsagePricing, RateWindow, priced_model,
 };
 
 const NOMINAL_WEEK_MINUTES: i64 = 7 * 24 * 60;
@@ -370,17 +370,7 @@ fn slice_from_row(row: &CodexSourceUsageRow, overlay: Option<&CodexPriorityOverl
     let input = u64::try_from(row.input.max(0)).unwrap_or(0);
     let output = u64::try_from(row.output.max(0)).unwrap_or(0);
     let tokens = Some(input.saturating_add(output));
-    let cost_usd = row.pricing.pricing_model.as_deref().and_then(|model| {
-        let model = if row.pricing.pricing_mode.as_deref() == Some("priority")
-            && !model.ends_with("-priority")
-        {
-            format!("{model}-priority")
-        } else {
-            model.to_string()
-        };
-        let model = overlay
-            .and_then(|overlay| overlay.priority_model(row.turn_id.as_deref(), &model))
-            .unwrap_or(model);
+    let cost_usd = priced_model(&row.pricing, row.turn_id.as_deref(), overlay).and_then(|model| {
         let date = timestamp.map(|value| value.with_timezone(&Local).date_naive())?;
         let cached = u64::try_from(row.cached.max(0)).unwrap_or(0).min(input);
         if model.ends_with("-priority") {

@@ -143,8 +143,8 @@ fn cold_scan_collects_priority_turns_and_completed_model() {
     let resolution = resolve(&db, None);
     let cursor = resolution.cursor.unwrap();
     assert!(!resolution.validation_pending);
-    assert_eq!(cursor.turns.len(), 1);
-    assert!(cursor.turns.contains_key("turn-1"));
+    assert_eq!(cursor.request_sources.len(), 1);
+    assert!(cursor.turn("turn-1").is_some());
     assert_eq!(cursor.last_row_id, 6);
     assert_eq!(cursor.anchors.len(), 4);
     assert_eq!(cursor.turn_model("turn-1"), Some("gpt-5.4"));
@@ -159,14 +159,14 @@ fn incremental_scan_appends_only_new_rows() {
     db.insert(&[(2_001, request_body("turn-2", "priority", "gpt-5.4"))]);
     let second = resolve(&db, Some(first)).cursor.unwrap();
     assert_eq!(second.last_row_id, 2);
-    assert_eq!(second.turns.len(), 2);
+    assert_eq!(second.request_sources.len(), 2);
 }
 
 #[test]
 fn completion_before_request_is_matched_when_the_request_arrives() {
     let db = TraceDb::new(&[(2_000, completed_body("turn-1", "gpt-5.4"))]);
     let first = resolve(&db, None).cursor.unwrap();
-    assert!(first.turns.is_empty());
+    assert!(first.request_sources.is_empty());
     assert!(first.completed_models.contains_key("turn-1"));
 
     db.insert(&[(2_001, request_body("turn-1", "priority", "gpt-5.5"))]);
@@ -181,13 +181,13 @@ fn rewritten_database_rebuilds_instead_of_reusing_evidence() {
     rows.push((2_000, request_body("old-turn", "priority", "gpt-5.5")));
     let db = TraceDb::new(&rows);
     let first = resolve(&db, None).cursor.unwrap();
-    assert!(first.turns.contains_key("old-turn"));
+    assert!(first.turn("old-turn").is_some());
 
     db.execute("update logs set feedback_log_body = 'rewritten ' || id");
     db.insert(&[(3_000, request_body("new-turn", "priority", "gpt-5.5"))]);
     let second = resolve(&db, Some(first)).cursor.unwrap();
-    assert!(!second.turns.contains_key("old-turn"));
-    assert!(second.turns.contains_key("new-turn"));
+    assert!(second.turn("old-turn").is_none());
+    assert!(second.turn("new-turn").is_some());
 }
 
 #[test]
@@ -198,12 +198,12 @@ fn deleted_source_rows_drop_their_turns() {
         (2_002, "tail row".to_string()),
     ]);
     let first = resolve(&db, None).cursor.unwrap();
-    assert_eq!(first.turns.len(), 2);
+    assert_eq!(first.request_sources.len(), 2);
 
     db.execute("delete from logs where id = 1");
     let second = resolve(&db, Some(first)).cursor.unwrap();
-    assert!(!second.turns.contains_key("turn-1"));
-    assert!(second.turns.contains_key("turn-2"));
+    assert!(second.turn("turn-1").is_none());
+    assert!(second.turn("turn-2").is_some());
 }
 
 #[test]
@@ -215,7 +215,7 @@ fn cancelled_cold_scan_reports_pending_without_evidence() {
     assert!(
         resolution
             .cursor
-            .is_none_or(|cursor| cursor.turns.is_empty())
+            .is_none_or(|cursor| cursor.request_sources.is_empty())
     );
 }
 
@@ -227,13 +227,13 @@ fn missing_database_keeps_prior_evidence_without_error() {
     let missing = db.path.with_file_name("absent.sqlite");
     let none = resolve_priority_turns(&missing, None, 0, None);
     assert!(none.cursor.is_none());
-    assert!(!none.validation_pending);
+    assert!(none.validation_pending);
 
     let mut previous = cursor;
     previous.database_path = missing.to_string_lossy().to_string();
     let kept = resolve_priority_turns(&missing, Some(previous), 0, None);
     assert!(kept.validation_pending);
-    assert_eq!(kept.cursor.unwrap().turns.len(), 1);
+    assert_eq!(kept.cursor.unwrap().request_sources.len(), 1);
 }
 
 #[test]
@@ -251,16 +251,19 @@ fn cursor_for_another_database_is_discarded() {
     let db = TraceDb::new(&[(2_000, request_body("turn-1", "priority", "gpt-5.5"))]);
     let mut stale = resolve(&db, None).cursor.unwrap();
     stale.database_path = "elsewhere".to_string();
-    stale.turns.insert(
+    stale.request_sources.insert(
         "ghost".to_string(),
-        CodexPriorityTurnMetadata {
-            turn_id: "ghost".to_string(),
-            ..CodexPriorityTurnMetadata::default()
-        },
+        BTreeMap::from([(
+            2,
+            CodexPriorityTurnMetadata {
+                turn_id: "ghost".to_string(),
+                ..CodexPriorityTurnMetadata::default()
+            },
+        )]),
     );
     let cursor = resolve(&db, Some(stale)).cursor.unwrap();
-    assert!(!cursor.turns.contains_key("ghost"));
-    assert!(cursor.turns.contains_key("turn-1"));
+    assert!(cursor.turn("ghost").is_none());
+    assert!(cursor.turn("turn-1").is_some());
 }
 
 #[test]
@@ -272,8 +275,48 @@ fn coverage_window_skips_older_history() {
     let cursor = resolve_priority_turns(&db.path, None, 1_000, None)
         .cursor
         .unwrap();
-    assert!(!cursor.turns.contains_key("ancient"));
-    assert!(cursor.turns.contains_key("recent"));
+    assert!(cursor.turn("ancient").is_none());
+    assert!(cursor.turn("recent").is_some());
+}
+
+#[test]
+fn advancing_coverage_prunes_expired_turns_without_restarting_the_cursor() {
+    let db = TraceDb::new(&[
+        (1_000, request_body("expired", "priority", "gpt-5.5")),
+        (2_000, request_body("current", "priority", "gpt-5.5")),
+    ]);
+    let first = resolve(&db, None).cursor.unwrap();
+    let last_row_id = first.last_row_id;
+    assert!(first.turn("expired").is_some());
+
+    let updated = resolve_priority_turns(&db.path, Some(first), 1_500, None)
+        .cursor
+        .unwrap();
+
+    assert_eq!(updated.last_row_id, last_row_id);
+    assert_eq!(updated.coverage_since_epoch, 1_500);
+    assert!(updated.turn("expired").is_none());
+    assert!(updated.turn("current").is_some());
+}
+
+#[test]
+fn anchor_digest_tracks_fractional_sqlite_timestamps() {
+    let db = TraceDb::new(&noise(6));
+    let first = resolve(&db, None).cursor.unwrap();
+    let anchor = first.anchors[0].clone();
+
+    db.execute(&format!(
+        "update logs set ts = ts + 0.25 where id = {}",
+        anchor.row_id
+    ));
+
+    let updated = resolve(&db, Some(first)).cursor.unwrap();
+    let updated_anchor = updated
+        .anchors
+        .iter()
+        .find(|candidate| candidate.row_id == anchor.row_id)
+        .unwrap();
+    assert_ne!(updated_anchor.digest, anchor.digest);
 }
 
 #[test]

@@ -11,7 +11,7 @@
 //! baked into the persisted source-row pricing evidence, so cached-price
 //! recovery keeps comparing like with like.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -54,9 +54,6 @@ pub struct CodexPriorityTurnsCursor {
     pub file_identity: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub anchors: Vec<CodexPriorityCursorAnchor>,
-    /// Priority turns keyed by turn id.
-    #[serde(default)]
-    pub turns: HashMap<String, CodexPriorityTurnMetadata>,
     /// Source trace rows behind each Priority turn, keyed by rowid.
     #[serde(default)]
     pub request_sources: HashMap<String, BTreeMap<i64, CodexPriorityTurnMetadata>>,
@@ -67,7 +64,7 @@ pub struct CodexPriorityTurnsCursor {
     #[serde(default)]
     pub completed_models: HashMap<String, BTreeMap<i64, String>>,
     #[serde(default)]
-    pub completed_order: Vec<String>,
+    pub completed_order: VecDeque<String>,
 }
 
 /// A borrowed view that prices session rows of one file as Priority.
@@ -80,11 +77,16 @@ impl CodexPriorityTurnsCursor {
     /// the Codex home this trace database belongs to. Turn sets are never
     /// shared across `CODEX_HOME` scopes.
     pub(crate) fn overlay_for_file(&self, file_path: &Path) -> Option<CodexPriorityOverlay<'_>> {
-        if self.turns.is_empty() {
+        if self.request_sources.is_empty() {
             return None;
         }
         let home = Path::new(&self.database_path).parent()?;
         path_is_under(file_path, home).then_some(CodexPriorityOverlay { cursor: self })
+    }
+
+    /// Latest retained Priority request for `turn_id`.
+    pub(crate) fn turn(&self, turn_id: &str) -> Option<&CodexPriorityTurnMetadata> {
+        self.request_sources.get(turn_id)?.values().next_back()
     }
 
     /// Model evidence for a Priority turn: the latest completion, else the
@@ -94,7 +96,7 @@ impl CodexPriorityTurnsCursor {
             .get(turn_id)
             .and_then(|models| models.values().next_back())
             .map(String::as_str)
-            .or_else(|| self.turns.get(turn_id)?.model.as_deref())
+            .or_else(|| self.turn(turn_id)?.model.as_deref())
     }
 }
 
@@ -104,7 +106,8 @@ impl CodexPriorityOverlay<'_> {
     /// lane keeps Standard pricing, as upstream does.
     pub(crate) fn priority_model(&self, turn_id: Option<&str>, row_model: &str) -> Option<String> {
         let turn_id = turn_id?;
-        if !self.cursor.turns.contains_key(turn_id) || row_model.ends_with("-priority") {
+        self.cursor.turn(turn_id)?;
+        if row_model.ends_with("-priority") {
             return None;
         }
         let priced = self
