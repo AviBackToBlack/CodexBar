@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useLocale } from "../hooks/useLocale";
 import type { SpendContract } from "../types/bridge";
 import {
@@ -5,13 +6,32 @@ import {
   formatUsd,
 } from "../lib/usageSpendSharing";
 
+type DailyPoints = SpendContract["daily"];
+
+/** Upstream `SpendDailyLedger.collapsedRowCount`: long ranges start with the newest 30 days. */
+export const DAILY_LEDGER_COLLAPSED_ROWS = 30;
+
+/**
+ * Newest-first ledger rows. Collapsed shows the newest `collapsedRowCount` days; expanded shows the
+ * complete history (upstream `spendDailyLedgerVisibleSummaries`).
+ */
+export function dailyLedgerVisibleRows(
+  daily: DailyPoints,
+  showsAllRows: boolean,
+  collapsedRowCount: number = DAILY_LEDGER_COLLAPSED_ROWS,
+): DailyPoints {
+  const newestFirst = [...daily].sort((a, b) => b.day.localeCompare(a.day));
+  return showsAllRows ? newestFirst : newestFirst.slice(0, collapsedRowCount);
+}
+
 export function UsageSpendDailyLedger({
   daily,
 }: {
-  daily: SpendContract["daily"];
+  daily: DailyPoints;
 }) {
   const { t } = useLocale();
-  const rows = [...daily].sort((a, b) => b.day.localeCompare(a.day));
+  const [showsAllRows, setShowsAllRows] = useState(false);
+  const rows = dailyLedgerVisibleRows(daily, showsAllRows);
 
   return (
     <section className="settings-section__group usage-spend-daily" aria-labelledby="usage-spend-daily-title">
@@ -40,6 +60,16 @@ export function UsageSpendDailyLedger({
             </tbody>
           </table>
         </div>
+      )}
+      {daily.length > DAILY_LEDGER_COLLAPSED_ROWS && (
+        <button
+          type="button"
+          className="credential-btn credential-btn--secondary usage-spend-daily__toggle"
+          aria-expanded={showsAllRows}
+          onClick={() => setShowsAllRows((value) => !value)}
+        >
+          {showsAllRows ? t("UsageSpendShowLess") : `${t("UsageSpendShowAll")} (${daily.length})`}
+        </button>
       )}
     </section>
   );

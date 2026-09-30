@@ -5398,6 +5398,10 @@ html:has(.menu-surface--tray) {
   margin-top: 10px;
 }
 
+.usage-spend-daily__toggle {
+  margin-top: 8px;
+}
+
 /* About update controls block */
 .about-update-controls {
   display: flex;
