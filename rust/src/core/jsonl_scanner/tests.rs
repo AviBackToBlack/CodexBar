@@ -529,7 +529,7 @@ fn codex_fast_parser_accepts_compact_and_spaced_event_records_equally() {
             parser
                 .records
                 .into_iter()
-                .map(|record| {
+                .map(|(record, _)| {
                     (
                         record.day_key,
                         record.model,
@@ -961,8 +961,8 @@ fn process_line_keeps_bare_usage_when_model_contains_turn_context() {
     );
 
     assert_eq!(parser.records.len(), 1);
-    assert_eq!(parser.records[0].input, 120);
-    assert_eq!(parser.records[0].output, 30);
+    assert_eq!(parser.records[0].0.input, 120);
+    assert_eq!(parser.records[0].0.output, 30);
 }
 
 #[test]
