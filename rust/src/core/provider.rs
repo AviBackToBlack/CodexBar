@@ -1022,27 +1022,32 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
 }
 
 /// The shipped brand color (hex) for a provider, mirroring the frontend
-/// `PROVIDER_ICON_REGISTRY` in `providerIcons.ts`. Used as the default
-/// accent color before any per-provider override (#2972).
+/// `PROVIDER_ICON_REGISTRY` in `providerIcons.ts` and the `--chart-<id>`
+/// tokens in `styles.css` (`providerIcons.test.ts` checks both). Used as the
+/// default accent color before any per-provider override (#2972).
+///
+/// Upstream 0.70.0 audited the palette (#4075, `docs/provider-palette.md`).
+/// The 16 accents it adopted are pinned in the tests below; changing one
+/// must not materially reduce contrast on white or `#222222`.
 pub fn brand_color(id: ProviderId) -> &'static str {
     match id {
         ProviderId::Codex => "#49A3B0",
         ProviderId::Claude => "#CC7C5E",
         ProviderId::Pi => "#7C3AED",
-        ProviderId::Cursor => "#00BFA5",
+        ProviderId::Cursor => "#F54E00",
         ProviderId::Factory => "#FF6B35",
         ProviderId::Gemini => "#AB87EA",
         ProviderId::Antigravity => "#60BA7E",
         ProviderId::Copilot => "#A855F7",
         ProviderId::Zai => "#E85A6A",
         ProviderId::MiniMax => "#FE603C",
-        ProviderId::Kiro => "#FF9900",
+        ProviderId::Kiro => "#9046FF",
         ProviderId::VertexAI => "#4285F4",
-        ProviderId::Augment => "#6366F1",
+        ProviderId::Augment => "#1AA049",
         ProviderId::OpenCode => "#3B82F6",
         ProviderId::Kimi => "#FE603C",
         ProviderId::KimiK2 => "#4C00FF",
-        ProviderId::Amp => "#DC2626",
+        ProviderId::Amp => "#F34E3F",
         ProviderId::Warp => "#6366F1",
         ProviderId::Ollama => "#8B95B0",
         ProviderId::AzureOpenAI => "#0078D4",
@@ -1054,24 +1059,24 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::NanoGPT => "#687FA1",
         ProviderId::Infini => "#687FA1",
         ProviderId::Perplexity => "#1FB8CD",
-        ProviderId::Abacus => "#7C3AED",
-        ProviderId::Mistral => "#FF500F",
+        ProviderId::Abacus => "#814EE8",
+        ProviderId::Mistral => "#FF5229",
         ProviderId::OpenCodeGo => "#3B82F6",
         ProviderId::Kilo => "#5D87FF",
-        ProviderId::Bedrock => "#FF9900",
-        ProviderId::Codebuff => "#44FF00",
+        ProviderId::Bedrock => "#01A88D",
+        ProviderId::Codebuff => "#00FF95",
         ProviderId::CodeRabbit => "#FF5C35",
-        ProviderId::DeepSeek => "#527DF0",
+        ProviderId::DeepSeek => "#4D6BFE",
         ProviderId::DeepInfra => "#2A3275",
         ProviderId::AiAnd => "#E25C2B",
         ProviderId::Windsurf => "#22C55E",
         ProviderId::Manus => "#34322D",
         ProviderId::MiMo => "#FF6900",
         ProviderId::Doubao => "#2563EB",
-        ProviderId::CommandCode => "#44FF00",
+        ProviderId::CommandCode => "#8C4EDD",
         ProviderId::Crof => "#7C3AED",
         ProviderId::StepFun => "#999999",
-        ProviderId::Venice => "#111827",
+        ProviderId::Venice => "#3C8FDD",
         ProviderId::OpenAIApi => "#10A37F",
         ProviderId::Grok => "#111827",
         ProviderId::ElevenLabs => "#111827",
@@ -1085,18 +1090,18 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Chutes => "#FF5C35",
         ProviderId::LiteLLM => "#0EA5E9",
         ProviderId::Poe => "#5D5FEF",
-        ProviderId::Devin => "#111827",
+        ProviderId::Devin => "#317CFF",
         ProviderId::Zed => "#084CCF",
         ProviderId::CrossModel => "#C084FC",
         ProviderId::Qoder => "#2563EB",
         ProviderId::CodeBuddy => "#0052D9",
         ProviderId::Sakana => "#0EA5E9",
-        ProviderId::Sub2Api => "#2DC6D8",
+        ProviderId::Sub2Api => "#14B8A6",
         ProviderId::Wayfinder => "#14B8A6",
         ProviderId::ZenMux => "#6C5CE7",
-        ProviderId::ClinePass => "#61A3FA",
-        ProviderId::LongCat => "#FFD100",
-        ProviderId::Neuralwatt => "#38D98C",
+        ProviderId::ClinePass => "#5487C8",
+        ProviderId::LongCat => "#29E154",
+        ProviderId::Neuralwatt => "#D55934",
         ProviderId::ZoomMate => "#0B5CFF",
         ProviderId::QwenCloud => "#615CED",
         ProviderId::Notion => "#337EA9",
@@ -1502,5 +1507,119 @@ mod tests {
             ProviderId::from_cli_name("supergrok"),
             Some(ProviderId::Grok)
         );
+    }
+
+    /// The 16 accents upstream 0.70.0 adopted in its palette audit (#4075),
+    /// each with the accent Windows shipped before this port.
+    const ADOPTED_ACCENTS: [(ProviderId, &str, &str); 16] = [
+        (ProviderId::Abacus, "#7C3AED", "#814EE8"),
+        (ProviderId::Amp, "#DC2626", "#F34E3F"),
+        (ProviderId::Augment, "#6366F1", "#1AA049"),
+        (ProviderId::Bedrock, "#FF9900", "#01A88D"),
+        (ProviderId::ClinePass, "#61A3FA", "#5487C8"),
+        (ProviderId::Codebuff, "#44FF00", "#00FF95"),
+        (ProviderId::CommandCode, "#44FF00", "#8C4EDD"),
+        (ProviderId::Cursor, "#00BFA5", "#F54E00"),
+        (ProviderId::DeepSeek, "#527DF0", "#4D6BFE"),
+        (ProviderId::Devin, "#111827", "#317CFF"),
+        (ProviderId::Kiro, "#FF9900", "#9046FF"),
+        (ProviderId::LongCat, "#FFD100", "#29E154"),
+        (ProviderId::Mistral, "#FF500F", "#FF5229"),
+        (ProviderId::Neuralwatt, "#38D98C", "#D55934"),
+        (ProviderId::Sub2Api, "#2DC6D8", "#14B8A6"),
+        (ProviderId::Venice, "#111827", "#3C8FDD"),
+    ];
+
+    /// Audited providers whose accent upstream kept, where the Windows accent
+    /// already equals upstream's final value. Chutes, Deepgram, Doubao, Groq,
+    /// Kilo, LiteLLM, Perplexity, Qoder, Sakana, T3 Chat and Warp keep older
+    /// Windows accents that differ from upstream; aligning them is out of
+    /// scope for the 0.70.0 port.
+    const RETAINED_ACCENTS: [(ProviderId, &str); 7] = [
+        (ProviderId::AiAnd, "#E25C2B"),
+        (ProviderId::Copilot, "#A855F7"),
+        (ProviderId::Fireworks, "#F25B1C"),
+        (ProviderId::JetBrains, "#FF3399"),
+        (ProviderId::Kimi, "#FE603C"),
+        (ProviderId::Notion, "#337EA9"),
+        (ProviderId::OpenCode, "#3B82F6"),
+    ];
+
+    /// WCAG relative luminance of a `#RRGGBB` color, as upstream's
+    /// `ProviderPaletteRegressionTests` computes it.
+    fn relative_luminance(hex: &str) -> f64 {
+        let digits = hex.strip_prefix('#').expect("hex color starts with #");
+        assert_eq!(digits.len(), 6, "{hex} is not #RRGGBB");
+        let linear = |offset: usize| {
+            let channel =
+                f64::from(u8::from_str_radix(&digits[offset..offset + 2], 16).expect("hex digits"))
+                    / 255.0;
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(0) + 0.7152 * linear(2) + 0.0722 * linear(4)
+    }
+
+    fn contrast_ratio(color: &str, background: &str) -> f64 {
+        let foreground = relative_luminance(color);
+        let backdrop = relative_luminance(background);
+        (foreground.max(backdrop) + 0.05) / (foreground.min(backdrop) + 0.05)
+    }
+
+    #[test]
+    fn contrast_ratio_matches_upstream_audit_values() {
+        // Rows of upstream docs/provider-palette.md, rounded to two decimals.
+        let rounded = |value: f64| (value * 100.0).round() / 100.0;
+        assert_eq!(rounded(contrast_ratio("#814EE8", "#FFFFFF")), 5.01);
+        assert_eq!(rounded(contrast_ratio("#814EE8", "#222222")), 3.17);
+        assert_eq!(rounded(contrast_ratio("#FF9900", "#FFFFFF")), 2.14);
+        assert_eq!(rounded(contrast_ratio("#01A88D", "#222222")), 5.29);
+        assert_eq!(rounded(contrast_ratio("#00FF95", "#FFFFFF")), 1.33);
+        assert_eq!(rounded(contrast_ratio("#FFFFFF", "#FFFFFF")), 1.0);
+    }
+
+    #[test]
+    fn adopted_upstream_palette_accents_are_pinned() {
+        for (id, _, adopted) in ADOPTED_ACCENTS {
+            assert_eq!(brand_color(id), adopted, "{id:?}");
+        }
+        for (id, retained) in RETAINED_ACCENTS {
+            assert_eq!(brand_color(id), retained, "{id:?}");
+        }
+    }
+
+    #[test]
+    fn adopted_palette_accents_do_not_materially_regress_contrast() {
+        // Upstream's controlled light and dark menu surfaces. A material
+        // regression falls below 3:1 while losing at least 0.5 of contrast
+        // against the accent Windows shipped before.
+        for (id, previous, _) in ADOPTED_ACCENTS {
+            for background in ["#FFFFFF", "#222222"] {
+                let current = contrast_ratio(brand_color(id), background);
+                let before = contrast_ratio(previous, background);
+                assert!(
+                    current >= 3.0 || before - current < 0.5,
+                    "{id:?} on {background}: {before:.2} -> {current:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn brand_colors_are_uppercase_hex() {
+        for id in ProviderId::all() {
+            let color = brand_color(*id);
+            assert!(
+                color.len() == 7
+                    && color.starts_with('#')
+                    && color[1..]
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || matches!(c, 'A'..='F')),
+                "{id:?} has {color}"
+            );
+        }
     }
 }
