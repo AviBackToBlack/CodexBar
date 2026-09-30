@@ -24,6 +24,10 @@ import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
+import {
+  providerCostPeriodTitle,
+  providerDisplayDetailTitle,
+} from "../lib/providerLabels";
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
@@ -541,6 +545,11 @@ export default function MenuCardDetails({
   );
   const localCostHistory = chartData?.costHistory ?? [];
   const costStyle = display.costSummaryDisplayStyle ?? "detailed";
+  const costPeriod = providerCostPeriodTitle(
+    provider.providerId,
+    provider.cost?.period ?? "",
+    t,
+  );
 
   const {
     hasMetrics,
@@ -598,15 +607,7 @@ export default function MenuCardDetails({
       {!provider.error && hasDisplayDetails && !compactOverview && (
         <section className="menu-card__group menu-card__provider-details">
           {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
-        </section>
-      )}
-
-      {!provider.error && hasDisplayDetails && (
-        <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
+            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} t={t} />
           ))}
         </section>
       )}
@@ -621,8 +622,8 @@ export default function MenuCardDetails({
             {provider.cost.alwaysVisible === true && (provider.cost.limit ?? 0) <= 0
               ? t("ApiSpendTitle")
               : provider.cost.balance != null && provider.cost.limit == null
-                ? provider.cost.period || t("CreditsLabel")
-              : `${t("DetailCostTitle")} — ${provider.cost.period}`}
+                ? costPeriod || t("CreditsLabel")
+              : `${t("DetailCostTitle")} — ${costPeriod}`}
           </div>
           {provider.cost.balance != null && provider.cost.limit == null ? (
             <div className="menu-card__cost-line">
@@ -787,7 +788,14 @@ export default function MenuCardDetails({
   );
 }
 
-function DisplayDetailRow({ detail }: { detail: ProviderDisplayDetail }) {
+function DisplayDetailRow({
+  detail,
+  t,
+}: {
+  detail: ProviderDisplayDetail;
+  t: (key: LocaleKey) => string;
+}) {
+  const title = providerDisplayDetailTitle(detail, t);
   const progress = detail.progress;
   const progressPercent = progress && Number.isFinite(progress.used) && Number.isFinite(progress.total) && progress.total > 0
     ? Math.max(0, Math.min(100, (progress.used / progress.total) * 100))
@@ -796,13 +804,13 @@ function DisplayDetailRow({ detail }: { detail: ProviderDisplayDetail }) {
   return (
     <div className="menu-card__provider-detail">
       <div className="menu-card__cost-line">
-        <span>{detail.title}: {detail.value}</span>
+        <span>{title}: {detail.value}</span>
         {detail.secondaryValue && (
           <span className="menu-card__cost-line--muted">{detail.secondaryValue}</span>
         )}
       </div>
       {progressPercent != null && (
-        <div className="menu-metric__bar" aria-label={`${detail.title} progress`}>
+        <div className="menu-metric__bar" aria-label={`${title} progress`}>
           <div className="menu-metric__bar-fill" style={{ width: `${progressPercent}%` }} />
         </div>
       )}

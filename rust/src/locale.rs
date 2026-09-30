@@ -266,6 +266,8 @@ locale_keys! {
     ProviderDisabled,
     ProviderInfo,
     ProviderUsage,
+    AtlasCloudAvailableBalance,
+    AtlasCloudBalance,
     PanelUsageDetails,
     AuthType,
     DataSource,

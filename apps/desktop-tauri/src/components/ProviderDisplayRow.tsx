@@ -1,4 +1,6 @@
 import type { ProviderDisplayDetail } from "../types/bridge";
+import type { LocaleKey } from "../i18n/keys";
+import { providerDisplayDetailTitle } from "../lib/providerLabels";
 
 /**
  * One transient provider detail line: "{title}: {value} [secondary]"
@@ -13,13 +15,16 @@ export function ProviderDisplayRow({
   secondaryClassName,
   trackClassName,
   fillClassName,
+  t,
 }: {
   detail: ProviderDisplayDetail;
   lineClassName: string;
   secondaryClassName?: string;
   trackClassName: string;
   fillClassName: string;
+  t: (key: LocaleKey) => string;
 }) {
+  const title = providerDisplayDetailTitle(detail, t);
   const progress = detail.progress;
   const progressPercent =
     progress &&
@@ -32,13 +37,13 @@ export function ProviderDisplayRow({
   return (
     <div>
       <div className={lineClassName}>
-        <span>{detail.title}: {detail.value}</span>
+        <span>{title}: {detail.value}</span>
         {detail.secondaryValue && secondaryClassName && (
           <span className={secondaryClassName}>{detail.secondaryValue}</span>
         )}
       </div>
       {progressPercent != null && (
-        <div className={trackClassName} aria-label={`${detail.title} progress`}>
+        <div className={trackClassName} aria-label={`${title} progress`}>
           <div className={fillClassName} style={{ width: `${progressPercent}%` }} />
         </div>
       )}

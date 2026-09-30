@@ -119,6 +119,8 @@ describe("MenuCard", () => {
       buildBundle({
         ActionCopyError: "Copy error",
         ApiSpendTitle: "API spend",
+        AtlasCloudAvailableBalance: "Available balance",
+        AtlasCloudBalance: "Atlas Cloud balance",
         DetailPaceRunsOutIn: "Runs out in",
         PanelEstimatedFromLocalLogs: "Estimated from local logs",
         PanelLeftSuffix: "left",
@@ -599,6 +601,27 @@ describe("MenuCard", () => {
     expect(details.open).toBe(false);
     fireEvent.click(details.querySelector("summary")!);
     expect(details.open).toBe(true);
+  });
+
+  it("renders provider display details once and hides them in compact overview", async () => {
+    const snapshot = provider(null);
+    snapshot.displayDetails = [
+      {
+        id: "atlascloud-available",
+        title: "Available balance",
+        value: "$95.50",
+        secondaryValue: null,
+        progress: null,
+      },
+    ];
+
+    const detailed = renderCard(snapshot);
+    expect(await screen.findByText("Available balance: $95.50")).toBeInTheDocument();
+    expect(screen.getAllByText("Available balance: $95.50")).toHaveLength(1);
+    detailed.unmount();
+
+    renderCard(snapshot, { compactOverview: true });
+    expect(screen.queryByText("Available balance: $95.50")).not.toBeInTheDocument();
   });
 
   it("places Claude accounts above metrics and the collapsed usage details", async () => {
