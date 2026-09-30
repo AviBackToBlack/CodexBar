@@ -241,7 +241,17 @@ impl Serialize for CostReportingPeriod {
 /// Settings files must keep loading, so an unreadable value reads as the default.
 impl<'de> Deserialize<'de> for CostReportingPeriod {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Option::<String>::deserialize(deserializer)?;
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum SavedPeriod {
+            Text(String),
+            Unreadable(serde::de::IgnoredAny),
+        }
+
+        let raw = match SavedPeriod::deserialize(deserializer)? {
+            SavedPeriod::Text(raw) => Some(raw),
+            SavedPeriod::Unreadable(_) => None,
+        };
         Ok(Self::migrated(raw.as_deref(), None))
     }
 }
@@ -452,5 +462,7 @@ mod tests {
         assert_eq!(read("\"all\""), CostReportingPeriod::AllAvailable);
         assert_eq!(read("\"nonsense\""), CostReportingPeriod::Rolling(30));
         assert_eq!(read("null"), CostReportingPeriod::Rolling(30));
+        assert_eq!(read("42"), CostReportingPeriod::Rolling(30));
+        assert_eq!(read(r#"{"a":1}"#), CostReportingPeriod::Rolling(30));
     }
 }
