@@ -29,9 +29,11 @@ impl ClaudeProjectsRoots {
 
 /// Existing Claude transcript roots, de-duplicated by resolved path.
 ///
-/// `config_dir` is the raw `CLAUDE_CONFIG_DIR` value: one literal directory,
-/// with empty meaning "unset". A root that does not exist is omitted; failures
-/// that prevent discovering existing roots are retained for scan coverage.
+/// `config_dir` is the raw `CLAUDE_CONFIG_DIR` value: one literal directory
+/// (never split on separators), with a blank value meaning "unset". A root
+/// that does not exist is omitted, which scans the same rows as upstream's
+/// empty missing root; failures that prevent discovering existing roots are
+/// retained for scan coverage.
 pub(super) fn claude_projects_roots(
     config_dir: Option<&str>,
     home: Option<&Path>,
@@ -141,13 +143,15 @@ fn is_missing_path(error: &std::io::Error) -> bool {
     )
 }
 
+/// `<N>-<label>` with `<N>` a positive integer. The label may be empty, as in
+/// upstream's `split(separator: "-", maxSplits: 1, omittingEmptySubsequences:
+/// false)` check; hidden entries are skipped like `.skipsHiddenFiles`.
 fn is_swap_slot_name(name: &str) -> bool {
     if name.starts_with('.') {
         return false;
     }
     name.split_once('-')
-        .and_then(|(number, label)| (!label.is_empty()).then_some(number))
-        .and_then(|number| number.parse::<i64>().ok())
+        .and_then(|(number, _label)| number.parse::<i64>().ok())
         .is_some_and(|number| number > 0)
 }
 
@@ -167,7 +171,7 @@ mod tests {
 
     #[test]
     fn slot_names_need_a_positive_integer_and_a_dash() {
-        for accepted in ["1-first", "12-a-b", "+5-plus"] {
+        for accepted in ["1-first", "12-a-b", "+5-plus", "3-"] {
             assert!(is_swap_slot_name(accepted), "{accepted}");
         }
         for rejected in [
@@ -176,10 +180,10 @@ mod tests {
             "unrelated",
             "abc-1",
             "7",
-            "3-",
             "",
             ".1-hidden",
             " 1-x",
+            "99999999999999999999-overflow",
         ] {
             assert!(!is_swap_slot_name(rejected), "{rejected}");
         }
@@ -287,6 +291,44 @@ mod tests {
             claude_projects_roots(None, Some(home.path())).paths,
             vec![first]
         );
+    }
+
+    /// Junctions need no symlink privilege, so this covers the resolved-path
+    /// de-duplication of a shared-history link on every Windows host.
+    #[cfg(windows)]
+    #[test]
+    fn shared_history_junction_is_scanned_once() {
+        use std::os::windows::process::CommandExt;
+        let home = tempfile::tempdir().unwrap();
+        let first = swap_home(home.path(), "1-first");
+        let second = swap_home(home.path(), "2-second");
+        let shared = home
+            .path()
+            .join(".claude-swap-backup")
+            .join("sessions")
+            .join("3-shared");
+        fs::create_dir_all(&shared).unwrap();
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "New-Item -ItemType Junction -Path $env:CODEXBAR_TEST_LINK -Target $env:CODEXBAR_TEST_TARGET | Out-Null",
+            ])
+            .env("CODEXBAR_TEST_LINK", shared.join("projects"))
+            .env("CODEXBAR_TEST_TARGET", &first)
+            .creation_flags(0x0800_0000)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "Failed to create the shared-history junction fixture."
+        );
+        assert!(shared.join("projects").is_dir());
+
+        let roots = claude_projects_roots(None, Some(home.path()));
+        assert_eq!(roots.paths, vec![first, second]);
+        assert_eq!(roots.read_failures, 0);
     }
 
     #[test]
