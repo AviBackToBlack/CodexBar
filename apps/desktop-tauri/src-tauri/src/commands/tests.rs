@@ -720,6 +720,24 @@ fn provider_dashboard_url_uses_selected_regional_console() {
     );
 }
 
+/// Provider metadata is the only source of the provider dashboard link; the
+/// API-key catalog URL is the key-management link shown next to the key field.
+/// A provider that only has a catalog URL must get a metadata URL instead of
+/// silently borrowing the key page.
+#[test]
+fn api_key_catalog_providers_have_metadata_dashboard_urls() {
+    let settings = Settings::default();
+    for provider in codexbar::settings::get_api_key_providers() {
+        if provider.dashboard_url.is_some() {
+            assert!(
+                super::provider_dashboard_url(provider.id, &settings).is_some(),
+                "{:?} has an API-key page but no metadata dashboard URL",
+                provider.id
+            );
+        }
+    }
+}
+
 #[test]
 fn fetch_context_token_account_uses_web_cookie_header() {
     let settings = Settings::default();
