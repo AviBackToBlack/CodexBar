@@ -671,6 +671,29 @@ fn same_unknown_stale_or_non_oauth_plans_keep_the_baseline() {
 }
 
 #[test]
+fn unknown_plan_publication_preserves_the_last_known_plan() {
+    for unknown_plan in [None, Some("  ")] {
+        let mut state = plus_baseline();
+        let inventory = inventory("credit-a");
+        let unknown = plan_snapshot(unknown_plan, 50.0, 10);
+        assert_eq!(
+            initial_decision(&mut state, &unknown, Some(&inventory), true, now()),
+            InitialDecision::Publish
+        );
+        commit_publication(&mut state, &unknown, Some(inventory));
+        assert_eq!(state.plan.as_deref(), Some("ChatGPT Plus"));
+
+        let changed = plan_snapshot(Some("ChatGPT Pro"), 50.0, 11);
+        assert_eq!(
+            initial_decision(&mut state, &changed, None, true, now()),
+            InitialDecision::Publish
+        );
+        assert!(state.published_weekly.is_none());
+        assert!(state.credit_inventory.is_none());
+    }
+}
+
+#[test]
 fn near_zero_confirmation_must_report_the_initial_plan() {
     let inv = inventory("credit-a");
     for confirmation_plan in [Some("ChatGPT Plus"), None] {

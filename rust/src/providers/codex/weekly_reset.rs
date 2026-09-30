@@ -641,7 +641,9 @@ pub(super) fn commit_publication(
     if let Some(weekly) = weekly(snapshot) {
         state.published_weekly = Some(weekly.clone());
         state.published_at = snapshot.updated_at;
-        state.plan = snapshot.login_method.clone();
+        if normalized_plan(snapshot.login_method.as_deref()).is_some() {
+            state.plan = snapshot.login_method.clone();
+        }
         state.credit_inventory = inventory;
         state.candidate = None;
     }
