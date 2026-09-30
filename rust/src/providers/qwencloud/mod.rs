@@ -622,7 +622,9 @@ fn quota_totals_from_bytes(data: &[u8], plan_code: &str) -> Option<QuotaTotals> 
     let value: Value = serde_json::from_slice(data).ok()?;
     let expanded = expand_json_strings(value);
     let quota = find_first_value_for_key(&expanded, plan_code)?;
-    quota.as_object()?;
+    if !quota.is_object() {
+        return None;
+    }
     let totals = QuotaTotals {
         five_hour: number_field(&quota, "five_hour").or_else(|| number_field(&quota, "fiveHour")),
         weekly: number_field(&quota, "weekly"),

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use chrono::{TimeZone, Utc};
 use serde_json::Value;
 
 use super::personal::{WindowStrictness, personal_usage_snapshot};
@@ -152,26 +151,10 @@ pub(super) fn parse_cli_usage(text: &str) -> Result<TokenPlanSnapshot, ProviderE
     .ok_or_else(unsupported)
 }
 
-pub(super) fn ratio(value: Option<&Value>) -> Option<f64> {
-    let ratio = value?.as_f64()?;
-    (ratio.is_finite() && (0.0..=1.0).contains(&ratio)).then_some(ratio)
-}
-
-pub(super) fn reset_date(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
-    let milliseconds = value?.as_f64()?;
-    if !milliseconds.is_finite() || milliseconds <= 0.0 {
-        return None;
-    }
-    let rounded = milliseconds.round();
-    if rounded < 1.0 || rounded >= 9_223_372_036_854_775_808.0 {
-        return None;
-    }
-    let millis = format!("{rounded:.0}").parse::<i64>().ok()?;
-    Utc.timestamp_millis_opt(millis).single()
-}
-
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Utc};
+
     use super::*;
 
     #[test]
@@ -189,26 +172,6 @@ mod tests {
         assert_eq!(
             parsed.weekly_resets_at,
             Utc.timestamp_millis_opt(1_787_001_180_000).single()
-        );
-    }
-
-    #[test]
-    fn reset_date_rejects_non_finite_and_out_of_range_values() {
-        assert!(reset_date(Some(&Value::from(-1.0))).is_none());
-        assert!(reset_date(Some(&Value::from(0.0))).is_none());
-        assert!(reset_date(Some(&Value::from(f64::NAN))).is_none());
-        assert!(reset_date(Some(&Value::from(f64::INFINITY))).is_none());
-        assert!(reset_date(Some(&Value::from(f64::MAX))).is_none());
-        assert!(reset_date(Some(&Value::from(i64::MAX as f64 + 4096.0))).is_none());
-        let fractional = reset_date(Some(&Value::from(1_787_000_400_250.5)));
-        assert_eq!(
-            fractional,
-            Utc.timestamp_millis_opt(1_787_000_400_251).single()
-        );
-        let integer_valued_float = reset_date(Some(&Value::from(1_787_000_400_000.0)));
-        assert_eq!(
-            integer_valued_float,
-            Utc.timestamp_millis_opt(1_787_000_400_000).single()
         );
     }
 

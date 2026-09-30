@@ -1,10 +1,9 @@
 //! Alibaba Token Plan Personal/Solo OneConsole path (upstream 0.46.0).
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use super::cli;
 use super::region::AlibabaTokenPlanRegion;
 use super::{
     LANGUAGE, PERSONAL_CONSOLE_PRODUCT, PERSONAL_QUOTA_CONFIG_API, PERSONAL_SUBSCRIPTION_API,
@@ -370,11 +369,29 @@ fn read_window(
             date_field(usage, reset_key),
         ),
         WindowStrictness::Cli => {
-            let percent = percentage_points(cli::ratio(usage.get(ratio_key)));
-            let reset = percent.and_then(|_| cli::reset_date(usage.get(reset_key)));
+            let percent = percentage_points(ratio(usage.get(ratio_key)));
+            let reset = percent.and_then(|_| reset_date(usage.get(reset_key)));
             (percent, reset)
         }
     }
+}
+
+fn ratio(value: Option<&Value>) -> Option<f64> {
+    let ratio = value?.as_f64()?;
+    (ratio.is_finite() && (0.0..=1.0).contains(&ratio)).then_some(ratio)
+}
+
+fn reset_date(value: Option<&Value>) -> Option<DateTime<Utc>> {
+    let milliseconds = value?.as_f64()?;
+    if !milliseconds.is_finite() || milliseconds <= 0.0 {
+        return None;
+    }
+    let rounded = milliseconds.round();
+    if rounded < 1.0 || rounded >= 9_223_372_036_854_775_808.0 {
+        return None;
+    }
+    let millis = format!("{rounded:.0}").parse::<i64>().ok()?;
+    Utc.timestamp_millis_opt(millis).single()
 }
 
 fn plan_code_from_bytes(data: &[u8]) -> Option<String> {
@@ -409,7 +426,9 @@ fn quota_totals_from_bytes(data: &[u8], plan_code: &str) -> Option<QuotaTotals> 
     let value: Value = serde_json::from_slice(data).ok()?;
     let expanded = expand_json_strings(value);
     let quota = find_first_value_for_key(&expanded, plan_code)?;
-    quota.as_object()?;
+    if !quota.is_object() {
+        return None;
+    }
     let totals = QuotaTotals {
         five_hour: number_field(&quota, "five_hour").or_else(|| number_field(&quota, "fiveHour")),
         weekly: number_field(&quota, "weekly"),
@@ -654,5 +673,25 @@ mod tests {
         assert_eq!(usage_snap.primary.window_minutes, Some(10080));
         assert!(usage_snap.secondary.is_none());
         assert_eq!(usage_snap.login_method.as_deref(), Some("Personal"));
+    }
+
+    #[test]
+    fn reset_date_rejects_non_finite_and_out_of_range_values() {
+        assert!(reset_date(Some(&Value::from(-1.0))).is_none());
+        assert!(reset_date(Some(&Value::from(0.0))).is_none());
+        assert!(reset_date(Some(&Value::from(f64::NAN))).is_none());
+        assert!(reset_date(Some(&Value::from(f64::INFINITY))).is_none());
+        assert!(reset_date(Some(&Value::from(f64::MAX))).is_none());
+        assert!(reset_date(Some(&Value::from(i64::MAX as f64 + 4096.0))).is_none());
+        let fractional = reset_date(Some(&Value::from(1_787_000_400_250.5)));
+        assert_eq!(
+            fractional,
+            Utc.timestamp_millis_opt(1_787_000_400_251).single()
+        );
+        let integer_valued_float = reset_date(Some(&Value::from(1_787_000_400_000.0)));
+        assert_eq!(
+            integer_valued_float,
+            Utc.timestamp_millis_opt(1_787_000_400_000).single()
+        );
     }
 }

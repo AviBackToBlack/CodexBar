@@ -355,22 +355,24 @@ impl AlibabaTokenPlanProvider {
         // payloads sometimes expose only `per1WeekPercentage`; promote that window to
         // primary instead of failing the whole fetch. A monthly window takes the primary
         // bar only when no other window exists; otherwise it is an extra "Monthly" row.
-        let (primary, secondary, monthly_is_primary) = match (five_hour.or(legacy), weekly) {
-            (Some(primary), secondary) => (primary, secondary, false),
-            (None, Some(weekly)) => (weekly, None, false),
-            (None, None) => match monthly.clone() {
-                Some(monthly) => (monthly, None, true),
-                None => {
-                    return Err(ProviderError::Parse(
-                        "Alibaba Token Plan quota totals missing".into(),
-                    ));
-                }
-            },
-        };
+        let (primary, secondary, primary_label, monthly_extra) =
+            match (five_hour.or(legacy), weekly) {
+                (Some(primary), secondary) => (primary, secondary, None, monthly),
+                (None, Some(weekly)) => (weekly, None, None, monthly),
+                (None, None) => match monthly {
+                    Some(monthly) => (monthly, None, Some("Monthly"), None),
+                    None => {
+                        return Err(ProviderError::Parse(
+                            "Alibaba Token Plan quota totals missing".into(),
+                        ));
+                    }
+                },
+            };
         let mut usage = UsageSnapshot::new(primary);
-        if monthly_is_primary {
-            usage = usage.with_primary_label("Monthly");
-        } else if let Some(monthly) = monthly {
+        if let Some(label) = primary_label {
+            usage = usage.with_primary_label(label);
+        }
+        if let Some(monthly) = monthly_extra {
             usage = usage.with_extra_rate_window("monthly", "Monthly", monthly);
         }
         if let Some(secondary) = secondary {
