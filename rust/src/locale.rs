@@ -660,6 +660,8 @@ locale_keys! {
     UsageSpendHourlyActivity,
     UsageSpendRequests,
     UsageSpendTokens,
+    IncompleteRequestsLabel,
+    IncompleteRequestsDetail,
     UsageSpendAllTimeHistory,
     UsageSpendCustomPricing,
     OverviewSpendTitle,

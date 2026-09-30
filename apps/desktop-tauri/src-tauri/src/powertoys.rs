@@ -231,6 +231,7 @@ mod tests {
                 top_model: Some("gpt-5".to_string()),
                 estimate_note: "cached".to_string(),
                 token_cost_updated_at_ms: 1234,
+                incomplete_request_count: None,
             }),
         );
 

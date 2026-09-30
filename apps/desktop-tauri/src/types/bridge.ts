@@ -798,6 +798,8 @@ export interface AppInfoBridge {
 export interface DailyCostPoint {
   date: string;
   value: number | null;
+  /** Claude requests excluded from this day's totals (upstream 0.60.5 #3688). */
+  incompleteRequestCount?: number;
 }
 
 /** Exact local token totals per day (upstream 0.50.0 #2930). */
@@ -825,6 +827,8 @@ export interface ProviderLocalUsageSummary {
   topModel: string | null;
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+  /** Claude requests excluded from the 30-day totals (upstream 0.60.5 #3688). */
+  incompleteRequestCount?: number;
 }
 
 export interface QuotaWindowHistoryPoint {

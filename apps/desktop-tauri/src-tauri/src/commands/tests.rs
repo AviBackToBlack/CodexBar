@@ -1595,15 +1595,18 @@ fn chart_data_serde_roundtrip_preserves_fields() {
             DailyCostPoint {
                 date: "2025-01-01".into(),
                 value: Some(1.25),
+                incomplete_request_count: None,
             },
             DailyCostPoint {
                 date: "2025-01-02".into(),
                 value: Some(0.0),
+                incomplete_request_count: None,
             },
         ],
         credits_history: vec![DailyCostPoint {
             date: "2025-01-01".into(),
             value: Some(42.0),
+            incomplete_request_count: None,
         }],
         usage_breakdown: vec![DailyUsageBreakdown {
             day: "2025-01-01".into(),

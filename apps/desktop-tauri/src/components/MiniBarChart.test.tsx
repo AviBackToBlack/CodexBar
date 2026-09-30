@@ -29,6 +29,26 @@ describe("MiniBarChart history axes", () => {
     expect((labels[1] as HTMLElement).style.transform).toBe("");
   });
 
+  it("marks days that only had incomplete requests without inventing a cost", () => {
+    const { container } = render(
+      <SimpleBarChart
+        points={[
+          { date: "2026-09-01", value: null, incompleteRequestCount: 2 },
+          { date: "2026-09-02", value: 1.5, incompleteRequestCount: 1 },
+        ]}
+        t={t}
+      />,
+    );
+
+    const titles = Array.from(container.querySelectorAll("rect title")).map(
+      (node) => node.textContent,
+    );
+    expect(titles[0]).toBe("2026-09-01 \u00b7 IncompleteRequestsLabel \u00b7 IncompleteRequestsDetail");
+    expect(titles[1]).toContain("2026-09-02: 1.50");
+    expect(titles[1]).toContain("IncompleteRequestsLabel");
+    expect(container.querySelectorAll("rect")[0]).toHaveAttribute("opacity", "0");
+  });
+
   it("keeps full endpoint dates for usage breakdown history", () => {
     const { container } = render(
       <StackedBarChart

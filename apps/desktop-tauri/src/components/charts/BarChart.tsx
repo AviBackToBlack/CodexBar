@@ -23,6 +23,8 @@ import {
 export interface BarChartPoint {
   label: string;
   value: number | null;
+  /** Localized marker for requests excluded from this slot's value. */
+  incompleteNote?: string;
 }
 
 export interface BarChartProps {
@@ -127,7 +129,12 @@ export function BarChart({
                 onMouseLeave={onLeave}
               >
                 <title>
-                  {p.value == null ? p.label : `${p.label}: ${fmt(p.value)}`}
+                  {[
+                    p.value == null ? p.label : `${p.label}: ${fmt(p.value)}`,
+                    p.incompleteNote,
+                  ]
+                    .filter(Boolean)
+                    .join(" \u00b7 ")}
                 </title>
               </rect>
               {isPeak && (
@@ -165,6 +172,9 @@ export function BarChart({
         >
           <span className="chart__tooltip-label">{data[hover.i].label}</span>
           <strong>{fmt(data[hover.i].value ?? 0)}</strong>
+          {data[hover.i].incompleteNote && (
+            <span className="chart__tooltip-label">{data[hover.i].incompleteNote}</span>
+          )}
         </div>
       )}
     </div>

@@ -19,6 +19,8 @@ use std::sync::atomic::AtomicBool;
 pub struct ProviderChartSnapshot {
     pub daily_cost: Vec<(String, Option<f64>)>,
     pub daily_tokens: Vec<(String, u64)>,
+    /// Claude incomplete proxy-request count per local day (upstream 0.60.5 #3688).
+    pub daily_incomplete: Vec<(String, u32)>,
     pub tokens_incomplete: bool,
     pub local_summary: Option<CostSummary>,
     pub quota_window_history: Option<QuotaWindowHistorySnapshot>,
@@ -121,6 +123,7 @@ fn build_claude_chart_snapshot(
     ProviderChartSnapshot {
         daily_cost: scan.daily_cost,
         daily_tokens: scan.daily_tokens,
+        daily_incomplete: scan.daily_incomplete,
         tokens_incomplete: !scan.summary.history_coverage_established,
         local_summary: Some(scan.summary),
         quota_window_history,
