@@ -14,7 +14,7 @@
 
 ## 功能特性
 
-- **56 个 AI 服务商** — Codex、Claude、Cursor、Factory、Gemini、Copilot、Antigravity、z.ai、MiniMax、Kiro、Vertex AI、Augment、OpenCode、Kimi、Kimi K2、Amp、Warp、Ollama、Azure OpenAI、T3 Chat、OpenRouter、JetBrains AI、Alibaba、Alibaba Token Plan、NanoGPT、Infini、Perplexity、Abacus AI、Mistral、OpenCode Go、Kilo、AWS Bedrock、Codebuff、DeepSeek、Windsurf、Manus、小米 MiMo、Doubao、Command Code、Crof、StepFun、Venice、OpenAI、Grok、ElevenLabs、Deepgram、Groq、LLM Proxy、Chutes、LiteLLM、Poe、Devin、Zed、CrossModel、Qoder、Sakana AI
+- **56 个 AI 服务商** — Codex、Claude、Cursor、Factory、Gemini、Copilot、Antigravity、z.ai、MiniMax、Kiro、Vertex AI、Augment、OpenCode、Kimi、Kimi K2、Amp、Warp、Ollama、Azure OpenAI、T3 Chat、OpenRouter、JetBrains AI、Alibaba、Alibaba Token Plan、NanoGPT、Infini、Perplexity、Abacus AI、Mistral、OpenCode Go、Kilo、AWS Bedrock、Codebuff、DeepSeek、Windsurf、Manus、小米 MiMo、Doubao、Command Code、StepFun、Venice、OpenAI、Grok、ElevenLabs、Deepgram、Groq、LLM Proxy、Chutes、LiteLLM、Poe、Devin、Zed、CrossModel、Qoder、Sakana AI
 - **系统托盘图标** — 动态双条进度显示会话与周用量
 - **Floating Bar** — 可选的置顶透明用量条，支持方向、透明度和点击穿透控制
 - **浏览器 Cookie 导入** — Chrome、Edge、Brave、Firefox（Windows DPAPI 解密）
@@ -217,7 +217,6 @@ codexbar cost  -p codex           # 本地成本（JSONL 日志）
 | 小米 MiMo | Cookies | 余额、Token 套餐 |
 | Doubao | API Key | 请求限制 |
 | Command Code | Cookies | 月度 Credits、已购 Credits |
-| Crof | API Key | Credits、请求配额 |
 | StepFun | Oasis Token | 5h、周用量 |
 | Venice | API Key | USD / DIEM 余额 |
 | OpenAI | Admin API / API Key | 用量、请求数、余额 |
