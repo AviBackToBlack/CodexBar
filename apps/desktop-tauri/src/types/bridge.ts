@@ -387,6 +387,9 @@ export interface UsageSpendRow {
   thirtyDayEstimate?: LocalCostEstimate;
   sevenDayTokens?: number | null;
   thirtyDayTokens?: number | null;
+  /** The token figure is a floor from an incomplete scan ("at least N"). */
+  sevenDayTokensLowerBound?: boolean;
+  thirtyDayTokensLowerBound?: boolean;
   currency: string;
   source: string;
   includedInOverview: boolean;

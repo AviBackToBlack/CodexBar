@@ -278,3 +278,67 @@ fn schema_entry_budget_is_incomplete_not_foreign() {
         SchemaInspection::Incomplete
     );
 }
+
+#[test]
+fn undecodable_row_beside_valid_rows_yields_a_lower_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".gemini/antigravity-cli/conversations");
+    fs::create_dir_all(&root).unwrap();
+    let timestamp = u64::try_from(Utc::now().timestamp()).unwrap();
+    let conn = Connection::open(root.join("one.db")).unwrap();
+    conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+        [valid_turn_blob(100, timestamp)],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES(2, ?1)",
+        params!["not-a-blob"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let SQLiteScan::Summary(summary) =
+        summarize(&database_roots(&dir.path().join(".gemini")), Utc::now(), 30)
+    else {
+        panic!("supported database should produce coverage");
+    };
+
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+    assert!(summary.total_tokens > 0);
+    assert!(summary.lower_bound);
+    assert_eq!(summary.published_tokens(), Some(summary.total_tokens));
+    assert_eq!(summary.total_usd(), None);
+}
+
+#[test]
+fn contradicting_rows_for_one_index_are_withheld_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".gemini/antigravity-cli/conversations");
+    fs::create_dir_all(&root).unwrap();
+    let timestamp = u64::try_from(Utc::now().timestamp()).unwrap();
+    let conn = Connection::open(root.join("one.db")).unwrap();
+    conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+        .unwrap();
+    for input in [100_u64, 900_u64] {
+        conn.execute(
+            "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+            [valid_turn_blob(input, timestamp)],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let SQLiteScan::Summary(summary) =
+        summarize(&database_roots(&dir.path().join(".gemini")), Utc::now(), 30)
+    else {
+        panic!("supported database should produce coverage");
+    };
+
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+    assert_eq!(summary.total_tokens, 0);
+    assert!(!summary.lower_bound);
+    assert_eq!(summary.published_tokens(), None);
+}

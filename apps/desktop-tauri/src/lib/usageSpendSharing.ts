@@ -131,6 +131,7 @@ export function formatSpendMetric(
   currency: string,
   tokenLabel: string,
   knownSubtotal?: number | null,
+  tokensAreLowerBound = false,
 ): string {
   const parts: string[] = [];
   if (cost != null && Number.isFinite(cost)) {
@@ -139,7 +140,7 @@ export function formatSpendMetric(
     parts.push(`≥${formatUsd(knownSubtotal, currency)} known`);
   }
   if (tokens != null && Number.isFinite(tokens)) {
-    parts.push(`${Math.max(0, tokens).toLocaleString()} ${tokenLabel}`);
+    parts.push(`${tokensAreLowerBound ? "≥" : ""}${Math.max(0, tokens).toLocaleString()} ${tokenLabel}`);
   }
   return parts.length > 0 ? parts.join(" · ") : "—";
 }
@@ -213,6 +214,7 @@ export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: stri
           row.currency,
           "tokens",
           row.sevenDayEstimate?.knownSubtotalUsd,
+          row.sevenDayTokensLowerBound,
         ),
         formatSpendMetric(
           row.thirtyDay,
@@ -220,6 +222,7 @@ export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: stri
           row.currency,
           "tokens",
           row.thirtyDayEstimate?.knownSubtotalUsd,
+          row.thirtyDayTokensLowerBound,
         ),
         row.currency || "USD",
         row.source,

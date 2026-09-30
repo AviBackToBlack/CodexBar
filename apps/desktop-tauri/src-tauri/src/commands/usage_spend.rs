@@ -34,6 +34,11 @@ pub struct UsageSpendRow {
     pub thirty_day_estimate: Option<codexbar::spend_contract::LocalCostEstimate>,
     pub seven_day_tokens: Option<u64>,
     pub thirty_day_tokens: Option<u64>,
+    /// The token figure is a floor from an incomplete scan ("at least N").
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub seven_day_tokens_lower_bound: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub thirty_day_tokens_lower_bound: bool,
     pub currency: String,
     pub source: String,
     /// Included in the shared Overview spend denominator.
@@ -547,6 +552,8 @@ fn build_usage_spend_summary_in_containment_proof(
         thirty_day_estimate,
         seven_day_tokens: spend.seven_day_tokens,
         thirty_day_tokens: spend.thirty_day_tokens,
+        seven_day_tokens_lower_bound: seven.lower_bound,
+        thirty_day_tokens_lower_bound: thirty.lower_bound,
         currency,
         source: spend.source,
         included_in_overview: true,
@@ -709,6 +716,7 @@ fn build_usage_spend_summary(
             .unwrap_or_else(|| provider_id.clone());
 
         let mut local_cost_estimates = None;
+        let mut token_lower_bounds = (false, false);
         let spend = match provider_id.as_str() {
             "codex" => SpendValues {
                 seven_day: codex_7_contract.known_cost_usd,
@@ -803,6 +811,7 @@ fn build_usage_spend_summary(
                 let thirty = codexbar::providers::antigravity::local_sessions::summarize(30);
                 let spend =
                     antigravity_spend_values(cached_spend(cached_snapshot), &seven, &thirty);
+                token_lower_bounds = (seven.lower_bound, thirty.lower_bound);
                 local_cost_estimates = Some((seven.cost_estimate, thirty.cost_estimate));
                 spend
             }
@@ -837,6 +846,8 @@ fn build_usage_spend_summary(
             thirty_day_estimate,
             seven_day_tokens: spend.seven_day_tokens,
             thirty_day_tokens: spend.thirty_day_tokens,
+            seven_day_tokens_lower_bound: token_lower_bounds.0,
+            thirty_day_tokens_lower_bound: token_lower_bounds.1,
             currency,
             source: spend.source,
             included_in_overview: include_in_shared_overview(
@@ -922,10 +933,9 @@ fn antigravity_spend_values(
 
     spend.seven_day = seven.total_usd();
     spend.thirty_day = thirty.total_usd();
-    spend.seven_day_tokens =
-        (seven.coverage == LocalHistoryCoverage::Complete).then_some(seven.total_tokens);
-    spend.thirty_day_tokens =
-        (thirty.coverage == LocalHistoryCoverage::Complete).then_some(thirty.total_tokens);
+    // Exact for a complete scan, a floor for a lower bound, unknown otherwise.
+    spend.seven_day_tokens = seven.published_tokens();
+    spend.thirty_day_tokens = thirty.published_tokens();
     if spend.thirty_day.is_some() {
         spend.source = "local Antigravity history · API list-price estimate".to_string();
     } else if thirty.cost_estimate.known_subtotal_usd.is_some() {
@@ -1031,7 +1041,9 @@ mod cache_key_tests {
                     unpriced,
                     ..Default::default()
                 },
+                ..Default::default()
             },
+            ..Default::default()
         }
     }
 
@@ -1105,6 +1117,21 @@ mod cache_key_tests {
         assert_eq!(spend.seven_day_tokens, None);
         assert_eq!(spend.thirty_day_tokens, None);
         assert!(spend.source.contains("known API list-price subtotal"));
+    }
+
+    #[test]
+    fn antigravity_lower_bound_history_publishes_floors_not_exact_totals() {
+        use codexbar::spend_contract::LocalHistoryCoverage;
+
+        let mut seven = local_history(100, LocalHistoryCoverage::Partial, Some(1.25), 0);
+        seven.lower_bound = true;
+        let withheld = local_history(0, LocalHistoryCoverage::Partial, None, 0);
+        let spend = antigravity_spend_values(cached_spend(None), &seven, &withheld);
+
+        assert_eq!(spend.seven_day, None);
+        assert_eq!(spend.seven_day_tokens, Some(100));
+        assert_eq!(spend.thirty_day, None);
+        assert_eq!(spend.thirty_day_tokens, None);
     }
 
     #[test]

@@ -145,11 +145,15 @@ fn summarize_paths_with_budget(
     let mut sessions_with_usage = HashSet::new();
     let mut seen_response_ids = HashSet::new();
     let mut complete = !truncated;
+    // A hard discovery or byte budget stops the read; such a truncated scan is
+    // withheld instead of being published as a lower bound.
+    let mut exhausted = truncated || paths.len() > MAX_SESSION_FILES;
     let mut remaining_total_bytes = total_byte_budget;
 
     for path in paths.iter().take(MAX_SESSION_FILES) {
         if remaining_total_bytes == 0 {
             complete = false;
+            exhausted = true;
             break;
         }
         let file = match File::open(path) {
@@ -181,6 +185,7 @@ fn summarize_paths_with_budget(
                 }
                 Ok(Some(BoundedJsonlLine::Truncated)) => {
                     complete = false;
+                    exhausted = true;
                     break;
                 }
                 Ok(None) => break,
@@ -266,18 +271,25 @@ fn summarize_paths_with_budget(
                 continue;
             };
             total_tokens = next_total_tokens;
-            cost_estimate.record_list_price(estimate_cost_usd(
+            cost_estimate.record_list_price(
                 model.as_deref(),
-                input,
-                cache_read,
-                cache_write,
-                output.saturating_add(reasoning),
-            ));
+                estimate_cost_usd(
+                    model.as_deref(),
+                    input,
+                    cache_read,
+                    cache_write,
+                    output.saturating_add(reasoning),
+                ),
+            );
             path_had_usage = true;
         }
         if path_had_usage {
             sessions_with_usage.insert(path.clone());
         }
+    }
+
+    if exhausted {
+        return LocalTokenHistorySummary::withheld();
     }
 
     LocalTokenHistorySummary {
@@ -291,7 +303,9 @@ fn summarize_paths_with_budget(
             LocalHistoryCoverage::Partial
         },
         cost_estimate,
+        lower_bound: false,
     }
+    .with_lower_bound_if_partial()
 }
 
 fn read_bounded_jsonl_line<R: BufRead>(
@@ -536,6 +550,9 @@ mod tests {
 
         assert_eq!(summary.total_tokens, 15);
         assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+        // Decoded rows survive as a floor, never as an exact total.
+        assert!(summary.lower_bound);
+        assert_eq!(summary.published_tokens(), Some(15));
     }
 
     #[test]
@@ -555,8 +572,11 @@ mod tests {
         let summary =
             summarize_paths_with_budget(&[first_path, second_path], now, 7, false, first.len());
 
-        assert_eq!(summary.total_tokens, 10);
+        // A hard budget stop is withheld: no total is published from it.
+        assert_eq!(summary.total_tokens, 0);
         assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+        assert!(!summary.lower_bound);
+        assert_eq!(summary.published_tokens(), None);
     }
 
     #[test]

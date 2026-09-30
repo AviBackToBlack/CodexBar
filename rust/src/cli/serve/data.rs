@@ -164,6 +164,7 @@ mod tests {
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Complete,
                 cost_estimate: Default::default(),
+                ..Default::default()
             },
             30,
         );
@@ -178,6 +179,7 @@ mod tests {
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
                 cost_estimate: Default::default(),
+                ..Default::default()
             },
             30,
         );

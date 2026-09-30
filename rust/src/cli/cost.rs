@@ -62,6 +62,12 @@ pub struct CostArgs {
     /// Emit the versioned native Codex summary contract as JSON.
     #[arg(long = "summary-only")]
     pub summary_only: bool,
+
+    /// Antigravity only: when a recorded model has no known public price, run
+    /// one bounded models.dev pricing refresh and rescan. Routine reads never
+    /// download pricing.
+    #[arg(long)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,9 +175,13 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
                     display_name: provider.display_name().to_string(),
                     summary: CostSummary::default(),
                     supported: true,
-                    token_history: Some(crate::providers::antigravity::local_sessions::summarize(
-                        args.days,
-                    )),
+                    token_history: Some(
+                        crate::providers::antigravity::local_sessions::summarize_with_pricing_refresh(
+                            args.days,
+                            args.refresh,
+                        )
+                        .await,
+                    ),
                 });
             }
             ProviderId::Muse => {
@@ -375,6 +385,13 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
 fn print_local_token_history(history: &crate::spend_contract::LocalTokenHistorySummary, days: u32) {
     use crate::spend_contract::LocalHistoryCoverage;
     match history.coverage {
+        LocalHistoryCoverage::Partial if history.lower_bound => {
+            println!(
+                "  Tokens:   at least {} (lower bound; scan stopped short)",
+                format_number(history.total_tokens)
+            );
+            println!("  Sessions: at least {}", history.session_count);
+        }
         LocalHistoryCoverage::Complete if history.total_tokens == 0 => {
             println!("  No token usage in the last {days} days (scan complete)");
         }
@@ -395,7 +412,7 @@ fn print_local_token_history(history: &crate::spend_contract::LocalTokenHistoryS
                 history.cost_estimate.coverage.unpriced
             );
         } else {
-            println!("  Known API list-price subtotal: ${cost:.2} (history incomplete)");
+            println!("  Known API list-price subtotal: at least ${cost:.2} (history incomplete)");
         }
     } else {
         println!("  Local token history; dollar costs unavailable");
@@ -639,6 +656,7 @@ mod tests {
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
                 cost_estimate: Default::default(),
+                ..Default::default()
             },
             30,
         );
@@ -654,6 +672,7 @@ mod tests {
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
                 cost_estimate: Default::default(),
+                ..Default::default()
             },
             30,
         );
@@ -677,7 +696,9 @@ mod tests {
                         estimated: 1,
                         ..Default::default()
                     },
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             30,
         );
@@ -704,7 +725,9 @@ mod tests {
                         estimated: 1,
                         ..Default::default()
                     },
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             30,
         );
@@ -754,7 +777,9 @@ mod tests {
                         unpriced: 1,
                         ..Default::default()
                     },
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             30,
         );

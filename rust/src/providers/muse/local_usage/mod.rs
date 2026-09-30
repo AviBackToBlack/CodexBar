@@ -65,6 +65,7 @@ impl From<Report> for crate::spend_contract::LocalTokenHistorySummary {
             session_count: report.session_count,
             coverage: report.coverage,
             cost_estimate: Default::default(),
+            ..Default::default()
         }
     }
 }

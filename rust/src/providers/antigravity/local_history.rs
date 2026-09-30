@@ -1,10 +1,12 @@
 use super::{local_sessions_reader as local_sessions, local_sqlite};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 use chrono::{DateTime, Utc};
 
-use crate::spend_contract::LocalTokenHistorySummary;
+use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
 
 fn clean_env_path(value: Option<&str>) -> Option<PathBuf> {
     value
@@ -51,6 +53,42 @@ pub(super) fn summarize_local_usage_from_explicit_roots(
     })
 }
 
+/// Last complete summary per scan scope (roots plus window). A later partial
+/// or withheld read of the same scope must not replace previously complete
+/// history; only a newer complete read does.
+#[derive(Default)]
+struct CompleteHistoryRetention {
+    complete: Mutex<HashMap<String, LocalTokenHistorySummary>>,
+}
+
+impl CompleteHistoryRetention {
+    fn resolve(&self, scope: &str, fresh: LocalTokenHistorySummary) -> LocalTokenHistorySummary {
+        let mut complete = self
+            .complete
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match fresh.coverage {
+            LocalHistoryCoverage::Complete => {
+                complete.insert(scope.to_string(), fresh.clone());
+                fresh
+            }
+            LocalHistoryCoverage::Partial => complete.get(scope).cloned().unwrap_or(fresh),
+            LocalHistoryCoverage::Unavailable => fresh,
+        }
+    }
+}
+
+static COMPLETE_HISTORY: LazyLock<CompleteHistoryRetention> = LazyLock::new(Default::default);
+
+fn retention_scope(roots: &[PathBuf], tokscale_sessions: &Path, days: u32) -> String {
+    let roots = roots
+        .iter()
+        .map(|root| root.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("|");
+    format!("{days}|{roots}|{}", tokscale_sessions.to_string_lossy())
+}
+
 pub fn summarize_local_usage(days: u32) -> LocalTokenHistorySummary {
     let now = Utc::now();
     let Some(home) = dirs::home_dir() else {
@@ -58,7 +96,29 @@ pub fn summarize_local_usage(days: u32) -> LocalTokenHistorySummary {
     };
     let roots = configured_database_roots(&home);
     let tokscale_sessions = local_sessions::configured_tokscale_sessions(&home);
-    summarize_local_usage_from_explicit_roots(&roots, &tokscale_sessions, now, days)
+    let fresh = summarize_local_usage_from_explicit_roots(&roots, &tokscale_sessions, now, days);
+    COMPLETE_HISTORY.resolve(&retention_scope(&roots, &tokscale_sessions, days), fresh)
+}
+
+/// CLI `cost --refresh`: when a recorded model has no known public price, run
+/// one bounded pricing refresh and rescan. Routine reads never download pricing.
+pub async fn summarize_local_usage_with_pricing_refresh(
+    days: u32,
+    refresh: bool,
+) -> LocalTokenHistorySummary {
+    let first = summarize_local_usage(days);
+    if !refresh || !super::cost::refresh_unpriced_model_pricing(&first.cost_estimate).await {
+        return first;
+    }
+    let rescanned = summarize_local_usage(days);
+    // A pricing download must not replace a complete scan with one that became
+    // partial in the meantime.
+    if first.coverage == LocalHistoryCoverage::Complete
+        && rescanned.coverage != LocalHistoryCoverage::Complete
+    {
+        return first;
+    }
+    rescanned
 }
 
 /// Count local Antigravity conversation artifacts for the quota provider's
@@ -107,7 +167,6 @@ fn count_extension(root: &Path, extension: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spend_contract::LocalHistoryCoverage;
     use chrono::TimeZone;
     use rusqlite::Connection;
 
@@ -224,5 +283,47 @@ mod tests {
         fs::create_dir_all(&cache).unwrap();
         fs::write(cache.join("one.jsonl"), b"{}\n").unwrap();
         assert_eq!(offline_conversation_count_in(dir.path()), 1);
+    }
+
+    #[test]
+    fn partial_read_never_replaces_previously_complete_history() {
+        let retention = CompleteHistoryRetention::default();
+        let complete = LocalTokenHistorySummary {
+            total_tokens: 500,
+            session_count: 3,
+            coverage: LocalHistoryCoverage::Complete,
+            ..Default::default()
+        };
+        let partial = LocalTokenHistorySummary {
+            total_tokens: 20,
+            session_count: 1,
+            coverage: LocalHistoryCoverage::Partial,
+            lower_bound: true,
+            ..Default::default()
+        };
+
+        // Nothing complete yet: the partial read is reported as it is.
+        assert_eq!(retention.resolve("scope", partial.clone()), partial);
+        assert_eq!(retention.resolve("scope", complete.clone()), complete);
+        // A later partial or withheld read keeps the complete history.
+        assert_eq!(retention.resolve("scope", partial.clone()), complete);
+        assert_eq!(
+            retention.resolve("scope", LocalTokenHistorySummary::withheld()),
+            complete
+        );
+        // Another scope is unaffected.
+        assert_eq!(retention.resolve("other", partial.clone()), partial);
+        // A newer complete read replaces the retained one.
+        let newer = LocalTokenHistorySummary {
+            total_tokens: 700,
+            ..complete.clone()
+        };
+        assert_eq!(retention.resolve("scope", newer.clone()), newer);
+        assert_eq!(retention.resolve("scope", partial), newer);
+        // Source absence is reported honestly, not masked by old history.
+        assert_eq!(
+            retention.resolve("scope", LocalTokenHistorySummary::default()),
+            LocalTokenHistorySummary::default()
+        );
     }
 }

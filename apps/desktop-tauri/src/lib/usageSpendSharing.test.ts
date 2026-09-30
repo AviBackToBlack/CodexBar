@@ -15,6 +15,14 @@ describe("usage spend sharing", () => {
     expect(formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125)).toMatch(/^≥.* known/);
   });
 
+  it("marks a lower-bound token count with a floor sign and leaves exact counts bare", () => {
+    const floor = formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125, true);
+    expect(floor).toContain("≥1,500 tokens");
+    expect(floor).toMatch(/^≥.* known/);
+    const exact = formatSpendMetric(null, 1_500, "USD", "tokens", null, false);
+    expect(exact).toBe("1,500 tokens");
+  });
+
   it("renders a complete known-zero total instead of a subtotal", () => {
     const metric = formatSpendMetric(0, 0, "USD", "tokens", 9);
     expect(metric).not.toBe("—");

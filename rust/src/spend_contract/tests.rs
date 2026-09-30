@@ -8,12 +8,14 @@ fn local_history_total_requires_complete_scan_and_pricing() {
             estimated: 1,
             ..Default::default()
         },
+        ..Default::default()
     };
     let partial_history = LocalTokenHistorySummary {
         total_tokens: 100,
         session_count: 1,
         coverage: LocalHistoryCoverage::Partial,
         cost_estimate: priced.clone(),
+        ..Default::default()
     };
     assert_eq!(partial_history.total_usd(), None);
     assert_eq!(partial_history.cost_estimate.known_subtotal_usd, Some(1.25));
@@ -29,7 +31,9 @@ fn local_history_total_requires_complete_scan_and_pricing() {
                 unpriced: 1,
                 ..Default::default()
             },
+            ..Default::default()
         },
+        ..Default::default()
     };
     assert_eq!(mixed_pricing.total_usd(), None);
     assert_eq!(mixed_pricing.cost_estimate.known_subtotal_usd, Some(1.25));
@@ -39,6 +43,7 @@ fn local_history_total_requires_complete_scan_and_pricing() {
         session_count: 1,
         coverage: LocalHistoryCoverage::Complete,
         cost_estimate: priced,
+        ..Default::default()
     };
     assert_eq!(complete.total_usd(), Some(1.25));
 }
@@ -570,4 +575,80 @@ fn coverage_for_models_counts_priced_rows_as_estimated() {
     assert_eq!(coverage.estimated, 2);
     assert_eq!(coverage.unpriced, 1);
     assert_eq!(coverage.total(), 3);
+}
+
+#[test]
+fn lower_bound_history_publishes_floors_and_never_an_exact_total() {
+    let priced = LocalCostEstimate {
+        known_subtotal_usd: Some(0.5),
+        coverage: CostCoverageCounts {
+            estimated: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let scanned = LocalTokenHistorySummary {
+        total_tokens: 900,
+        session_count: 2,
+        coverage: LocalHistoryCoverage::Partial,
+        cost_estimate: priced,
+        ..Default::default()
+    };
+    let floor = scanned.with_lower_bound_if_partial();
+    assert!(floor.lower_bound);
+    assert_eq!(floor.published_tokens(), Some(900));
+    assert_eq!(floor.total_usd(), None);
+
+    let payload = local_token_history_json("antigravity", &floor, 30);
+    assert_eq!(payload["tokens"]["total"], 900);
+    assert_eq!(payload["sessions_count"], 2);
+    assert_eq!(payload["tokensAreLowerBound"], true);
+    assert_eq!(payload["costIsLowerBound"], true);
+    assert!(payload["cost"]["total_usd"].is_null());
+    assert_eq!(payload["cost"]["known_subtotal_usd"], 0.5);
+}
+
+#[test]
+fn withheld_history_is_partial_with_no_published_numbers() {
+    let withheld = LocalTokenHistorySummary::withheld();
+    assert_eq!(withheld.coverage, LocalHistoryCoverage::Partial);
+    assert!(!withheld.lower_bound);
+    assert_eq!(withheld.published_tokens(), None);
+    assert!(!withheld.clone().with_lower_bound_if_partial().lower_bound);
+
+    let payload = local_token_history_json("antigravity", &withheld, 30);
+    assert!(payload["tokens"]["total"].is_null());
+    assert!(payload["sessions_count"].is_null());
+    assert_eq!(payload["tokensAreLowerBound"], false);
+    assert_eq!(payload["costIsLowerBound"], false);
+    assert_eq!(payload["historyCoverage"], "partial");
+}
+
+#[test]
+fn complete_history_is_never_marked_as_a_lower_bound() {
+    let complete = LocalTokenHistorySummary {
+        total_tokens: 10,
+        session_count: 1,
+        coverage: LocalHistoryCoverage::Complete,
+        ..Default::default()
+    }
+    .with_lower_bound_if_partial();
+    assert!(!complete.lower_bound);
+    assert_eq!(complete.published_tokens(), Some(10));
+}
+
+#[test]
+fn unpriced_model_names_are_recorded_but_not_serialized() {
+    let mut estimate = LocalCostEstimate::default();
+    estimate.record_list_price(Some("  mystery-model "), None);
+    estimate.record_list_price(None, None);
+    estimate.record_list_price(Some("known"), Some(1.0));
+    assert_eq!(estimate.coverage.unpriced, 2);
+    assert_eq!(estimate.coverage.estimated, 1);
+    assert_eq!(
+        estimate.unpriced_models.iter().collect::<Vec<_>>(),
+        vec!["mystery-model"]
+    );
+    let json = serde_json::to_value(&estimate).unwrap();
+    assert!(json.get("unpricedModels").is_none());
 }
