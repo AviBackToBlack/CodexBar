@@ -128,6 +128,10 @@ impl GrokProvider {
         kind: GrokAuthKind,
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
+        // Validate before starting the optional reset-credit request.
+        if credentials.is_expired(Utc::now()) {
+            return Err(ProviderError::AuthRequired);
+        }
         let reset_lookup = GrokProvider::spawn_remaining_resets(
             ctx,
             Some(credentials.access_token.clone()),

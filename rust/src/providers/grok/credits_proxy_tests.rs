@@ -179,9 +179,11 @@ async fn bearer_billing_sends_the_cli_proxy_request_and_skips_grpc() {
         .match_header("accept", "application/json")
         .match_header("user-agent", "CodexBar")
         .with_status(200)
-        .with_body(
-            r#"{"config":{"creditUsagePercent":12.5,"currentPeriod":{"start":"2020-01-01T00:00:00Z","end":"2020-01-08T00:00:00Z"}}}"#,
-        )
+        .with_body(format!(
+            r#"{{"config":{{"creditUsagePercent":12.5,"currentPeriod":{{"start":"{}","end":"{}"}}}}}}"#,
+            (Utc::now() - chrono::Duration::days(1)).to_rfc3339(),
+            (Utc::now() + chrono::Duration::days(6)).to_rfc3339(),
+        ))
         .expect(1)
         .create_async()
         .await;
@@ -310,8 +312,12 @@ async fn expired_credentials_are_never_sent() {
     let mut credentials = GrokCredentials::from_bearer("stale-token");
     credentials.expires_at = Some(Utc::now() - chrono::Duration::minutes(1));
 
+    let context = FetchContext {
+        include_credits: false,
+        ..FetchContext::default()
+    };
     let error = provider_for(&server)
-        .fetch_bearer_billing(&credentials)
+        .fetch_with_auth(&credentials, GrokAuthKind::OAuth, &context)
         .await
         .unwrap_err();
 

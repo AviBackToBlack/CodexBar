@@ -86,7 +86,7 @@ fn window_minutes(
 ) -> Option<u32> {
     let start = parse_timestamp(start)?;
     let end = end?;
-    if end <= start || start > now {
+    if start > now || now >= end {
         return None;
     }
     u32::try_from((end - start).num_minutes())
@@ -177,7 +177,7 @@ impl GrokProvider {
         &self,
         credentials: &GrokCredentials,
     ) -> Result<BearerBilling, ProviderError> {
-        // Expired tokens are never sent to either endpoint.
+        // Recheck after optional work was scheduled; the token may have expired meanwhile.
         if credentials.is_expired(Utc::now()) {
             return Err(ProviderError::AuthRequired);
         }
