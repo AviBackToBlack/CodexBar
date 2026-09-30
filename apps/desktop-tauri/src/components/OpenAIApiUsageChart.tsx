@@ -17,14 +17,9 @@ type Metric = "cost" | "tokens";
 type T = (key: LocaleKey) => string;
 
 const METRICS: readonly Metric[] = ["cost", "tokens"];
-/** Bars stay at least 1px wide inside the shared 280px chart geometry. */
-const MAX_CHART_DAYS = 60;
 const MAX_DETAIL_ROWS = 5;
 
-const usdFormat = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-});
+const usdFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const compactFormat = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -107,7 +102,9 @@ function DayDetail({ day, t }: { day: OpenAiApiDailyUsageSnapshot; t: T }) {
   const models = day.models.map((model, index) => ({
     key: `${model.name}-${index}`,
     name: model.name,
-    value: `${compactFormat.format(model.totalTokens)} · ${countFormat.format(model.requests)} ${t("UsageSpendRequests")}`,
+    value: `${compactFormat.format(model.totalTokens)} · ${countFormat.format(model.requests)} ${t(
+      "UsageSpendRequests",
+    )}`,
   }));
   return (
     <div className="openai-usage__detail" aria-live="polite">
@@ -145,9 +142,13 @@ export function OpenAIApiUsageChart({
   const [selectedStart, setSelectedStart] = useState<number | null>(null);
   const baseId = useId();
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const days = useMemo(() => usage.daily.slice(-MAX_CHART_DAYS), [usage.daily]);
+  const days = usage.daily;
   const points = useMemo(
-    () => days.map((day) => ({ label: dayLabel(day), value: metricValue(day, metric) })),
+    () =>
+      days.map((day) => ({
+        label: dayLabel(day),
+        value: metricValue(day, metric),
+      })),
     [days, metric],
   );
 
@@ -170,8 +171,6 @@ export function OpenAIApiUsageChart({
   const found = days.findIndex((day) => day.startTime === selectedStart);
   const selectedIndex = found >= 0 ? found : days.length - 1;
   const total = days.reduce((sum, day) => sum + metricValue(day, metric), 0);
-  const trimmed = days.length < usage.daily.length;
-  const windowDays = trimmed ? days.length : usage.historyDays;
   const tabLabel = (m: Metric) =>
     t(m === "cost" ? "OpenAIChartMetricCost" : "OpenAIChartMetricTokens");
   const tabId = (m: Metric) => `${baseId}-tab-${m}`;
@@ -222,6 +221,7 @@ export function OpenAIApiUsageChart({
           valueFormatter={(v) => formatMetric(v, metric)}
           animations={animations}
           emptyMessage={t("DetailChartEmpty")}
+          scrollable
           selection={{
             index: selectedIndex,
             onSelect: (index) => setSelectedStart(days[index]?.startTime ?? null),
@@ -230,7 +230,7 @@ export function OpenAIApiUsageChart({
         <div className="openai-usage__hint">{t("OpenAIChartHint")}</div>
         <DayDetail day={days[selectedIndex]} t={t} />
         <div className="openai-usage__footer">
-          <span>{windowLabel(windowDays, t)}</span>
+          <span>{windowLabel(usage.historyDays, t)}</span>
           <strong>{formatMetric(total, metric)}</strong>
         </div>
       </div>

@@ -5,6 +5,7 @@ import {
   getBarCenter,
   getBarWidth,
   getBarX,
+  getScrollableChartWidth,
   shouldRenderCenterMax,
 } from "./chartGeometry";
 
@@ -46,6 +47,8 @@ export interface BarChartProps {
   /** Optional empty-state message rendered when `data.length === 0`. */
   emptyMessage?: string;
   selection?: BarChartSelection;
+  /** Keep narrow bars readable by making long series horizontally scrollable. */
+  scrollable?: boolean;
 }
 
 const DEFAULT_COLOR = "var(--chart-cost)";
@@ -60,6 +63,7 @@ export function BarChart({
   animations = true,
   emptyMessage,
   selection,
+  scrollable = false,
 }: BarChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -93,7 +97,11 @@ export function BarChart({
     );
   }
 
-  const barWidth = getBarWidth(data.length);
+  const chartWidth = scrollable ? getScrollableChartWidth(data.length) : WIDTH;
+  const chartClass = scrollable
+    ? "chart chart--bar chart--scrollable"
+    : "chart chart--bar";
+  const barWidth = getBarWidth(data.length, chartWidth);
   const plotHeight = Math.max(1, height - 4);
 
   const onMove = (e: React.MouseEvent<SVGRectElement>, i: number) => {
@@ -122,12 +130,13 @@ export function BarChart({
   };
 
   return (
-    <div className="chart chart--bar" ref={containerRef}>
+    <div className={chartClass} ref={containerRef}>
       <svg
-        width={WIDTH}
+        width={chartWidth}
         height={height}
-        viewBox={`0 0 ${WIDTH} ${height}`}
+        viewBox={`0 0 ${chartWidth} ${height}`}
         className="chart__svg"
+        style={scrollable ? { width: chartWidth, maxWidth: "none" } : undefined}
         role={selection ? "listbox" : "img"}
         aria-orientation={selection ? "horizontal" : undefined}
         aria-label={ariaLabel}
@@ -137,13 +146,18 @@ export function BarChart({
           const base = p.value == null ? 1 : p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
           const eased = anim.barProgress(i);
           const barH = base * eased;
-          const x = getBarX(i, data.length);
+          const x = getBarX(i, data.length, chartWidth);
           const y = height - barH;
           const isPeak = i === peakIndex && barH > CAP_HEIGHT;
           const bodyH = isPeak ? Math.max(0, barH - CAP_HEIGHT) : barH;
           const bodyY = isPeak ? y + CAP_HEIGHT : y;
           const isHovered = hover?.i === i;
           const isSelected = i === selectedIndex;
+          let opacity = 0.9;
+          if (p.value == null) opacity = 0;
+          else if (p.value === 0) opacity = 0.25;
+          else if (selection) opacity = isSelected ? 1 : 0.6;
+          else if (isHovered) opacity = 1;
 
           return (
             <g key={`${p.label}-${i}`}>
@@ -153,15 +167,7 @@ export function BarChart({
                 width={barWidth}
                 height={bodyH}
                 fill={color}
-                opacity={
-                  p.value == null
-                    ? 0
-                    : p.value === 0
-                      ? 0.25
-                      : selection
-                        ? isSelected ? 1 : 0.6
-                        : isHovered ? 1 : 0.9
-                }
+                opacity={opacity}
                 rx={1}
                 className="chart__bar"
                 {...(selection
@@ -205,14 +211,22 @@ export function BarChart({
           );
         })}
       </svg>
-      <div className="chart__axis">
-        <span className="chart__axis-start" style={{ left: `${getBarCenter(0, data.length)}px` }}>
+      <div className="chart__axis" style={scrollable ? { width: chartWidth } : undefined}>
+        <span
+          className="chart__axis-start"
+          style={{ left: `${getBarCenter(0, data.length, chartWidth)}px` }}
+        >
           {data[0].label}
         </span>
         {shouldRenderCenterMax(data.length) && (
-          <span className="chart__axis-max" style={{ left: `${WIDTH / 2}px` }}>{fmt(max)}</span>
+          <span className="chart__axis-max" style={{ left: `${chartWidth / 2}px` }}>
+            {fmt(max)}
+          </span>
         )}
-        <span className="chart__axis-end" style={{ left: `${getBarCenter(data.length - 1, data.length)}px` }}>
+        <span
+          className="chart__axis-end"
+          style={{ left: `${getBarCenter(data.length - 1, data.length, chartWidth)}px` }}
+        >
           {data[data.length - 1].label}
         </span>
       </div>

@@ -91,12 +91,16 @@ function snapshot(
   };
 }
 
-function renderCard(snap: ProviderUsageSnapshot, compactOverview = false) {
+function renderCard(
+  snap: ProviderUsageSnapshot,
+  compactOverview = false,
+  hidePersonalInfo = false,
+) {
   return render(
     <LocaleProvider>
       <MenuCard
         provider={snap}
-        display={{ hideEmail: false, resetTimeRelative: true, compactOverview }}
+        display={{ hideEmail: hidePersonalInfo, resetTimeRelative: true, compactOverview }}
       />
     </LocaleProvider>,
   );
@@ -137,6 +141,15 @@ describe("MenuCard OpenAI daily usage section", () => {
     });
     expect(container.querySelector(".menu-card__daily-usage")).toBeNull();
     expect(container.querySelector('[role="option"]')).toBeNull();
+  });
+
+  it("masks the Admin project id in the card identity when privacy is enabled", async () => {
+    const provider = snapshot("openaiapi", usage());
+    provider.planName = "Admin API: proj-private";
+    const { container } = renderCard(provider, false, true);
+    await waitFor(() => expect(container.querySelector(".menu-card__plan-badge")).not.toBeNull());
+    expect(container.querySelector(".menu-card__plan-badge")).toHaveTextContent("Admin API: ••••");
+    expect(container).not.toHaveTextContent("proj-private");
   });
 
   it("hides the section on error, in compact overview and with an empty window", async () => {

@@ -288,7 +288,12 @@ export function ProviderDetailPane({
 
   return (
     <div className="provider-detail">
-      <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+      <IdentitySection
+        provider={detail}
+        subtitle={subtitle}
+        t={t}
+        hidePersonalInfo={hidePersonalInfo}
+      />
 
       {detail.id === "codex" && (
         <CodexAccountsSection t={t} hidePersonalInfo={hidePersonalInfo} />

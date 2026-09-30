@@ -3,6 +3,8 @@ import {
   DATE_EDGE_PADDING,
   WIDTH,
   getBarCenter,
+  getBarWidth,
+  getScrollableChartWidth,
   shouldRenderCenterMax,
 } from "./chartGeometry";
 
@@ -21,5 +23,14 @@ describe("chart axis geometry", () => {
 
   it("renders the center max label for three or more points", () => {
     expect(shouldRenderCenterMax(3)).toBe(true);
+  });
+
+  it("allocates enough scrollable width to keep long-series bars visible", () => {
+    const width = getScrollableChartWidth(90);
+    const lastBarRight = getBarCenter(89, 90, width) + getBarWidth(90, width) / 2;
+
+    expect(width).toBeGreaterThan(WIDTH);
+    expect(getBarWidth(90, width)).toBeCloseTo(1.5);
+    expect(lastBarRight).toBeLessThanOrEqual(width - DATE_EDGE_PADDING);
   });
 });

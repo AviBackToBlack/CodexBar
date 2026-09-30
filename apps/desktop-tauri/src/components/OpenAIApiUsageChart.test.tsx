@@ -203,11 +203,19 @@ describe("OpenAIApiUsageChart", () => {
     expect(within(detail).queryByText("OpenAIChartModels")).toBeNull();
   });
 
-  it("draws only the latest 60 days and relabels the window to match", () => {
+  it("keeps the full history in a horizontally scrollable chart", () => {
     const days = Array.from({ length: 90 }, (_, i) => day(i));
     renderChart(usage(days, 90));
-    expect(bars()).toHaveLength(60);
-    expect(screen.getByText("Last 60 days")).toBeInTheDocument();
+    expect(bars()).toHaveLength(90);
+    expect(screen.getByText("Last 90 days")).toBeInTheDocument();
+    const chart = document.querySelector(".chart--scrollable");
+    expect(chart).toBeInTheDocument();
+    expect(Number(chart?.querySelector("svg")?.getAttribute("width"))).toBeGreaterThan(280);
+    expect(bars()[0]).toHaveAttribute("aria-label", "2026-09-01: $1.00");
+    expect(bars()[89]).toHaveAttribute("aria-label", "2026-11-29: $90.00");
+    expect(screen.getByText("Last 90 days").nextElementSibling).toHaveTextContent(
+      "$4,095.00",
+    );
   });
 
   it("shows the empty message when the window has no days", () => {

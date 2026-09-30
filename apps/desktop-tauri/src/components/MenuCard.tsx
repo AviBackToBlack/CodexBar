@@ -9,6 +9,7 @@ import { useLocale } from "../hooks/useLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import type { LocaleKey } from "../i18n/keys";
 import { providerSupportsChartData } from "../lib/providerCharts";
+import { hideOpenAiApiProjectId } from "../lib/openAiApiIdentity";
 import MenuCardDetails, { describeCard, type MetricEntry } from "./MenuCardDetails";
 import CodexAccountsMenu from "./CodexAccountsMenu";
 import ClaudeAccountsMenu from "./ClaudeAccountsMenu";
@@ -194,7 +195,13 @@ export default function MenuCard({
       ? maskEmail(provider.accountEmail)
       : provider.accountEmail
     : null;
-  const planName = !isWayfinder ? displayPlanName(provider.planName, t) : null;
+  const planName = !isWayfinder
+    ? displayPlanName(provider.planName, t)
+    : null;
+  const displayedPlanName = hideOpenAiApiProjectId(
+    planName,
+    provider.providerId === "openaiapi" && hideEmail,
+  );
 
   const metrics: MetricEntry[] = [
     ...(isWayfinder
@@ -285,8 +292,8 @@ export default function MenuCard({
                 ? provider.updatedAt
                 : formatRelativeUpdated(Date.parse(provider.updatedAt), t)}
             </span>
-            {planName && (
-              <span className="menu-card__plan-badge">{planName}</span>
+            {displayedPlanName && (
+              <span className="menu-card__plan-badge">{displayedPlanName}</span>
             )}
           </div>
         )}

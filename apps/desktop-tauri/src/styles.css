@@ -2704,6 +2704,21 @@ body:has(.tray-panel-reveal) {
   height: auto;
 }
 
+.chart--scrollable {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chart--scrollable .chart__svg {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: none;
+}
+
+.chart--scrollable .chart__axis {
+  flex: 0 0 auto;
+}
+
 .chart__axis {
   position: relative;
   font-size: 0.7rem;
