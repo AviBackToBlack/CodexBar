@@ -892,6 +892,21 @@ pub trait Provider: Send + Sync {
         true
     }
 
+    /// Id of the extra rate window that holds this provider's monthly plan
+    /// allowance. The `MonthlyPlan` menu bar metric selects that window
+    /// (upstream 0.70.0 #4072). `None` means the provider offers no Monthly
+    /// Plan metric.
+    fn monthly_plan_window_id(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Label for the primary lane in the menu bar metric picker when the
+    /// lane is not a session window (upstream `menuBarLayoutPrimaryLabel`).
+    /// `None` keeps the generic session label.
+    fn menu_bar_primary_label(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Whether browser-cookie discovery/recovery is owned by the provider.
     fn owns_browser_cookie_resolution(&self) -> bool {
         false

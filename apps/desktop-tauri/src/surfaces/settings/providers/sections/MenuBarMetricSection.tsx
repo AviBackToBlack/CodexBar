@@ -78,7 +78,12 @@ function metricOptions(
 ): MetricOption[] {
   const options: MetricOption[] = [
     { value: "automatic", label: t("Automatic") },
-    { value: "session", label: t("ProviderSessionLabel") },
+    {
+      value: "session",
+      // Upstream 0.70.0: a primary lane that is not a session window keeps
+      // its provider name in the picker (Mistral's "Included API").
+      label: provider.primaryMetricLabel ?? t("ProviderSessionLabel"),
+    },
   ];
 
   if (provider.weekly) {
@@ -95,21 +100,36 @@ function metricOptions(
       ),
     });
   }
-  if (provider.id === "cursor" || provider.extraRateWindows.length > 0) {
+  // The monthly plan window has its own choice below, so it does not make
+  // Extra usage available on its own.
+  const extraWindows = provider.extraRateWindows.filter(
+    (extra) => extra.id !== provider.monthlyPlanWindowId,
+  );
+  if (provider.id === "cursor" || extraWindows.length > 0) {
     options.push({ value: "extraUsage", label: t("ExtraUsage") });
   }
-  if (provider.id === "mistral") {
-    options.push({ value: "monthlyPlan", label: t("MistralMonthlySpend") });
+  // Upstream 0.70.0 (#4072): providers that publish a monthly plan
+  // allowance window offer it for the menu bar and widgets.
+  if (provider.monthlyPlanWindowId) {
+    options.push({ value: "monthlyPlan", label: t("MetricMonthlyPlan") });
   }
   if (provider.id === "gemini" && provider.weekly) {
     options.push({ value: "average", label: t("Average") });
   }
   if (!options.some((option) => option.value === selected)) {
+    const labelKey = SAVED_ONLY_LABEL_KEYS[selected];
     options.push({
       value: selected,
-      label: selected === "credits" ? t("CreditsLabel") : selected,
+      label: labelKey ? t(labelKey) : selected,
     });
   }
 
   return options;
 }
+
+/** Labels for saved choices the provider no longer offers. */
+const SAVED_ONLY_LABEL_KEYS: Partial<Record<MetricPreference, LocaleKey>> = {
+  credits: "CreditsLabel",
+  extraUsage: "ExtraUsage",
+  monthlyPlan: "MetricMonthlyPlan",
+};

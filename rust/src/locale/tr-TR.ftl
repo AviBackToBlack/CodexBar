@@ -753,6 +753,7 @@ Sub2ApiBaseUrlHelp = GET /v1/usage için dağıtım URL'si. Yerel geliştirme i�
 PromoteTrayIconLabel = Görev Çubuğuna Sabitle (Windows 11)
 PromoteTrayIconHelper = CodexBar simgesini taşma şevronunun içinde değil, her zaman görev çubuğunda göster
 PromoteTrayIconUnsupportedHint = Bu işletim sisteminde kullanılamaz. Elle sabitlemek için simgeyi Windows Ayarlar > Görev Çubuğu'ndaki ^ taşma alanının dışına sürükleyin.
+MetricMonthlyPlan = Aylık plan
 UsageSpendShare = Paylaşım kartını dışa aktar (PNG)
 UsageSpendShareEmpty = Henüz dışa aktarılacak bir şey yok.
 UsageSpendShareFailed = Paylaşım kartı görseli oluşturulamadı.

@@ -280,8 +280,8 @@ pub enum MetricPreference {
     Credits,
     #[serde(rename = "extraUsage", alias = "extrausage")]
     ExtraUsage,
-    /// Current-month plan spend for PAYG providers (e.g. Mistral) that have
-    /// cost data but no rate-limit window (#2821, #2947).
+    /// The provider's monthly plan allowance window, such as Mistral's Vibe
+    /// plan (upstream 0.70.0 #4072).
     MonthlyPlan,
     Average,
 }
@@ -312,7 +312,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary",
             MetricPreference::Credits => "Credits",
             MetricPreference::ExtraUsage => "Extra usage",
-            MetricPreference::MonthlyPlan => "Monthly plan spend",
+            MetricPreference::MonthlyPlan => "Monthly plan",
             MetricPreference::Average => "Average",
         }
     }
@@ -327,7 +327,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary usage limit",
             MetricPreference::Credits => "Credit balance",
             MetricPreference::ExtraUsage => "On-demand or extra usage budget",
-            MetricPreference::MonthlyPlan => "Current-month plan spend (PAYG)",
+            MetricPreference::MonthlyPlan => "Monthly plan allowance",
             MetricPreference::Average => "Average across metrics",
         }
     }

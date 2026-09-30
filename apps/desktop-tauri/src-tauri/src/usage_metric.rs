@@ -95,8 +95,42 @@ fn preferred_window(
             extra_usage_window(snapshot).or_else(|| cost_window(snapshot))
         }
         MetricPreference::Average => average_window(snapshot),
-        MetricPreference::MonthlyPlan => cost_window(snapshot),
+        // Upstream 0.70.0 (#4072): the provider's plan allowance. A missing
+        // or unknown plan falls back to the primary (included API) allowance,
+        // never to a spend window. Providers without a plan window fall
+        // through to Automatic.
+        MetricPreference::MonthlyPlan => {
+            let window_id = provider.and_then(monthly_plan_window_id)?;
+            plan_window(snapshot, window_id)
+                .or_else(|| non_informational(Some(&snapshot.primary)))
+                .cloned()
+        }
     }
+}
+
+/// The provider-declared monthly plan allowance, when the snapshot carries a
+/// known value for it. Providers without a plan window return `None`.
+pub(crate) fn monthly_plan_window(
+    snapshot: &ProviderUsageSnapshot,
+    provider: Option<ProviderId>,
+) -> Option<&RateWindowSnapshot> {
+    plan_window(snapshot, provider.and_then(monthly_plan_window_id)?)
+}
+
+fn monthly_plan_window_id(provider: ProviderId) -> Option<&'static str> {
+    codexbar::core::instantiate_provider(provider).monthly_plan_window_id()
+}
+
+fn plan_window<'a>(
+    snapshot: &'a ProviderUsageSnapshot,
+    window_id: &str,
+) -> Option<&'a RateWindowSnapshot> {
+    snapshot
+        .extra_rate_windows
+        .iter()
+        .find(|extra| extra.id == window_id)
+        .map(|extra| &extra.window)
+        .filter(|window| !window.is_informational)
 }
 
 fn automatic_window(
@@ -604,6 +638,119 @@ mod tests {
         let selected = selected_usage_window(&snapshot, &settings);
         assert_eq!(selected.used_percent, 40.0);
         assert_eq!(selected.remaining_percent, 60.0);
+    }
+
+    fn mistral_snapshot(plan: Option<RateWindowSnapshot>) -> ProviderUsageSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.provider_id = "mistral".to_string();
+        snapshot.display_name = "Mistral".to_string();
+        snapshot.primary = window(2.0);
+        snapshot.primary_label = Some("Included API".to_string());
+        snapshot.secondary = None;
+        snapshot.extra_rate_windows = plan
+            .map(|window| crate::commands::NamedRateWindowSnapshot {
+                id: codexbar::providers::mistral::MONTHLY_PLAN_WINDOW_ID.to_string(),
+                title: "Monthly Plan".to_string(),
+                window,
+                fallback_lane: false,
+            })
+            .into_iter()
+            .collect();
+        snapshot
+    }
+
+    fn metric_settings(provider: ProviderId, preference: MetricPreference) -> Settings {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(provider, preference);
+        settings
+    }
+
+    #[test]
+    fn mistral_monthly_plan_selects_the_vibe_plan_window() {
+        let mut snapshot = mistral_snapshot(Some(window(42.0)));
+        snapshot.primary = window(80.0);
+
+        let monthly_plan = metric_settings(ProviderId::Mistral, MetricPreference::MonthlyPlan);
+        assert_eq!(
+            selected_usage_window(&snapshot, &monthly_plan).used_percent,
+            42.0
+        );
+        // Included API and Automatic stay separate choices (upstream #4072).
+        let included_api = metric_settings(ProviderId::Mistral, MetricPreference::Session);
+        assert_eq!(
+            selected_usage_window(&snapshot, &included_api).used_percent,
+            80.0
+        );
+        assert_eq!(
+            selected_usage_window(&snapshot, &Settings::default()).used_percent,
+            80.0
+        );
+        let presentation =
+            crate::commands::ProviderUsagePresentationSnapshot::new(snapshot, &monthly_plan);
+        assert_eq!(presentation.selected_metric.used_percent, 42.0);
+    }
+
+    #[test]
+    fn mistral_monthly_plan_falls_back_to_included_api_without_a_known_plan() {
+        let settings = metric_settings(ProviderId::Mistral, MetricPreference::MonthlyPlan);
+        let unknown_plan = RateWindowSnapshot {
+            is_informational: true,
+            ..window(0.0)
+        };
+
+        for snapshot in [mistral_snapshot(None), mistral_snapshot(Some(unknown_plan))] {
+            let selected = selected_usage_window(&snapshot, &settings);
+            assert_eq!(selected.used_percent, 2.0);
+            assert!(!selected.is_informational);
+        }
+    }
+
+    #[test]
+    fn mistral_monthly_plan_never_selects_a_spend_window() {
+        let mut snapshot = mistral_snapshot(None);
+        snapshot.cost = Some(crate::commands::CostSnapshotBridge {
+            used: 45.0,
+            limit: Some(50.0),
+            remaining: Some(5.0),
+            currency_code: "EUR".to_string(),
+            currency_symbol: Some("€".to_string()),
+            period: "month".to_string(),
+            resets_at: None,
+            formatted_used: "€45.00".to_string(),
+            formatted_limit: Some("€50.00".to_string()),
+            balance: None,
+            balance_updated_at: None,
+            account_id: None,
+            formatted_balance: None,
+            daily: Vec::new(),
+            always_visible: false,
+        });
+        let settings = metric_settings(ProviderId::Mistral, MetricPreference::MonthlyPlan);
+
+        assert_eq!(
+            selected_usage_window(&snapshot, &settings).used_percent,
+            2.0
+        );
+    }
+
+    #[test]
+    fn monthly_plan_without_a_provider_plan_window_falls_through_to_automatic() {
+        let mut snapshot = snapshot();
+        snapshot.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: codexbar::providers::mistral::MONTHLY_PLAN_WINDOW_ID.to_string(),
+            title: "Monthly Plan".to_string(),
+            window: window(90.0),
+            fallback_lane: false,
+        }];
+        let settings = metric_settings(ProviderId::Codex, MetricPreference::MonthlyPlan);
+
+        // Codex declares no plan window, so a same-named lane is not special
+        // and the choice resolves like Automatic (highest real window).
+        assert_eq!(
+            selected_usage_window(&snapshot, &settings).used_percent,
+            selected_usage_window(&snapshot, &Settings::default()).used_percent
+        );
+        assert!(monthly_plan_window(&snapshot, Some(ProviderId::Codex)).is_none());
     }
 
     #[test]

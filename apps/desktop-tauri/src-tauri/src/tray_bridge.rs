@@ -513,7 +513,7 @@ fn status_labels_for_settings(
     if settings.tray_icon_mode == TrayIconMode::PerProvider {
         return healthy
             .into_iter()
-            .map(|s| provider_status_label(s, lang))
+            .map(|s| provider_status_label(s, settings, lang))
             .collect::<Vec<_>>();
     }
 
@@ -524,7 +524,7 @@ fn status_labels_for_settings(
         return vec![];
     };
 
-    let (_, label) = provider_status_label(selected, lang);
+    let (_, label) = provider_status_label(selected, settings, lang);
     vec![("status_summary".to_string(), label)]
 }
 
@@ -554,25 +554,34 @@ fn ordered_snapshot_refs<'a>(
 
 fn provider_status_label(
     snapshot: &crate::commands::ProviderUsageSnapshot,
+    settings: &Settings,
     lang: codexbar::settings::Language,
 ) -> (String, String) {
-    // MonthlyPlan metric (PAYG spend, e.g. Mistral): show formatted cost.
     let provider = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id);
     let preference = provider
-        .map(|id| Settings::load().get_provider_metric(id))
+        .map(|id| settings.get_provider_metric(id))
         .unwrap_or_default();
-    if preference == MetricPreference::MonthlyPlan
-        && let Some(cost) = snapshot.cost.as_ref()
-    {
-        let amount = if !cost.formatted_used.is_empty() {
-            cost.formatted_used.clone()
-        } else {
-            crate::commands::format_cost_amount(cost)
-        };
-        return (
-            snapshot.provider_id.clone(),
-            format!("{} {}", snapshot.display_name, amount),
-        );
+    if preference == MetricPreference::MonthlyPlan {
+        // Upstream 0.70.0 (#4072): label the provider's plan allowance when
+        // it resolves, otherwise keep the current-month spend amount.
+        if let Some(plan) = crate::usage_metric::monthly_plan_window(snapshot, provider) {
+            let label = crate::commands::compact_tray_status_label(plan, lang);
+            return (
+                snapshot.provider_id.clone(),
+                format!("{} {}", snapshot.display_name, label),
+            );
+        }
+        if let Some(cost) = snapshot.cost.as_ref() {
+            let amount = if !cost.formatted_used.is_empty() {
+                cost.formatted_used.clone()
+            } else {
+                crate::commands::format_cost_amount(cost)
+            };
+            return (
+                snapshot.provider_id.clone(),
+                format!("{} {}", snapshot.display_name, amount),
+            );
+        }
     }
 
     let label = crate::commands::compact_tray_status_label(headline_window(snapshot), lang);
@@ -1315,12 +1324,40 @@ mod tests {
             "{japanese_tooltip}"
         );
 
+        let settings = Settings::default();
         let (_, english_label) =
-            provider_status_label(&claude, codexbar::settings::Language::English);
+            provider_status_label(&claude, &settings, codexbar::settings::Language::English);
         let (_, japanese_label) =
-            provider_status_label(&claude, codexbar::settings::Language::Japanese);
+            provider_status_label(&claude, &settings, codexbar::settings::Language::Japanese);
         assert!(english_label.contains("Resets in"), "{english_label}");
         assert!(japanese_label.contains("リセットまで"), "{japanese_label}");
+    }
+
+    #[test]
+    fn mistral_monthly_plan_tray_label_shows_the_plan_then_the_spend() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Mistral, MetricPreference::MonthlyPlan);
+        settings.show_as_used = true;
+        let lang = codexbar::settings::Language::English;
+        let mut mistral =
+            fake_snapshot_with("mistral", "Mistral", 2.0, None, None, Some((12.5, 50.0)));
+        let mut plan = fake_extra_window(42.0);
+        plan.id = codexbar::providers::mistral::MONTHLY_PLAN_WINDOW_ID.to_string();
+        plan.title = "Monthly Plan".to_string();
+        mistral.extra_rate_windows = vec![plan];
+
+        let (_, label) = provider_status_label(&mistral, &settings, lang);
+        assert_eq!(label, "Mistral 42%");
+        assert_eq!(selected_tray_percents(&mistral, &settings).0, 42.0);
+
+        // Without a known plan allowance the label keeps the spend text.
+        mistral.extra_rate_windows[0].window.is_informational = true;
+        let (_, label) = provider_status_label(&mistral, &settings, lang);
+        assert_eq!(label, "Mistral $12.50");
+
+        // Automatic keeps the existing headline label.
+        let (_, label) = provider_status_label(&mistral, &Settings::default(), lang);
+        assert_eq!(label, "Mistral 2%");
     }
 
     #[test]

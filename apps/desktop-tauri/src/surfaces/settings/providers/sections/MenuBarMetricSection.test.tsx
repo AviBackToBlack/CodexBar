@@ -36,6 +36,25 @@ function provider(extra = true): ProviderDetail {
   };
 }
 
+function mistral(observed = true): ProviderDetail {
+  return {
+    ...provider(false),
+    id: "mistral",
+    displayName: "Mistral",
+    primaryMetricLabel: "Included API",
+    monthlyPlanWindowId: "mistral-monthly-plan",
+    session: observed ? rateWindow(2) : null,
+    extraRateWindows: observed
+      ? [{ id: "mistral-monthly-plan", title: "Monthly Plan", window: rateWindow(42) }]
+      : [],
+    hasSnapshot: observed,
+  };
+}
+
+function optionNames() {
+  return screen.getAllByRole("option").map((option) => option.textContent);
+}
+
 function rateWindow(usedPercent: number) {
   return {
     usedPercent,
@@ -122,5 +141,62 @@ describe("MenuBarMetricSection", () => {
     expect(onChange).toHaveBeenCalledWith({
       providerMetrics: { copilot: "extraUsage" },
     });
+    expect(screen.queryByRole("option", { name: "MetricMonthlyPlan" })).toBeNull();
+  });
+
+  it("offers Included API and Monthly Plan for a provider plan window", () => {
+    const onChange = vi.fn();
+    render(
+      <MenuBarMetricSection
+        provider={mistral()}
+        providerMetrics={{}}
+        disabled={false}
+        t={(key) => key}
+        onChange={onChange}
+      />,
+    );
+
+    // Upstream 0.70.0: Automatic, Included API and Monthly Plan only. The
+    // plan window does not add a separate Extra usage choice.
+    expect(optionNames()).toEqual(["Automatic", "Included API", "MetricMonthlyPlan"]);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "monthlyPlan" } });
+    expect(onChange).toHaveBeenCalledWith({
+      providerMetrics: { mistral: "monthlyPlan" },
+    });
+  });
+
+  it("offers Monthly Plan before the first Mistral snapshot", () => {
+    render(
+      <MenuBarMetricSection
+        provider={mistral(false)}
+        providerMetrics={{ mistral: "monthlyPlan" }}
+        disabled={false}
+        t={(key) => key}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(optionNames()).toEqual(["Automatic", "Included API", "MetricMonthlyPlan"]);
+    expect(screen.getByRole("combobox")).toHaveValue("monthlyPlan");
+  });
+
+  it("keeps a saved choice the provider no longer offers readable", () => {
+    render(
+      <MenuBarMetricSection
+        provider={mistral()}
+        providerMetrics={{ mistral: "extraUsage" }}
+        disabled={false}
+        t={(key) => key}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(optionNames()).toEqual([
+      "Automatic",
+      "Included API",
+      "MetricMonthlyPlan",
+      "ExtraUsage",
+    ]);
+    expect(screen.getByRole("combobox")).toHaveValue("extraUsage");
   });
 });

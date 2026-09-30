@@ -27,6 +27,12 @@ const CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// `/subscription` render can never stall the refresh; degraded enrichment is
 /// logged and skipped, never fatal.
 const SUBSCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+/// Extra rate window holding the Vibe monthly plan allowance. The Monthly Plan
+/// menu bar metric selects it (upstream 0.70.0 #4072).
+pub const MONTHLY_PLAN_WINDOW_ID: &str = "mistral-monthly-plan";
+/// Picker label for the primary lane, the included API allowance (upstream
+/// `menuBarLayoutPrimaryLabel`).
+const INCLUDED_API_LABEL: &str = "Included API";
 
 #[derive(Debug, Deserialize)]
 struct BillingResponse {
@@ -417,11 +423,11 @@ impl MistralProvider {
         if let Some(budgets) = budgets {
             if let Some(api) = budgets.api {
                 usage.primary = Self::budget_window(&api);
-                usage.primary_label = Some("Included API".to_string());
+                usage.primary_label = Some(INCLUDED_API_LABEL.to_string());
             }
             if let Some(vibe) = budgets.vibe {
                 usage.extra_rate_windows.push(NamedRateWindow::new(
-                    "mistral-monthly-plan",
+                    MONTHLY_PLAN_WINDOW_ID,
                     "Monthly Plan",
                     Self::budget_window(&vibe),
                 ));
@@ -576,6 +582,14 @@ impl Provider for MistralProvider {
     fn supports_web(&self) -> bool {
         true
     }
+
+    fn monthly_plan_window_id(&self) -> Option<&'static str> {
+        Some(MONTHLY_PLAN_WINDOW_ID)
+    }
+
+    fn menu_bar_primary_label(&self) -> Option<&'static str> {
+        Some(INCLUDED_API_LABEL)
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +639,17 @@ mod tests {
                 .unwrap_or_default()
                 .contains("1000 input / 500 output")
         );
+    }
+
+    #[test]
+    fn monthly_plan_metric_targets_the_published_vibe_window() {
+        let provider = MistralProvider::new();
+
+        assert_eq!(
+            provider.monthly_plan_window_id(),
+            Some("mistral-monthly-plan")
+        );
+        assert_eq!(provider.menu_bar_primary_label(), Some("Included API"));
     }
 
     #[test]
