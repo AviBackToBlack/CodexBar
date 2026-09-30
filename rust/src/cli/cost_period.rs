@@ -23,8 +23,11 @@ pub(super) fn resolve_period(
         return Ok(CostReportingPeriod::rolling(days));
     }
     let period = match period {
-        Some(raw) => CostReportingPeriod::parse(raw)
-            .ok_or_else(|| anyhow::anyhow!("--period must be month-to-date or all"))?,
+        Some(raw) => match CostReportingPeriod::parse(raw) {
+            Some(CostReportingPeriod::MonthToDate) => CostReportingPeriod::MonthToDate,
+            Some(CostReportingPeriod::AllAvailable) => CostReportingPeriod::AllAvailable,
+            _ => anyhow::bail!("--period must be month-to-date or all"),
+        },
         None => saved,
     };
     if host_summary && period == CostReportingPeriod::AllAvailable {

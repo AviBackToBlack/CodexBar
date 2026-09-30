@@ -91,21 +91,26 @@ pub async fn cost_response(provider: Option<&str>) -> String {
             results.push(payload);
             continue;
         }
-        let (supported, summary) = match provider_id {
-            ProviderId::Codex => (true, scanner.scan_codex()),
-            ProviderId::Claude => (true, scanner.scan_claude()),
-            ProviderId::Pi => (true, scanner.scan_pi()),
-            _ => (false, Default::default()),
+        let (supported, summary, daily) = match provider_id {
+            ProviderId::Codex => (true, scanner.scan_codex(), None),
+            ProviderId::Claude => {
+                let snapshot = scanner.scan_claude_chart_snapshot_with_cancel(None);
+                (true, snapshot.summary, Some(snapshot.daily_cost))
+            }
+            ProviderId::Pi => (true, scanner.scan_pi(), None),
+            _ => (false, Default::default(), None),
         };
         if supported {
-            // Daily spend history for the dashboard bar charts. The debounced
-            // helper reuses the cache the summary scan just warmed, so no
-            // second disk walk happens per request. All charts the most recent
-            // year; month to date charts exactly its own days.
-            let daily = daily_json(cost_scanner::get_daily_cost_history(
-                provider_id.cli_name(),
-                rolling_window_days(period),
-            ));
+            // Claude's snapshot derives the summary and chart rows in one
+            // transcript walk. Other providers use the shared daily-history
+            // path, capped at one year for All.
+            let daily = daily.unwrap_or_else(|| {
+                cost_scanner::get_daily_cost_history(
+                    provider_id.cli_name(),
+                    rolling_window_days(period),
+                )
+            });
+            let daily = daily_json(daily);
             let mut payload = json!({
                 "provider": provider_id.cli_name(),
                 "supported": true,

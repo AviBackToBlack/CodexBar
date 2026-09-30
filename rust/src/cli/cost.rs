@@ -100,11 +100,12 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     let group_by = CostGroupBy::from_arg(args.group_by.as_deref());
     let use_color = !args.no_color && is_terminal();
 
+    let settings = Settings::load();
     let host_summary = args.remote.is_some() || args.summary_only;
     let period = resolve_period(
         args.days,
         args.period.as_deref(),
-        Settings::load().cost_reporting_period,
+        settings.cost_reporting_period,
         host_summary,
     )?;
     let days = window_days(period);
@@ -221,7 +222,7 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
             print_text_output(&results, use_color, period, group_by);
         }
         OutputFormat::Json => {
-            print_json_output(&results, args.pretty, period, days)?;
+            print_json_output(&results, args.pretty, period, days, &settings)?;
         }
     }
 
@@ -485,8 +486,8 @@ fn build_json_payloads(
     results: &[CostResult],
     period: CostReportingPeriod,
     days: u32,
+    settings: &Settings,
 ) -> Vec<serde_json::Value> {
-    let settings = Settings::load();
     results
         .iter()
         .map(|r| {
@@ -546,8 +547,9 @@ fn print_json_output(
     pretty: bool,
     period: CostReportingPeriod,
     days: u32,
+    settings: &Settings,
 ) -> anyhow::Result<()> {
-    let payloads = build_json_payloads(results, period, days);
+    let payloads = build_json_payloads(results, period, days, settings);
 
     let output = if pretty {
         serde_json::to_string_pretty(&payloads)?
@@ -727,7 +729,9 @@ mod tests {
             supported: true,
             token_history: None,
         }];
-        let payloads = build_json_payloads(&results, CostReportingPeriod::MonthToDate, 12);
+        let settings = Settings::default();
+        let payloads =
+            build_json_payloads(&results, CostReportingPeriod::MonthToDate, 12, &settings);
         let payload = &payloads[0];
         assert_eq!(payload["reportingPeriod"], "month-to-date");
         assert_eq!(payload["historyLabel"], "Month to date");
@@ -738,7 +742,8 @@ mod tests {
         assert_eq!(payload["cost"]["total_usd"], 2.5);
         assert_eq!(payload["tokens"]["input"], 10);
 
-        let rolling = build_json_payloads(&results, CostReportingPeriod::Rolling(30), 30);
+        let rolling =
+            build_json_payloads(&results, CostReportingPeriod::Rolling(30), 30, &settings);
         assert_eq!(rolling[0]["reportingPeriod"], "rolling:30");
         assert_eq!(rolling[0]["historyLabel"], "Last 30 days");
     }
@@ -757,7 +762,13 @@ mod tests {
                 coverage: LocalHistoryCoverage::Complete,
             }),
         }];
-        let payloads = build_json_payloads(&results, CostReportingPeriod::AllAvailable, 20_000);
+        let settings = Settings::default();
+        let payloads = build_json_payloads(
+            &results,
+            CostReportingPeriod::AllAvailable,
+            20_000,
+            &settings,
+        );
         assert_eq!(payloads[0]["reportingPeriod"], "all");
         assert_eq!(payloads[0]["historyLabel"], "All");
         assert_eq!(payloads[0]["days_scanned"], 20_000);
