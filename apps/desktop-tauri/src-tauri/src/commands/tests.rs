@@ -1955,3 +1955,46 @@ fn bootstrap_payload_exposes_every_provider_variant() {
     assert!(encoded.contains("\"providers\""));
     assert!(encoded.contains("\"settings\""));
 }
+
+// Issue #684: the catalog size depends only on the settings passed in. A
+// deprecated provider that is still enabled (the state that made the old
+// test read 79 entries on a developer machine) is listed exactly once, and
+// building the payload twice from the same settings gives the same catalog.
+#[test]
+fn bootstrap_catalog_depends_only_on_supplied_settings() {
+    let active_count = ProviderId::all()
+        .iter()
+        .filter(|provider| !provider.is_deprecated())
+        .count();
+
+    let mut settings = Settings::default();
+    settings
+        .enabled_providers
+        .insert(ProviderId::KimiK2.cli_name().to_string());
+
+    let first = super::bootstrap_state_for(settings.clone());
+    let second = super::bootstrap_state_for(settings);
+
+    let ids = |payload: &super::BootstrapState| -> Vec<String> {
+        payload
+            .providers
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect()
+    };
+    assert_eq!(ids(&first), ids(&second));
+    assert_eq!(first.providers.len(), active_count + 1);
+    assert_eq!(
+        ids(&first)
+            .iter()
+            .filter(|id| id.as_str() == ProviderId::KimiK2.cli_name())
+            .count(),
+        1
+    );
+    assert!(
+        !ids(&first)
+            .iter()
+            .any(|id| id.as_str() == ProviderId::CrossModel.cli_name()),
+        "a deprecated provider that is not enabled stays hidden"
+    );
+}
