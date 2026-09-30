@@ -4,6 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 use crate::core::{CostDailyPoint, CostSnapshot, ProviderError};
+use crate::spend_contract::CostProvenance;
 
 const MAX_ACTIVITY_ROWS: usize = 20_000;
 /// Distinct identity rows tracked for dedupe; bounds the `seen` map.
@@ -19,6 +20,8 @@ pub(super) fn parse_activity_cost(
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut daily: BTreeMap<String, f64> = BTreeMap::new();
     let mut total = 0.0;
+    let mut estimated_total = 0.0;
+    let mut tokens = 0u64;
     let mut rows_seen = 0usize;
 
     for payload in payloads {
@@ -139,16 +142,32 @@ pub(super) fn parse_activity_cost(
                 ));
             }
             total += cost;
+            estimated_total += estimated;
+            // Prompt plus completion only: reasoning tokens are a separate counter.
+            tokens = tokens.saturating_add(prompt + completion);
             *daily.entry(day.to_string()).or_default() += cost;
         }
     }
 
-    if !total.is_finite() {
+    if !total.is_finite() || !estimated_total.is_finite() {
         return Err(ProviderError::Parse(
             "OpenRouter Activity spend overflowed".into(),
         ));
     }
+    // Matches upstream's plugin snapshot mapper: any BYOK estimate makes the
+    // window estimated, or mixed when metered spend is also present.
+    let provenance = if estimated_total > 0.0 {
+        if total - estimated_total > 0.0 {
+            CostProvenance::Mixed
+        } else {
+            CostProvenance::ListPriceEstimate
+        }
+    } else {
+        CostProvenance::VendorMetered
+    };
     Ok(CostSnapshot::new(total, "USD", "Last 30 days (UTC)")
+        .with_history_tokens(tokens)
+        .with_provenance(provenance)
         .with_daily(
             daily
                 .into_iter()
@@ -313,5 +332,46 @@ mod tests {
         let error = parse_activity_cost(&[payload], now()).unwrap_err();
 
         assert!(error.to_string().contains("completed UTC day"));
+    }
+
+    #[test]
+    fn records_token_total_and_cost_provenance() {
+        use crate::spend_contract::CostProvenance;
+
+        let cases = [
+            (1.25, 0.0, CostProvenance::VendorMetered),
+            (0.0, 0.75, CostProvenance::ListPriceEstimate),
+            (1.25, 0.75, CostProvenance::Mixed),
+        ];
+        for (usage, byok, expected) in cases {
+            let history = serde_json::json!({"data":[
+                {"date":"2026-08-17","model":"m","prompt_tokens":10,"completion_tokens":5,
+                 "reasoning_tokens":2,"requests":1,"usage":usage,"byok_usage_inference":byok}
+            ]});
+            let cost = parse_activity_cost(&[history], now()).unwrap();
+            assert_eq!(cost.history_tokens, Some(15));
+            assert_eq!(cost.provenance, Some(expected));
+            assert_eq!(cost.used, usage + byok);
+        }
+    }
+
+    #[test]
+    fn empty_activity_is_a_reported_zero_with_zero_tokens() {
+        use crate::spend_contract::CostProvenance;
+
+        let cost = parse_activity_cost(&[serde_json::json!({"data":[]})], now()).unwrap();
+        assert_eq!(cost.used, 0.0);
+        assert_eq!(cost.history_tokens, Some(0));
+        assert_eq!(cost.provenance, Some(CostProvenance::VendorMetered));
+    }
+
+    #[test]
+    fn duplicate_rows_do_not_double_count_tokens() {
+        let row = serde_json::json!({"date":"2026-08-21","model":"m","prompt_tokens":10,
+            "completion_tokens":5,"requests":1,"usage":1.0});
+        let history = serde_json::json!({"data":[row.clone()]});
+        let latest = serde_json::json!({"data":[row]});
+        let cost = parse_activity_cost(&[history, latest], now()).unwrap();
+        assert_eq!(cost.history_tokens, Some(15));
     }
 }

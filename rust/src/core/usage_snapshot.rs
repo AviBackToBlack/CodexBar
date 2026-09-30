@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ProviderDisplayDetail;
 use super::RateWindow;
+use crate::spend_contract::CostProvenance;
 /// Subscription dates explicitly reported by an authenticated provider
 /// dashboard or subscription endpoint.
 ///
@@ -414,6 +415,17 @@ pub struct CostSnapshot {
     /// usage signal and must remain visible when optional local summaries are hidden.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub always_visible: bool,
+
+    /// Input-plus-output token total for the same reporting window as `used`,
+    /// when the provider supplies one. Text rendering only: it is not part of
+    /// the serialized cost payload, which keeps the ordinary usage JSON contract.
+    #[serde(skip)]
+    pub history_tokens: Option<u64>,
+
+    /// How the `used` figure was produced, when the provider states it. Text
+    /// rendering only; not serialized.
+    #[serde(skip)]
+    pub provenance: Option<CostProvenance>,
 }
 
 impl CostSnapshot {
@@ -432,6 +444,8 @@ impl CostSnapshot {
             account_id: None,
             daily: Vec::new(),
             always_visible: false,
+            history_tokens: None,
+            provenance: None,
         }
     }
 
@@ -538,6 +552,18 @@ impl CostSnapshot {
     /// Keep this provider-metered spend visible even when optional local cost summaries are hidden.
     pub fn always_visible(mut self) -> Self {
         self.always_visible = true;
+        self
+    }
+
+    /// Attach the provider-supplied token total for this spend window.
+    pub fn with_history_tokens(mut self, tokens: u64) -> Self {
+        self.history_tokens = Some(tokens);
+        self
+    }
+
+    /// Record how the spend figure was produced (reported, estimated, mixed).
+    pub fn with_provenance(mut self, provenance: CostProvenance) -> Self {
+        self.provenance = Some(provenance);
         self
     }
 

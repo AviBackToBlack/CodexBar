@@ -13,6 +13,7 @@ menu-bar layout.
 - Grok: Settings and tray **Add account** flow matching Codex/Claude — isolated `grok login --oauth`, save current CLI login, switch, and remove without logging out the active session.
 - Replicate: cookie-authenticated monthly spend and optional prepaid credit balance from the billing page, with user and organization account isolation.
 - DeepSeek: show reported per-model spend in the provider details while preserving the billing currency, reporting period, zero values, and incomplete-total safeguards.
+- CLI: show provider-supplied history in usage text with its source period, known zero, and cost provenance (reported, estimated, or includes estimates), plus input-plus-output token totals for OpenRouter Activity.
 
 ### Fixed
 - Claude: when Hide Personal Info is enabled, keep saved account rows distinguishable with stable localized `Account N` labels and matching redacted tooltips.
