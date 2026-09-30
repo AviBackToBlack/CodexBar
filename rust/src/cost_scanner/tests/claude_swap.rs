@@ -24,10 +24,11 @@ fn claude_swap_homes_are_scanned_once_beside_a_literal_config_dir() {
     write_project(sessions.join("0-ignored").join("projects"), &[row("decoy")]);
 
     let roots = claude_roots::claude_projects_roots(configured.path().to_str(), Some(home.path()));
-    assert_eq!(roots, vec![configured_projects, first, second]);
+    assert_eq!(roots.paths, vec![configured_projects, first, second]);
+    assert_eq!(roots.read_failures, 0);
 
-    // A dangling profile directory only costs one read failure.
-    let mut scan_roots = roots;
+    // A root that disappears before traversal is recorded as a read failure.
+    let mut scan_roots = roots.paths;
     scan_roots.push(home.path().join("missing").join("projects"));
     let scanner = CostScanner::new(1);
     let cutoff = Utc::now() - Duration::days(1);

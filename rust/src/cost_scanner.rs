@@ -597,7 +597,7 @@ impl CostScanner {
         // Walk through projects directory, de-duplicating usage records
         // that appear across multiple files.
         let mut claude_scan = ClaudeFileScanResult::default();
-        if !roots.is_empty() {
+        if !roots.paths.is_empty() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
             let traversal_read_failures = {
@@ -624,10 +624,11 @@ impl CostScanner {
                     }
                     claude_scan.absorb(file_result);
                 };
-                self.walk_claude_roots(&roots, &cutoff, cancel, &mut handle_file)
+                self.walk_claude_roots(&roots.paths, &cutoff, cancel, &mut handle_file)
             };
             claude_scan.read_failures = claude_scan
                 .read_failures
+                .saturating_add(roots.read_failures)
                 .saturating_add(traversal_read_failures);
         }
 
@@ -650,7 +651,7 @@ impl CostScanner {
         // than turning a partial zero into a known zero.
         finalize_claude_summary(
             &mut summary,
-            !roots.is_empty(),
+            !roots.paths.is_empty(),
             claude_scan,
             is_cancelled(cancel),
         );
@@ -684,11 +685,11 @@ impl CostScanner {
 
         let mut quota_records = Vec::new();
         let mut scan_result = ClaudeFileScanResult::default();
-        if !roots.is_empty() {
+        if !roots.paths.is_empty() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
             let traversal_read_failures =
-                self.walk_claude_roots(&roots, &cutoff, cancel, &mut |path| {
+                self.walk_claude_roots(&roots.paths, &cutoff, cancel, &mut |path| {
                     let mut file_has_usage = false;
                     let mut aggregation_complete = true;
                     let mut file_result = scan_claude_file_with_pricing(
@@ -725,6 +726,7 @@ impl CostScanner {
                 });
             scan_result.read_failures = scan_result
                 .read_failures
+                .saturating_add(roots.read_failures)
                 .saturating_add(traversal_read_failures);
         }
 
@@ -736,10 +738,11 @@ impl CostScanner {
             &mut HashSet::new(),
         );
 
-        let complete = !roots.is_empty() && !is_cancelled(cancel) && scan_result.is_complete();
+        let complete =
+            !roots.paths.is_empty() && !is_cancelled(cancel) && scan_result.is_complete();
         finalize_claude_summary(
             &mut summary,
-            !roots.is_empty(),
+            !roots.paths.is_empty(),
             scan_result,
             is_cancelled(cancel),
         );
@@ -807,7 +810,7 @@ impl CostScanner {
 
     /// Existing Claude transcript roots: the profile root plus claude-swap
     /// session homes, de-duplicated by resolved path.
-    fn claude_projects_roots(&self) -> Vec<PathBuf> {
+    fn claude_projects_roots(&self) -> claude_roots::ClaudeProjectsRoots {
         claude_roots::claude_projects_roots(
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
             dirs::home_dir().as_deref(),
@@ -1212,7 +1215,7 @@ pub fn has_cost_usage_sources() -> bool {
         .get_codex_sessions_dirs()
         .iter()
         .any(|dir| dir.exists())
-        || !scanner.claude_projects_roots().is_empty()
+        || scanner.claude_projects_roots().has_possible_roots()
         || crate::pi_session_cost::pi_compatible_session_roots(dirs::home_dir())
             .iter()
             .any(|dir| dir.exists())
@@ -1276,7 +1279,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
             // Real per-day breakdown: walk the project logs once,
             // de-duplicating records across files.
             let roots = scanner.claude_projects_roots();
-            if !roots.is_empty() {
+            if !roots.paths.is_empty() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
@@ -1306,10 +1309,11 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                         }
                         claude_scan.absorb(file_result);
                     };
-                    scanner.walk_claude_roots(&roots, &cutoff, None, &mut handle_file)
+                    scanner.walk_claude_roots(&roots.paths, &cutoff, None, &mut handle_file)
                 };
                 claude_scan.read_failures = claude_scan
                     .read_failures
+                    .saturating_add(roots.read_failures)
                     .saturating_add(traversal_read_failures);
                 if claude_scan.is_complete() {
                     zero_fill_uninitialized_claude_daily_costs(
@@ -1398,7 +1402,7 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
             // as the cost chart. Only a complete valid walk establishes
             // authoritative coverage of the requested history window.
             let roots = scanner.claude_projects_roots();
-            if !roots.is_empty() {
+            if !roots.paths.is_empty() {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
@@ -1414,10 +1418,11 @@ pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>
                         );
                         claude_scan.absorb(file_result);
                     };
-                    scanner.walk_claude_roots(&roots, &cutoff, None, &mut handle_file)
+                    scanner.walk_claude_roots(&roots.paths, &cutoff, None, &mut handle_file)
                 };
                 claude_scan.read_failures = claude_scan
                     .read_failures
+                    .saturating_add(roots.read_failures)
                     .saturating_add(traversal_read_failures);
                 mark_claude_daily_token_coverage(&mut covered_days, &daily_tokens, claude_scan);
             }

@@ -11,37 +11,68 @@
 //! claude-swap uses the legacy `~/.claude-swap-backup` root on Windows and
 //! macOS. The XDG data root applies to Linux/WSL only and is not needed here.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const SWAP_SESSIONS_DIR: [&str; 2] = [".claude-swap-backup", "sessions"];
+#[derive(Debug, Default)]
+pub(super) struct ClaudeProjectsRoots {
+    pub(super) paths: Vec<PathBuf>,
+    pub(super) read_failures: u32,
+}
+
+impl ClaudeProjectsRoots {
+    pub(super) fn has_possible_roots(&self) -> bool {
+        !self.paths.is_empty() || self.read_failures > 0
+    }
+}
 
 /// Existing Claude transcript roots, de-duplicated by resolved path.
 ///
 /// `config_dir` is the raw `CLAUDE_CONFIG_DIR` value: one literal directory,
-/// with empty meaning "unset". A root that does not exist is omitted, so an
-/// empty result means there is no Claude history to scan.
-pub(super) fn claude_projects_roots(config_dir: Option<&str>, home: Option<&Path>) -> Vec<PathBuf> {
-    let mut candidates = vec![base_projects_dir(config_dir, home)];
+/// with empty meaning "unset". A root that does not exist is omitted; failures
+/// that prevent discovering existing roots are retained for scan coverage.
+pub(super) fn claude_projects_roots(
+    config_dir: Option<&str>,
+    home: Option<&Path>,
+) -> ClaudeProjectsRoots {
+    let mut result = ClaudeProjectsRoots {
+        paths: vec![base_projects_dir(config_dir, home)],
+        ..ClaudeProjectsRoots::default()
+    };
     if let Some(home) = home {
-        candidates.extend(swap_projects_roots(home));
+        let swaps = swap_projects_roots(home);
+        result.paths.extend(swaps.paths);
+        result.read_failures = result.read_failures.saturating_add(swaps.read_failures);
     }
 
-    let mut seen = Vec::new();
-    let mut roots = Vec::new();
-    for root in candidates {
-        if !root.exists() {
-            continue;
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+    for root in result.paths.drain(..) {
+        match fs::metadata(&root) {
+            Ok(_) => {}
+            Err(error) if is_missing_path(&error) => continue,
+            Err(_) => {
+                result.read_failures = result.read_failures.saturating_add(1);
+                continue;
+            }
         }
+
         // Shared-history symlinks or junctions resolve to the same directory
         // as the profile they point at; scan that directory once.
-        let resolved = fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
-        if !seen.contains(&resolved) {
-            seen.push(resolved);
-            roots.push(root);
+        let resolved = match fs::canonicalize(&root) {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                result.read_failures = result.read_failures.saturating_add(1);
+                root.clone()
+            }
+        };
+        if seen.insert(resolved) {
+            paths.push(root);
         }
     }
-    roots
+    result.paths = paths;
+    result
 }
 
 fn base_projects_dir(config_dir: Option<&str>, home: Option<&Path>) -> PathBuf {
@@ -60,25 +91,54 @@ fn base_projects_dir(config_dir: Option<&str>, home: Option<&Path>) -> PathBuf {
 /// `<home>/.claude-swap-backup/sessions/<N>-<label>/projects` directories,
 /// sorted by path. Only immediate children of `sessions` qualify; `<N>` must
 /// be a positive integer and `projects` must be a directory (a dangling shared
-/// history link is skipped without affecting the other homes).
-fn swap_projects_roots(home: &Path) -> Vec<PathBuf> {
-    let sessions = SWAP_SESSIONS_DIR
-        .iter()
-        .fold(home.to_path_buf(), |path, part| path.join(part));
-    let Ok(entries) = fs::read_dir(&sessions) else {
-        return Vec::new();
+/// history link is skipped without affecting the other homes). Discovery
+/// failures are retained so callers do not report incomplete history as a
+/// complete zero.
+fn swap_projects_roots(home: &Path) -> ClaudeProjectsRoots {
+    let sessions = home.join(".claude-swap-backup").join("sessions");
+    let entries = match fs::read_dir(&sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return ClaudeProjectsRoots::default();
+        }
+        Err(_) => {
+            return ClaudeProjectsRoots {
+                read_failures: 1,
+                ..ClaudeProjectsRoots::default()
+            };
+        }
     };
-    let mut slots: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| is_swap_slot_name(&entry.file_name().to_string_lossy()))
-        .map(|entry| entry.path())
-        .collect();
-    slots.sort();
-    slots
-        .into_iter()
-        .map(|slot| slot.join("projects"))
-        .filter(|projects| projects.is_dir())
-        .collect()
+
+    let mut result = ClaudeProjectsRoots::default();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                result.read_failures = result.read_failures.saturating_add(1);
+                continue;
+            }
+        };
+        if !is_swap_slot_name(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+        let projects = entry.path().join("projects");
+        match fs::metadata(&projects) {
+            Ok(metadata) if metadata.is_dir() => result.paths.push(projects),
+            Ok(_) => {}
+            Err(error) if is_missing_path(&error) => {}
+            Err(_) => result.read_failures = result.read_failures.saturating_add(1),
+        }
+    }
+
+    result.paths.sort();
+    result
+}
+
+fn is_missing_path(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
 }
 
 fn is_swap_slot_name(name: &str) -> bool {
@@ -86,7 +146,8 @@ fn is_swap_slot_name(name: &str) -> bool {
         return false;
     }
     name.split_once('-')
-        .and_then(|(number, _label)| number.parse::<i64>().ok())
+        .and_then(|(number, label)| (!label.is_empty()).then_some(number))
+        .and_then(|number| number.parse::<i64>().ok())
         .is_some_and(|number| number > 0)
 }
 
@@ -106,7 +167,7 @@ mod tests {
 
     #[test]
     fn slot_names_need_a_positive_integer_and_a_dash() {
-        for accepted in ["1-first", "12-a-b", "3-", "+5-plus"] {
+        for accepted in ["1-first", "12-a-b", "+5-plus"] {
             assert!(is_swap_slot_name(accepted), "{accepted}");
         }
         for rejected in [
@@ -115,6 +176,7 @@ mod tests {
             "unrelated",
             "abc-1",
             "7",
+            "3-",
             "",
             ".1-hidden",
             " 1-x",
@@ -133,7 +195,7 @@ mod tests {
         swap_home(home.path(), "0-zero");
 
         let roots = claude_projects_roots(None, Some(home.path()));
-        assert_eq!(roots, vec![base, first, second]);
+        assert_eq!(roots.paths, vec![base, first, second]);
     }
 
     #[test]
@@ -145,7 +207,7 @@ mod tests {
         let swap = swap_home(home.path(), "2-second");
 
         let roots = claude_projects_roots(configured.path().to_str(), Some(home.path()));
-        assert_eq!(roots, vec![configured_projects, swap]);
+        assert_eq!(roots.paths, vec![configured_projects, swap]);
     }
 
     #[test]
@@ -153,7 +215,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let default = make_projects(&home.path().join(".config").join("claude"));
         assert_eq!(
-            claude_projects_roots(Some("  "), Some(home.path())),
+            claude_projects_roots(Some("  "), Some(home.path())).paths,
             vec![default]
         );
     }
@@ -179,8 +241,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(claude_projects_roots(None, Some(home.path())), vec![swap]);
-        assert!(claude_projects_roots(None, Some(&home.path().join("nowhere"))).is_empty());
+        assert_eq!(
+            claude_projects_roots(None, Some(home.path())).paths,
+            vec![swap]
+        );
+        assert!(
+            claude_projects_roots(None, Some(&home.path().join("nowhere")))
+                .paths
+                .is_empty()
+        );
     }
 
     #[test]
@@ -191,9 +260,9 @@ mod tests {
         let respelled = sessions.join("..").join("sessions").join("1-first");
 
         let roots = claude_projects_roots(respelled.to_str(), Some(home.path()));
-        assert_eq!(roots.len(), 1);
+        assert_eq!(roots.paths.len(), 1);
         assert_eq!(
-            fs::canonicalize(&roots[0]).unwrap(),
+            fs::canonicalize(&roots.paths[0]).unwrap(),
             fs::canonicalize(first).unwrap()
         );
     }
@@ -214,6 +283,22 @@ mod tests {
             return;
         }
 
-        assert_eq!(claude_projects_roots(None, Some(home.path())), vec![first]);
+        assert_eq!(
+            claude_projects_roots(None, Some(home.path())).paths,
+            vec![first]
+        );
+    }
+
+    #[test]
+    fn session_enumeration_errors_are_reported() {
+        let home = tempfile::tempdir().unwrap();
+        let backup = home.path().join(".claude-swap-backup");
+        fs::create_dir_all(&backup).unwrap();
+        fs::write(backup.join("sessions"), b"not a directory").unwrap();
+
+        let roots = claude_projects_roots(None, Some(home.path()));
+        assert!(roots.paths.is_empty());
+        assert_eq!(roots.read_failures, 1);
+        assert!(roots.has_possible_roots());
     }
 }
