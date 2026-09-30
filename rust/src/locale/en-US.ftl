@@ -881,3 +881,6 @@ ClaudeSwapHistoricalUsage = Last known usage
 ClaudeSwapHistoricalCapturedAt = captured
 ClaudeSwapSpend = Spend
 ClaudeSwapDisabled = Disabled in claude-swap
+ProviderRaycastAutoImportHelp = Automatically imports the signed-in www.raycast.com session from Chrome.
+ProviderRaycastManualCookieHelp = Paste a Cookie header from www.raycast.com/settings.
+ProviderRaycastCookiesDisabled = Raycast cookies are disabled.

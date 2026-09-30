@@ -167,16 +167,14 @@ fn request_timeout(web_timeout_seconds: u64) -> Duration {
 }
 
 fn check_status(status: StatusCode) -> Result<(), ProviderError> {
-    let message = if status == StatusCode::OK {
-        return Ok(());
-    } else if status == StatusCode::FORBIDDEN {
-        "Raycast denied access to AI credits for this account.".to_string()
-    } else if status == StatusCode::TOO_MANY_REQUESTS {
-        "Raycast credits requests are rate limited.".to_string()
-    } else if status.is_server_error() {
-        format!("Raycast credits service is unavailable (HTTP {status}).")
-    } else {
-        format!("Raycast credits API returned HTTP {status}.")
+    let message = match status {
+        StatusCode::OK => return Ok(()),
+        StatusCode::FORBIDDEN => "Raycast denied access to AI credits for this account.".into(),
+        StatusCode::TOO_MANY_REQUESTS => "Raycast credits requests are rate limited.".into(),
+        status if status.is_server_error() => {
+            format!("Raycast credits service is unavailable (HTTP {status}).")
+        }
+        status => format!("Raycast credits API returned HTTP {status}."),
     };
     Err(ProviderError::Other(message))
 }

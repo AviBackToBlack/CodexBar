@@ -754,7 +754,7 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(
                 lang,
                 "auto",
-                "Automatically imports the signed-in www.raycast.com session from Chrome.",
+                locale::get_text(lang, locale::LocaleKey::ProviderRaycastAutoImportHelp),
                 "",
                 None,
             ),
@@ -762,10 +762,19 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 lang,
                 "manual",
                 "",
-                "Paste a Cookie header from www.raycast.com/settings.",
+                locale::get_text(lang, locale::LocaleKey::ProviderRaycastManualCookieHelp),
                 None,
             ),
-            cookie_option(lang, "off", "", "", Some("Raycast cookies are disabled.")),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some(
+                    locale::get_text(lang, locale::LocaleKey::ProviderRaycastCookiesDisabled)
+                        .as_str(),
+                ),
+            ),
         ],
         "helmcode" => vec![
             cookie_option(

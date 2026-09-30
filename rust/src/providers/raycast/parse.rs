@@ -4,7 +4,7 @@
 //! failure, never an exact zero.
 
 use chrono::{DateTime, Utc};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::core::{
     ProviderDisplayDetail, ProviderError, ProviderFetchResult, RateWindow, SubscriptionMetadata,
@@ -23,20 +23,9 @@ fn invalid(field: &str) -> ProviderError {
     ProviderError::Parse(format!("Invalid Raycast credits response: {field}"))
 }
 
-/// `null` and absent keys read as an empty object; any other non-object is invalid.
-fn object<'a>(
-    value: Option<&'a Value>,
-    field: &str,
-) -> Result<Option<&'a Map<String, Value>>, ProviderError> {
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Object(map)) => Ok(Some(map)),
-        Some(_) => Err(invalid(field)),
-    }
-}
-
-/// Accepts JSON numbers and strings shaped like `[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?`.
-/// The character screen keeps Rust's float parser from accepting `inf` or `nan`.
+/// Accepts non-negative JSON numbers and strings shaped like
+/// `[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?`. The character screen keeps
+/// Rust's float parser from accepting `inf` or `nan`.
 fn amount(value: Option<&Value>, field: &str) -> Result<Option<f64>, ProviderError> {
     let parsed = match value {
         None | Some(Value::Null) => return Ok(None),
@@ -55,16 +44,9 @@ fn amount(value: Option<&Value>, field: &str) -> Result<Option<f64>, ProviderErr
         Some(_) => None,
     };
     parsed
-        .filter(|number| number.is_finite())
+        .filter(|number| number.is_finite() && *number >= 0.0)
         .map(Some)
         .ok_or_else(|| invalid(field))
-}
-
-fn non_negative_amount(value: Option<&Value>, field: &str) -> Result<Option<f64>, ProviderError> {
-    match amount(value, field)? {
-        Some(number) if number < 0.0 => Err(invalid(field)),
-        other => Ok(other),
-    }
 }
 
 fn plan_label(tier: &str) -> String {
@@ -78,14 +60,16 @@ fn plan_label(tier: &str) -> String {
 
 pub(super) fn parse_credits(body: &str) -> Result<Credits, ProviderError> {
     let root: Value = serde_json::from_str(body).map_err(|_| invalid("expected JSON"))?;
-    let root = object(Some(&root), "expected an object")?;
-    let field = |name: &str| root.and_then(|map| map.get(name));
+    let root = root
+        .as_object()
+        .ok_or_else(|| invalid("expected an object"))?;
+    let field = |name: &str| root.get(name);
 
-    let remaining = non_negative_amount(
+    let remaining = amount(
         field("remaining_balance_credits"),
         "remaining_balance_credits",
     )?;
-    let total = non_negative_amount(field("total_balance_credits"), "total_balance_credits")?;
+    let total = amount(field("total_balance_credits"), "total_balance_credits")?;
     if remaining.is_none() && total.is_none() {
         return Err(invalid("no credit amounts"));
     }
@@ -100,7 +84,11 @@ pub(super) fn parse_credits(body: &str) -> Result<Credits, ProviderError> {
         Some(_) => return Err(invalid("next_credits_at")),
     };
 
-    let funding = object(field("funding_subscription"), "funding_subscription")?;
+    let funding = match field("funding_subscription") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(map)) => Some(map),
+        Some(_) => return Err(invalid("funding_subscription")),
+    };
     let plan = funding
         .and_then(|map| map.get("tier"))
         .and_then(Value::as_str)

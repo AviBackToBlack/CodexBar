@@ -772,3 +772,6 @@ ProviderAccentColor = 强调色
 ProviderAccentColorHelper = 覆盖用于用量条和图表的品牌颜色。输入十六进制颜色，如 #FF5733。
 ProviderAccentColorReset = 恢复默认
 ProviderAccentColorInvalid = 无效的十六进制颜色。请使用 #RRGGBB 格式，例如 #FF5733。
+ProviderRaycastAutoImportHelp = 自动从 Chrome 导入已登录的 www.raycast.com 会话。
+ProviderRaycastManualCookieHelp = 粘贴来自 www.raycast.com/settings 的 Cookie 标头。
+ProviderRaycastCookiesDisabled = Raycast Cookie 已禁用。
