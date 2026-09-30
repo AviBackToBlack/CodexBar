@@ -57,13 +57,6 @@ export function normalizeCostPeriod(raw: string | null | undefined): string {
   return parsed ? toRaw(parsed) : DEFAULT_COST_PERIOD;
 }
 
-/** Migrate the pre-0.67.0 day selection (0 = all, otherwise a rolling day count). */
-export function periodFromLegacyDays(days: number | null | undefined): string {
-  if (days == null || !Number.isFinite(days) || days < 0) return DEFAULT_COST_PERIOD;
-  if (days === 0) return "all";
-  return normalizeCostPeriod(`rolling:${Math.floor(days)}`);
-}
-
 /** Persisted form for a typed custom day count; null unless it is an integer in 1..=365. */
 export function customPeriodRaw(input: string): string | null {
   const text = input.trim();

@@ -35,11 +35,14 @@ describe("usage spend sharing", () => {
     expect(
       usageSpendShareFooter({
         contract: {} as SpendContract,
+        reportingPeriod: "rolling:30",
         rows: [{
           providerId: "codex",
           displayName: "Codex",
           sevenDay: null,
           thirtyDay: null,
+          periodCost: null,
+          periodTokens: null,
           currency: "USD",
           source: "local",
           includedInOverview: true,
@@ -53,6 +56,7 @@ describe("usage spend sharing", () => {
   it("keeps hidden sources out of the Overview share summary", () => {
     const summary: UsageSpendSummary = {
       contract: {} as SpendContract,
+      reportingPeriod: "rolling:30",
       reportingDay: "2026-09-19",
       dashboardTimezone: "UTC",
       rows: [
@@ -61,6 +65,8 @@ describe("usage spend sharing", () => {
           displayName: "Codex",
           sevenDay: 1,
           thirtyDay: 2,
+          periodCost: 1,
+          periodTokens: null,
           currency: "USD",
           source: "local",
           includedInOverview: true,
@@ -70,6 +76,8 @@ describe("usage spend sharing", () => {
           displayName: "Claude",
           sevenDay: 3,
           thirtyDay: 4,
+          periodCost: 3,
+          periodTokens: null,
           currency: "USD",
           source: "hidden",
           includedInOverview: false,
@@ -101,6 +109,8 @@ describe("usage spend sharing", () => {
       displayName: "Codex",
       sevenDay: 1,
       thirtyDay: 2,
+      periodCost: 2,
+      periodTokens: null,
       currency: "USD",
       source: "local",
       includedInOverview: true,
@@ -110,7 +120,7 @@ describe("usage spend sharing", () => {
     );
     // Nothing outside the drawn cells may be read by the renderer, and no
     // UsageSpendRow field may carry account-identity data (no email/org).
-    expect(Object.keys(row).filter((key) => /email|org|token|account/i.test(key))).toEqual([]);
+    expect(Object.keys(row).filter((key) => /email|org|account|secret|(access|auth|api|refresh)token/i.test(key))).toEqual([]);
     expect(unsafeKeys).toEqual(["providerId", "includedInOverview"]);
   });
 
@@ -126,10 +136,6 @@ describe("usage spend sharing", () => {
       source: "local",
       includedInOverview: true,
     };
-    const plain = usageSpendShareColumns();
-    expect(plain.headers).toEqual(["Provider", "7 days", "30 days", "Currency", "Source"]);
-    expect(plain.cellsFor(row)).toHaveLength(plain.headers.length);
-
     const withPeriod = usageSpendShareColumns("Month to date");
     expect(withPeriod.headers).toEqual([
       "Provider",

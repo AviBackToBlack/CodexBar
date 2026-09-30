@@ -30,7 +30,7 @@ pub(super) fn daily_range(since: NaiveDate, now: DateTime<Utc>) -> (String, Stri
 
 fn utc_month_start(now: DateTime<Utc>) -> NaiveDate {
     CostReportingPeriod::MonthToDate
-        .bounds(now, CostTimeZone::Named(chrono_tz::UTC), None)
+        .bounds(now, CostTimeZone::UTC, None)
         .start
 }
 

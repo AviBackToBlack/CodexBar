@@ -93,10 +93,10 @@ type FloatBarCostSummary = {
   providerId: string;
   displayName: string;
   todayCost: number | null;
-  /** Cost over the selected History window (30 days when the backend sends none). */
+  /** Cost over the selected History window. */
   periodCost: number | null;
-  /** Raw History window, or null for payloads that only carry 30 days. */
-  period: string | null;
+  /** Raw History window `periodCost` covers. */
+  period: string;
 };
 
 type FloatBarCostTarget = {
@@ -109,13 +109,8 @@ function providerCostKey(provider: ProviderUsageSnapshot): string {
   return `${provider.providerId}:${provider.accountEmail ?? ""}`;
 }
 
-/** Cost for the selected History window; older payloads only carry 30 days. */
-function windowCost(summary: ProviderLocalUsageSummary): number | null {
-  return (summary.reportingPeriod ? summary.periodCost : summary.thirtyDayCost) ?? null;
-}
-
 function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is ProviderLocalUsageSummary {
-  return summary != null && (summary.todayCost != null || windowCost(summary) != null);
+  return summary?.todayCost != null || summary?.periodCost != null;
 }
 
 function formatUsd(value: number | null): string | null {
@@ -391,8 +386,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
           providerId: target.providerId,
           displayName: target.displayName,
           todayCost: localUsage.todayCost,
-          periodCost: windowCost(localUsage),
-          period: localUsage.reportingPeriod || null,
+          periodCost: localUsage.periodCost,
+          period: localUsage.reportingPeriod,
         } satisfies FloatBarCostSummary;
       }),
     )
@@ -533,11 +528,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               summary={summary}
               scale={scale}
               todayLabel={t("PanelToday")}
-              periodLabel={
-                summary.period
-                  ? costPeriodShortLabel(summary.period, t)
-                  : t("FloatBarThirtyDayShort")
-              }
+              periodLabel={costPeriodShortLabel(summary.period, t)}
               estimateLabel={t("OverviewSpendEstimate")}
             />
           ))}

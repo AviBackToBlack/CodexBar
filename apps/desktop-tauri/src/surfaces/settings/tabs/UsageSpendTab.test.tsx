@@ -150,7 +150,7 @@ describe("UsageSpendTab History window", () => {
     expect(await screen.findByRole("columnheader", { name: "Last 90 days" })).toBeTruthy();
   });
 
-  it("offers a custom day count and only persists values in 1..=365", async () => {
+  it("offers a custom day count and persists one valid value on blur", async () => {
     render(<UsageSpendTab {...props} />);
     await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
 
@@ -166,20 +166,39 @@ describe("UsageSpendTab History window", () => {
     fireEvent.change(input, { target: { value: "0" } });
     expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
 
-    // Typing "1" on the way to "14" keeps the custom input open.
+    // Typing "1" on the way to "14" saves nothing and keeps the input open.
     fireEvent.change(input, { target: { value: "1" } });
-    await waitFor(() =>
-      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ costReportingPeriod: "rolling:1" }),
-    );
+    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
     expect(screen.getByLabelText("CostPeriodCustomDays")).toBe(input);
 
     fireEvent.change(input, { target: { value: "14" } });
+    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
+    fireEvent.blur(input);
     await waitFor(() =>
       expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ costReportingPeriod: "rolling:14" }),
     );
+    expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(lastScanPeriod()).toBe("rolling:14"));
     expect(input.getAttribute("aria-invalid")).toBe("false");
     expect(await screen.findByRole("columnheader", { name: "Last 14 days" })).toBeTruthy();
+  });
+
+  it("commits a valid custom day count on Enter", async () => {
+    render(<UsageSpendTab {...props} />);
+    await waitFor(() => expect(tauriMocks.getUsageSpendSummary).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByLabelText("CostPeriodHistoryWindow"), {
+      target: { value: "custom" },
+    });
+    const input = screen.getByLabelText("CostPeriodCustomDays") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "45" } });
+    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({ costReportingPeriod: "rolling:45" }),
+    );
+    expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(1);
   });
 
   it("starts in custom mode for a saved count that is not a preset", async () => {

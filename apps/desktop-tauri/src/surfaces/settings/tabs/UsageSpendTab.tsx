@@ -19,7 +19,6 @@ import {
   DEFAULT_COST_PERIOD,
   costPeriodLabel,
   normalizeCostPeriod,
-  periodFromLegacyDays,
 } from "../../../lib/costPeriod";
 import type { TabProps } from "../settingsTabs";
 import CostPeriodControl from "./CostPeriodControl";
@@ -311,11 +310,6 @@ export default function UsageSpendTab(_props: TabProps) {
 
 
 
-/** Window label for a contract; older payloads only carry a day count (0 = all). */
-function contractPeriodLabel(contract: SpendContract, t: (key: LocaleKey) => string): string {
-  return costPeriodLabel(contract.reportingPeriod ?? periodFromLegacyDays(contract.historyDays), t);
-}
-
 function SpendContractOverview({ contract, t }: { contract: SpendContract; t: (key: LocaleKey) => string }) {
   const coverage = contract.priceCoverageRatio == null
     ? t("UsageSpendUnknown")
@@ -400,7 +394,7 @@ function ContractModelsPanel({ contract, showAll, onToggleAll, t }: { contract: 
         <div>
           <h4 style={{ margin: 0 }}>{t("UsageSpendModels")}</h4>
           <p className="settings-section__caption">
-            {t("UsageSpendModelsPeriodCaption").replace("{}", contractPeriodLabel(contract, t))}
+            {t("UsageSpendModelsPeriodCaption").replace("{}", costPeriodLabel(contract.reportingPeriod, t))}
           </p>
         </div>
         {contract.models.length > 8 && (
@@ -454,7 +448,7 @@ function ProjectsPanel({
         <div>
           <h4 style={{ margin: 0 }}>{t("UsageSpendProjects")}</h4>
           <p className="settings-section__caption" style={{ marginTop: 4 }}>
-            {t("UsageSpendProjectsPeriodCaption").replace("{}", contractPeriodLabel(contract, t))}
+            {t("UsageSpendProjectsPeriodCaption").replace("{}", costPeriodLabel(contract.reportingPeriod, t))}
             {partial ? ` · ${t("UsageSpendPartialHistory")}` : ""}.
           </p>
         </div>

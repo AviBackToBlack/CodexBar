@@ -555,6 +555,14 @@ fn local_usage_period_identity() -> String {
     current_reporting_period().identity(Utc::now(), CostTimeZone::Local)
 }
 
+/// Cache a completed scan under the reporting window it actually used. The
+/// summary timestamp preserves the month for month-to-date identities.
+fn local_usage_summary_period_identity(summary: &ProviderLocalUsageSummary) -> Option<String> {
+    let period = CostReportingPeriod::parse(&summary.reporting_period)?;
+    let scanned_at = DateTime::<Utc>::from_timestamp_millis(summary.token_cost_updated_at_ms)?;
+    Some(period.identity(scanned_at, CostTimeZone::Local))
+}
+
 fn local_usage_cache() -> &'static Mutex<HashMap<String, CachedLocalUsage>> {
     static CACHE: OnceLock<Mutex<HashMap<String, CachedLocalUsage>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -662,7 +670,16 @@ fn load_local_usage_summary_cached(
 }
 
 fn store_local_usage_summary(provider_id: &str, summary: Option<ProviderLocalUsageSummary>) {
-    let period_identity = local_usage_period_identity();
+    let period_identity = match summary.as_ref() {
+        Some(summary) => {
+            let Some(period_identity) = local_usage_summary_period_identity(summary) else {
+                tracing::warn!("Skipping local usage cache entry with invalid period metadata");
+                return;
+            };
+            period_identity
+        }
+        None => local_usage_period_identity(),
+    };
     if let Ok(mut guard) = local_usage_cache().lock() {
         guard.insert(
             provider_id.to_string(),

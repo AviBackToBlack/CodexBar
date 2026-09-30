@@ -1,4 +1,5 @@
 use super::*;
+use codexbar::cost_scanner::CostSummary;
 
 #[test]
 fn invalidated_owner_clears_orphaned_indexing_activity() {
@@ -47,6 +48,35 @@ fn privacy_mode_is_part_of_usage_spend_cache_identity() {
     let public = usage_spend_cache_key_with_privacy(&[], "rolling:30", false, false, false);
     let private = usage_spend_cache_key_with_privacy(&[], "rolling:30", false, false, true);
     assert_ne!(public, private);
+}
+
+#[test]
+fn selected_period_scan_reuses_fixed_windows_and_scans_other_periods() {
+    let seven = CostSummary {
+        total_cost_usd: 7.0,
+        ..CostSummary::default()
+    };
+    let thirty = CostSummary {
+        total_cost_usd: 30.0,
+        ..CostSummary::default()
+    };
+    let mut scanned = false;
+    let selected = selected_period_scan(CostReportingPeriod::Rolling(7), &seven, &thirty, || {
+        scanned = true;
+        CostSummary::default()
+    });
+    assert_eq!(selected.total_cost_usd, 7.0);
+    assert!(!scanned);
+
+    let selected = selected_period_scan(CostReportingPeriod::Rolling(90), &seven, &thirty, || {
+        scanned = true;
+        CostSummary {
+            total_cost_usd: 90.0,
+            ..CostSummary::default()
+        }
+    });
+    assert_eq!(selected.total_cost_usd, 90.0);
+    assert!(scanned);
 }
 
 fn identity(period: CostReportingPeriod, now: &str) -> String {

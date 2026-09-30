@@ -241,17 +241,10 @@ impl CostReportingPeriod {
         self.scan_days(now).clamp(1, MAX_ROLLING_DAYS)
     }
 
-    /// Pick the period a request runs with: an explicit raw `period` wins,
-    /// then a legacy day count (`0` meant All in the old UI), then `saved`.
-    pub fn resolve_request(period: Option<&str>, legacy_days: Option<u32>, saved: Self) -> Self {
-        if let Some(parsed) = period.and_then(Self::parse) {
-            return parsed;
-        }
-        match legacy_days {
-            Some(0) => Self::AllAvailable,
-            Some(days) => Self::rolling(days),
-            None => saved,
-        }
+    /// Pick the period a request runs with: a valid raw `period` wins,
+    /// otherwise `saved`.
+    pub fn resolve_request(period: Option<&str>, saved: Self) -> Self {
+        period.and_then(Self::parse).unwrap_or(saved)
     }
 }
 
@@ -281,7 +274,7 @@ mod tests {
     use chrono_tz::{America::Los_Angeles, Asia::Tokyo};
 
     const LA: CostTimeZone = CostTimeZone::Named(Los_Angeles);
-    const UTC: CostTimeZone = CostTimeZone::Named(chrono_tz::UTC);
+    const UTC: CostTimeZone = CostTimeZone::UTC;
 
     fn at(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
@@ -439,25 +432,16 @@ mod tests {
     }
 
     #[test]
-    fn request_resolution_prefers_explicit_then_legacy_then_saved() {
+    fn request_resolution_prefers_explicit_then_saved() {
         let saved = CostReportingPeriod::MonthToDate;
-        let resolve = |period, legacy| CostReportingPeriod::resolve_request(period, legacy, saved);
+        let resolve = |period| CostReportingPeriod::resolve_request(period, saved);
+        assert_eq!(resolve(Some("all")), CostReportingPeriod::AllAvailable);
         assert_eq!(
-            resolve(Some("all"), Some(7)),
-            CostReportingPeriod::AllAvailable
-        );
-        assert_eq!(
-            resolve(Some("rolling:90"), None),
+            resolve(Some("rolling:90")),
             CostReportingPeriod::Rolling(90)
         );
-        assert_eq!(resolve(None, Some(0)), CostReportingPeriod::AllAvailable);
-        assert_eq!(resolve(None, Some(7)), CostReportingPeriod::Rolling(7));
-        assert_eq!(
-            resolve(Some("bogus"), Some(30)),
-            CostReportingPeriod::Rolling(30)
-        );
-        assert_eq!(resolve(None, None), saved);
-        assert_eq!(resolve(Some("bogus"), None), saved);
+        assert_eq!(resolve(None), saved);
+        assert_eq!(resolve(Some("bogus")), saved);
     }
 
     #[test]

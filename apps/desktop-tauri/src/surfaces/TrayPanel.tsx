@@ -1,11 +1,6 @@
 import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type {
-  BootstrapState,
-  ProviderUsageSnapshot,
-  UsageSpendRow,
-  UsageSpendSummary,
-} from "../types/bridge";
+import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
 import type { LocaleKey } from "../i18n/keys";
 import { costPeriodLabel, costPeriodShortLabel } from "../lib/costPeriod";
 import {
@@ -373,32 +368,25 @@ function OverviewSpendSummary({
   const overviewSummary = summary ? filterUsageSpendSummaryForOverview(summary) : null;
 
   if (!overviewSummary) return null;
-  // The summary names the History window its period columns cover. Payloads
-  // without one only carry the fixed 30-day column.
-  const summaryPeriod = overviewSummary.reportingPeriod || null;
-  const spendOf = (row: UsageSpendRow) => (summaryPeriod ? row.periodCost : row.thirtyDay);
-  const title = summaryPeriod
-    ? t("OverviewSpendPeriodTitle").replace("{}", costPeriodShortLabel(summaryPeriod, t))
-    : t("OverviewSpendTitle");
+  // The summary names the History window its period columns cover.
+  const summaryPeriod = overviewSummary.reportingPeriod;
+  const title = t("OverviewSpendPeriodTitle").replace("{}", costPeriodShortLabel(summaryPeriod, t));
   const onShare = () => {
     setShareError(null);
     const error = shareUsageSpendPng(
       overviewSummary,
       title,
       `codexbar-overview-usage-${overviewSummary.reportingDay}.png`,
-      summaryPeriod ? costPeriodLabel(summaryPeriod, t) : undefined,
+      costPeriodLabel(summaryPeriod, t),
     );
     if (error) setShareError(t(error as LocaleKey));
   };
 
   const rows = overviewSummary.rows;
   const summable = rows.filter((row) => (row.currency || "USD") === "USD");
-  const known = summable.filter((row) => {
-    const spend = spendOf(row);
-    return spend != null && Number.isFinite(spend);
-  });
+  const known = summable.filter((row) => row.periodCost != null && Number.isFinite(row.periodCost));
   if (known.length === 0) return null;
-  const total = known.reduce((sum, row) => sum + (spendOf(row) ?? 0), 0);
+  const total = known.reduce((sum, row) => sum + (row.periodCost ?? 0), 0);
   const partial = known.length < rows.length;
   const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
 

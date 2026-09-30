@@ -1,10 +1,10 @@
 use super::{
     CostFetchFailure, ProviderLocalUsageSummary, cost_fetch_failure_allows_early_retry,
-    local_usage_summary_from_cost_summary, localized_estimate_note, muse_local_usage_summary,
-    token_cost_cache_is_fresh,
+    local_usage_summary_from_cost_summary, local_usage_summary_period_identity,
+    localized_estimate_note, muse_local_usage_summary, token_cost_cache_is_fresh,
 };
 use crate::commands::is_provider_cache_fresh;
-use codexbar::cost_reporting_period::CostReportingPeriod;
+use codexbar::cost_reporting_period::{CostReportingPeriod, CostTimeZone};
 use codexbar::cost_scanner::CostSummary;
 use codexbar::providers::muse::local_usage::{DailyUsage, Report};
 use codexbar::settings::Language;
@@ -56,6 +56,30 @@ fn local_usage_summary_serializes_token_cost_timestamp() {
     assert_eq!(
         json.get("tokenCostUpdatedAtMs").and_then(|v| v.as_i64()),
         Some(1234)
+    );
+}
+
+#[test]
+fn local_usage_cache_identity_uses_the_summary_period_and_timestamp() {
+    let scanned_at = chrono::DateTime::parse_from_rfc3339("2026-09-30T23:00:00Z")
+        .expect("valid timestamp")
+        .with_timezone(&chrono::Utc);
+    let summary = ProviderLocalUsageSummary {
+        today_cost: None,
+        thirty_day_cost: None,
+        thirty_day_tokens: None,
+        period_cost: None,
+        period_tokens: None,
+        reporting_period: "month-to-date".to_string(),
+        latest_tokens: None,
+        top_model: None,
+        estimate_note: String::new(),
+        token_cost_updated_at_ms: scanned_at.timestamp_millis(),
+    };
+
+    assert_eq!(
+        local_usage_summary_period_identity(&summary),
+        Some(CostReportingPeriod::MonthToDate.identity(scanned_at, CostTimeZone::Local))
     );
 }
 

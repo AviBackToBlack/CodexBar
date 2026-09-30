@@ -116,10 +116,7 @@ function LocalUsageBlock({
   const isCodex = providerId === "codex";
   const isMuse = providerId === "muse";
   // The selected History window; the histogram below stays a fixed 30 days.
-  // Payloads without a period (older cache entries) fall back to 30 days.
-  const period = summary.reportingPeriod || null;
-  const periodCost = period ? summary.periodCost : summary.thirtyDayCost;
-  const periodTokens = period ? summary.periodTokens : summary.thirtyDayTokens;
+  const { reportingPeriod, periodCost, periodTokens } = summary;
   const visibleHistory = costHistory.slice(-30);
   const maxCost = Math.max(
     ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
@@ -144,7 +141,7 @@ function LocalUsageBlock({
         {!isMuse && (
           <div>
             <span className="menu-card__local-label">
-              {period ? periodCostLabel(period, t) : t("PanelThirtyDayCost")}
+              {periodCostLabel(reportingPeriod, t)}
             </span>
             <strong>
               {periodCost != null ? formatCurrency(periodCost, "USD") : "—"}
@@ -153,9 +150,9 @@ function LocalUsageBlock({
         )}
         <div>
           <span className="menu-card__local-label">
-            {period ? periodTokensLabel(period, t) : t("PanelThirtyDayTokens")}
+            {periodTokensLabel(reportingPeriod, t)}
           </span>
-          <strong>{formatCompactCount(periodTokens ?? null)}</strong>
+          <strong>{formatCompactCount(periodTokens)}</strong>
         </div>
         {!isMuse && (
           <div>

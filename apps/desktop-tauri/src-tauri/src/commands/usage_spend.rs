@@ -193,7 +193,6 @@ struct BuiltUsageSpendSummary {
 #[tauri::command]
 pub async fn get_usage_spend_summary(
     state: State<'_, Mutex<AppState>>,
-    history_days: Option<u32>,
     period: Option<String>,
     force_refresh: Option<bool>,
 ) -> Result<UsageSpendSummary, String> {
@@ -202,11 +201,9 @@ pub async fn get_usage_spend_summary(
         guard.provider_cache.clone()
     };
 
-    // An explicit `period` wins, then the legacy `history_days` (0 = All),
-    // then the saved History window.
+    // An explicit `period` wins; otherwise use the saved History window.
     let period = CostReportingPeriod::resolve_request(
         period.as_deref(),
-        history_days,
         codexbar::settings::Settings::load().cost_reporting_period,
     );
     let force_refresh = force_refresh.unwrap_or(false);
@@ -398,8 +395,7 @@ fn build_usage_spend_summary(
     };
     let mut codex_scan_options = codex_scan_options;
     codex_scan_options.include_pi_sessions = include_pi_in_native;
-    // The selected period reuses the fixed 7d/30d scan when it is the same
-    // rolling window; any other period costs one extra scan per provider.
+    // Any period other than 7d/30d costs one extra scan per provider.
     let (
         (codex_7_summary, codex_30_summary, codex_period_summary),
         (claude_7_summary, claude_30_summary, claude_period_summary),
@@ -412,13 +408,11 @@ fn build_usage_spend_summary(
             let thirty = CostScanner::new(30)
                 .with_options(codex_scan_options)
                 .scan_codex();
-            let selected = match period {
-                CostReportingPeriod::Rolling(7) => seven.clone(),
-                CostReportingPeriod::Rolling(30) => thirty.clone(),
-                _ => CostScanner::for_period(period)
+            let selected = selected_period_scan(period, &seven, &thirty, || {
+                CostScanner::for_period(period)
                     .with_options(codex_scan_options)
-                    .scan_codex(),
-            };
+                    .scan_codex()
+            });
             (seven, thirty, selected)
         });
         let claude = scope.spawn(|| {
@@ -426,22 +420,18 @@ fn build_usage_spend_summary(
                 .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native);
             let thirty = CostScanner::new(30)
                 .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native);
-            let selected = match period {
-                CostReportingPeriod::Rolling(7) => seven.clone(),
-                CostReportingPeriod::Rolling(30) => thirty.clone(),
-                _ => CostScanner::for_period(period)
-                    .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native),
-            };
+            let selected = selected_period_scan(period, &seven, &thirty, || {
+                CostScanner::for_period(period)
+                    .scan_claude_with_cancel_and_pi_sessions(None, include_pi_in_native)
+            });
             (seven, thirty, selected)
         });
         let pi = scope.spawn(|| {
             let seven = CostScanner::new(7).scan_pi();
             let thirty = CostScanner::new(30).scan_pi();
-            let selected = match period {
-                CostReportingPeriod::Rolling(7) => seven.clone(),
-                CostReportingPeriod::Rolling(30) => thirty.clone(),
-                _ => CostScanner::for_period(period).scan_pi(),
-            };
+            let selected = selected_period_scan(period, &seven, &thirty, || {
+                CostScanner::for_period(period).scan_pi()
+            });
             (seven, thirty, selected)
         });
         (
@@ -728,6 +718,20 @@ fn build_usage_spend_summary(
         reporting_period: period.raw(),
         reporting_day,
         dashboard_timezone,
+    }
+}
+
+/// Reuse the fixed scan when it already covers the selected period.
+fn selected_period_scan<T: Clone>(
+    period: CostReportingPeriod,
+    seven: &T,
+    thirty: &T,
+    scan: impl FnOnce() -> T,
+) -> T {
+    match period {
+        CostReportingPeriod::Rolling(7) => seven.clone(),
+        CostReportingPeriod::Rolling(30) => thirty.clone(),
+        _ => scan(),
     }
 }
 

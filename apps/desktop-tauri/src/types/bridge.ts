@@ -389,8 +389,8 @@ export interface UsageSpendRow {
   sevenDayTokens?: number | null;
   thirtyDayTokens?: number | null;
   /** Cost over the selected History window (`UsageSpendSummary.reportingPeriod`). */
-  periodCost?: number | null;
-  periodTokens?: number | null;
+  periodCost: number | null;
+  periodTokens: number | null;
   currency: string;
   source: string;
   includedInOverview: boolean;
@@ -405,7 +405,7 @@ export interface UsageSpendSummary {
   rows: UsageSpendRow[];
   contract: SpendContract;
   /** Raw History window the `period*` columns were built for. */
-  reportingPeriod?: string;
+  reportingPeriod: string;
   reportingDay: string;
   dashboardTimezone: string;
 }
@@ -530,7 +530,7 @@ export interface SpendContract {
   providerId: string;
   historyDays: number;
   /** Raw History window this contract was built for. */
-  reportingPeriod?: string;
+  reportingPeriod: string;
   knownCostUsd: number | null;
   knownZero: boolean;
   provenance: CostProvenance;
@@ -836,10 +836,10 @@ export interface ProviderLocalUsageSummary {
   /** Always the trailing 30 days. */
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
-  /** Selected History window totals; absent from older backends. */
-  periodCost?: number | null;
-  periodTokens?: number | null;
-  reportingPeriod?: string;
+  /** Selected History window totals. */
+  periodCost: number | null;
+  periodTokens: number | null;
+  reportingPeriod: string;
   latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;

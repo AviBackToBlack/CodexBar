@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { LocaleKey } from "../../../i18n/keys";
 import {
   MAX_ROLLING_DAYS,
@@ -14,7 +14,8 @@ const CUSTOM_OPTION = "custom";
 /**
  * History window picker: month to date, all, 1/7/30/90/365 days, or a custom
  * day count in 1..=365. `value` is the persisted form (`rolling:N`,
- * `month-to-date`, `all`). A custom count is only reported once it is valid.
+ * `month-to-date`, `all`). A custom count is committed on blur or Enter, once
+ * it is valid, so typing a multi-digit value triggers one rescan.
  */
 export default function CostPeriodControl({
   value,
@@ -29,13 +30,8 @@ export default function CostPeriodControl({
 }) {
   const [customMode, setCustomMode] = useState(() => !isPresetCostPeriod(value));
   const [customText, setCustomText] = useState(() => String(rollingDays(value) ?? ""));
-  const typedRaw = useRef<string | null>(null);
-
   // Follow external changes (settings loaded after mount, another window).
-  // Values this control just emitted while typing a custom count are skipped so
-  // typing "1" on the way to "14" does not collapse the custom input.
   useEffect(() => {
-    if (value === typedRaw.current) return;
     if (isPresetCostPeriod(value)) {
       setCustomMode(false);
     } else {
@@ -45,6 +41,10 @@ export default function CostPeriodControl({
   }, [value]);
 
   const customInvalid = customMode && customText !== "" && customPeriodRaw(customText) === null;
+  const commitCustom = () => {
+    const raw = customPeriodRaw(customText);
+    if (raw && raw !== value) onChange(raw);
+  };
 
   return (
     <div className="settings-section__group" style={{ marginBottom: 16 }}>
@@ -66,7 +66,6 @@ export default function CostPeriodControl({
               setCustomText(String(rollingDays(value) ?? ""));
               return;
             }
-            typedRaw.current = null;
             setCustomMode(false);
             onChange(next);
           }}
@@ -90,13 +89,12 @@ export default function CostPeriodControl({
             disabled={disabled}
             aria-label={t("CostPeriodCustomDays")}
             aria-invalid={customInvalid}
-            onChange={(event) => {
-              const text = event.target.value;
-              setCustomText(text);
-              const raw = customPeriodRaw(text);
-              if (raw && raw !== value) {
-                typedRaw.current = raw;
-                onChange(raw);
+            onChange={(event) => setCustomText(event.target.value)}
+            onBlur={commitCustom}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitCustom();
               }
             }}
           />

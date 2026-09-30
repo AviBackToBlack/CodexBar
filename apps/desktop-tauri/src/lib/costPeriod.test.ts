@@ -10,7 +10,6 @@ import {
   normalizeCostPeriod,
   parseCostPeriod,
   periodCostLabel,
-  periodFromLegacyDays,
   periodTokensLabel,
   rollingDays,
 } from "./costPeriod";
@@ -53,21 +52,6 @@ describe("normalizeCostPeriod", () => {
     expect(normalizeCostPeriod("rolling:9999")).toBe("rolling:365");
     expect(normalizeCostPeriod("rolling:0")).toBe(DEFAULT_COST_PERIOD);
     expect(normalizeCostPeriod(undefined)).toBe("rolling:30");
-  });
-});
-
-describe("periodFromLegacyDays", () => {
-  it("migrates the old day selection, where 0 meant all", () => {
-    expect(periodFromLegacyDays(0)).toBe("all");
-    expect(periodFromLegacyDays(7)).toBe("rolling:7");
-    expect(periodFromLegacyDays(30)).toBe("rolling:30");
-    expect(periodFromLegacyDays(1000)).toBe("rolling:365");
-  });
-
-  it("uses the default for missing or negative counts", () => {
-    expect(periodFromLegacyDays(undefined)).toBe("rolling:30");
-    expect(periodFromLegacyDays(null)).toBe("rolling:30");
-    expect(periodFromLegacyDays(-1)).toBe("rolling:30");
   });
 });
 

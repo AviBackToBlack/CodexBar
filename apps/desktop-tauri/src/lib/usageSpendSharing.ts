@@ -140,31 +140,20 @@ export function formatSpendMetric(
 }
 
 /**
- * Share-card columns. The fixed 7 and 30 day columns stay for compatibility;
- * when `periodLabel` is given, a column for the selected History window
- * (read from `periodCost` / `periodTokens`) follows the provider name.
+ * Share-card columns: the selected History window (`periodCost` / `periodTokens`)
+ * follows the provider name, then the fixed 7 and 30 day compatibility columns.
  */
-export function usageSpendShareColumns(periodLabel?: string): {
+export function usageSpendShareColumns(periodLabel: string): {
   headers: string[];
   colW: number[];
   cellsFor: (row: UsageSpendRow) => string[];
 } {
-  const withPeriod = Boolean(periodLabel);
   return {
-    headers: [
-      "Provider",
-      ...(withPeriod ? [periodLabel as string] : []),
-      "7 days",
-      "30 days",
-      "Currency",
-      "Source",
-    ],
-    colW: withPeriod ? [150, 130, 100, 100, 70, 130] : [160, 100, 100, 80, 160],
+    headers: ["Provider", periodLabel, "7 days", "30 days", "Currency", "Source"],
+    colW: [150, 130, 100, 100, 70, 130],
     cellsFor: (row) => [
       row.displayName,
-      ...(withPeriod
-        ? [formatSpendMetric(row.periodCost, row.periodTokens, row.currency, "tokens")]
-        : []),
+      formatSpendMetric(row.periodCost, row.periodTokens, row.currency, "tokens"),
       formatSpendMetric(row.sevenDay, row.sevenDayTokens, row.currency, "tokens"),
       formatSpendMetric(row.thirtyDay, row.thirtyDayTokens, row.currency, "tokens"),
       row.currency || "USD",
@@ -185,7 +174,7 @@ export function usageSpendShareColumns(periodLabel?: string): {
 export function renderUsageSpendSharePng(
   summary: UsageSpendSummary,
   title: string,
-  periodLabel?: string,
+  periodLabel: string,
 ): string {
   const rows = summary.rows;
   const pad = 24;
@@ -281,7 +270,7 @@ export function shareUsageSpendPng(
   summary: UsageSpendSummary | null,
   title: string,
   filename: string,
-  periodLabel?: string,
+  periodLabel: string,
 ): string | null {
   if (!summary) return "UsageSpendShareEmpty";
   try {
