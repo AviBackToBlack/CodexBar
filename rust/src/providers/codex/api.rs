@@ -22,8 +22,8 @@ const USAGE_PATH: &str = "/wham/usage";
 const RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
 /// Upstream 0.69.0 #4088: the Codex CLI owns `auth.json` and may be publishing a
-/// replacement while we read it. Re-read a missing, unreadable, or torn file up to
-/// this many times, `CREDENTIAL_READ_RETRY_DELAY` apart, before reporting the error.
+/// replacement while we read it. A failed or stale read is repeated up to this many
+/// times, `CREDENTIAL_READ_RETRY_DELAY` apart, before the error is reported.
 const CREDENTIAL_READ_RETRIES: u32 = 2;
 const CREDENTIAL_READ_RETRY_DELAY: Duration = Duration::from_millis(50);
 const EXTERNAL_OAUTH_REFRESH_WINDOW: chrono::TimeDelta = chrono::Duration::minutes(5);
@@ -313,20 +313,31 @@ impl CodexApi {
 
     /// Load credentials, tolerating a brief owner publication of `auth.json`.
     ///
-    /// Only read-side failures are retried (missing -> `NotInstalled`, unreadable ->
-    /// `Other`, malformed or incomplete -> `Parse`). The final error keeps its
-    /// category, and a stale/gated credential (`AuthRequired`) is never retried.
-    /// Nothing is written, and the credential cache semantics are unchanged.
-    /// Dropping the returned future cancels the retry delay.
+    /// Upstream 0.69.0 #4088 (`CodexOAuthFetchStrategy.loadCredentials` on the
+    /// usage path, `retryStale: true`): every failed read is repeated. That covers
+    /// a missing (`NotInstalled`), unreadable (`Other`), malformed or incomplete
+    /// (`Parse`) file, and a credential the gate rejects as stale (`AuthRequired`,
+    /// such as a token inside its renewal window), because the CLI may be
+    /// publishing its renewal. This only rereads the file: no token is redeemed,
+    /// nothing is written, and the credential cache semantics are unchanged. After
+    /// the last read the error keeps its category, so unchanged stale credentials
+    /// still need their owner's renewal.
     async fn load_credentials(&self) -> Result<CodexCredentials, ProviderError> {
+        Self::reread_during_owner_publication(|| self.load_credentials_once()).await
+    }
+
+    /// The bounded reread behind [`Self::load_credentials`]: `read` runs up to
+    /// `1 + CREDENTIAL_READ_RETRIES` times, `CREDENTIAL_READ_RETRY_DELAY` apart,
+    /// until it succeeds, and the last result is returned unchanged. Dropping the
+    /// returned future cancels the pending delay and any further read (upstream
+    /// checks task cancellation before each read).
+    async fn reread_during_owner_publication<T>(
+        mut read: impl FnMut() -> Result<T, ProviderError>,
+    ) -> Result<T, ProviderError> {
         let mut retries_remaining = CREDENTIAL_READ_RETRIES;
         loop {
-            match self.load_credentials_once() {
-                Err(
-                    ProviderError::NotInstalled(_)
-                    | ProviderError::Other(_)
-                    | ProviderError::Parse(_),
-                ) if retries_remaining > 0 => {
+            match read() {
+                Err(_) if retries_remaining > 0 => {
                     retries_remaining -= 1;
                     tokio::time::sleep(CREDENTIAL_READ_RETRY_DELAY).await;
                 }
@@ -450,11 +461,14 @@ impl CodexApi {
     /// request may use it. When the access token is a JWT, its native expiry
     /// is the validity authority; opaque tokens are sent to the server.
     fn enforce_external_oauth_gate(credentials: &CodexCredentials) -> Result<(), ProviderError> {
-        Self::enforce_external_oauth_gate_at(
-            credentials,
-            crate::settings::Settings::load().codex_external_oauth_sources_allowed,
-            Utc::now(),
-        )
+        if !credentials.is_external_oauth {
+            return Ok(());
+        }
+        // The opt-in only matters without refresh provenance. Skip the settings
+        // load otherwise: credential reads repeat while the owner publishes.
+        let external_sources_allowed = credentials.last_refresh.is_some()
+            || crate::settings::Settings::load().codex_external_oauth_sources_allowed;
+        Self::enforce_external_oauth_gate_at(credentials, external_sources_allowed, Utc::now())
     }
 
     fn enforce_external_oauth_gate_at(
