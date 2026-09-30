@@ -55,9 +55,16 @@ pub fn validate_provider_workspace_value(
                 Err("Helmcode tenant must be 'helmcode' or 'nanBuilders'".to_string())
             }
         }
-        ProviderId::LiteLLM => validate_token_endpoint(trimmed, "LiteLLM base URL", |_| true),
+        ProviderId::LiteLLM => validate_litellm_base_url(trimmed),
         ProviderId::Sub2Api => validate_sub2api_base_url(trimmed),
         _ => Ok(trimmed.to_string()),
+    }
+}
+
+fn validate_litellm_base_url(raw: &str) -> Result<String, String> {
+    match crate::providers::litellm::validated_base_url(raw) {
+        Ok(url) => Ok(url.to_string().trim_end_matches('/').to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
@@ -195,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn validates_token_endpoint_hosts() {
+    fn validates_litellm_base_url_policy() {
         assert_eq!(
             validate_provider_workspace_value(
                 ProviderId::LiteLLM,
@@ -205,11 +212,22 @@ mod tests {
             "https://litellm.example.com/v1"
         );
         for value in [
-            "http://litellm.example.com",
-            "https://user@litellm.example.com",
-            "https://127.0.0.1",
+            "http://127.0.0.1:4000",
+            "http://10.0.0.5:4000",
+            "http://192.168.1.4",
+            "http://[::1]:4000",
+            "http://proxy.local:4000",
             "https://10.0.0.5",
-            "https://[::1]",
+        ] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::LiteLLM, value).is_ok(),
+                "rejected {value}"
+            );
+        }
+        for value in [
+            "http://litellm.example.com",
+            "http://8.8.8.8",
+            "https://user@litellm.example.com",
             "https://example.com%2f.evil.test",
         ] {
             assert!(

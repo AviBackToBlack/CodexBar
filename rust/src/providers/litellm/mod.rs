@@ -1,13 +1,27 @@
 use async_trait::async_trait;
-use reqwest::{Client, Url};
-use serde_json::Value;
+use reqwest::{Client, StatusCode, Url};
+use serde::de::DeserializeOwned;
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
+    SourceMode,
+};
+use crate::providers::{BoundedBodyError, read_bounded_response};
+
+mod endpoint;
+mod info;
+#[cfg(test)]
+mod tests;
+
+use endpoint::management_url;
+pub(crate) use endpoint::validated_base_url;
+use info::{
+    KeyInfoResponse, TeamInfoResponse, UserInfoResponse, bind_key, parse_error, result_from_team,
+    result_from_user,
 };
 
 const CREDENTIAL_TARGET: &str = "codexbar-litellm";
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub struct LiteLLMProvider {
     metadata: ProviderMetadata,
@@ -38,6 +52,40 @@ impl LiteLLMProvider {
     }
 }
 
+impl LiteLLMProvider {
+    async fn get_json<T: DeserializeOwned>(&self, url: Url, key: &str) -> Result<T, ProviderError> {
+        let route = url.path().to_string();
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(key)
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthRequired);
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(ProviderError::Other(
+                "LiteLLM rate limited the request (HTTP 429).".into(),
+            ));
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Other(format!(
+                "LiteLLM {route} returned status {status}"
+            )));
+        }
+        let body = read_bounded_response(response, MAX_RESPONSE_BYTES)
+            .await
+            .map_err(|error| match error {
+                BoundedBodyError::TooLarge => parse_error("response too large"),
+                BoundedBodyError::Read(error) => ProviderError::Network(error),
+            })?;
+        serde_json::from_slice(&body).map_err(|e| parse_error(format!("{route}: {e}")))
+    }
+}
+
 impl Default for LiteLLMProvider {
     fn default() -> Self {
         Self::new()
@@ -58,28 +106,23 @@ impl Provider for LiteLLMProvider {
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::OAuth => {
                 let (base, key) = resolve_base_and_key(ctx)?;
-                let response = self
-                    .client
-                    .get(management_url(&base, "key/info")?)
-                    .bearer_auth(key)
-                    .header("Accept", "application/json")
-                    .send()
+                let key_info: KeyInfoResponse = self
+                    .get_json(management_url(&base, "key/info", None)?, &key)
                     .await?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                    || response.status() == reqwest::StatusCode::FORBIDDEN
-                {
-                    return Err(ProviderError::AuthRequired);
+                let binding = bind_key(key_info)?;
+                if let Some(user_id) = binding.user_id.as_deref() {
+                    let url = management_url(&base, "user/info", Some(("user_id", user_id)))?;
+                    let response: UserInfoResponse = self.get_json(url, &key).await?;
+                    result_from_user(&binding, user_id, response)
+                } else if let Some(team_id) = binding.team_id.as_deref() {
+                    let url = management_url(&base, "team/info", Some(("team_id", team_id)))?;
+                    let response: TeamInfoResponse = self.get_json(url, &key).await?;
+                    result_from_team(&binding, team_id, response)
+                } else {
+                    Err(parse_error(
+                        "LiteLLM key info did not include a user_id or team_id.",
+                    ))
                 }
-                if !response.status().is_success() {
-                    return Err(ProviderError::Other(format!(
-                        "LiteLLM key/info returned status {}",
-                        response.status()
-                    )));
-                }
-                let value: Value = response.json().await.map_err(|e| {
-                    ProviderError::Parse(format!("Failed to parse LiteLLM key/info: {e}"))
-                })?;
-                Ok(result_from_key_info(&value))
             }
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -116,132 +159,4 @@ fn resolve_base_and_key(ctx: &FetchContext) -> Result<(String, String), Provider
             )
         })?;
     Ok((base, key))
-}
-
-fn management_url(base: &str, path: &str) -> Result<Url, ProviderError> {
-    let mut url = crate::providers::validated_https_url(base, "LiteLLM base")?;
-    if url.path().trim_end_matches('/').ends_with("/v1") {
-        let stripped = url
-            .path()
-            .trim_end_matches('/')
-            .trim_end_matches("/v1")
-            .to_string();
-        url.set_path(&stripped);
-    }
-    url.join(path)
-        .map_err(|e| ProviderError::Other(format!("Invalid LiteLLM URL: {e}")))
-}
-
-fn result_from_key_info(value: &Value) -> ProviderFetchResult {
-    let root = value
-        .get("info")
-        .or_else(|| value.get("key"))
-        .unwrap_or(value);
-    let spend = number(root, &["spend", "spend_usd", "spendUSD"]).unwrap_or(0.0);
-    let limit = number(root, &["max_budget", "maxBudget", "budget", "limit"]);
-    let percent = limit
-        .filter(|v| *v > 0.0)
-        .map_or(0.0, |limit| spend / limit * 100.0);
-    let mut primary = RateWindow::new(percent);
-    if let Some(limit) = limit.filter(|value| *value > 0.0) {
-        primary.reset_description = Some(budget_detail(spend, limit));
-    }
-    let mut snapshot = UsageSnapshot::new(primary).with_login_method(format!("Spend ${spend:.2}"));
-    if let Some(team) = root.get("team_info").or_else(|| root.get("teamInfo"))
-        && let Some(team_spend) = number(team, &["spend", "team_spend", "teamSpend"])
-    {
-        let team_limit = number(team, &["max_budget", "budget", "limit"]);
-        let team_percent = team_limit
-            .filter(|v| *v > 0.0)
-            .map_or(0.0, |limit| team_spend / limit * 100.0);
-        let mut team_window = RateWindow::new(team_percent);
-        if let Some(team_limit) = team_limit.filter(|value| *value > 0.0) {
-            let alias = string(team, &["team_alias", "teamAlias", "alias"])
-                .map(|value| format!("Team {value}: "))
-                .unwrap_or_default();
-            team_window.reset_description =
-                Some(format!("{alias}{}", budget_detail(team_spend, team_limit)));
-        }
-        snapshot = snapshot.with_extra_rate_window("team", "Team budget", team_window);
-    }
-    let mut result = ProviderFetchResult::new(snapshot, "api");
-    if spend > 0.0 {
-        let mut cost = CostSnapshot::new(spend, "USD", "Spend");
-        if let Some(limit) = limit {
-            cost = cost.with_limit(limit);
-        }
-        result = result.with_cost(cost);
-    }
-    result
-}
-
-fn number(value: &Value, keys: &[&str]) -> Option<f64> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_f64))
-}
-
-fn string(value: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn budget_detail(spend: f64, budget: f64) -> String {
-    format!("${spend:.2} / ${budget:.2}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_spend_budget() {
-        let result =
-            result_from_key_info(&serde_json::json!({"info":{"spend":25.0,"max_budget":100.0}}));
-        assert_eq!(result.usage.primary.used_percent, 25.0);
-        assert_eq!(
-            result.usage.primary.reset_description.as_deref(),
-            Some("$25.00 / $100.00")
-        );
-    }
-
-    #[test]
-    fn preserves_team_budget_detail_with_alias() {
-        let result = result_from_key_info(&serde_json::json!({
-            "info": {
-                "team_info": {
-                    "team_alias": "Platform",
-                    "spend": 70.0,
-                    "max_budget": 1000.0
-                }
-            }
-        }));
-        assert_eq!(result.usage.extra_rate_windows.len(), 1);
-        assert_eq!(
-            result.usage.extra_rate_windows[0]
-                .window
-                .reset_description
-                .as_deref(),
-            Some("Team Platform: $70.00 / $1000.00")
-        );
-    }
-
-    #[test]
-    fn saved_base_url_uses_only_app_saved_key() {
-        let mut ctx = FetchContext {
-            workspace_id: Some("https://litellm.example.com".to_string()),
-            ..Default::default()
-        };
-        assert!(matches!(
-            resolve_base_and_key(&ctx),
-            Err(ProviderError::AuthRequired)
-        ));
-
-        ctx.api_key = Some("sk-app".to_string());
-        let (base, key) = resolve_base_and_key(&ctx).unwrap();
-        assert_eq!(base, "https://litellm.example.com");
-        assert_eq!(key, "sk-app");
-    }
 }
