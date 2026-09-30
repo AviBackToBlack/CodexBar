@@ -49,7 +49,7 @@ fn resolve_credential(
                 login_method: file.login_method(),
                 token: file.token,
             })
-            .ok_or_else(|| ProviderError::NotInstalled(MISSING_CREDENTIALS.into())),
+            .ok_or_else(|| ProviderError::Other(MISSING_CREDENTIALS.into())),
         Err(other) => Err(other),
     }
 }
@@ -165,10 +165,12 @@ impl Provider for ClinePassProvider {
         vec![SourceMode::Auto, SourceMode::OAuth]
     }
 
-    /// A rejected key or browser session is a sign-in gate, not an unknown failure.
+    /// Missing or rejected credentials are sign-in gates, not unknown failures.
     fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
         match error {
-            ProviderError::Other(message) if message == REJECTED_CREDENTIALS => {
+            ProviderError::Other(message)
+                if message == MISSING_CREDENTIALS || message == REJECTED_CREDENTIALS =>
+            {
                 ProviderStateKind::NeedsAuthentication
             }
             _ => error.state_kind(),
@@ -308,11 +310,11 @@ mod tests {
         let error = resolve_credential(Err(missing()), || None)
             .err()
             .expect("no credential");
+        assert_eq!(error.to_string(), MISSING_CREDENTIALS);
         assert_eq!(
-            error.to_string(),
-            format!("Provider not installed: {MISSING_CREDENTIALS}")
+            ClinePassProvider::new().error_state_kind(&error),
+            ProviderStateKind::NeedsAuthentication
         );
-        assert_eq!(error.state_kind(), ProviderStateKind::NeedsAuthentication);
     }
 
     #[test]
