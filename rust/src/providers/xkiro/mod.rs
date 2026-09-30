@@ -32,32 +32,16 @@ const DAY_MINUTES: u32 = 24 * 60;
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 const PLAN_PAY_AS_YOU_GO: &str = "Pay as you go";
 
-/// How one `free_tokens` counter appears in the response body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Counter {
-    Absent,
-    Null,
-    Value(u64),
-}
-
-impl Counter {
-    fn value(self) -> Option<u64> {
-        match self {
-            Self::Value(value) => Some(value),
-            Self::Absent | Self::Null => None,
-        }
-    }
-}
-
 /// The parts of a usage response that feed the free-token meter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FreeTokenUsage {
-    used_today: Counter,
-    limit_per_day: Counter,
-    remaining: Counter,
+    used_today: Option<u64>,
+    limit_per_day: Option<u64>,
+    remaining: Option<u64>,
+    /// `limit_per_day` was an explicit `null`: the account reports no daily cap.
+    uncapped: bool,
     email: Option<String>,
-    /// `Some(None)` is an explicit `"plan": null` (pay as you go).
-    plan: Option<Option<String>>,
+    login_method: Option<String>,
 }
 
 pub struct XKiroProvider {
@@ -180,7 +164,7 @@ fn validate_status(status: StatusCode, headers: &HeaderMap) -> Result<(), Provid
                     .and_then(|value| value.to_str().ok()),
             );
             Err(ProviderError::Other(format!(
-                "xKiro rate limit reached; retry after {retry_after:.0}s."
+                "xKiro rate limit reached; retry after {retry_after}s."
             )))
         }
         status if status.is_server_error() => Err(ProviderError::Other(format!(
@@ -210,30 +194,21 @@ fn as_record(value: Option<&Value>) -> Option<&Map<String, Value>> {
     value.and_then(Value::as_object)
 }
 
-/// A non-negative safe integer, mirroring `Number.isSafeInteger(n) && n >= 0`
-/// (so `5.0` is accepted, as JSON.parse makes it the integer `5`).
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "the float is integral and within 0..=2^53-1 before the cast"
-)]
+/// A non-negative JSON integer within JavaScript's safe-integer range.
 fn safe_counter(number: &serde_json::Number) -> Option<u64> {
-    let value = number.as_u64().or_else(|| {
-        number
-            .as_f64()
-            .filter(|float| {
-                float.fract() == 0.0 && *float >= 0.0 && *float <= MAX_SAFE_INTEGER as f64
-            })
-            .map(|float| float as u64)
-    })?;
+    let value = number.as_u64()?;
     (value <= MAX_SAFE_INTEGER).then_some(value)
 }
 
-fn read_counter(free_tokens: &Map<String, Value>, name: &str) -> Result<Counter, ProviderError> {
+/// A counter that is absent or `null` reads as `None`; any other non-integer is a parse failure.
+fn read_counter(
+    free_tokens: &Map<String, Value>,
+    name: &str,
+) -> Result<Option<u64>, ProviderError> {
     match free_tokens.get(name) {
-        None => Ok(Counter::Absent),
-        Some(Value::Null) => Ok(Counter::Null),
+        None | Some(Value::Null) => Ok(None),
         Some(Value::Number(number)) => safe_counter(number)
-            .map(Counter::Value)
+            .map(Some)
             .ok_or_else(unrecognized_response),
         Some(_) => Err(unrecognized_response()),
     }
@@ -255,13 +230,10 @@ fn parse_usage(body: &[u8]) -> Result<FreeTokenUsage, ProviderError> {
     let used_today = read_counter(free_tokens, "used_today")?;
     let limit_per_day = read_counter(free_tokens, "limit_per_day")?;
     let remaining = read_counter(free_tokens, "remaining")?;
+    let uncapped = free_tokens.get("limit_per_day") == Some(&Value::Null);
     // A body with no usable counter is only meaningful for an explicitly
-    // uncapped account (`limit_per_day: null`).
-    if used_today.value().is_none()
-        && limit_per_day.value().is_none()
-        && remaining.value().is_none()
-        && limit_per_day != Counter::Null
-    {
+    // uncapped account.
+    if used_today.is_none() && limit_per_day.is_none() && remaining.is_none() && !uncapped {
         return Err(unrecognized_response());
     }
 
@@ -269,11 +241,12 @@ fn parse_usage(body: &[u8]) -> Result<FreeTokenUsage, ProviderError> {
         used_today,
         limit_per_day,
         remaining,
+        uncapped,
         email: trimmed_text(as_record(root.get("user")).and_then(|user| user.get("email"))),
-        plan: match root.get("plan") {
-            Some(Value::Null) => Some(None),
-            Some(plan) => trimmed_text(Some(plan)).map(Some),
-            None => None,
+        // An explicit `"plan": null` is pay as you go; an absent plan stays unlabelled.
+        login_method: match root.get("plan") {
+            Some(Value::Null) => Some(PLAN_PAY_AS_YOU_GO.to_string()),
+            plan => trimmed_text(plan),
         },
     })
 }
@@ -309,7 +282,7 @@ fn used_percent(used: u64, limit: u64) -> f64 {
 }
 
 fn primary_window(usage: &FreeTokenUsage, now: DateTime<Utc>) -> RateWindow {
-    match (usage.used_today.value(), usage.limit_per_day.value()) {
+    match (usage.used_today, usage.limit_per_day) {
         (Some(used), Some(limit)) => RateWindow::with_details(
             used_percent(used, limit),
             Some(DAY_MINUTES),
@@ -317,10 +290,12 @@ fn primary_window(usage: &FreeTokenUsage, now: DateTime<Utc>) -> RateWindow {
             None,
         ),
         // Missing counters stay unknown: no percentage is invented.
-        _ => RateWindow::informational(match (usage.remaining.value(), usage.limit_per_day) {
-            (Some(remaining), _) => format!("{} tokens remaining", format_count(remaining)),
-            (None, Counter::Null) => "No daily cap reported".to_string(),
-            (None, _) => "Daily free-token usage unavailable".to_string(),
+        _ => RateWindow::informational(if let Some(remaining) = usage.remaining {
+            format!("{} tokens remaining", format_count(remaining))
+        } else if usage.uncapped {
+            "No daily cap reported".to_string()
+        } else {
+            "Daily free-token usage unavailable".to_string()
         }),
     }
 }
@@ -330,49 +305,37 @@ fn result_from_usage(usage: &FreeTokenUsage, now: DateTime<Utc>) -> ProviderFetc
     if let Some(email) = &usage.email {
         snapshot = snapshot.with_email(email.clone());
     }
-    match &usage.plan {
-        Some(None) => snapshot = snapshot.with_login_method(PLAN_PAY_AS_YOU_GO),
-        Some(Some(plan)) => snapshot = snapshot.with_login_method(plan.clone()),
-        None => {}
+    if let Some(login_method) = &usage.login_method {
+        snapshot = snapshot.with_login_method(login_method.clone());
     }
 
-    let mut result = ProviderFetchResult::new(snapshot, "api");
-    if let Some(used) = usage.used_today.value() {
-        result = result.with_display_detail(ProviderDisplayDetail::new(
+    let allowance = match usage.limit_per_day {
+        Some(limit) => Some(format_count(limit)),
+        None if usage.uncapped => Some("No cap reported".to_string()),
+        None => None,
+    };
+    let rows = [
+        (
             "tokens-used-today",
             "Tokens used today",
-            format_count(used),
-        ));
-    }
-    match usage.limit_per_day {
-        Counter::Value(limit) => {
-            result = result.with_display_detail(ProviderDisplayDetail::new(
-                "daily-allowance",
-                "Daily allowance",
-                format_count(limit),
-            ));
-        }
-        Counter::Null => {
-            result = result.with_display_detail(ProviderDisplayDetail::new(
-                "daily-allowance",
-                "Daily allowance",
-                "No cap reported",
-            ));
-        }
-        Counter::Absent => {}
-    }
-    if let Some(remaining) = usage.remaining.value() {
-        result = result.with_display_detail(ProviderDisplayDetail::new(
+            usage.used_today.map(format_count),
+        ),
+        ("daily-allowance", "Daily allowance", allowance),
+        (
             "tokens-remaining",
             "Tokens remaining",
-            format_count(remaining),
-        ));
-    }
-    result.with_display_detail(ProviderDisplayDetail::new(
-        "daily-reset",
-        "Daily reset",
-        "00:00 UTC",
-    ))
+            usage.remaining.map(format_count),
+        ),
+        ("daily-reset", "Daily reset", Some("00:00 UTC".to_string())),
+    ];
+    rows.into_iter().fold(
+        ProviderFetchResult::new(snapshot, "api"),
+        |result, (id, label, value)| {
+            result.with_display_detail(
+                value.and_then(|value| ProviderDisplayDetail::new(id, label, value)),
+            )
+        },
+    )
 }
 
 #[cfg(test)]

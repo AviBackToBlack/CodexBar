@@ -114,16 +114,16 @@ fn exhaustion_and_zero_allowance_do_not_use_wallet_capacity() {
 }
 
 #[test]
-fn integral_floats_are_accepted_like_json_parse() {
-    let result = result_for(&free_tokens(r#""used_today":5.0,"limit_per_day":10"#)).unwrap();
-    assert_eq!(result.usage.primary.used_percent, 50.0);
+fn floating_point_counters_are_rejected() {
+    for value in ["0.5", "5.0", "1e3"] {
+        assert_parse_failure(&free_tokens(&format!(r#""used_today":{value}"#)));
+    }
 }
 
 #[test]
 fn invalid_counters_fail_without_echoing_response_data() {
     for value in [
         "-1",
-        "0.5",
         "true",
         "\"private-response\"",
         "9007199254740992",
@@ -161,6 +161,11 @@ fn retry_after_is_bounded_and_defaults_to_one_second() {
     assert_eq!(retry_after_seconds(Some("-3")), 1.0);
     assert_eq!(retry_after_seconds(Some("soon")), 1.0);
     assert_eq!(retry_after_seconds(None), 1.0);
+
+    let mut headers = HeaderMap::new();
+    headers.insert("retry-after", "0.5".parse().unwrap());
+    let error = validate_status(StatusCode::TOO_MANY_REQUESTS, &headers).unwrap_err();
+    assert!(error.to_string().contains("retry after 0.5s"), "{error}");
 }
 
 fn provider_for(server: &mockito::ServerGuard) -> XKiroProvider {
