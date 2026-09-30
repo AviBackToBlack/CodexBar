@@ -396,9 +396,8 @@ pub struct CodexForkAccountingState {
     pub history_base_thread_id: Option<String>,
     pub fork_timestamp: Option<String>,
     pub inherited_totals: Option<CodexTotals>,
-    /// Timestamp of this fork's first own token event. Until then its
-    /// cumulative counters still sit at `inherited_totals`, so a descendant
-    /// forked earlier resolves to that origin.
+    /// Timestamp of the first token event in this fork's log. A descendant
+    /// forked before it uses this fork's inherited counter origin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_token_timestamp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -454,7 +453,8 @@ pub struct CodexParseResult {
     pub token_timestamps_monotonic: Option<bool>,
     /// Last token timestamp observed by the parser.
     pub last_token_timestamp: Option<String>,
-    /// First token timestamp observed by a from-zero parse.
+    /// First token timestamp seen in this parse. Fork accounting uses it only
+    /// on full, from-zero parses; resumed standard parses see only their suffix.
     pub first_token_timestamp: Option<String>,
     /// Number of timestamp comparisons performed while validating this parse.
     pub token_timestamp_comparisons: u64,
