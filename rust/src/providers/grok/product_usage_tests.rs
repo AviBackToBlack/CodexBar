@@ -336,3 +336,21 @@ async fn grpc_percent_never_borrows_the_proxy_products() {
     assert_eq!(result.usage.primary.used_percent, 12.0);
     assert!(result.display_details().is_empty());
 }
+
+#[test]
+fn repeated_product_names_keep_distinct_rows_and_overage_is_not_clamped() {
+    let rows = rows(&[
+        product("GrokChat", 3.0),
+        product("GrokChat", 2.0),
+        product("GrokBuild", 120.0),
+    ]);
+    assert_eq!(
+        rows.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        [
+            "grok.product.GrokBuild",
+            "grok.product.row.0",
+            "grok.product.row.1"
+        ]
+    );
+    assert_eq!(rows[0].2, "120%");
+}

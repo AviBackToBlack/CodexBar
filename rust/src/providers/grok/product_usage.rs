@@ -9,6 +9,8 @@
 //! `GrokCreditsProxyFetcher` (`composingProducts`, `LossyProductUsageArray`)
 //! and `GrokProductUsageDetails` (v0.67.0).
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Deserializer};
 
 use crate::core::ProviderDisplayDetail;
@@ -83,28 +85,40 @@ fn product_label(product: &str) -> &str {
 }
 
 fn format_share(percent: f64) -> String {
-    let clamped = percent.clamp(0.0, 100.0);
-    if clamped > 0.0 && clamped < 1.0 {
+    if percent > 0.0 && percent < 1.0 {
         "<1%".to_string()
     } else {
-        format!("{clamped:.0}%")
+        format!("{percent:.0}%")
     }
 }
 
 /// Plain detail rows sorted by share, largest first (ties keep wire order),
 /// with zero-share products omitted.
 pub(super) fn display_details(products: &[GrokProductUsage]) -> Vec<ProviderDisplayDetail> {
-    let mut shares: Vec<&GrokProductUsage> = products
+    let mut name_counts = HashMap::new();
+    for entry in products {
+        *name_counts.entry(entry.product.as_str()).or_insert(0usize) += 1;
+    }
+
+    let mut shares: Vec<(usize, &GrokProductUsage)> = products
         .iter()
-        .filter(|entry| entry.used_percent > 0.0)
+        .enumerate()
+        .filter(|(_, entry)| entry.used_percent > 0.0)
         .collect();
     // `sort_by` is stable, so equal shares keep their wire order.
-    shares.sort_by(|left, right| right.used_percent.total_cmp(&left.used_percent));
+    shares.sort_by(|(_, left), (_, right)| right.used_percent.total_cmp(&left.used_percent));
     shares
         .into_iter()
-        .filter_map(|entry| {
+        .filter_map(|(wire_index, entry)| {
+            let id = if name_counts[entry.product.as_str()] > 1 {
+                // Repeated product names are distinct wire rows. Keep their ids
+                // unique so ProviderFetchResult does not silently discard them.
+                format!("grok.product.row.{wire_index}")
+            } else {
+                format!("grok.product.{}", entry.product)
+            };
             ProviderDisplayDetail::new(
-                format!("grok.product.{}", entry.product),
+                id,
                 product_label(&entry.product),
                 format_share(entry.used_percent),
             )
