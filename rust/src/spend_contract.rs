@@ -289,6 +289,12 @@ impl CustomPricing {
             .get(&provider_key)
             .or_else(|| self.entries.get(&model_key))
     }
+
+    fn provider_rates(&self, provider_id: &str, model: &str) -> Option<&CustomRates> {
+        let model_key = model.trim().to_ascii_lowercase();
+        let provider_key = format!("{}/{}", provider_id.trim().to_ascii_lowercase(), model_key);
+        self.entries.get(&provider_key)
+    }
 }
 
 impl CustomRates {

@@ -23,7 +23,7 @@ pub(super) fn cost(
     let output = entry.output_tokens.unwrap_or(0);
     let cache_read = entry.cache_read_tokens.unwrap_or(0);
     let cache_write = entry.cache_creation_tokens.unwrap_or(0);
-    if let Some(rates) = custom.rates(SUBSCRIPTION_ID, &entry.model) {
+    if let Some(rates) = custom.provider_rates(SUBSCRIPTION_ID, &entry.model) {
         return rates.cost_parts(
             input.saturating_add(cache_read),
             output,

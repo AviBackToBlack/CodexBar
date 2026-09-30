@@ -195,6 +195,16 @@ impl CostUsagePricing {
         } else {
             pricing.output_cost_per_token
         };
+        let cache_write_rate = if use_tier {
+            pricing
+                .cache_write_input_cost_per_token_above_threshold
+                .or(pricing.cache_write_input_cost_per_token)
+                .unwrap_or(pricing.input_cost_per_token)
+        } else {
+            pricing
+                .cache_write_input_cost_per_token
+                .unwrap_or(pricing.input_cost_per_token)
+        };
         Some(codex_cost_from_rates_with_cache_write(
             input_tokens,
             cached_input_tokens,
@@ -202,7 +212,7 @@ impl CostUsagePricing {
             output_tokens,
             input_rate,
             cache_read_rate,
-            input_rate,
+            cache_write_rate,
             output_rate,
         ))
     }

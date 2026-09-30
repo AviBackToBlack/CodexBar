@@ -119,6 +119,7 @@ fn custom_nous_pricing_prices_each_fixture_row_with_input_excluding_cache() {
         assert_eq!(source.coverage.priced, 0);
         assert_eq!(source.provenance, CostProvenance::ListPriceEstimate);
         assert_eq!(source.models[0].model, entry.model);
+        assert!(source.models[0].custom_pricing);
         assert_eq!(
             source.models[0].total_tokens,
             entry.resolved_total_tokens().unwrap()
@@ -164,6 +165,30 @@ fn nous_catalog_cache_reads_are_added_back_to_the_inclusive_input() {
     );
     let cost = entry_cost(entry, &CustomPricing::default(), &snapshot).expect("priced");
     assert!((cost - 0.059_058).abs() < 1e-10, "{cost}");
+}
+
+#[test]
+fn nous_catalog_cache_writes_use_the_catalog_cache_write_rate() {
+    let mut entry = parse_line(UNREPORTED).expect("row parses");
+    entry.usage_status = "estimated".to_string();
+    let snapshot = catalog(
+        r#""fixture-model":{"id":"fixture-model","cost":{"input":2,"output":8,"cache_read":0.5,"cache_write":3}}"#,
+    );
+    let cost = entry_cost(&entry, &CustomPricing::default(), &snapshot).expect("priced");
+    assert!((cost - 0.000_049_5).abs() < 1e-12, "{cost}");
+}
+
+#[test]
+fn nous_custom_pricing_requires_a_provider_qualified_override() {
+    let entry = &fixture_entries()[0];
+    let mut custom = custom_pricing(&entry.model);
+    let rates = custom
+        .entries
+        .remove(&format!("nous/{}", entry.model))
+        .expect("provider-qualified override");
+    custom.entries.insert(entry.model.clone(), rates);
+
+    assert_eq!(entry_cost(entry, &custom, &catalog("")), None);
 }
 
 #[test]
