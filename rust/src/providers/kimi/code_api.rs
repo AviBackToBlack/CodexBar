@@ -279,7 +279,7 @@ pub(crate) fn kimi_code_home() -> Option<PathBuf> {
 }
 
 /// State of the Kimi Code CLI credential file, as seen read-only.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub(crate) enum KimiCliCredential {
     /// No CLI credential is usable or eligible (missing file, empty token,
     /// non-default region, or an endpoint override).
@@ -287,6 +287,16 @@ pub(crate) enum KimiCliCredential {
     /// The CLI credential exists but is expired or inside the safety margin.
     Stale,
     Fresh(String),
+}
+
+impl std::fmt::Debug for KimiCliCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => formatter.write_str("Unavailable"),
+            Self::Stale => formatter.write_str("Stale"),
+            Self::Fresh(_) => formatter.write_str("Fresh([REDACTED])"),
+        }
+    }
 }
 
 /// Guidance shown when a stale or rejected CLI credential leaves no working
