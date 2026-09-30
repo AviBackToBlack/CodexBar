@@ -758,6 +758,7 @@ export const ALL_LOCALE_KEYS = [
   "MuseBrowserTeamChoose",
   "MuseBrowserTeamHelp",
   "MuseBrowserTeamNoTeams",
+  "MuseBrowserTeamUnavailable",
   "OpenRouterManagementKeyTitle",
   "OpenRouterManagementKeyLabel",
   "OpenRouterManagementKeyHelp",

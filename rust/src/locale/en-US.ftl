@@ -663,6 +663,7 @@ MuseBrowserTeamTitle = Browser team
 MuseBrowserTeamChoose = Choose a team…
 MuseBrowserTeamHelp = Used only when the login response has no quota. Turn on the browser cookie source above, refresh Muse Code, then choose the dev.meta.ai team whose quota to show.
 MuseBrowserTeamNoTeams = No teams listed yet. Refresh Muse Code after turning on the browser cookie source.
+MuseBrowserTeamUnavailable = unavailable
 CredsStatusAuthenticated = Authenticated
 CredsStatusNotSignedIn = Not signed in
 CredsStatusDetected = Detected

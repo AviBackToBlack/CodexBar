@@ -41,11 +41,12 @@ export function MuseBrowserTeamSection({
   onChanged,
 }: Props) {
   const [selected, setSelected] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let stale = false;
+    setBusy(true);
     setError(null);
     void getProviderWorkspaceId(providerId)
       .then((value) => {
@@ -53,6 +54,9 @@ export function MuseBrowserTeamSection({
       })
       .catch((reason: unknown) => {
         if (!stale) setError(String(reason));
+      })
+      .finally(() => {
+        if (!stale) setBusy(false);
       });
     return () => {
       stale = true;
@@ -64,8 +68,14 @@ export function MuseBrowserTeamSection({
     () =>
       !selected || teams.some((team) => team.id === selected)
         ? teams
-        : [...teams, { id: selected, label: selected }],
-    [teams, selected],
+        : [
+            ...teams,
+            {
+              id: selected,
+              label: `${selected} (${t("MuseBrowserTeamUnavailable")})`,
+            },
+          ],
+    [teams, selected, t],
   );
 
   const handleChange = async (next: string) => {

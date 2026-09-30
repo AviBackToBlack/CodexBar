@@ -532,6 +532,10 @@ fn amount(value: &Value) -> Option<f64> {
 
 fn percent(used: &Value, limit: &Value) -> Option<f64> {
     let (used, limit) = (amount(used)?, amount(limit)?);
+    percent_from_amounts(used, limit)
+}
+
+fn percent_from_amounts(used: f64, limit: f64) -> Option<f64> {
     (limit > 0.0).then(|| (used / limit * 100.0).min(100.0))
 }
 
@@ -568,9 +572,11 @@ fn parse_team_quota(quota: &QuotaRecord, now: DateTime<Utc>) -> Option<(RateWind
     let window_minutes = u32::try_from((seconds / 60.0).round() as u64).ok()?;
 
     let window_reset = reset_at(&quota.window_resets_at);
-    let mut primary_percent = percent(&quota.window_weighted_used, &quota.window_weighted_limit)?;
+    let window_used = amount(&quota.window_weighted_used)?;
+    let window_limit = amount(&quota.window_weighted_limit)?;
+    let mut primary_percent = percent_from_amounts(window_used, window_limit)?;
     let no_window_reset = quota.window_resets_at.is_null();
-    if (!no_window_reset && window_reset.is_none()) || (no_window_reset && primary_percent != 0.0) {
+    if (!no_window_reset && window_reset.is_none()) || (no_window_reset && window_used != 0.0) {
         return None;
     }
     // An idle 5-hour window has no reset time; one whose reset has passed

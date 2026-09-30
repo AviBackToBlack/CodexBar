@@ -273,6 +273,25 @@ async fn invalid_five_hour_resets_never_invent_an_idle_window() {
 }
 
 #[tokio::test]
+async fn nonzero_idle_window_is_rejected_even_when_its_percent_underflows() {
+    let body = idle_quota()
+        .replace(
+            "\"window_weighted_used\":\"0\"",
+            "\"window_weighted_used\":1e-300",
+        )
+        .replace(
+            "\"window_weighted_limit\":\"20000000000\"",
+            "\"window_weighted_limit\":1e308",
+        );
+    let result = fallback_result(read(&FakeApi::with_quota(body), TEAM_ID).await);
+
+    assert_eq!(result.source_label, "oauth");
+    assert!(result.usage.primary.is_informational);
+    assert!(result.usage.secondary.is_none());
+    assert!(has_detail(&result, "quota"));
+}
+
+#[tokio::test]
 async fn selected_quota_retains_the_team_list_for_settings() {
     let result = fallback_result(read(&FakeApi::with_quota(idle_quota()), TEAM_ID).await);
     let row = detail(&result, &format!("browser-team-{TEAM_ID}"));

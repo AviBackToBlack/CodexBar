@@ -1037,6 +1037,7 @@ locale_keys! {
     MuseBrowserTeamChoose,
     MuseBrowserTeamHelp,
     MuseBrowserTeamNoTeams,
+    MuseBrowserTeamUnavailable,
     OpenRouterManagementKeyTitle,
     OpenRouterManagementKeyLabel,
     OpenRouterManagementKeyHelp,

@@ -60,6 +60,7 @@ describe("MuseBrowserTeamSection", () => {
   it("persists the chosen team as the provider workspace value", async () => {
     const onChanged = renderSection();
     const select = await screen.findByRole("combobox");
+    await vi.waitFor(() => expect(select).toBeEnabled());
 
     await act(async () => {
       fireEvent.change(select, { target: { value: "22" } });
@@ -77,13 +78,34 @@ describe("MuseBrowserTeamSection", () => {
 
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
     await vi.waitFor(() => expect(select.value).toBe("99"));
+    expect(Array.from(select.options).map((option) => option.textContent)).toContain(
+      "99 (MuseBrowserTeamUnavailable)",
+    );
     expect(screen.getByText("MuseBrowserTeamNoTeams")).toBeInTheDocument();
+  });
+
+  it("waits for the saved team to load before allowing a change", async () => {
+    let resolveWorkspaceId!: (value: string | null) => void;
+    vi.mocked(getProviderWorkspaceId).mockReturnValue(
+      new Promise<string | null>((resolve) => {
+        resolveWorkspaceId = resolve;
+      }),
+    );
+    renderSection();
+
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(select).toBeDisabled();
+    await act(async () => resolveWorkspaceId("22"));
+
+    await vi.waitFor(() => expect(select).toBeEnabled());
+    expect(select.value).toBe("22");
   });
 
   it("reports a failed save without changing the selection", async () => {
     vi.mocked(setProviderWorkspaceId).mockRejectedValue("Muse browser team ID is invalid");
     const onChanged = renderSection();
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    await vi.waitFor(() => expect(select).toBeEnabled());
 
     await act(async () => {
       fireEvent.change(select, { target: { value: "11" } });
