@@ -13,9 +13,12 @@ import {
   formatUsd,
   shareUsageSpendPng,
 } from "../../../lib/usageSpendSharing";
+import { buildSpendProviderGroups, findSpendDay, formatSpendDay } from "../../../lib/usageSpendBreakdown";
 import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
+import { UsageSpendProviderGroups } from "./UsageSpendProviderGroups";
+import { UsageSpendTrendPanel } from "./UsageSpendTrendPanel";
 
 export default function UsageSpendTab(_props: TabProps) {
   const { t } = useLocale();
@@ -26,7 +29,7 @@ export default function UsageSpendTab(_props: TabProps) {
   const [shareError, setShareError] = useState<string | null>(null);
   const [includeOpenCodex, setIncludeOpenCodex] = useState(false);
   const [hideNativeCodex, setHideNativeCodex] = useState(false);
-  const [showAllModels, setShowAllModels] = useState(false);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const tableRef = useRef<HTMLTableElement | null>(null);
@@ -60,6 +63,11 @@ export default function UsageSpendTab(_props: TabProps) {
   useEffect(() => {
     load(false);
   }, [load]);
+
+  // A selected day belongs to one history range; changing the range clears it.
+  useEffect(() => {
+    setSelectedDay(null);
+  }, [selectedDays]);
 
   // Upstream 0.55.0 #3106 parity: provider token/cost publications refresh
   // Usage & Spend silently while the pane is open. Coalesce bursts so a
@@ -256,10 +264,22 @@ export default function UsageSpendTab(_props: TabProps) {
         </table>
       )}
 
-      {!error && summary && <SpendContractOverview contract={summary.contract} t={t} />}
+      {!error && summary && <SpendContractOverview contract={summary.contract} selectedDay={selectedDay} t={t} />}
 
       {!error && summary && (
-        <ContractModelsPanel contract={summary.contract} showAll={showAllModels} onToggleAll={() => setShowAllModels((value) => !value)} t={t} />
+        <UsageSpendTrendPanel contract={summary.contract} selectedDay={selectedDay} onSelectDay={setSelectedDay} t={t} />
+      )}
+
+      {!error && summary && (
+        <UsageSpendProviderGroups
+          groups={buildSpendProviderGroups(
+            summary.contract,
+            summary.rows.find((row) => row.providerId === summary.contract.providerId)?.displayName
+              ?? summary.contract.providerId,
+          )}
+          historyDays={summary.contract.historyDays}
+          t={t}
+        />
       )}
 
       {!error && summary && (
@@ -285,7 +305,8 @@ export default function UsageSpendTab(_props: TabProps) {
 
 
 
-function SpendContractOverview({ contract, t }: { contract: SpendContract; t: (key: LocaleKey) => string }) {
+function SpendContractOverview({ contract, selectedDay, t }: { contract: SpendContract; selectedDay: string | null; t: (key: LocaleKey) => string }) {
+  const day = findSpendDay(contract.daily, selectedDay);
   const coverage = contract.priceCoverageRatio == null
     ? t("UsageSpendUnknown")
     : `${Math.round(contract.priceCoverageRatio * 100)}%`;
@@ -308,12 +329,19 @@ function SpendContractOverview({ contract, t }: { contract: SpendContract; t: (k
   return (
     <div className="settings-section__group" style={{ marginTop: 16 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
-        <MetricCard label={t("UsageSpendSpend")} value={total} detail={contract.knownZero ? t("UsageSpendKnownZero") : provenance} />
+        {day ? (
+          <MetricCard
+            label={t("UsageSpendSpend")}
+            value={day.costUsd == null ? "—" : formatUsd(day.costUsd, "USD")}
+            detail={formatSpendDay(day.day)}
+          />
+        ) : (
+          <MetricCard label={t("UsageSpendSpend")} value={total} detail={contract.knownZero ? t("UsageSpendKnownZero") : provenance} />
+        )}
         <MetricCard label={t("UsageSpendPriceCoverage")} value={coverage} detail={`${contract.priceCoverage.unpriced} ${t("UsageSpendUnpriced")}`} />
         <MetricCard label={t("UsageSpendConversations")} value={contract.conversationCount.toLocaleString()} detail={contract.historyCoverageEstablished ? t("UsageSpendHistoryCovered") : t("UsageSpendPartialHistory")} />
         <MetricCard label={t("UsageSpendTokenMix")} value={tokenParts || "—"} detail={contract.customPricingActive ? t("UsageSpendCustomPricingActive") : t("UsageSpendDefaultPricing")} />
       </div>
-      <ActivityHeatmap cells={contract.hourlyActivity} t={t} />
       {contract.imports.map((source) => (
         <p key={source.sourceId} className="settings-section__caption" style={{ marginTop: 8 }}>
           {source.displayName}: {source.requestCount.toLocaleString()} {t("UsageSpendRequests")} · {source.conversationCount.toLocaleString()} {t("UsageSpendConversations").toLowerCase()}
@@ -329,70 +357,6 @@ function MetricCard({ label, value, detail }: { label: string; value: string; de
       <span className="settings-section__caption">{label}</span>
       <strong style={{ display: "block", marginTop: 3 }}>{value}</strong>
       <span className="settings-section__caption">{detail}</span>
-    </div>
-  );
-}
-
-function ActivityHeatmap({ cells, t }: { cells: SpendContract["hourlyActivity"]; t: (key: LocaleKey) => string }) {
-  const lookup = new Map(cells.map((cell) => [`${cell.weekday}:${cell.hour}`, cell.conversations]));
-  const max = Math.max(1, ...cells.map((cell) => cell.conversations));
-  return (
-    <div style={{ marginTop: 14 }}>
-      <h4 style={{ margin: "0 0 8px" }}>{t("UsageSpendHourlyActivity")}</h4>
-      <div
-        aria-label={t("UsageSpendHourlyActivity")}
-        style={{ display: "grid", gridTemplateColumns: "repeat(24, minmax(7px, 1fr))", gap: 2 }}
-      >
-        {Array.from({ length: 7 * 24 }, (_, index) => {
-          const weekday = Math.floor(index / 24);
-          const hour = index % 24;
-          const value = lookup.get(`${weekday}:${hour}`) ?? 0;
-          const alpha = value === 0 ? 0.08 : 0.18 + (value / max) * 0.72;
-          return (
-            <span
-              key={`${weekday}:${hour}`}
-              title={`Day ${weekday + 1}, ${hour}:00 · ${value} conversations`}
-              style={{ aspectRatio: "1", borderRadius: 2, background: `rgb(90 160 255 / ${alpha})` }}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ContractModelsPanel({ contract, showAll, onToggleAll, t }: { contract: SpendContract; showAll: boolean; onToggleAll: () => void; t: (key: LocaleKey) => string }) {
-  const visible = showAll ? contract.models : contract.models.slice(0, 8);
-  return (
-    <div className="settings-section__group" style={{ marginTop: 20 }}>
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-        <div>
-          <h4 style={{ margin: 0 }}>{t("UsageSpendModels")}</h4>
-          <p className="settings-section__caption">{t("UsageSpendAllTimeHistory")} {contract.historyDays} days of local history.</p>
-        </div>
-        {contract.models.length > 8 && (
-          <button type="button" className="credential-btn credential-btn--secondary" onClick={onToggleAll}>
-            {showAll ? t("UsageSpendShowLess") : t("UsageSpendShowAll") + " (" + contract.models.length + ")"}
-          </button>
-        )}
-      </div>
-      {visible.length === 0 ? (
-        <p className="settings-section__caption">{t("UsageSpendNoModels")}</p>
-      ) : (
-        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
-          {visible.map((model) => (
-            <div key={model.model} className="provider-detail-section" style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12 }}>
-              <span>
-                <strong>{model.model}</strong>
-                <span className="settings-section__caption" style={{ display: "block" }}>
-                  {model.totalTokens.toLocaleString()} {t("UsageSpendTokens")}{model.customPricing ? " · " + t("UsageSpendCustomPricing") : ""}
-                </span>
-              </span>
-              <span>{model.costUsd == null ? t("UsageSpendUnpriced") : formatUsd(model.costUsd, "USD")}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
