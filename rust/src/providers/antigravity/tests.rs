@@ -576,7 +576,7 @@ fn strategy_ids_are_stable_and_reject_unknown_sources() {
     assert_eq!(AntigravityStrategyId::Cli.as_str(), "cli");
 }
 
-fn offline_result() -> ProviderFetchResult {
+pub(super) fn offline_result() -> ProviderFetchResult {
     ProviderFetchResult::new(
         UsageSnapshot::new(RateWindow::informational("Offline · 2 conversations"))
             .with_login_method("offline"),
@@ -643,7 +643,7 @@ async fn local_probe_success_does_not_run_structured_cli_fallback() {
 #[tokio::test]
 async fn local_auth_probe_failure_uses_structured_cli_fallback() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async {
+        .resolve_runtime_fallback(Err(ProviderError::AuthRequired.into()), || async {
             Ok(Some(structured_cli_result()))
         })
         .await
@@ -657,7 +657,7 @@ async fn local_auth_probe_failure_uses_structured_cli_fallback() {
 async fn generic_local_probe_failure_uses_valid_structured_cli_json() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback(
-            Err(ProviderError::Other("local API unavailable".to_string())),
+            Err(ProviderError::Other("local API unavailable".to_string()).into()),
             || async { Ok(Some(structured_cli_result())) },
         )
         .await
@@ -670,7 +670,9 @@ async fn generic_local_probe_failure_uses_valid_structured_cli_json() {
 #[tokio::test]
 async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async { Ok(None) })
+        .resolve_runtime_fallback(Err(ProviderError::AuthRequired.into()), || async {
+            Ok(None)
+        })
         .await;
 
     assert!(matches!(result, Err(ProviderError::AuthRequired)));
@@ -680,11 +682,11 @@ async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() 
 async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
                 let error = quota_summary::parse_cli_usage_report(br#"{"status":"SUCCESS""#)
                     .expect_err("malformed JSON must fail parsing");
-                Err(error)
+                Err(LiveFailure::from(error))
             },
             None,
         )
@@ -697,11 +699,11 @@ async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
 async fn cli_fallback_error_prefers_offline_history() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
-                Err(ProviderError::Parse(
+                Err(LiveFailure::from(ProviderError::Parse(
                     "Antigravity CLI usage report: malformed JSON".to_string(),
-                ))
+                )))
             },
             Some(offline_result()),
         )
@@ -710,106 +712,6 @@ async fn cli_fallback_error_prefers_offline_history() {
 
     assert_eq!(result.source_label, "offline");
     assert_eq!(result.usage.login_method.as_deref(), Some("offline"));
-}
-
-const OFFLINE_DETAIL_PREFIX: &str = "Live Antigravity usage is unavailable; showing offline data.";
-const HINT: &str = "check Diagnostics for per-source details";
-
-fn offline_detail_value(result: &ProviderFetchResult) -> String {
-    let details = result.display_details();
-    assert_eq!(details.len(), 1, "exactly one explanation row");
-    assert_eq!(details[0].id(), "antigravity-live-unavailable");
-    assert_eq!(details[0].title(), "Live usage");
-    details[0].value().to_string()
-}
-
-#[test]
-fn offline_fallback_explains_each_typed_failure() {
-    let cases = [
-        (
-            ProviderError::NotInstalled("agy missing".to_string()),
-            AGY_NOT_FOUND_MESSAGE,
-        ),
-        (ProviderError::Timeout, "the quota request timed out"),
-        (ProviderError::Parse("bad json".to_string()), HINT),
-        (ProviderError::Other("boom".to_string()), HINT),
-        (ProviderError::NoCookies, HINT),
-    ];
-    for (error, reason) in cases {
-        let resolved = AntigravityProvider::resolve_probe_failure(error, Some(offline_result()))
-            .expect("offline history is preserved");
-        assert_eq!(resolved.source_label, "offline");
-        assert_eq!(
-            offline_detail_value(&resolved),
-            format!("{OFFLINE_DETAIL_PREFIX} {reason}")
-        );
-    }
-}
-
-#[test]
-fn offline_explanation_never_echoes_error_text() {
-    let secrets = [
-        "user@example.com",
-        "https://lh3.googleusercontent.com/a/photo",
-        r"C:\Users\someone\agy.exe",
-        "HTTP 500",
-    ];
-    let leaky = secrets.join(" ");
-    let errors = [
-        ProviderError::NotInstalled(leaky.clone()),
-        ProviderError::Parse(leaky.clone()),
-        ProviderError::Other(leaky.clone()),
-        ProviderError::OAuth(leaky),
-    ];
-    for error in errors {
-        let resolved = AntigravityProvider::resolve_probe_failure(error, Some(offline_result()))
-            .expect("offline history is preserved");
-        let value = offline_detail_value(&resolved);
-        for secret in secrets {
-            assert!(!value.contains(secret), "{secret} leaked into {value}");
-        }
-    }
-}
-
-#[test]
-fn auth_required_adds_no_offline_explanation() {
-    assert!(offline_reason::live_unavailable_detail(&ProviderError::AuthRequired).is_none());
-    let resolved = AntigravityProvider::resolve_probe_failure(
-        ProviderError::AuthRequired,
-        Some(offline_result()),
-    );
-    assert!(matches!(resolved, Err(ProviderError::AuthRequired)));
-}
-
-#[tokio::test]
-async fn successful_live_fallback_carries_no_offline_explanation() {
-    let live = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(10.0)), "cli");
-    let result = AntigravityProvider::new()
-        .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::Timeout),
-            || async { Ok(Some(live)) },
-            Some(offline_result()),
-        )
-        .await
-        .expect("live CLI fallback wins over offline history");
-    assert_eq!(result.source_label, "cli");
-    assert!(result.display_details().is_empty());
-}
-
-#[tokio::test]
-async fn failed_cli_fallback_offline_result_explains_failure() {
-    let result = AntigravityProvider::new()
-        .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
-            || async { Err(ProviderError::Timeout) },
-            Some(offline_result()),
-        )
-        .await
-        .expect("offline history should survive a failed CLI probe");
-    assert_eq!(
-        offline_detail_value(&result),
-        format!("{OFFLINE_DETAIL_PREFIX} the quota request timed out")
-    );
 }
 
 #[test]

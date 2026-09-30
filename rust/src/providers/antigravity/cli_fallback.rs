@@ -9,12 +9,16 @@ use tokio::process::Command as AsyncCommand;
 use uuid::Uuid;
 
 use super::AntigravityProvider;
+use super::cli_print_failure::{CliPrintFailure, ExitClassification, classify_exit};
+use super::offline_reason::LiveFailure;
 use super::quota_summary;
 use crate::core::{ProviderError, ProviderFetchResult};
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(90);
+const REPORT_TOO_LARGE: &str = "Antigravity CLI usage report is too large";
 const VERSION_ARGS: [&str; 1] = ["--version"];
 const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
+const VERSION_TOO_LARGE: &str = "Antigravity CLI version output is too large";
 const USAGE_ARGS: [&str; 6] = [
     "-p",
     "/usage",
@@ -80,15 +84,15 @@ impl Drop for PrivateWorkdir {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct BoundedStdout {
+struct BoundedOutput {
     bytes: Vec<u8>,
     exceeded_limit: bool,
 }
 
-/// Read a child stdout stream incrementally, retaining only the configured
+/// Read a child output stream incrementally, retaining only the configured
 /// prefix while continuing to drain the pipe so the child cannot block on a
-/// full stdout buffer.
-async fn read_stdout_limited<R>(mut reader: R, max_bytes: usize) -> std::io::Result<BoundedStdout>
+/// full pipe buffer.
+async fn read_output_limited<R>(mut reader: R, max_bytes: usize) -> std::io::Result<BoundedOutput>
 where
     R: AsyncRead + Unpin,
 {
@@ -110,7 +114,7 @@ where
         }
     }
 
-    Ok(BoundedStdout {
+    Ok(BoundedOutput {
         bytes,
         exceeded_limit,
     })
@@ -118,7 +122,7 @@ where
 
 pub(super) async fn try_fetch(
     binary: Option<PathBuf>,
-) -> Result<Option<ProviderFetchResult>, ProviderError> {
+) -> Result<Option<ProviderFetchResult>, LiveFailure> {
     let Some(binary) = binary else {
         return Ok(None);
     };
@@ -138,37 +142,28 @@ pub(super) async fn managed_spawn_is_csrf_gated(binary: Option<PathBuf>) -> bool
     let Some(binary) = binary else {
         return false;
     };
-    let Ok(version) = run_cli_command(&binary, &VERSION_ARGS, VERSION_TIMEOUT).await else {
+    let Ok(version) =
+        run_cli_command(&binary, &VERSION_ARGS, VERSION_TIMEOUT, VERSION_TOO_LARGE).await
+    else {
         return false;
     };
-    if version.exceeded_limit {
-        return false;
-    }
-    let version = String::from_utf8_lossy(&version.bytes);
+    let version = String::from_utf8_lossy(&version);
     is_csrf_gated_version(version.trim())
 }
 
-async fn fetch_print_usage(binary: &Path) -> Result<ProviderFetchResult, ProviderError> {
-    let version = run_cli_command(binary, &VERSION_ARGS, VERSION_TIMEOUT).await?;
-    if version.exceeded_limit {
-        return Err(ProviderError::Parse(
-            "Antigravity CLI version output is too large".into(),
-        ));
-    }
-    let version = String::from_utf8_lossy(&version.bytes);
+async fn fetch_print_usage(binary: &Path) -> Result<ProviderFetchResult, LiveFailure> {
+    let version =
+        run_cli_command(binary, &VERSION_ARGS, VERSION_TIMEOUT, VERSION_TOO_LARGE).await?;
+    let version = String::from_utf8_lossy(&version);
     if !is_supported_version(version.trim()) {
         return Err(ProviderError::Parse(
             "Antigravity CLI usage reports require agy 1.1.11 or later".into(),
-        ));
+        )
+        .into());
     }
 
-    let output = run_cli_command(binary, &USAGE_ARGS, REPORT_TIMEOUT).await?;
-    if output.exceeded_limit {
-        return Err(ProviderError::Parse(
-            "Antigravity CLI usage report is too large".into(),
-        ));
-    }
-    let usage = quota_summary::parse_cli_usage_report(&output.bytes)?;
+    let output = run_cli_command(binary, &USAGE_ARGS, REPORT_TIMEOUT, REPORT_TOO_LARGE).await?;
+    let usage = quota_summary::parse_cli_usage_report(&output)?;
     Ok(AntigravityProvider::fetch_result(
         usage,
         super::AntigravityStrategyId::Cli,
@@ -183,7 +178,8 @@ fn prepare_command(binary: &Path, args: &[&str], working_dir: &Path) -> AsyncCom
         .env_remove(OAUTH_CREDENTIALS_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        // Captured only to classify a failed run; never logged or displayed.
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(windows)]
     command.as_std_mut().creation_flags(0x0800_0000);
@@ -194,36 +190,58 @@ async fn run_cli_command(
     binary: &Path,
     args: &[&str],
     timeout: Duration,
-) -> Result<BoundedStdout, ProviderError> {
+    too_large: &'static str,
+) -> Result<Vec<u8>, LiveFailure> {
     let working_dir = PrivateWorkdir::create()?;
     let mut command = prepare_command(binary, args, working_dir.path());
 
     let mut child = command
         .spawn()
-        .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
+        .map_err(|error| LiveFailure::cli_report(CliPrintFailure::from_spawn_error(&error)))?;
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(report_failed());
+    };
 
-    tokio::time::timeout(timeout, async {
-        let (stdout_result, status_result) = tokio::join!(
-            read_stdout_limited(stdout, REPORT_MAX_OUTPUT_BYTES),
+    let (stdout, stderr, status) = tokio::time::timeout(timeout, async {
+        tokio::join!(
+            read_output_limited(stdout, REPORT_MAX_OUTPUT_BYTES),
+            read_output_limited(stderr, REPORT_MAX_OUTPUT_BYTES),
             child.wait()
-        );
-        let stdout = stdout_result
-            .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
-        let status = status_result
-            .map_err(|_| ProviderError::Other("Antigravity CLI usage report failed".into()))?;
-        if !status.success() {
-            return Err(ProviderError::Other(
-                "Antigravity CLI usage report failed".into(),
-            ));
-        }
-        Ok(stdout)
+        )
     })
     .await
-    .map_err(|_| ProviderError::Timeout)?
+    .map_err(|_| LiveFailure::from(ProviderError::Timeout))?;
+    let (Ok(stdout), Ok(stderr), Ok(status)) = (stdout, stderr, status) else {
+        return Err(report_failed());
+    };
+    finish_run(stdout, stderr, status.code(), too_large)
+}
+
+fn report_failed() -> LiveFailure {
+    ProviderError::Other("Antigravity CLI usage report failed".into()).into()
+}
+
+/// Map a finished `agy` run onto the probe policy. Like upstream
+/// `SubprocessRunner`, oversized output on either stream is rejected before
+/// the exit status is considered. stderr only feeds the fixed classification.
+fn finish_run(
+    stdout: BoundedOutput,
+    stderr: BoundedOutput,
+    exit_code: Option<i32>,
+    too_large: &'static str,
+) -> Result<Vec<u8>, LiveFailure> {
+    if stdout.exceeded_limit || stderr.exceeded_limit {
+        return Err(ProviderError::Parse(too_large.into()).into());
+    }
+    if exit_code == Some(0) {
+        return Ok(stdout.bytes);
+    }
+    match classify_exit(exit_code.unwrap_or(-1), &stderr.bytes) {
+        // A signed-out CLI stays a terminal, actionable sign-in error on
+        // Windows instead of being hidden behind offline history.
+        ExitClassification::SignedOut => Err(ProviderError::AuthRequired.into()),
+        ExitClassification::Failed(failure) => Err(LiveFailure::cli_report(failure)),
+    }
 }
 
 fn is_supported_version(version: &str) -> bool {
@@ -252,6 +270,8 @@ fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::cli_print_failure::ExitReason;
+    use super::super::offline_reason::LiveFailureReason;
     use super::*;
 
     #[test]
@@ -277,19 +297,195 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stdout_capture_retains_only_the_configured_limit() {
-        let output = read_stdout_limited(b"0123456789".as_slice(), 4)
+    async fn output_capture_retains_only_the_configured_limit() {
+        let output = read_output_limited(b"0123456789".as_slice(), 4)
             .await
-            .expect("stdout reader should succeed");
+            .expect("output reader should succeed");
 
         assert_eq!(output.bytes, b"0123");
         assert!(output.exceeded_limit);
 
-        let output = read_stdout_limited(b"0123".as_slice(), 4)
+        let output = read_output_limited(b"0123".as_slice(), 4)
             .await
-            .expect("stdout reader should succeed");
+            .expect("output reader should succeed");
         assert_eq!(output.bytes, b"0123");
         assert!(!output.exceeded_limit);
+    }
+
+    fn output(bytes: &[u8], exceeded_limit: bool) -> BoundedOutput {
+        BoundedOutput {
+            bytes: bytes.to_vec(),
+            exceeded_limit,
+        }
+    }
+
+    #[test]
+    fn oversized_output_on_either_stream_fails_before_the_exit_status() {
+        let cases = [
+            (output(b"{}", true), output(b"", false), Some(0)),
+            (output(b"{}", false), output(b"noise", true), Some(0)),
+            (output(b"", true), output(b"not logged in", false), Some(1)),
+        ];
+        for (stdout, stderr, exit_code) in cases {
+            let failure = finish_run(stdout, stderr, exit_code, REPORT_TOO_LARGE)
+                .expect_err("oversized output must be rejected");
+            assert_eq!(failure.reason(), LiveFailureReason::Unclassified);
+            assert!(matches!(
+                failure.into_error(),
+                ProviderError::Parse(message) if message == REPORT_TOO_LARGE
+            ));
+        }
+    }
+
+    #[test]
+    fn successful_run_returns_stdout_and_ignores_stderr() {
+        let stdout = finish_run(
+            output(b"{\"ok\":true}", false),
+            output(b"warning: not logged in to telemetry", false),
+            Some(0),
+            REPORT_TOO_LARGE,
+        )
+        .expect("exit 0 succeeds");
+        assert_eq!(stdout, b"{\"ok\":true}");
+    }
+
+    #[test]
+    fn failed_run_is_classified_without_echoing_stderr() {
+        let failure = finish_run(
+            output(b"", false),
+            output(b"synthetic-private-diagnostic", false),
+            Some(7),
+            REPORT_TOO_LARGE,
+        )
+        .expect_err("exit 7 fails");
+        assert_eq!(
+            failure.reason(),
+            LiveFailureReason::CliReport(CliPrintFailure::Exited {
+                code: 7,
+                reason: ExitReason::Unspecified,
+            })
+        );
+        let message = failure.into_error().to_string();
+        assert_eq!(message, "Antigravity CLI usage report failed: agy exited 7");
+        assert!(!message.contains("synthetic-private-diagnostic"));
+
+        let failure = finish_run(
+            output(b"", false),
+            output(b"", false),
+            None,
+            REPORT_TOO_LARGE,
+        )
+        .expect_err("a run without an exit code fails");
+        assert_eq!(
+            failure.reason(),
+            LiveFailureReason::CliReport(CliPrintFailure::Exited {
+                code: -1,
+                reason: ExitReason::Unspecified,
+            })
+        );
+    }
+
+    #[test]
+    fn signed_out_run_requires_authentication() {
+        let failure = finish_run(
+            output(b"", false),
+            output(b"Select login method:", false),
+            Some(1),
+            REPORT_TOO_LARGE,
+        )
+        .expect_err("a login prompt fails");
+        assert!(failure.is_auth_required());
+        assert!(failure.offline_detail().is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_agy_executable_is_classified() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let failure = fetch_print_usage(&dir.path().join("agy.exe"))
+            .await
+            .expect_err("a missing executable cannot report usage");
+        assert_eq!(
+            failure.reason(),
+            LiveFailureReason::CliReport(CliPrintFailure::ExecutableNotFound)
+        );
+        assert_eq!(
+            failure.into_error().to_string(),
+            "Antigravity CLI usage report failed: agy executable not found"
+        );
+    }
+
+    /// A stand-in `agy` that reports a supported version and then fails the
+    /// usage report with fixed stderr and exit code.
+    #[cfg(windows)]
+    fn failing_agy(stderr: &str, exit_code: i32) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        std::fs::write(dir.path().join("stderr.txt"), stderr).expect("stderr fixture");
+        std::fs::write(
+            dir.path().join("agy.cmd"),
+            format!(
+                "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo 1.2.2\r\n  exit /b 0\r\n)\r\n>&2 type \"%~dp0stderr.txt\"\r\nexit /b {exit_code}\r\n"
+            ),
+        )
+        .expect("agy fixture");
+        dir
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn failed_print_usage_process_is_classified_without_leaking_stderr() {
+        let cases = [
+            ("synthetic-private-diagnostic", 7, ExitReason::Unspecified),
+            (
+                r#"Eligibility check failed: failed to get profile picture: Get "https://lh3.googleusercontent.com/a/private": EOF"#,
+                1,
+                ExitReason::EligibilityNetwork,
+            ),
+            (
+                "Eligibility check failed: account does not support Google ToS",
+                1,
+                ExitReason::Ineligible,
+            ),
+            (
+                r#"Post "https://usage.invalid/v1": dial tcp: no such host"#,
+                1,
+                ExitReason::Network,
+            ),
+        ];
+        for (stderr, code, reason) in cases {
+            let fixture = failing_agy(stderr, code);
+            let failure = fetch_print_usage(&fixture.path().join("agy.cmd"))
+                .await
+                .expect_err("a failing agy cannot report usage");
+            assert_eq!(
+                failure.reason(),
+                LiveFailureReason::CliReport(CliPrintFailure::Exited { code, reason }),
+                "{stderr}"
+            );
+            let detail = failure
+                .offline_detail()
+                .expect("offline explanation")
+                .value()
+                .to_string();
+            let message = failure.into_error().to_string();
+            for secret in [
+                "synthetic-private-diagnostic",
+                "googleusercontent",
+                "usage.invalid",
+            ] {
+                assert!(!message.contains(secret), "{secret} leaked into {message}");
+                assert!(!detail.contains(secret), "{secret} leaked into {detail}");
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn signed_out_print_usage_process_requires_authentication() {
+        let fixture = failing_agy("You are not logged into Antigravity", 1);
+        let failure = fetch_print_usage(&fixture.path().join("agy.cmd"))
+            .await
+            .expect_err("a signed-out agy cannot report usage");
+        assert!(failure.is_auth_required());
     }
 
     #[test]
