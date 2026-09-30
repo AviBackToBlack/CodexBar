@@ -8,32 +8,39 @@ use serde_json::{Value, json};
 
 const CACHE_SCHEMA_BEFORE_DIRECT_FORK_BASELINES: u64 = 4;
 
-fn timestamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+pub(super) fn timestamp(at: DateTime<Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn session_meta(id: &str, parent: Option<&str>, at: DateTime<Utc>) -> Value {
-    let mut payload = json!({"id": id});
+/// Upstream fixture shape: the session (and fork) time lives in the payload.
+pub(super) fn session_meta(id: &str, parent: Option<&str>, at: DateTime<Utc>) -> Value {
+    let mut payload = json!({
+        "id": id,
+        "source": "vscode",
+        "thread_source": "user",
+        "timestamp": timestamp(at),
+    });
     if let Some(parent) = parent {
         payload["forked_from_id"] = json!(parent);
     }
-    json!({"type": "session_meta", "timestamp": timestamp(at), "payload": payload})
+    json!({"type": "session_meta", "payload": payload})
 }
 
-fn token_count(at: DateTime<Utc>, total_input: i64, last_input: Option<i64>) -> Value {
-    // The parser also accepts this compact event_msg wrapper; it keeps the
-    // three-snapshot child fixture inside the 512-byte per-file budget.
-    let mut info = json!({"total_token_usage": {"input_tokens": total_input}});
-    if let Some(last_input) = last_input {
-        info["last_token_usage"] = json!({"input_tokens": last_input});
-    }
+/// Upstream fixture shape: a full `event_msg` token_count with a model and
+/// both cumulative and last-turn counters.
+pub(super) fn token_count(at: DateTime<Utc>, total_input: i64, last_input: i64) -> Value {
     json!({
+        "type": "event_msg",
         "timestamp": timestamp(at),
-        "event_msg": {"type": "token_count", "info": info}
+        "payload": {"type": "token_count", "info": {
+            "model": "gpt-5.4",
+            "total_token_usage": {"input_tokens": total_input, "output_tokens": 0},
+            "last_token_usage": {"input_tokens": last_input, "output_tokens": 0},
+        }},
     })
 }
 
-fn write_rows(dir: &Path, name: &str, rows: &[Value]) -> PathBuf {
+pub(super) fn write_rows(dir: &Path, name: &str, rows: &[Value]) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let path = dir.join(name);
     let body = rows
@@ -61,14 +68,16 @@ impl Chain {
 
     fn root_rows(&self, total_input: i64) -> Vec<Value> {
         vec![
-            session_meta("r", None, self.at(-2)),
-            token_count(self.at(-1), total_input, Some(total_input)),
+            session_meta("root", None, self.at(0)),
+            token_count(self.at(1), total_input, total_input),
         ]
     }
 }
 
-/// `root(1000)` -> `parent` forked at t=0 (optional own token event at
-/// `parent_event_time`, total 1040 / last 40) -> `child` forked at t=4.
+/// Upstream timeline: `root` (1000 at t=1) -> `parent` forked at t=2, with an
+/// optional own token event at `parent_event_time` (total 1040 / last 40) ->
+/// `child` forked at t=4. Upstream covers no parent event and events at t=3
+/// and t=8; t=2 additionally puts the parent's event at its own fork instant.
 fn write_chain(parent_event_time: Option<i64>) -> Chain {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
@@ -90,54 +99,35 @@ fn write_chain(parent_event_time: Option<i64>) -> Chain {
     };
 
     chain.root_file = write_rows(&day_dir, "root.jsonl", &chain.root_rows(1_000));
-    let mut parent_rows = vec![session_meta("p", Some("r"), chain.at(0))];
+    let mut parent_rows = vec![session_meta("parent", Some("root"), chain.at(2))];
     if let Some(parent_event_time) = parent_event_time {
-        parent_rows.push(token_count(chain.at(parent_event_time), 1_040, Some(40)));
+        parent_rows.push(token_count(chain.at(parent_event_time), 1_040, 40));
     }
     chain.parent_file = write_rows(&day_dir, "parent.jsonl", &parent_rows);
 
     let (inherited, copied_last) = match parent_event_time {
-        Some(0 | 3) => (1_040, 40),
+        Some(2 | 3) => (1_040, 40),
         None | Some(8) => (1_000, 1_000),
-        Some(_) => unreachable!("the fixture uses parent events at t=0, 3, or 8"),
+        Some(_) => unreachable!("the fixture uses parent events at t=2, 3, or 8"),
     };
     chain.child_file = write_rows(
         &day_dir,
         "child.jsonl",
         &[
-            session_meta("c", Some("p"), chain.at(4)),
-            token_count(chain.at(5), inherited, Some(copied_last)),
-            token_count(chain.at(6), inherited + 20, None),
-            token_count(chain.at(7), inherited + 20, None),
+            session_meta("child", Some("parent"), chain.at(4)),
+            token_count(chain.at(5), inherited, copied_last),
+            token_count(chain.at(6), inherited + 20, 20),
+            token_count(chain.at(7), inherited + 20, 20),
         ],
     );
-    // Discovery is oldest-first, so make parent-before-child order explicit
-    // rather than depending on filesystem timestamp resolution.
-    for (age, file) in [
-        (30, &chain.root_file),
-        (20, &chain.parent_file),
-        (10, &chain.child_file),
-    ] {
-        let modified = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
-        std::fs::File::options()
-            .write(true)
-            .open(file)
-            .unwrap()
-            .set_modified(modified)
-            .unwrap();
-    }
     chain
 }
 
 fn scanner(sessions: &Path, cache_root: &Path, bounded: bool) -> CostScanner {
     let mut options = CostScanOptions::app_driven();
     if bounded {
-        // Admit the full chain so the 512-byte work limit, not candidate
-        // pagination, forces the child to finish on a later refresh.
-        options.codex_candidate_limit = 0;
+        // Upstream bounds only the per-refresh byte budget.
         options.codex_max_scan_bytes_per_refresh = 512;
-        options.codex_max_session_file_bytes = 512;
-        options.prefer_newest_codex_sessions_first = false;
     }
     CostScanner::new(7)
         .with_options(options)
@@ -150,17 +140,31 @@ fn scan_to_completion(scanner: &CostScanner) -> (CostSummary, CostUsageCache) {
     (summary, cache)
 }
 
-fn scan_to_completion_with_passes(scanner: &CostScanner) -> (CostSummary, CostUsageCache, usize) {
-    for pass in 1..=80 {
-        let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+/// Passes and Codex history bytes read until the scan stops deferring work.
+pub(super) struct Progress {
+    pub(super) passes: usize,
+    pub(super) bytes_read: u64,
+}
+
+pub(super) fn scan_to_completion_with_passes(
+    scanner: &CostScanner,
+) -> (CostSummary, CostUsageCache, Progress) {
+    let mut bytes_read = 0;
+    for passes in 1..=80 {
+        let (summary, stats, cache) = scanner.scan_codex_detailed_with_cache(None);
+        bytes_read += stats.codex_bytes_read;
         if !cache.codex_scan_incomplete {
-            return (summary, cache, pass);
+            return (summary, cache, Progress { passes, bytes_read });
         }
     }
     panic!("bounded Codex scan never completed");
 }
 
-fn billed_input(cache: &CostUsageCache, path: &Path) -> i64 {
+pub(super) fn file_len(path: &Path) -> u64 {
+    std::fs::metadata(path).unwrap().len()
+}
+
+pub(super) fn billed_input(cache: &CostUsageCache, path: &Path) -> i64 {
     let usage = &cache.files[&path.to_string_lossy().to_string()];
     assert!(
         !usage.codex_unresolved_fork_parent,
@@ -194,21 +198,25 @@ fn assert_chain_billing(
 
 #[test]
 fn direct_fork_chain_preserves_cumulative_inheritance() {
-    for parent_event_time in [None, Some(0_i64), Some(3), Some(8)] {
+    for parent_event_time in [None, Some(2_i64), Some(3), Some(8)] {
         for bounded in [false, true] {
             let chain = write_chain(parent_event_time);
-            if bounded {
-                assert!(
-                    std::fs::metadata(&chain.child_file).unwrap().len() <= 512,
-                    "bounded fixture must fit within the 512-byte per-file budget"
-                );
-            }
             let scanner = scanner(&chain.sessions, &chain.cache_root, bounded);
 
             // Cold scan, then an unchanged warm scan from the persisted cache.
-            let (summary, cache, passes) = scan_to_completion_with_passes(&scanner);
+            let (summary, cache, progress) = scan_to_completion_with_passes(&scanner);
             if bounded {
-                assert!(passes > 1, "512-byte budget should defer part of the chain");
+                assert!(
+                    progress.passes > 1,
+                    "512-byte budget should defer part of the chain"
+                );
+                // Deferred forks continue where they stopped: every history
+                // byte is read once, as in one unbounded pass.
+                let chain_bytes: u64 = [&chain.root_file, &chain.parent_file, &chain.child_file]
+                    .into_iter()
+                    .map(|path| file_len(path))
+                    .sum();
+                assert_eq!(progress.bytes_read, chain_bytes);
             }
             assert_chain_billing(&cache, &summary, &chain, parent_event_time);
             let (summary, cache) = scan_to_completion(&scanner);
@@ -300,7 +308,7 @@ fn scan_empty_fork_ladder(depth: usize) -> (CostSummary, CostUsageCache, PathBuf
         "s000.jsonl",
         &[
             session_meta("s000", None, base),
-            token_count(base + Duration::seconds(1), 1_000, Some(1_000)),
+            token_count(base + Duration::seconds(1), 1_000, 1_000),
         ],
     );
     for level in 1..=depth {
@@ -323,8 +331,8 @@ fn scan_empty_fork_ladder(depth: usize) -> (CostSummary, CostUsageCache, PathBuf
                 Some(&format!("s{depth:03}")),
                 base + Duration::seconds(3),
             ),
-            token_count(base + Duration::seconds(4), 1_000, Some(1_000)),
-            token_count(base + Duration::seconds(5), 1_020, Some(20)),
+            token_count(base + Duration::seconds(4), 1_000, 1_000),
+            token_count(base + Duration::seconds(5), 1_020, 20),
         ],
     );
     let scanner = scanner(&sessions, &root.path().join("cache"), false);

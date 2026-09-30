@@ -549,14 +549,9 @@ impl CodexLineageDecision {
                 let replaces_cached_state = matching_cached_state.is_some_and(|state| {
                     state.locally_resolved || state.inherited_totals.as_ref() != Some(baseline)
                 });
-                let cached_parent_state = matching_cached_state.filter(|state| {
-                    !state.locally_resolved && state.inherited_totals.as_ref() == Some(baseline)
-                });
                 CodexAccountingMode::Baseline {
                     baseline: baseline.clone(),
                     paginated_continuation,
-                    remaining_inherited_totals: cached_parent_state
-                        .and_then(|state| state.remaining_inherited_totals.clone()),
                     provenance: CodexBaselineProvenance::ValidatedParent {
                         replaces_cached_state,
                     },
@@ -569,7 +564,6 @@ impl CodexLineageDecision {
                     return CodexAccountingMode::Baseline {
                         baseline,
                         paginated_continuation,
-                        remaining_inherited_totals: state.remaining_inherited_totals.clone(),
                         provenance: CodexBaselineProvenance::CachedValidatedParent,
                     };
                 }

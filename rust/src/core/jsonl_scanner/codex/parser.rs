@@ -1,5 +1,7 @@
 use super::helpers::*;
-use super::{CodexTotals, CodexUsageRecord, CostUsageDayRange};
+use super::{
+    CodexForkParseResume, CodexForkResumeState, CodexTotals, CodexUsageRecord, CostUsageDayRange,
+};
 use crate::core::CostUsagePricing;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -27,6 +29,8 @@ pub(super) struct CodexParserState {
     paginated_baseline_checked: bool,
     pub(super) fork_baseline_ambiguous: bool,
     fork_baseline_inference: Option<ForkBaselineInference>,
+    /// Parent baseline a parent-baseline fork parse started from.
+    fork_parse_baseline: Option<CodexTotals>,
 }
 
 pub(super) enum CodexParseMode {
@@ -42,6 +46,8 @@ pub(super) enum CodexParseMode {
         paginated_continuation: bool,
         remaining_inherited_totals: Option<CodexTotals>,
     },
+    /// Continue an unfinished `ParentBaseline` parse at its saved cursor.
+    ResumeParentBaseline(CodexForkParseResume),
     InferSubagent {
         start_ordinal: Option<i64>,
     },
@@ -51,6 +57,7 @@ impl CodexParseMode {
     pub(super) fn start_offset(&self) -> i64 {
         match self {
             Self::Standard { start_offset, .. } => *start_offset,
+            Self::ResumeParentBaseline(resume) => resume.start_offset,
             Self::ParentBaseline { .. } | Self::InferSubagent { .. } => 0,
         }
     }
@@ -217,6 +224,10 @@ impl CodexParserState {
     }
 
     pub(super) fn from_mode(mode: CodexParseMode) -> Self {
+        let fork_parse_baseline = match &mode {
+            CodexParseMode::ParentBaseline { baseline, .. } => Some(baseline.clone()),
+            _ => None,
+        };
         let (
             initial_model,
             initial_totals,
@@ -261,6 +272,7 @@ impl CodexParserState {
                     None,
                 )
             }
+            CodexParseMode::ResumeParentBaseline(resume) => return Self::resume_fork(resume),
             CodexParseMode::InferSubagent { start_ordinal } => (
                 None,
                 None,
@@ -294,7 +306,52 @@ impl CodexParserState {
             paginated_baseline_checked: false,
             fork_baseline_ambiguous: false,
             fork_baseline_inference,
+            fork_parse_baseline,
         }
+    }
+
+    /// Restore an unfinished fork parse at its saved cursor. A resumable parse
+    /// never latched an ambiguous baseline: that result is cached unresolved.
+    fn resume_fork(resume: CodexForkParseResume) -> Self {
+        let CodexForkParseResume {
+            start_offset,
+            paginated_continuation,
+            inherited_totals,
+            remaining_inherited_totals,
+            last_model,
+            last_totals,
+            last_token_timestamp,
+            first_token_timestamp,
+            token_timestamps_monotonic,
+            state,
+        } = resume;
+        let mut parser = Self::from_mode(CodexParseMode::Standard {
+            start_offset,
+            initial_model: last_model,
+            initial_totals: Some(last_totals),
+            previous_token_timestamp: last_token_timestamp,
+            token_timestamps_monotonic,
+        });
+        parser.totals_watermark = state.totals_watermark;
+        parser.saw_interleaved_totals = state.saw_interleaved_totals;
+        parser.first_token_timestamp = first_token_timestamp;
+        parser.fork_baseline = Some(inherited_totals);
+        // Kept verbatim: `None` means the inherited counters are used up.
+        parser.remaining_inherited_totals = remaining_inherited_totals;
+        parser.paginated_continuation = paginated_continuation;
+        parser.paginated_baseline_checked = state.paginated_baseline_checked;
+        parser.fork_parse_baseline = Some(state.parse_baseline);
+        parser
+    }
+
+    /// State a later pass needs to continue this parent-baseline fork parse.
+    pub(super) fn fork_resume_state(&self) -> Option<CodexForkResumeState> {
+        Some(CodexForkResumeState {
+            parse_baseline: self.fork_parse_baseline.clone()?,
+            totals_watermark: self.totals_watermark.clone(),
+            saw_interleaved_totals: self.saw_interleaved_totals,
+            paginated_baseline_checked: self.paginated_baseline_checked,
+        })
     }
 
     pub(super) fn fork_baseline_locally_resolved(&self) -> bool {
