@@ -40,7 +40,7 @@ static PERIOD_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("period regex is valid")
 });
 static HTML_COMMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<!--.*?-->").expect("comment regex is valid"));
+    LazyLock::new(|| Regex::new(r"<!--[\s\S]*?-->").expect("comment regex is valid"));
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct PaygBalance {
@@ -129,22 +129,16 @@ async fn fetch(
 /// Handle to the in-flight optional GET. Dropping it (primary failure, caller
 /// cancellation, budget expiry) aborts the request instead of leaking it.
 pub(super) struct PaygLookup {
-    task: Option<JoinHandle<Option<PaygBalance>>>,
+    task: JoinHandle<Option<PaygBalance>>,
     started_at: Instant,
 }
 
 impl PaygLookup {
-    pub(super) fn idle() -> Self {
-        Self {
-            task: None,
-            started_at: Instant::now(),
-        }
-    }
-
     pub(super) fn spawn(client: Client, url: Url, cookie: String, billing_origin: Url) -> Self {
+        let started_at = Instant::now();
         Self {
-            task: Some(tokio::spawn(fetch(client, url, cookie, billing_origin))),
-            started_at: Instant::now(),
+            task: tokio::spawn(fetch(client, url, cookie, billing_origin)),
+            started_at,
         }
     }
 
@@ -157,8 +151,7 @@ impl PaygLookup {
         requires_optional_usage_completeness: bool,
     ) -> Option<PaygBalance> {
         let budget = join_budget(self.started_at, requires_optional_usage_completeness);
-        let task = self.task.as_mut()?;
-        match tokio::time::timeout(budget, task).await {
+        match tokio::time::timeout(budget, &mut self.task).await {
             Ok(Ok(balance)) => balance,
             Ok(Err(_)) | Err(_) => None,
         }
@@ -167,9 +160,7 @@ impl PaygLookup {
 
 impl Drop for PaygLookup {
     fn drop(&mut self) {
-        if let Some(task) = &self.task {
-            task.abort();
-        }
+        self.task.abort();
     }
 }
 

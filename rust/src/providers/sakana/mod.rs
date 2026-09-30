@@ -58,7 +58,7 @@ impl SakanaProvider {
         let cookie = normalize_cookie_header(cookie_header).ok_or(ProviderError::NoCookies)?;
         // The optional lookup runs alongside the required request. Dropping
         // the handle on any early return cancels it.
-        let payg = if ctx.include_credits {
+        let payg = ctx.include_credits.then(|| {
             let mut payg_url = self.billing_url.clone();
             payg_url.set_query(Some(PAYG_QUERY));
             payg::PaygLookup::spawn(
@@ -67,9 +67,7 @@ impl SakanaProvider {
                 cookie.clone(),
                 self.billing_url.clone(),
             )
-        } else {
-            payg::PaygLookup::idle()
-        };
+        });
         let response = billing_request(&self.client, self.billing_url.clone(), &cookie)
             .send()
             .await?;
@@ -94,7 +92,9 @@ impl SakanaProvider {
             return Err(ProviderError::AuthRequired);
         }
         let mut result = ProviderFetchResult::new(snapshot_from_html(&text)?, "web");
-        if let Some(balance) = payg.join(ctx.requires_optional_usage_completeness).await {
+        if let Some(payg) = payg
+            && let Some(balance) = payg.join(ctx.requires_optional_usage_completeness).await
+        {
             for row in balance.display_details() {
                 result = result.with_display_detail(Some(row));
             }
