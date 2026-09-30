@@ -1,7 +1,6 @@
 use super::*;
 use crate::core::{
-    CodexPriorityOverlay, CodexSourceUsageRow, CodexUsageRecord, CostUsagePricing,
-    row_priced_model,
+    CodexPriorityOverlay, CodexSourceUsageRow, CodexUsageRecord, CostUsagePricing, row_priced_model,
 };
 use std::collections::BTreeMap;
 
