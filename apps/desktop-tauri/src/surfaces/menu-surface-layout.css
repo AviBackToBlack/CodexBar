@@ -1,44 +1,44 @@
-/* Tray/popout account and usage-card layout. */
+/* Tray panel account and usage-card layout. */
 .menu-surface {
   --surface-inset: 16px;
   line-height: 1.4;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card {
+.menu-surface--tray .menu-card {
   --menu-card-x: var(--surface-inset);
   --menu-card-header-only-y: 12px;
   --menu-card-section-y: 12px;
   gap: 12px;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__name-group {
+.menu-surface--tray .menu-card__name-group {
   flex-direction: row;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__name {
+.menu-surface--tray .menu-card__name {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__email {
+.menu-surface--tray .menu-card__email {
   max-width: 60%;
   text-align: right;
   font-size: 11px;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__subtitle,
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__plan-badge {
+.menu-surface--tray .menu-card__subtitle,
+.menu-surface--tray .menu-card__plan-badge {
   font-size: 11px;
   font-weight: 400;
   background: transparent;
   padding: 0;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__content,
+.menu-surface--tray .menu-card__content,
 .menu-card__metrics,
 .menu-card__more-content {
   display: flex;
@@ -47,21 +47,21 @@
   padding-bottom: 0;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-card__divider {
+.menu-surface--tray .menu-card__divider {
   margin: 0;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric {
+.menu-surface--tray .menu-metric {
   gap: 6px;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__title {
+.menu-surface--tray .menu-metric__title {
   font-size: 13px;
   font-weight: 600;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__pct,
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__reset {
+.menu-surface--tray .menu-metric__pct,
+.menu-surface--tray .menu-metric__reset {
   font-size: 11px;
   line-height: 1.4;
 }
@@ -140,26 +140,26 @@
   padding-top: 12px;
 }
 
-:is(.menu-surface--tray, .menu-surface--popout) .menu-stack__item,
-:is(.menu-surface--tray, .menu-surface--popout) .menu-stack__item--selected {
+.menu-surface--tray .menu-stack__item,
+.menu-surface--tray .menu-stack__item--selected {
   background: transparent;
   border: 0;
   border-radius: 0;
   padding: 0;
 }
-:is(.menu-surface--tray, .menu-surface--popout) .menu-stack__sep {
+.menu-surface--tray .menu-stack__sep {
   height: 1px;
   margin: 4px var(--surface-inset);
   background: var(--panel-border);
 }
-:is(.menu-surface--tray, .menu-surface--popout) .provider-grid {
+.menu-surface--tray .provider-grid {
   padding: 8px var(--surface-inset);
   gap: 8px;
 }
-:is(.menu-surface--tray, .menu-surface--popout) .provider-grid__item {
+.menu-surface--tray .provider-grid__item {
   min-height: 32px;
 }
-:is(.menu-surface--tray, .menu-surface--popout) .menu-surface__footer-row {
+.menu-surface--tray .menu-surface__footer-row {
   min-height: 28px;
   font-size: 12px;
   padding-top: 5px;
