@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Days, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Days, Local, NaiveDate};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +38,7 @@ fn grok_home() -> PathBuf {
 }
 
 fn summarize_root(root: &Path, lookback_days: u32, now: DateTime<Local>) -> Summary {
-    let (window_start, window_end) = calendar_window(now, lookback_days);
+    let (first_day, last_day) = calendar_day_window(now, lookback_days);
     let mut stack = vec![root.to_path_buf()];
     let mut session_count = 0u32;
     let mut total_tokens = 0u64;
@@ -66,7 +66,8 @@ fn summarize_root(root: &Path, lookback_days: u32, now: DateTime<Local>) -> Summ
                 continue;
             };
             let modified: DateTime<Local> = modified.into();
-            if modified < window_start || modified >= window_end {
+            let modified_day = modified.date_naive();
+            if modified_day < first_day || modified_day > last_day {
                 continue;
             }
             let Ok(text) = fs::read_to_string(&path) else {
@@ -145,22 +146,13 @@ fn summarize_root(root: &Path, lookback_days: u32, now: DateTime<Local>) -> Summ
     }
 }
 
-/// Half-open window `[start, end)` covering exactly `days` local calendar days
-/// ending with the day of `now`: local midnight `days - 1` days ago through the
-/// next local midnight.
-fn calendar_window(now: DateTime<Local>, days: u32) -> (DateTime<Local>, DateTime<Local>) {
+/// Inclusive local-date window covering `max(1, days)` days through today.
+fn calendar_day_window(now: DateTime<Local>, days: u32) -> (NaiveDate, NaiveDate) {
     let today = now.date_naive();
-    let first = today
-        .checked_sub_days(Days::new(u64::from(days.max(1) - 1)))
-        .unwrap_or(today);
-    let tomorrow = today.checked_add_days(Days::new(1)).unwrap_or(today);
-    (local_midnight(first, now), local_midnight(tomorrow, now))
-}
-
-fn local_midnight(day: NaiveDate, fallback: DateTime<Local>) -> DateTime<Local> {
-    day.and_hms_opt(0, 0, 0)
-        .and_then(|midnight| Local.from_local_datetime(&midnight).earliest())
-        .unwrap_or(fallback)
+    let first_day = today
+        .checked_sub_days(Days::new(u64::from(days.saturating_sub(1))))
+        .unwrap_or(NaiveDate::MIN);
+    (first_day, today)
 }
 
 fn nonnegative_u64(value: &Value) -> Option<u64> {
@@ -172,6 +164,7 @@ fn nonnegative_u64(value: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn summarizes_signal_token_totals_by_local_day() {
@@ -208,7 +201,7 @@ mod tests {
             .unwrap();
     }
 
-    fn local_noon(today: NaiveDate, offset: i64) -> DateTime<Local> {
+    fn local_at(today: NaiveDate, offset: i64, hour: u32) -> DateTime<Local> {
         let day = if offset >= 0 {
             today.checked_add_days(Days::new(offset.unsigned_abs()))
         } else {
@@ -216,7 +209,7 @@ mod tests {
         }
         .unwrap();
         Local
-            .from_local_datetime(&day.and_hms_opt(12, 0, 0).unwrap())
+            .from_local_datetime(&day.and_hms_opt(hour, 0, 0).unwrap())
             .earliest()
             .unwrap()
     }
@@ -225,13 +218,13 @@ mod tests {
     fn scan_totals_cover_only_the_advertised_local_calendar_days() {
         for days in [1u32, 7, 30] {
             let root = tempfile::tempdir().unwrap();
-            let now = Local::now();
-            let today = now.date_naive();
+            let today = Local::now().date_naive();
+            let now = local_at(today, 0, 11);
             let back = i64::from(days);
-            write_signals_at(root.path(), "outside", 100, local_noon(today, -back));
-            write_signals_at(root.path(), "first", 100, local_noon(today, -(back - 1)));
-            write_signals_at(root.path(), "today", 100, local_noon(today, 0));
-            write_signals_at(root.path(), "tomorrow", 100, local_noon(today, 1));
+            write_signals_at(root.path(), "outside", 100, local_at(today, -back, 12));
+            write_signals_at(root.path(), "first", 100, local_at(today, -(back - 1), 12));
+            write_signals_at(root.path(), "today", 100, local_at(today, 0, 12));
+            write_signals_at(root.path(), "tomorrow", 100, local_at(today, 1, 12));
 
             let summary = summarize_root(root.path(), days, now);
             assert_eq!(summary.session_count, 2, "days={days}");
@@ -242,13 +235,13 @@ mod tests {
     }
 
     #[test]
-    fn calendar_window_starts_at_local_midnight() {
-        let now = Local::now();
-        let (start, end) = calendar_window(now, 7);
-        assert!(start <= now && now < end);
-        assert_eq!(start.date_naive(), now.date_naive() - Days::new(6));
-        assert_eq!(end.date_naive(), now.date_naive() + Days::new(1));
-        let (zero_start, _) = calendar_window(now, 0);
-        assert_eq!(zero_start.date_naive(), now.date_naive());
+    fn calendar_day_window_covers_the_requested_local_dates() {
+        let now = local_at(Local::now().date_naive(), 0, 11);
+        let today = now.date_naive();
+        let (first_day, last_day) = calendar_day_window(now, 7);
+        assert_eq!(first_day, today - Days::new(6));
+        assert_eq!(last_day, today);
+        let (zero_first_day, zero_last_day) = calendar_day_window(now, 0);
+        assert_eq!((zero_first_day, zero_last_day), (today, today));
     }
 }
