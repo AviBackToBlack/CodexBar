@@ -353,6 +353,7 @@ UsageSpendDefaultPricing = Default pricing
 UsageSpendHourlyActivity = Hourly activity
 UsageSpendRequests = requests
 UsageSpendTokens = tokens
+UsageSpendKnownSubtotal = ≥{ "{}" } known
 UsageSpendAllTimeHistory = All-time is backed by the latest
 UsageSpendCustomPricing = custom pricing
 OverviewSpendTitle = Usage & Spend · 30d

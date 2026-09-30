@@ -659,6 +659,7 @@ locale_keys! {
     UsageSpendHourlyActivity,
     UsageSpendRequests,
     UsageSpendTokens,
+    UsageSpendKnownSubtotal,
     UsageSpendAllTimeHistory,
     UsageSpendCustomPricing,
     OverviewSpendTitle,
