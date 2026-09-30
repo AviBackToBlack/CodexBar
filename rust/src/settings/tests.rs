@@ -549,6 +549,20 @@ fn test_api_key_provider_catalog_includes_token_providers() {
 }
 
 #[test]
+fn openrouter_api_key_help_explains_management_keys() {
+    let info = get_api_key_providers()
+        .into_iter()
+        .find(|info| info.id == ProviderId::OpenRouter)
+        .expect("OpenRouter api key metadata");
+    assert_eq!(
+        info.api_key_help,
+        Some(
+            "Required. Enter a regular API key or a Management API key here. Management keys also enable account Activity on the official OpenRouter API."
+        )
+    );
+}
+
+#[test]
 fn test_t3_chat_is_cookie_configured_not_api_key_configured() {
     let providers = get_api_key_providers();
     assert!(

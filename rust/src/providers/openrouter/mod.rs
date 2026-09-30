@@ -172,15 +172,11 @@ impl OpenRouterProvider {
             return Ok(key.to_string());
         }
 
-        match keyring::Entry::new(OPENROUTER_CREDENTIAL_TARGET, "api_token") {
-            Ok(entry) => match entry.get_password() {
-                Ok(token) => Ok(token),
-                Err(_) => std::env::var("OPENROUTER_API_KEY")
-                    .map_err(|_| ProviderError::NotInstalled(MISSING_API_KEY_MESSAGE.to_string())),
-            },
-            Err(_) => std::env::var("OPENROUTER_API_KEY")
-                .map_err(|_| ProviderError::NotInstalled(MISSING_API_KEY_MESSAGE.to_string())),
-        }
+        keyring::Entry::new(OPENROUTER_CREDENTIAL_TARGET, "api_token")
+            .ok()
+            .and_then(|entry| entry.get_password().ok())
+            .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
+            .ok_or_else(|| ProviderError::NotInstalled(MISSING_API_KEY_MESSAGE.to_string()))
     }
 
     fn configured_management_key() -> Option<String> {
