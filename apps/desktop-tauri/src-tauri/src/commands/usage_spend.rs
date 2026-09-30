@@ -833,6 +833,7 @@ fn cached_spend(
     } else {
         let today = chrono::Utc::now().date_naive();
         let seven_cutoff = today - chrono::Duration::days(6);
+        let thirty_cutoff = today - chrono::Duration::days(29);
         let mut seven = 0.0;
         let mut thirty = 0.0;
         let mut saw_seven = false;
@@ -841,7 +842,9 @@ fn cached_spend(
             let Ok(day) = chrono::NaiveDate::parse_from_str(&point.day, "%Y-%m-%d") else {
                 continue;
             };
-            if day > today {
+            // Providers with long daily history (Bedrock keeps 14 months) must
+            // not widen the fixed 30-day column.
+            if day > today || day < thirty_cutoff {
                 continue;
             }
             thirty += point.amount;

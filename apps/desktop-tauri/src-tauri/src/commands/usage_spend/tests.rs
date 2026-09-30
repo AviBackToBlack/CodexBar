@@ -108,6 +108,42 @@ fn daily_period_cost_follows_the_selected_window() {
 }
 
 #[test]
+fn long_provider_daily_history_does_not_widen_the_fixed_columns() {
+    // Bedrock reports 14 months of daily spend; the 7d / 30d columns keep
+    // their windows while the selected period still sees the whole history.
+    let today = Utc::now().date_naive();
+    let day = |ago: i64| {
+        serde_json::json!({
+            "day": (today - chrono::Duration::days(ago)).format("%Y-%m-%d").to_string(),
+            "amount": 1.0,
+        })
+    };
+    let cost: super::super::bridge::CostSnapshotBridge =
+        serde_json::from_value(serde_json::json!({
+            "used": 99.0,
+            "period": "Monthly",
+            "daily": [day(0), day(6), day(7), day(29), day(30), day(200)],
+        }))
+        .expect("cost fixture");
+    let mut snapshot = ProviderUsageSnapshot::from_error(
+        codexbar::core::ProviderId::Bedrock,
+        codexbar::core::instantiate_provider(codexbar::core::ProviderId::Bedrock).metadata(),
+        "unused".to_string(),
+        codexbar::core::ProviderStateKind::Unknown,
+    );
+    snapshot.cost = Some(cost);
+
+    let spend = cached_spend(
+        Some(&snapshot),
+        CostReportingPeriod::AllAvailable,
+        Utc::now(),
+    );
+    assert_eq!(spend.seven_day, Some(2.0));
+    assert_eq!(spend.thirty_day, Some(4.0));
+    assert_eq!(spend.period_cost, Some(6.0));
+}
+
+#[test]
 fn pi_history_is_an_alternate_view_not_a_shared_overview_source() {
     assert!(!include_in_shared_overview("pi", true, true));
     assert!(include_in_shared_overview("codex", true, false));
