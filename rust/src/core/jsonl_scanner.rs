@@ -169,6 +169,36 @@ impl CacheStamp {
             content_hash: hasher.finish(),
         }
     }
+
+    /// Stamp the serialized cache while ignoring its scan timestamp. This
+    /// avoids allocating a second full-size JSON buffer just to normalize one
+    /// scalar before comparing cache payloads.
+    fn from_cache_payload(bytes: &[u8]) -> Option<Self> {
+        const FIELD: &[u8] = b"\"last_scan_unix_ms\":";
+        let value_start = bytes
+            .windows(FIELD.len())
+            .position(|window| window == FIELD)?
+            + FIELD.len();
+        let mut value_end = value_start;
+        if bytes.get(value_end) == Some(&b'-') {
+            value_end += 1;
+        }
+        let digits_start = value_end;
+        while bytes.get(value_end).is_some_and(u8::is_ascii_digit) {
+            value_end += 1;
+        }
+        if value_end == digits_start {
+            return None;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hasher.write(&bytes[..value_start]);
+        hasher.write(&bytes[value_end..]);
+        Some(Self {
+            byte_len: bytes.len() - (value_end - value_start),
+            content_hash: hasher.finish(),
+        })
+    }
 }
 
 /// Terminal reason for a bounded Codex catch-up pause.
@@ -249,10 +279,10 @@ pub struct CostUsageCache {
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
     pub(crate) loaded_stamp: Option<Option<CacheStamp>>,
-    /// `last_scan_unix_ms` as decoded from disk, before any in-memory debounce
-    /// time from a skipped save. Baseline for the unchanged-payload check.
+    /// Stamp of the loaded cache payload with `last_scan_unix_ms` omitted.
+    /// This is separate from `loaded_stamp`, which still protects stale writes.
     #[serde(skip)]
-    pub(crate) loaded_last_scan_unix_ms: i64,
+    pub(crate) loaded_payload_stamp: Option<CacheStamp>,
 }
 
 /// Pricing evidence attached to one cached Codex request row.
@@ -560,7 +590,7 @@ impl JsonlScanner {
             && let Ok(mut cache) = serde_json::from_str::<CostUsageCache>(&contents)
         {
             let stamp = CacheStamp::from_bytes(contents.as_bytes());
-            cache.loaded_last_scan_unix_ms = cache.last_scan_unix_ms;
+            cache.loaded_payload_stamp = CacheStamp::from_cache_payload(contents.as_bytes());
             if let Some(scan_unix_ms) = save_skip::recorded_scan_time(&cache_path, &stamp) {
                 cache.last_scan_unix_ms = scan_unix_ms;
             }
@@ -901,7 +931,7 @@ impl JsonlScanner {
         };
         if wrote {
             cache.loaded_stamp = Some(Some(CacheStamp::from_bytes(json.as_bytes())));
-            cache.loaded_last_scan_unix_ms = cache.last_scan_unix_ms;
+            cache.loaded_payload_stamp = CacheStamp::from_cache_payload(json.as_bytes());
         }
         // Best-effort temp cleanup (ignore errors — unique name avoids clashes).
         let _truncated_tmp = fs::File::create(&tmp_path).and_then(|f| f.set_len(0));

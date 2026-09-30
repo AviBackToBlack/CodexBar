@@ -7,10 +7,13 @@
 //! store is one JSON artifact, so the equivalent is to skip the write when the
 //! payload, excluding the scan timestamp, matches the decoded baseline.
 //!
-//! Two pieces make that safe:
+//! Three pieces make that safe:
 //! - Deterministic key order. `HashMap` iteration order differs between
 //!   instances, so a reloaded cache would never re-encode to the same bytes.
 //!   The `sorted_*` serializers give equal content equal bytes.
+//! - A timestamp-free content stamp. The save path already has the encoded
+//!   JSON in memory, so the comparison hashes around the timestamp instead of
+//!   serializing the full cache into a second buffer.
 //! - An in-memory debounce mark. A skipped save records the new scan time for
 //!   this process only, keyed by the on-disk stamp it applies to, so the
 //!   scanner debounce still works. After a restart the older on-disk time
@@ -78,25 +81,17 @@ pub(super) fn recorded_scan_time(cache_path: &Path, stamp: &CacheStamp) -> Optio
 /// the decoded on-disk baseline. `json` is the encoding of `cache` as-is.
 /// When it is unchanged the scan time is kept in memory and the caller skips
 /// the write.
-pub(super) fn skip_unchanged_save(
-    cache_path: &Path,
-    cache: &mut CostUsageCache,
-    json: &str,
-) -> bool {
-    let Some(Some(baseline)) = cache.loaded_stamp.clone() else {
+pub(super) fn skip_unchanged_save(cache_path: &Path, cache: &CostUsageCache, json: &str) -> bool {
+    let Some(baseline) = cache.loaded_payload_stamp.as_ref() else {
         return false;
     };
-    let unchanged = if cache.last_scan_unix_ms == cache.loaded_last_scan_unix_ms {
-        CacheStamp::from_bytes(json.as_bytes()) == baseline
-    } else {
-        let scan_unix_ms = cache.last_scan_unix_ms;
-        cache.last_scan_unix_ms = cache.loaded_last_scan_unix_ms;
-        let baseline_json = serde_json::to_vec(&*cache);
-        cache.last_scan_unix_ms = scan_unix_ms;
-        baseline_json.is_ok_and(|bytes| CacheStamp::from_bytes(&bytes) == baseline)
+    let Some(Some(stamp)) = cache.loaded_stamp.as_ref() else {
+        return false;
     };
+    let unchanged =
+        CacheStamp::from_cache_payload(json.as_bytes()).is_some_and(|current| current == *baseline);
     if unchanged {
-        record_scan_time(cache_path, &baseline, cache.last_scan_unix_ms);
+        record_scan_time(cache_path, stamp, cache.last_scan_unix_ms);
     }
     unchanged
 }
