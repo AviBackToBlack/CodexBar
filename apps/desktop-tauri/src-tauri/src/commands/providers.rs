@@ -9,6 +9,8 @@ use codexbar::core::HookUsageWindow;
 use serde::Serialize;
 use std::sync::Arc;
 
+mod reset_backfill;
+
 const MAX_CONCURRENT_PROVIDER_FETCHES: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -594,7 +596,7 @@ async fn refresh_provider(
                 .find(|c| c.provider_id == snapshot.provider_id && c.error.is_none())
                 .cloned();
             let mut snapshot = snapshot;
-            codex_reset_backfill(&mut snapshot, cached.as_ref());
+            reset_backfill::codex_reset_backfill(&mut snapshot, cached.as_ref());
             upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
             if fresh_snapshot {
                 guard
@@ -676,82 +678,6 @@ fn dispatch_usage_updated_hook(
         account,
         rate_limit_scope,
     );
-}
-
-/// F6 (upstream 0.48.0 UsageStore+CodexResetBackfill): backfill missing
-/// `resets_at` / `reset_description` on fresh Codex windows from the cached
-/// lane data when the cached reset is still future. z.ai five-hour cached
-/// resets use the same plausibility bound as the provider parser, so an
-/// impossible rejected reset cannot be restored from the cache. Fresh
-/// `used_percent` is untouched; only reset metadata is backfilled.
-///
-/// This remains provider-scoped by design (upstream: "Provider-specific by
-/// design"): only Codex and z.ai carry the relevant bounded reset semantics.
-///
-/// Applies to the bridge snapshot before publishing so every surface (tray,
-/// CLI, frontend) sees the backfilled reset instead of a missing one.
-pub(super) fn codex_reset_backfill(
-    snapshot: &mut ProviderUsageSnapshot,
-    cached: Option<&ProviderUsageSnapshot>,
-) {
-    let Some(cached) = cached else { return };
-    if !matches!(snapshot.provider_id.as_str(), "codex" | "zai") {
-        return;
-    }
-
-    // Backfill each slot from the corresponding cached slot.
-    backfill_slot_window(
-        &snapshot.provider_id,
-        &mut snapshot.primary,
-        &cached.primary,
-    );
-    if let (Some(fresh), Some(cached_sec)) = (&mut snapshot.secondary, &cached.secondary) {
-        backfill_slot_window(&snapshot.provider_id, fresh, cached_sec);
-    }
-    // Tertiary (monthly/other): the Codex bridge doesn't normally populate this,
-    // but the slot exists for forward-compat. Backfill when available.
-    if let (Some(fresh), Some(cached_ter)) = (&mut snapshot.tertiary, &cached.tertiary) {
-        backfill_slot_window(&snapshot.provider_id, fresh, cached_ter);
-    }
-}
-
-/// Backfill `resets_at` and `reset_description` on a fresh window from the
-/// cached window whose reset is still in the future. `used_percent` is never
-/// overwritten (upstream: "fresh used_percent untouched").
-fn backfill_slot_window(
-    provider_id: &str,
-    fresh: &mut bridge::RateWindowSnapshot,
-    cached: &bridge::RateWindowSnapshot,
-) {
-    if fresh.resets_at.is_some() {
-        return;
-    }
-    let Some(cached_reset) = &cached.resets_at else {
-        return;
-    };
-    // Only backfill when the cached reset is still future — a stale reset is
-    // worse than a missing one.
-    let Ok(cached_dt) = chrono::DateTime::parse_from_rfc3339(cached_reset) else {
-        return;
-    };
-    let now = chrono::Utc::now();
-    if cached_dt <= now {
-        return;
-    }
-    // A missing z.ai five-hour reset can mean the provider rejected an
-    // impossible future timestamp. Do not let equally impossible cached
-    // evidence undo that rejection, but preserve a plausible cached reset.
-    if provider_id == "zai"
-        && fresh.window_minutes == Some(300)
-        && cached_dt > now + chrono::Duration::minutes(5 * 60 + 1)
-    {
-        return;
-    }
-    fresh.resets_at = Some(cached_reset.clone());
-    fresh.reset_description = fresh
-        .reset_description
-        .clone()
-        .or_else(|| cached.reset_description.clone());
 }
 
 #[cfg(test)]
@@ -1301,6 +1227,7 @@ mod predictive_warning_tests {
         }
     }
 }
+<<<<<<< HEAD
 
 #[cfg(test)]
 mod reset_backfill_tests {
@@ -1428,3 +1355,5 @@ mod reset_backfill_tests {
         assert!(fresh.primary.resets_at.is_none());
     }
 }
+=======
+>>>>>>> origin/port/micro-0.69.0-codex-plan-change-baseline

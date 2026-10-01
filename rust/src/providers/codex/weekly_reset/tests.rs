@@ -1,6 +1,8 @@
 use super::*;
 use chrono::TimeZone;
 
+mod plan_change;
+
 #[test]
 fn reset_diagnostic_codes_are_fixed_and_redacted() {
     let codes = [
