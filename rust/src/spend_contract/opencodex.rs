@@ -175,8 +175,8 @@ fn aggregate_with_pricing(
     custom: &CustomPricing,
     pricing_snapshot: Option<&ModelsDevPricingSnapshot>,
 ) -> Option<ImportedSpendSource> {
-    let first_day = now.with_timezone(&Local).date_naive()
-        - Duration::days(i64::from(history_days.saturating_sub(1)));
+    let zone = crate::cost_reporting_period::cost_bucket_zone();
+    let first_day = zone.date(now) - Duration::days(i64::from(history_days.saturating_sub(1)));
 
     // requestId is authoritative: a later row replaces an earlier row with the same id.
     let mut unique: HashMap<String, OpenCodexEntry> = HashMap::new();
@@ -185,10 +185,7 @@ fn aggregate_with_pricing(
     }
     let mut entries: Vec<_> = unique
         .into_values()
-        .filter(|entry| {
-            entry.timestamp <= now
-                && entry.timestamp.with_timezone(&Local).date_naive() >= first_day
-        })
+        .filter(|entry| entry.timestamp <= now && zone.date(entry.timestamp) >= first_day)
         .collect();
     entries.sort_by(|left, right| {
         left.timestamp
@@ -268,7 +265,7 @@ fn aggregate_with_pricing(
         );
 
         let day = daily
-            .entry(local.date_naive().format("%Y-%m-%d").to_string())
+            .entry(zone.date(entry.timestamp).format("%Y-%m-%d").to_string())
             .or_default();
         if let Some(cost) = cost {
             day.cost += cost;

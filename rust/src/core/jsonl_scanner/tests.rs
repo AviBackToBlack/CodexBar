@@ -1766,8 +1766,10 @@ fn save_cache_at_exact_limit_is_accepted() {
     let root = tempfile::tempdir().unwrap();
     let cache_root = root.path().to_path_buf();
 
-    let cache = CostUsageCache::default();
-    // Serialize to learn the actual encoded size for this exact struct.
+    let mut cache = CostUsageCache::default();
+    // Saving stamps the schema version and bucket zone first; serialize the
+    // stamped struct to learn the exact encoded size.
+    codex_cache_stamp_schema_version(&mut cache);
     let json = serde_json::to_string(&cache).unwrap();
     let exact_limit = json.len();
 
@@ -1793,7 +1795,8 @@ fn save_cache_one_over_limit_is_refused_and_removes_destination() {
     let root = tempfile::tempdir().unwrap();
     let cache_root = root.path().to_path_buf();
 
-    let cache = CostUsageCache::default();
+    let mut cache = CostUsageCache::default();
+    codex_cache_stamp_schema_version(&mut cache);
     let json = serde_json::to_string(&cache).unwrap();
     // One byte short of the encoded size forces refusal on the next attempt.
     let under_by_one = json.len().saturating_sub(1);
@@ -1820,3 +1823,6 @@ mod codex_metadata;
 #[cfg(test)]
 #[path = "tests/save_skip.rs"]
 mod save_skip;
+
+#[path = "tests/cache_zone.rs"]
+mod cache_zone;

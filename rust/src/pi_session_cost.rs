@@ -4,7 +4,7 @@
 //! openai-codex / anthropic assistant rows into cost summaries without
 //! double-counting the same entry id across shared files.
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs::File;
@@ -113,13 +113,13 @@ fn resolve_environment_path(value: &str, cwd: &Path) -> Option<PathBuf> {
 pub fn scan_pi_compatible_into(
     summary: &mut CostSummary,
     target: PiMappedProvider,
-    days: u32,
+    cutoff: DateTime<Utc>,
     cancel: Option<&AtomicBool>,
     seen_entries: &mut HashSet<String>,
 ) -> PiScanEvidence {
     scan_roots_into(
         summary,
-        days,
+        cutoff,
         cancel,
         seen_entries,
         pi_compatible_session_roots(dirs::home_dir()),
@@ -135,13 +135,13 @@ pub fn scan_pi_compatible_into(
 /// both roots so standalone Pi history is not double-counted.
 pub fn scan_pi_into(
     summary: &mut CostSummary,
-    days: u32,
+    cutoff: DateTime<Utc>,
     cancel: Option<&AtomicBool>,
     seen_entries: &mut HashSet<String>,
 ) -> PiScanEvidence {
     scan_roots_into(
         summary,
-        days,
+        cutoff,
         cancel,
         seen_entries,
         pi_compatible_session_roots(dirs::home_dir()),
@@ -184,9 +184,8 @@ fn scan_pi_daily_from_roots(
                     missing_timestamp = true;
                     return;
                 };
-                let day = timestamp
-                    .with_timezone(&Local)
-                    .date_naive()
+                let day = crate::cost_reporting_period::cost_bucket_zone()
+                    .date(timestamp)
                     .format("%Y-%m-%d")
                     .to_string();
                 if !entry.pricing_known {
@@ -209,13 +208,12 @@ fn scan_pi_daily_from_roots(
 
 fn scan_roots_into(
     summary: &mut CostSummary,
-    days: u32,
+    cutoff: DateTime<Utc>,
     cancel: Option<&AtomicBool>,
     seen_entries: &mut HashSet<String>,
     roots: Vec<PathBuf>,
     target: Option<PiMappedProvider>,
 ) -> PiScanEvidence {
-    let cutoff = Utc::now() - Duration::days(days as i64);
     let mut sessions = 0u32;
     let mut evidence = PiScanEvidence::default();
     for root in roots {
@@ -941,7 +939,14 @@ mod tests {
 
         let mut summary = CostSummary::default();
         let mut seen = HashSet::new();
-        let evidence = scan_roots_into(&mut summary, 365, None, &mut seen, vec![sessions], None);
+        let evidence = scan_roots_into(
+            &mut summary,
+            Utc::now() - Duration::days(365),
+            None,
+            &mut seen,
+            vec![sessions],
+            None,
+        );
         assert!(!evidence.complete);
         assert_eq!(summary.input_tokens, 11);
     }

@@ -270,6 +270,10 @@ pub(super) struct RawSettings {
     open_codex_usage_logs_enabled: bool,
     #[serde(default)]
     hide_native_codex_cost_when_open_codex_present: bool,
+    #[serde(default)]
+    cost_reporting_period: CostReportingPeriod,
+    #[serde(default)]
+    cost_usage_bucket_time_zone: String,
 }
 
 impl Default for RawSettings {
@@ -380,6 +384,8 @@ impl Default for RawSettings {
             open_codex_usage_logs_enabled: s.open_codex_usage_logs_enabled,
             hide_native_codex_cost_when_open_codex_present: s
                 .hide_native_codex_cost_when_open_codex_present,
+            cost_reporting_period: s.cost_reporting_period,
+            cost_usage_bucket_time_zone: s.cost_usage_bucket_time_zone,
         }
     }
 }
@@ -701,6 +707,10 @@ impl From<RawSettings> for Settings {
             hide_native_codex_cost_when_open_codex_present: raw
                 .hide_native_codex_cost_when_open_codex_present,
             codex_external_oauth_sources_allowed: raw.codex_external_oauth_sources_allowed,
+            cost_reporting_period: raw.cost_reporting_period,
+            cost_usage_bucket_time_zone: super::normalize_cost_usage_bucket_time_zone(
+                &raw.cost_usage_bucket_time_zone,
+            ),
         }
     }
 }

@@ -15,7 +15,7 @@ pub(crate) use summary_contract::{
     decode_remote_codex_summary,
 };
 
-use chrono::{Duration, Local, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -23,6 +23,7 @@ use crate::core::{
     CodexUsageRecord, CostUsageCache, CostUsageDayRange, CostUsagePricing, JsonlScanner,
     is_unpriced_codex_routing_model,
 };
+use crate::cost_reporting_period::cost_bucket_zone;
 use crate::cost_scanner::{CostSummary, ModelPricingCompleteness, ModelTokenCounts};
 use crate::spend_contract::CostCoverageCounts;
 
@@ -40,12 +41,12 @@ pub(crate) fn build_codex_cost_summary(
         &today,
         history_days,
         Utc::now(),
-        crate::core::local_timezone_name(),
+        cost_bucket_zone().identifier(),
     )
 }
 
 fn codex_today_summary(history: &CostSummary, cache: &CostUsageCache) -> CostSummary {
-    let today = Local::now().date_naive();
+    let today = cost_bucket_zone().date(Utc::now());
     let range = CostUsageDayRange::new(today, today);
     let mut summary = CostSummary {
         period_start: Some(today),
@@ -228,7 +229,7 @@ pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRa
 
 #[cfg(test)]
 pub(crate) fn scan_codex_file_cost(path: &Path) -> f64 {
-    let today = Local::now().date_naive();
+    let today = chrono::Local::now().date_naive();
     let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
     scan_codex_file_cost_for_range(path, &range)
 }

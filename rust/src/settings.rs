@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::core::ProviderId;
+use crate::cost_reporting_period::CostReportingPeriod;
 
 /// Stable namespace used by the desktop bridge for quota metric rows.
 pub const USAGE_ITEM_METRIC_PREFIX: &str = "metric:";
@@ -26,6 +27,7 @@ pub const CODEX_SPARK_USAGE_ITEM_IDS: [&str; 2] = [
 pub const CLAUDE_DAILY_ROUTINES_USAGE_ITEM_ID: &str = "metric:extra-claude-routines";
 
 mod api_keys;
+mod cost_time_zone;
 mod manual_cookies;
 mod provider_workspace;
 mod raw;
@@ -33,6 +35,7 @@ mod status;
 mod types;
 
 pub use api_keys::*;
+pub use cost_time_zone::*;
 pub use manual_cookies::*;
 pub use provider_workspace::*;
 use raw::RawSettings;
@@ -383,6 +386,16 @@ pub struct Settings {
     /// Hide native Codex spend rows when an OpenCodex import is present.
     #[serde(default)]
     pub hide_native_codex_cost_when_open_codex_present: bool,
+
+    /// History window for local cost surfaces: `rolling:N`, `month-to-date`, or
+    /// `all` (upstream 0.67.0). Missing or unreadable values read as `rolling:30`.
+    #[serde(default)]
+    pub cost_reporting_period: CostReportingPeriod,
+
+    /// IANA zone local cost history is bucketed in; empty means the machine
+    /// zone (upstream 0.67.0 `tokenCostUsageBucketTimeZone`).
+    #[serde(default)]
+    pub cost_usage_bucket_time_zone: String,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -612,6 +625,8 @@ impl Default for Settings {
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
             open_codex_usage_logs_enabled: false,
             hide_native_codex_cost_when_open_codex_present: false,
+            cost_reporting_period: CostReportingPeriod::default(),
+            cost_usage_bucket_time_zone: String::new(),
         }
     }
 }

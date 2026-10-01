@@ -11,6 +11,7 @@ pub mod codex_accounts;
 pub mod codex_cli;
 pub mod codex_workspaces;
 pub mod core;
+pub mod cost_reporting_period;
 pub mod cost_scanner;
 pub mod host;
 pub mod locale;

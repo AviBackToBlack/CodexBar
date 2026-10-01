@@ -118,6 +118,29 @@ fn ambient_codex_trace_database_path(
     Some(home.join(priority_trace::CODEX_TRACE_DATABASE_FILE))
 }
 
+/// First day that can hold a Codex date partition: January 1 of the earliest
+/// `YYYY` directory under any sessions root (upstream `firstPartitionDate`).
+///
+/// An all-available window starts here so the `YYYY/MM/DD` walk never probes
+/// empty history. Years before 1970 are stray directories, not sessions.
+pub(super) fn first_codex_partition_date(sessions_dirs: &[PathBuf]) -> Option<NaiveDate> {
+    sessions_dirs
+        .iter()
+        .filter_map(|root| fs::read_dir(root).ok())
+        .flat_map(|entries| entries.flatten())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            (name.len() == 4 && name.bytes().all(|byte| byte.is_ascii_digit()))
+                .then(|| name.parse::<i32>().ok())
+                .flatten()
+        })
+        .filter(|year| *year >= 1970)
+        .min()
+        .and_then(|year| NaiveDate::from_ymd_opt(year, 1, 1))
+}
+
 fn is_codex_path_in_scan_window(
     path: &Path,
     sessions_dirs: &[PathBuf],

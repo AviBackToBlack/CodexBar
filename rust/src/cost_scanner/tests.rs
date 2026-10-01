@@ -1,6 +1,7 @@
 use super::*;
+use crate::codex_costs::codex_period_start;
 use crate::core::{CodexSessionLineage, CostUsagePricing};
-use chrono::{FixedOffset, NaiveTime, TimeZone};
+use chrono::{FixedOffset, Local, NaiveTime, TimeZone};
 use std::io::Write;
 
 #[test]
@@ -3414,3 +3415,6 @@ mod lineage_cache;
 #[cfg(test)]
 #[path = "tests/paginated.rs"]
 mod paginated;
+
+#[path = "tests/period.rs"]
+mod period;

@@ -29,6 +29,8 @@ pub(crate) struct CodexForkParseResume {
     pub state: CodexForkResumeState,
 }
 
+use crate::cost_reporting_period::cost_bucket_zone;
+
 /// Persisted Codex cache schema version. Version 0 predates 64-bit totals;
 /// version 1 can retain a terminal pause after treating a paginated v2
 /// subagent's independent counters as an inherited fork. Version 3 adds
@@ -47,7 +49,14 @@ pub(crate) fn codex_cache_schema_is_current(schema_version: u32) -> bool {
     schema_version == CODEX_CACHE_SCHEMA_VERSION
 }
 
-/// Apply the Codex cache schema version policy to a freshly decoded artifact.
+/// Whether a persisted Codex cache bucketed its days in the zone now in
+/// effect. Artifacts written before the zone was stamped are kept.
+pub(crate) fn codex_cache_zone_is_current(bucket_time_zone: Option<&str>) -> bool {
+    bucket_time_zone.is_none_or(|zone| zone == cost_bucket_zone().identifier())
+}
+
+/// Apply the Codex cache schema version and bucket zone policy to a freshly
+/// decoded artifact.
 ///
 /// A mismatched artifact is invalidated: a fresh, current-version cache is
 /// returned with the decoded baseline stamp retained so the caller stays
@@ -57,7 +66,9 @@ pub(crate) fn codex_cache_apply_load_policy(
     mut cache: CostUsageCache,
     stamp: CacheStamp,
 ) -> CostUsageCache {
-    if !codex_cache_schema_is_current(cache.codex_cache_schema_version) {
+    if !codex_cache_schema_is_current(cache.codex_cache_schema_version)
+        || !codex_cache_zone_is_current(cache.bucket_time_zone.as_deref())
+    {
         return CostUsageCache {
             codex_cache_schema_version: CODEX_CACHE_SCHEMA_VERSION,
             loaded_stamp: Some(Some(stamp)),
@@ -68,9 +79,11 @@ pub(crate) fn codex_cache_apply_load_policy(
     cache
 }
 
-/// Stamp the current schema version before a Codex cache is persisted.
+/// Stamp the current schema version and bucket zone before a Codex cache is
+/// persisted.
 pub(crate) fn codex_cache_stamp_schema_version(cache: &mut CostUsageCache) {
     cache.codex_cache_schema_version = CODEX_CACHE_SCHEMA_VERSION;
+    cache.bucket_time_zone = Some(cost_bucket_zone().identifier());
 }
 
 #[cfg(test)]

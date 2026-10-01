@@ -32,6 +32,12 @@ static GLOBALIZATION_PINNED: LazyLock<bool> = LazyLock::new(pin_globalization_dl
 /// Returns the IANA name of the system timezone, or `"UTC"` if it cannot be
 /// determined safely.
 pub fn local_timezone_name() -> String {
+    try_local_timezone_name().unwrap_or_else(|| FALLBACK_TIMEZONE.to_string())
+}
+
+/// Returns the IANA name of the system timezone, or `None` when it cannot be
+/// read safely. Use this when a fallback name must not be persisted.
+pub fn try_local_timezone_name() -> Option<String> {
     #[cfg(windows)]
     {
         // Deref runs the load+pin to completion on one thread while all
@@ -40,10 +46,10 @@ pub fn local_timezone_name() -> String {
         if !*GLOBALIZATION_PINNED {
             // Unpinned: `get_timezone` might fault on an unloadable cached
             // factory, and an AV is uncatchable. Refuse to call it.
-            return FALLBACK_TIMEZONE.to_string();
+            return None;
         }
     }
-    iana_time_zone::get_timezone().unwrap_or_else(|_| FALLBACK_TIMEZONE.to_string())
+    iana_time_zone::get_timezone().ok()
 }
 
 /// Loads `Windows.Globalization.dll` from System32 and pins it so no later
