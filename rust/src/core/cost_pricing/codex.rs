@@ -1,9 +1,103 @@
 use super::super::{codex_routed_pricing, models_dev_pricing};
-use super::{CODEX_PRICING, CostUsagePricing};
+use super::{CODEX_PRICING, CodexLongContextRates, CodexPricing, CostUsagePricing};
+use chrono::NaiveDate;
 
 pub(super) const CODEX_LONG_CONTEXT_THRESHOLD: u64 = 272_000;
-const CODEX_ASTRA_CACHE_WRITE_RATE: f64 = 1.25e-5;
-const CODEX_ASTRA_LONG_CACHE_WRITE_RATE: f64 = 2.5e-5;
+
+/// GPT-5.6 rates per token in upstream `gpt56Pricing` order:
+/// (input, cache read, cache write, output).
+pub(super) type Gpt56Rates = (f64, f64, f64, f64);
+
+/// Upstream `gpt56Pricing`: standard rates plus the whole-request rates above
+/// the 272K-token long-context threshold, each with its own cache-write rate.
+pub(super) const fn gpt56_pricing(standard: Gpt56Rates, long_context: Gpt56Rates) -> CodexPricing {
+    let (input, cache_read, cache_write, output) = standard;
+    let (long_input, long_cache_read, long_cache_write, long_output) = long_context;
+    CodexPricing {
+        input_cost_per_token: input,
+        output_cost_per_token: output,
+        cache_read_input_cost_per_token: cache_read,
+        cache_write_input_cost_per_token: Some(cache_write),
+        display_label: None,
+        long_context: Some(CodexLongContextRates {
+            input_cost_per_token: long_input,
+            output_cost_per_token: long_output,
+            cache_read_input_cost_per_token: long_cache_read,
+            cache_write_input_cost_per_token: Some(long_cache_write),
+        }),
+    }
+}
+
+/// Upstream `codexHistoricalPricing`: the rates a model billed at before its
+/// repricing. GPT-5.6 Terra and Luna were cut on 2026-07-30 (Unix 1785369600)
+/// and Sol on 2026-08-21 (Unix 1787270400). Windows keys usage by calendar
+/// day, so the cutoff compares days rather than event instants.
+pub(super) fn codex_historical_pricing(key: &str, pricing_date: NaiveDate) -> Option<CodexPricing> {
+    let ((year, month, day), standard, long_context) = match key {
+        "gpt-5.6-sol" => (
+            (2026, 8, 21),
+            (5e-6, 5e-7, 6.25e-6, 3e-5),
+            (1e-5, 1e-6, 1.25e-5, 4.5e-5),
+        ),
+        "gpt-5.6-terra" => (
+            (2026, 7, 30),
+            (2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5),
+            (5e-6, 5e-7, 6.25e-6, 2.25e-5),
+        ),
+        "gpt-5.6-luna" => (
+            (2026, 7, 30),
+            (1e-6, 1e-7, 1.25e-6, 6e-6),
+            (2e-6, 2e-7, 2.5e-6, 9e-6),
+        ),
+        _ => return None,
+    };
+    let cutoff = NaiveDate::from_ymd_opt(year, month, day)?;
+    (pricing_date < cutoff).then(|| gpt56_pricing(standard, long_context))
+}
+
+/// Upstream `codexCostUSD(pricing:)` for one bundled entry. `input_tokens` is
+/// the inclusive prompt size and selects the long-context tier. A long-context
+/// cache write without its own rate falls back to the standard cache-write
+/// rate, then to the tier's input rate.
+pub(super) fn codex_cost_from_pricing(
+    pricing: &CodexPricing,
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
+    output_tokens: u64,
+) -> f64 {
+    let long_context = pricing
+        .long_context
+        .filter(|_| input_tokens > CODEX_LONG_CONTEXT_THRESHOLD);
+    let (input_rate, cache_read_rate, cache_write_rate, output_rate) = match long_context {
+        Some(long) => (
+            long.input_cost_per_token,
+            long.cache_read_input_cost_per_token,
+            long.cache_write_input_cost_per_token
+                .or(pricing.cache_write_input_cost_per_token)
+                .unwrap_or(long.input_cost_per_token),
+            long.output_cost_per_token,
+        ),
+        None => (
+            pricing.input_cost_per_token,
+            pricing.cache_read_input_cost_per_token,
+            pricing
+                .cache_write_input_cost_per_token
+                .unwrap_or(pricing.input_cost_per_token),
+            pricing.output_cost_per_token,
+        ),
+    };
+    codex_cost_from_rates_with_cache_write(
+        input_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        output_tokens,
+        input_rate,
+        cache_read_rate,
+        cache_write_rate,
+        output_rate,
+    )
+}
 
 pub(super) fn codex_cost_from_rates(
     input_tokens: u64,
@@ -110,46 +204,12 @@ impl CostUsagePricing {
             return None;
         }
         if let Some(pricing) = CODEX_PRICING.get(key.as_str()) {
-            let long = input_tokens > CODEX_LONG_CONTEXT_THRESHOLD;
-            let (input_rate, cache_read_rate, output_rate) = if long {
-                if let Some(long_context) = pricing.long_context {
-                    (
-                        long_context.input_cost_per_token,
-                        long_context.cache_read_input_cost_per_token,
-                        long_context.output_cost_per_token,
-                    )
-                } else {
-                    (
-                        pricing.input_cost_per_token,
-                        pricing.cache_read_input_cost_per_token,
-                        pricing.output_cost_per_token,
-                    )
-                }
-            } else {
-                (
-                    pricing.input_cost_per_token,
-                    pricing.cache_read_input_cost_per_token,
-                    pricing.output_cost_per_token,
-                )
-            };
-            let cache_write_rate = if key == "gpt-6-astra" {
-                if long {
-                    CODEX_ASTRA_LONG_CACHE_WRITE_RATE
-                } else {
-                    CODEX_ASTRA_CACHE_WRITE_RATE
-                }
-            } else {
-                input_rate
-            };
-            return Some(codex_cost_from_rates_with_cache_write(
+            return Some(codex_cost_from_pricing(
+                pricing,
                 input_tokens,
                 cached_input_tokens,
                 cache_write_input_tokens,
                 output_tokens,
-                input_rate,
-                cache_read_rate,
-                cache_write_rate,
-                output_rate,
             ));
         }
 

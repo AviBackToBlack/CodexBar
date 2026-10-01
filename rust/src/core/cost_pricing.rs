@@ -16,6 +16,9 @@ pub struct CodexLongContextRates {
     pub input_cost_per_token: f64,
     pub output_cost_per_token: f64,
     pub cache_read_input_cost_per_token: f64,
+    /// `None` falls back to the standard cache-write rate, then to this
+    /// tier's input rate.
+    pub cache_write_input_cost_per_token: Option<f64>,
 }
 /// Codex (OpenAI) model pricing
 #[derive(Debug, Clone, Copy)]
@@ -26,6 +29,9 @@ pub struct CodexPricing {
     pub output_cost_per_token: f64,
     /// Cost per cached input token in USD
     pub cache_read_input_cost_per_token: f64,
+    /// Cost per cache-write input token in USD; `None` bills cache writes at
+    /// the input rate.
+    pub cache_write_input_cost_per_token: Option<f64>,
     /// Optional display label override (e.g. "Research Preview")
     pub display_label: Option<&'static str>,
     /// Whole-request rates above the Codex long-context threshold.
@@ -65,6 +71,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.25e-6,
             output_cost_per_token: 1e-5,
             cache_read_input_cost_per_token: 1.25e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -75,6 +82,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.25e-6,
             output_cost_per_token: 1e-5,
             cache_read_input_cost_per_token: 1.25e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -85,6 +93,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2.5e-7,
             output_cost_per_token: 2e-6,
             cache_read_input_cost_per_token: 2.5e-8,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -95,6 +104,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 5e-8,
             output_cost_per_token: 4e-7,
             cache_read_input_cost_per_token: 5e-9,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -105,6 +115,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.5e-5,
             output_cost_per_token: 1.2e-4,
             cache_read_input_cost_per_token: 1.5e-5,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -115,6 +126,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.25e-6,
             output_cost_per_token: 1e-5,
             cache_read_input_cost_per_token: 1.25e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -125,6 +137,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.25e-6,
             output_cost_per_token: 1e-5,
             cache_read_input_cost_per_token: 1.25e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -135,6 +148,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.25e-6,
             output_cost_per_token: 1e-5,
             cache_read_input_cost_per_token: 1.25e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -145,6 +159,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2.5e-7,
             output_cost_per_token: 2e-6,
             cache_read_input_cost_per_token: 2.5e-8,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -155,6 +170,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.75e-6,
             output_cost_per_token: 1.4e-5,
             cache_read_input_cost_per_token: 1.75e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -165,6 +181,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.75e-6,
             output_cost_per_token: 1.4e-5,
             cache_read_input_cost_per_token: 1.75e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -175,6 +192,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2.1e-5,
             output_cost_per_token: 1.68e-4,
             cache_read_input_cost_per_token: 2.1e-5,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -185,6 +203,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 1.75e-6,
             output_cost_per_token: 1.4e-5,
             cache_read_input_cost_per_token: 1.75e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -195,6 +214,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 0.0,
             output_cost_per_token: 0.0,
             cache_read_input_cost_per_token: 0.0,
+            cache_write_input_cost_per_token: None,
             display_label: Some("Research Preview"),
             long_context: None,
         },
@@ -207,6 +227,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2.5e-6,
             output_cost_per_token: 1.5e-5,
             cache_read_input_cost_per_token: 2.5e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -217,6 +238,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2.5e-6,
             output_cost_per_token: 1.5e-5,
             cache_read_input_cost_per_token: 2.5e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -229,6 +251,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 7.5e-7,
             output_cost_per_token: 4.5e-6,
             cache_read_input_cost_per_token: 7.5e-8,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -239,6 +262,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 7.5e-7,
             output_cost_per_token: 4.5e-6,
             cache_read_input_cost_per_token: 7.5e-8,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -251,6 +275,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2e-7,
             output_cost_per_token: 1.25e-6,
             cache_read_input_cost_per_token: 2e-8,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -261,6 +286,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 2e-7,
             output_cost_per_token: 1.25e-6,
             cache_read_input_cost_per_token: 2e-8,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -273,6 +299,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 3e-5,
             output_cost_per_token: 1.8e-4,
             cache_read_input_cost_per_token: 3e-5,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -283,6 +310,7 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 5e-6,
             output_cost_per_token: 3e-5,
             cache_read_input_cost_per_token: 5e-7,
+            cache_write_input_cost_per_token: None,
             display_label: None,
             long_context: None,
         },
@@ -293,65 +321,70 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             input_cost_per_token: 3e-5,
             output_cost_per_token: 1.8e-4,
             cache_read_input_cost_per_token: 3e-5,
+            cache_write_input_cost_per_token: None,
+            display_label: None,
+            long_context: None,
+        },
+    );
+    // GPT-5.6 Sol/Terra/Luna (OpenAI pricing page and model cards), in
+    // upstream `gpt56Pricing` order (input, cache read, cache write, output).
+    // Above 272K input tokens the whole request bills 2x input / 1.5x output;
+    // cache writes bill at 1.25x uncached input. Sol was repriced from $5/$30
+    // to $4/$20 on 2026-08-21. Dated usage before a model's repricing keeps
+    // the rates in `codex_pricing::codex_historical_pricing`.
+    m.insert(
+        "gpt-5.6-sol",
+        codex_pricing::gpt56_pricing((4e-6, 4e-7, 5e-6, 2e-5), (8e-6, 8e-7, 1e-5, 3e-5)),
+    );
+    m.insert(
+        "gpt-5.6-terra",
+        codex_pricing::gpt56_pricing((2e-6, 2e-7, 2.5e-6, 1.2e-5), (4e-6, 4e-7, 5e-6, 1.8e-5)),
+    );
+    m.insert(
+        "gpt-5.6-luna",
+        codex_pricing::gpt56_pricing((2e-7, 2e-8, 2.5e-7, 1.2e-6), (4e-7, 4e-8, 5e-7, 1.8e-6)),
+    );
+    // Daybreak Cyber models (OpenAI pricing page). No long-context tier is
+    // published, and gpt-5.5-cyber lists no cache-write rate, so its writes
+    // bill at the input rate.
+    m.insert(
+        "gpt-5.6-cyber",
+        CodexPricing {
+            input_cost_per_token: 1.25e-5,
+            output_cost_per_token: 7.5e-5,
+            cache_read_input_cost_per_token: 1.25e-6,
+            cache_write_input_cost_per_token: Some(1.5625e-5),
             display_label: None,
             long_context: None,
         },
     );
     m.insert(
-        "gpt-5.6-sol",
+        "gpt-5.5-cyber",
         CodexPricing {
-            input_cost_per_token: 5e-6,
-            output_cost_per_token: 3e-5,
-            cache_read_input_cost_per_token: 5e-7,
+            input_cost_per_token: 1.25e-5,
+            output_cost_per_token: 7.5e-5,
+            cache_read_input_cost_per_token: 1.25e-6,
+            cache_write_input_cost_per_token: None,
             display_label: None,
-            long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 1e-5,
-                output_cost_per_token: 4.5e-5,
-                cache_read_input_cost_per_token: 1e-6,
-            }),
-        },
-    );
-    m.insert(
-        "gpt-5.6-terra",
-        CodexPricing {
-            input_cost_per_token: 2e-6,
-            output_cost_per_token: 1.2e-5,
-            cache_read_input_cost_per_token: 2e-7,
-            display_label: None,
-            long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 4e-6,
-                output_cost_per_token: 1.8e-5,
-                cache_read_input_cost_per_token: 4e-7,
-            }),
-        },
-    );
-    m.insert(
-        "gpt-5.6-luna",
-        CodexPricing {
-            input_cost_per_token: 2e-7,
-            output_cost_per_token: 1.2e-6,
-            cache_read_input_cost_per_token: 2e-8,
-            display_label: None,
-            long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 4e-7,
-                output_cost_per_token: 1.8e-6,
-                cache_read_input_cost_per_token: 4e-8,
-            }),
+            long_context: None,
         },
     );
     // GPT-6 Astra pricing (OpenAI model card and pricing table).
-    // Long-context rates apply to the whole request above 272K input tokens.
+    // Long-context rates apply to the whole request above 272K input tokens;
+    // cache writes bill at 1.25x uncached input in both tiers.
     m.insert(
         "gpt-6-astra",
         CodexPricing {
             input_cost_per_token: 1e-5,
             output_cost_per_token: 5e-5,
             cache_read_input_cost_per_token: 1e-6,
+            cache_write_input_cost_per_token: Some(1.25e-5),
             display_label: None,
             long_context: Some(CodexLongContextRates {
                 input_cost_per_token: 2e-5,
                 output_cost_per_token: 7.5e-5,
                 cache_read_input_cost_per_token: 2e-6,
+                cache_write_input_cost_per_token: Some(2.5e-5),
             }),
         },
     );
@@ -629,6 +662,14 @@ impl CostUsagePricing {
             trimmed = rest.to_string();
         }
 
+        // OpenAI's Daybreak aliases currently point to Sol (blue) and Cyber
+        // (red). https://developers.openai.com/api/docs/pricing
+        match trimmed.as_str() {
+            "gpt-daybreak-blue-latest" => return "gpt-5.6-sol".to_string(),
+            "gpt-daybreak-red-latest" => return "gpt-5.6-cyber".to_string(),
+            _ => {}
+        }
+
         // Check if base model (without -codex suffix) exists in pricing
         if let Some(idx) = trimmed.find("-codex") {
             let base = &trimmed[..idx];
@@ -722,7 +763,7 @@ impl CostUsagePricing {
     }
 
     /// Calculate Codex cost using the rates in effect on a historical usage day.
-    /// GPT-5.6 Terra/Luna were cut on 2026-07-30; Sol was unchanged.
+    /// GPT-5.6 Terra/Luna were cut on 2026-07-30 and Sol on 2026-08-21.
     pub fn codex_cost_usd_at_date(
         model: &str,
         input_tokens: u64,
@@ -761,8 +802,8 @@ impl CostUsagePricing {
 
     /// Codex cost on a historical usage day when the prompt also wrote cache
     /// tokens. `input_tokens` is the inclusive prompt size: cache reads and
-    /// writes are subsets of it. The pre-cutoff GPT-5.6 Terra/Luna rates carry
-    /// their own 1.25x cache-write rate (upstream `codexHistoricalPricing`).
+    /// writes are subsets of it. A model's pre-repricing rates (upstream
+    /// `codexHistoricalPricing`) win over today's bundled and catalog rates.
     pub fn codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
         model: &str,
         input_tokens: u64,
@@ -773,29 +814,14 @@ impl CostUsagePricing {
         pricing_snapshot: Option<&models_dev_pricing::ModelsDevPricingSnapshot>,
     ) -> Option<f64> {
         let key = Self::normalize_codex_model(model);
-        let cutoff = NaiveDate::from_ymd_opt(2026, 7, 30).expect("valid pricing cutoff");
-        if pricing_date < cutoff {
-            let long = input_tokens > codex_pricing::CODEX_LONG_CONTEXT_THRESHOLD;
-            // (input, cache read, cache write, output) per token.
-            let rates = match (key.as_str(), long) {
-                ("gpt-5.6-terra", false) => Some((2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5)),
-                ("gpt-5.6-terra", true) => Some((5e-6, 5e-7, 6.25e-6, 2.25e-5)),
-                ("gpt-5.6-luna", false) => Some((1e-6, 1e-7, 1.25e-6, 6e-6)),
-                ("gpt-5.6-luna", true) => Some((2e-6, 2e-7, 2.5e-6, 9e-6)),
-                _ => None,
-            };
-            if let Some((input_rate, cache_read_rate, cache_write_rate, output_rate)) = rates {
-                return Some(codex_pricing::codex_cost_from_rates_with_cache_write(
-                    input_tokens,
-                    cached_input_tokens,
-                    cache_write_input_tokens,
-                    output_tokens,
-                    input_rate,
-                    cache_read_rate,
-                    cache_write_rate,
-                    output_rate,
-                ));
-            }
+        if let Some(pricing) = codex_pricing::codex_historical_pricing(&key, pricing_date) {
+            return Some(codex_pricing::codex_cost_from_pricing(
+                &pricing,
+                input_tokens,
+                cached_input_tokens,
+                cache_write_input_tokens,
+                output_tokens,
+            ));
         }
         Self::codex_cost_usd_with_cache_write_and_pricing_snapshot(
             model,
