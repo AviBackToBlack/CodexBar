@@ -95,8 +95,8 @@ pub(crate) fn build_fetch_context(
         .cookie_domain()
         .is_none()
     {
-        let source_mode = if active_token_env.is_some() {
-            SourceMode::OAuth
+        let (source_mode, cookie_header, missing_cookie) = if active_token_env.is_some() {
+            (SourceMode::OAuth, None, false)
         } else {
             match cookie_source {
                 // #433: an explicitly selected, non-empty Claude manual cookie is
@@ -118,7 +118,7 @@ pub(crate) fn build_fetch_context(
                 // API-key fallback.
                 "off" | "manual" if provider.cookie_source_scopes_session_only() => {
                     let cookie_header = if cookie_source == "manual" {
-                        active_token_cookie.or(stored_cookie)
+                        active_token_cookie.clone().or(stored_cookie)
                     } else {
                         None
                     };
@@ -144,7 +144,7 @@ pub(crate) fn build_fetch_context(
                 "off" if id == ProviderId::Factory => (SourceMode::Cli, None, false),
                 "off" => (SourceMode::Cli, None, false),
                 "manual" => {
-                    let cookie_header = active_token_cookie.or(stored_cookie);
+                    let cookie_header = active_token_cookie.clone().or(stored_cookie);
                     let fails_closed_without_cookie = cookie_header.is_none()
                         && provider.manual_empty_cookie_policy()
                             == ManualEmptyCookiePolicy::FailClosedWeb;
@@ -176,23 +176,24 @@ pub(crate) fn build_fetch_context(
                 "auto" | "browser" | "web" => {
                     // Claude resolves its cached cookie and browser fallback inside
                     // the provider; other providers retain the shell fallback.
-                    let cookie_header = active_token_cookie.or(stored_cookie).or_else(|| {
-                        if defer_provider_browser_cookie_lookup {
-                            None
-                        } else {
-                            provider_cookie_domain(id, settings).and_then(|domain| {
-                                codexbar::browser::cookies::get_cookie_header(domain)
-                                    .ok()
-                                    .filter(|h| !h.is_empty())
-                            })
-                        }
-                    });
+                    let cookie_header =
+                        active_token_cookie.clone().or(stored_cookie).or_else(|| {
+                            if defer_provider_browser_cookie_lookup {
+                                None
+                            } else {
+                                provider_cookie_domain(id, settings).and_then(|domain| {
+                                    codexbar::browser::cookies::get_cookie_header(domain)
+                                        .ok()
+                                        .filter(|h| !h.is_empty())
+                                })
+                            }
+                        });
                     (usage_source, cookie_header, false)
                 }
                 _ => (usage_source, stored_cookie, false),
             }
         };
-        (source_mode, None, false)
+        (source_mode, cookie_header, missing_cookie)
     } else {
         match cookie_source {
             // #433: an explicitly selected, non-empty Claude manual cookie is
