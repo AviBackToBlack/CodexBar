@@ -203,7 +203,9 @@ pub fn parse_subscription_value(value: &Value) -> OpenAISubscriptionFetchResult 
             )))
         }
         (None, Some(false)) => OpenAISubscriptionFetchResult::Success(
-            (!starts_at.is_none()).then(|| SubscriptionMetadata::new(starts_at, None, None)),
+            starts_at
+                .is_some()
+                .then(|| SubscriptionMetadata::new(starts_at, None, None)),
         ),
         // A renewal without an explicit active-until date is not safe to
         // represent as a date, even if a plan is known.
