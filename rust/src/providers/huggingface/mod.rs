@@ -1,9 +1,9 @@
 //! Hugging Face billing provider.
 //!
 //! Hugging Face exposes inference billing and optional ZeroGPU usage through
-//! authenticated JSON endpoints. The billing data is presented as cost and
-//! transient detail rows; it is deliberately not converted into a quota
-//! window or a persisted identity record.
+//! authenticated JSON endpoints, with a prepaid wallet balance available from
+//! the browser session in Auto mode. Billing data is presented as cost and
+//! transient detail rows; identity is kept only in a short-lived process cache.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
@@ -18,9 +18,11 @@ use crate::core::{
     ProviderFetchResult, ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
+mod identity_cache;
 mod wallet;
 
-use wallet::{WalletCandidate, matching_wallet_balance, parse_wallet_balance};
+use identity_cache::{get_or_fetch_identity, process_identity_cache};
+use wallet::{WalletCandidate, fetch_matching_wallet_balance, parse_wallet_balance};
 
 const BILLING_URL: &str = "https://huggingface.co/api/settings/billing/usage-v2";
 const WHOAMI_URL: &str = "https://huggingface.co/api/whoami-v2";
@@ -170,16 +172,25 @@ impl HuggingFaceProvider {
         let zerogpu_url = Url::parse(ZEROGPU_URL)
             .map_err(|_| ProviderError::Other("Invalid Hugging Face ZeroGPU URL.".to_string()))?;
 
-        let (billing, identity, zerogpu, wallet_candidate) = tokio::join!(
-            self.fetch_json(billing_url, &token, PRIMARY_TIMEOUT),
-            self.fetch_optional_json(whoami_url, &token),
+        let (billing, identity, zerogpu) = tokio::join!(
+            self.fetch_json(
+                billing_url,
+                &token,
+                PRIMARY_TIMEOUT,
+                classify_billing_status
+            ),
+            get_or_fetch_identity(process_identity_cache(), &token, now, || async {
+                let profile = self.fetch_optional_json(whoami_url, &token).await?;
+                parse_identity(&profile)
+            }),
             self.fetch_optional_json(zerogpu_url, &token),
-            self.fetch_optional_wallet_candidate(),
         );
         let billing = parse_billing(billing?)?;
-        let identity = identity.and_then(|value| parse_identity(&value));
         let zerogpu = zerogpu.and_then(|value| parse_zerogpu(&value));
-        let balance = matching_wallet_balance(identity.as_ref(), wallet_candidate);
+        let balance = fetch_matching_wallet_balance(ctx.source_mode, identity.as_ref(), || {
+            self.fetch_optional_wallet_candidate()
+        })
+        .await;
 
         Ok(build_result(billing, identity, zerogpu, balance))
     }
@@ -217,7 +228,7 @@ impl HuggingFaceProvider {
                 .send()
                 .await?;
             if !response.status().is_success() {
-                return Err(classify_status(response.status()));
+                return Err(classify_optional_status(response.status()));
             }
             let body = read_bounded_body(response, "wallet response").await?;
             String::from_utf8(body).map_err(|_| {
@@ -229,7 +240,9 @@ impl HuggingFaceProvider {
     }
 
     async fn fetch_optional_json(&self, url: Url, token: &str) -> Option<Value> {
-        self.fetch_json(url, token, OPTIONAL_TIMEOUT).await.ok()
+        self.fetch_json(url, token, OPTIONAL_TIMEOUT, classify_optional_status)
+            .await
+            .ok()
     }
 
     async fn fetch_json(
@@ -237,6 +250,7 @@ impl HuggingFaceProvider {
         url: Url,
         token: &str,
         timeout: Duration,
+        classify: fn(StatusCode) -> ProviderError,
     ) -> Result<Value, ProviderError> {
         // Wrapper timeout, not just the client's PRIMARY_TIMEOUT: the
         // optional-fetch path (fetch_optional_json) overrides this with
@@ -252,7 +266,7 @@ impl HuggingFaceProvider {
                 .await?;
             let status = response.status();
             if !status.is_success() {
-                return Err(classify_status(status));
+                return Err(classify(status));
             }
 
             let body = read_bounded_body(response, "JSON body").await?;
@@ -462,14 +476,12 @@ fn parse_identity(value: &Value) -> Option<IdentitySnapshot> {
         .get("isPro")
         .and_then(Value::as_bool)
         .map(|is_pro| if is_pro { "Pro" } else { "Free" }.to_string());
-    (user_id.is_some() || name.is_some() || email.is_some() || plan.is_some()).then_some(
-        IdentitySnapshot {
-            user_id,
-            name,
-            email,
-            plan,
-        },
-    )
+    (user_id.is_some() || name.is_some() || email.is_some()).then_some(IdentitySnapshot {
+        user_id,
+        name,
+        email,
+        plan,
+    })
 }
 
 fn safe_text(value: Option<&str>) -> Option<String> {
@@ -577,7 +589,7 @@ fn format_usd(value: f64) -> String {
     format!("${value:.2}")
 }
 
-fn classify_status(status: StatusCode) -> ProviderError {
+fn classify_optional_status(status: StatusCode) -> ProviderError {
     match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ProviderError::AuthRequired,
         StatusCode::TOO_MANY_REQUESTS => {
@@ -587,6 +599,17 @@ fn classify_status(status: StatusCode) -> ProviderError {
             ProviderError::Other("Hugging Face service unavailable (HTTP 5xx).".to_string())
         }
         status => ProviderError::Other(format!("Hugging Face API request failed (HTTP {status}).")),
+    }
+}
+
+fn classify_billing_status(status: StatusCode) -> ProviderError {
+    if status == StatusCode::FORBIDDEN {
+        ProviderError::Other(
+            "The Hugging Face token lacks billing access. Use a classic read token or enable Billing read on a fine-grained token."
+                .to_string(),
+        )
+    } else {
+        classify_optional_status(status)
     }
 }
 
@@ -775,6 +798,7 @@ mod tests {
         assert_eq!(identity.email.as_deref(), Some("n@example.test"));
         assert_eq!(identity.plan.as_deref(), Some("Pro"));
         assert!(parse_identity(&json!({"email": "bad\nemail"})).is_none());
+        assert!(parse_identity(&json!({"isPro": true})).is_none());
     }
 
     #[test]
@@ -786,18 +810,82 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::BAD_REQUEST,
         ] {
-            let error = classify_status(status).to_string();
+            let error = classify_optional_status(status).to_string();
             assert!(!error.contains(token));
             assert!(!error.contains("response body"));
         }
         assert!(matches!(
-            classify_status(StatusCode::UNAUTHORIZED),
+            classify_optional_status(StatusCode::UNAUTHORIZED),
             ProviderError::AuthRequired
         ));
         assert!(matches!(
-            classify_status(StatusCode::FORBIDDEN),
+            classify_optional_status(StatusCode::FORBIDDEN),
             ProviderError::AuthRequired
         ));
+    }
+
+    #[test]
+    fn billing_status_errors_retain_actionable_classification() {
+        let token = "hf_secret_fixture";
+        assert!(matches!(
+            classify_billing_status(StatusCode::UNAUTHORIZED),
+            ProviderError::AuthRequired
+        ));
+
+        let forbidden = classify_billing_status(StatusCode::FORBIDDEN).to_string();
+        assert_eq!(
+            forbidden,
+            "The Hugging Face token lacks billing access. Use a classic read token or enable Billing read on a fine-grained token."
+        );
+        assert!(!forbidden.contains(token));
+
+        assert_eq!(
+            classify_billing_status(StatusCode::TOO_MANY_REQUESTS).to_string(),
+            "Hugging Face API rate limited (HTTP 429)."
+        );
+        assert_eq!(
+            classify_billing_status(StatusCode::SERVICE_UNAVAILABLE).to_string(),
+            "Hugging Face service unavailable (HTTP 5xx)."
+        );
+    }
+
+    #[tokio::test]
+    async fn html_billing_403_body_still_returns_the_permission_message() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            let body = "<html>Billing access denied</html>";
+            let response = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let mut provider = HuggingFaceProvider::new();
+        provider.client = Client::builder().no_proxy().build().unwrap();
+        let url = Url::parse(&format!("http://{address}/billing")).unwrap();
+        let error = provider
+            .fetch_json(
+                url,
+                "hf_secret_fixture",
+                PRIMARY_TIMEOUT,
+                classify_billing_status,
+            )
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(
+            error.to_string(),
+            "The Hugging Face token lacks billing access. Use a classic read token or enable Billing read on a fine-grained token."
+        );
+        assert!(!error.to_string().contains("hf_secret_fixture"));
     }
 
     #[test]
