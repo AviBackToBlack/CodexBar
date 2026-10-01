@@ -226,6 +226,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "replicate" => ProviderId::Replicate,
         "helmcode" => ProviderId::Helmcode,
         "typesafe" => ProviderId::TypeSafe,
+        "hyper" => ProviderId::Hyper,
         _ => return None,
     })
 }
@@ -817,6 +818,31 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 "",
                 "Paste a Cookie header from the TypeSafe billing page.",
                 None,
+            ),
+        ],
+        // Upstream's Hyper picker; the session can come from any selected
+        // browser here, not only Chrome.
+        "hyper" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Prefer a signed-in Hyper browser session, then fall back to an API key.",
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste a Cookie header from hyper.charm.land.",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some("Use only the configured API key."),
             ),
         ],
         _ => Vec::new(),

@@ -721,7 +721,9 @@ pub struct SettingsSnapshot {
     provider_accent_colors: std::collections::HashMap<String, String>,
 }
 
-fn bootstrap_state_from_settings(settings: Settings) -> BootstrapState {
+#[tauri::command]
+pub fn get_bootstrap_state() -> BootstrapState {
+    let settings = Settings::load();
     BootstrapState {
         contract_version: "v1",
         providers: provider_catalog_for(&settings),
@@ -729,48 +731,14 @@ fn bootstrap_state_from_settings(settings: Settings) -> BootstrapState {
     }
 }
 
-#[cfg(not(test))]
 #[tauri::command]
-pub fn get_bootstrap_state(
-    state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<BootstrapState, String> {
-    Ok(bootstrap_state_from_settings(settings_for_command(&state)?))
-}
-
-#[cfg(test)]
-#[tauri::command]
-pub fn get_bootstrap_state() -> BootstrapState {
-    bootstrap_state_from_settings(Settings::default())
-}
-
-#[tauri::command]
-pub fn get_provider_catalog(
-    state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<Vec<ProviderCatalogEntry>, String> {
-    Ok(provider_catalog_for(&settings_for_command(&state)?))
-}
-
-pub fn get_provider_catalog_for_current_settings() -> Vec<ProviderCatalogEntry> {
+pub fn get_provider_catalog() -> Vec<ProviderCatalogEntry> {
     provider_catalog_for(&Settings::load())
 }
 
 #[tauri::command]
-pub fn get_settings_snapshot(
-    state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<SettingsSnapshot, String> {
-    Ok(SettingsSnapshot::from(settings_for_command(&state)?))
-}
-
-fn settings_for_command(state: &tauri::State<'_, Mutex<AppState>>) -> Result<Settings, String> {
-    let guard = state.lock().map_err(|error| error.to_string())?;
-    if guard.is_containment_proof() {
-        guard
-            .proof_settings()
-            .cloned()
-            .ok_or_else(|| "containment proof settings are unavailable".to_string())
-    } else {
-        Ok(Settings::load())
-    }
+pub fn get_settings_snapshot() -> SettingsSnapshot {
+    SettingsSnapshot::from(Settings::load())
 }
 
 impl From<Settings> for SettingsSnapshot {
