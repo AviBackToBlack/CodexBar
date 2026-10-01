@@ -7,7 +7,9 @@
 //! icon, and explicit menu-bar selections keep reading the provider's data.
 //! Mirrors upstream `RateWindow.bindingQuotaProjection` plus
 //! `MenuCardView.blockingQuotaMetrics`; the blocker's own reset owns the reset
-//! text, so no projected reset is computed here.
+//! text, so no projected reset is computed here. Upstream evaluates the block
+//! whenever it builds the card, so [`BlockedWindows::resets_at`] carries the
+//! blocker's reset for surfaces that show a snapshot after it was fetched.
 
 use chrono::{DateTime, Utc};
 
@@ -22,6 +24,9 @@ pub struct BlockedWindows {
     pub tertiary: bool,
     /// Parallel to [`UsageSnapshot::extra_rate_windows`].
     pub extra: Vec<bool>,
+    /// Reset of the exhausted blocker; the block lifts then. `None` when the
+    /// reset is unknown (the block holds) or nothing is blocked.
+    pub resets_at: Option<DateTime<Utc>>,
 }
 
 impl BlockedWindows {
@@ -50,7 +55,19 @@ impl BlockedWindows {
         for (flag, extra) in blocked.extra.iter_mut().zip(&usage.extra_rate_windows) {
             *flag = extra.usage_known && blocks(&extra.window);
         }
+        if blocked.any() {
+            blocked.resets_at = blocker.resets_at;
+        }
         blocked
+    }
+
+    /// True when at least one window is blocked.
+    pub fn any(&self) -> bool {
+        self.primary
+            || self.secondary
+            || self.model_specific
+            || self.tertiary
+            || self.extra.iter().any(|flag| *flag)
     }
 }
 
@@ -102,6 +119,8 @@ mod tests {
         assert!(blocked.primary && blocked.secondary);
         assert_eq!(blocked.extra, vec![false, true]);
         assert!(!blocked.tertiary && !blocked.model_specific);
+        // The block lifts at the pool's reset, not at the shorter windows' resets.
+        assert_eq!(blocked.resets_at, Some(now() + Duration::days(30)));
 
         // Tertiary and model-specific lanes follow the same rule as the primary.
         let mut usage = usage;
@@ -115,8 +134,12 @@ mod tests {
 
     #[test]
     fn unknown_reset_still_blocks() {
-        let usage = kimi_snapshot(window(100.0, Some(MONTH), None));
-        assert!(BlockedWindows::evaluate(ProviderId::Kimi, &usage, now()).primary);
+        let mut usage = kimi_snapshot(window(100.0, Some(MONTH), None));
+        usage.primary.resets_at = Some(now() + Duration::hours(1));
+        let blocked = BlockedWindows::evaluate(ProviderId::Kimi, &usage, now());
+        // Upstream: an unknown monthly reset does not promise the shorter reset.
+        assert!(blocked.primary && blocked.any());
+        assert_eq!(blocked.resets_at, None);
     }
 
     #[test]
@@ -131,10 +154,10 @@ mod tests {
             window(100.0, Some(MONTH), Some(now() - Duration::days(1))),
         ] {
             let usage = kimi_snapshot(monthly);
-            assert_eq!(
-                BlockedWindows::evaluate(ProviderId::Kimi, &usage, now()),
-                unblocked
-            );
+            let blocked = BlockedWindows::evaluate(ProviderId::Kimi, &usage, now());
+            // Nothing blocked: no reset is carried either.
+            assert_eq!(blocked, unblocked);
+            assert!(!blocked.any());
         }
 
         let mut usage = kimi_snapshot(window(100.0, Some(MONTH), None));

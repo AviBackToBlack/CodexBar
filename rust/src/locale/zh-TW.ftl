@@ -528,6 +528,7 @@ PanelOneHour = 1小時
 PanelFiveHours = 5小時
 PanelTodayBudget = 今日
 PanelReserveSuffix = 儲備
+PanelBlockedByMonthlyLimit = 已被月度限額阻擋
 PanelReserveLastsUntilReset = 持續到重置
 PanelReserveRunsOutInDaysHours = { "{}" }天{ "{}" }小時後耗盡
 PanelReserveRunsOutInHours = { "{}" }小時後耗盡

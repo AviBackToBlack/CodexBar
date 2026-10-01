@@ -42,7 +42,7 @@ mod tests {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
-            blocked_by_monthly_limit: false,
+            monthly_limit_block: None,
         }
     }
 

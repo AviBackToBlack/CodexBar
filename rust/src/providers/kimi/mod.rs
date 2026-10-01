@@ -19,6 +19,8 @@
 mod auto;
 mod code_api;
 pub mod desktop_token;
+#[cfg(test)]
+mod monthly_blocking_tests;
 mod ratio_pool;
 mod region;
 mod web;

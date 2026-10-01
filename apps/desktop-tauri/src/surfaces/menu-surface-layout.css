@@ -61,7 +61,8 @@
 }
 
 .menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset {
+.menu-surface--tray .menu-metric__reset,
+.menu-surface--tray .menu-metric__status {
   font-size: 11px;
   line-height: 1.4;
 }

@@ -178,7 +178,7 @@ mod tests {
             reserve_percent: None,
             reserve_description: None,
             reserve_eta_seconds: None,
-            blocked_by_monthly_limit: false,
+            monthly_limit_block: None,
             reserve_will_last_to_reset: false,
         }
     }

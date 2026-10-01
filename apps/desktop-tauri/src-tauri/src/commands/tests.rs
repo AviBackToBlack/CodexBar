@@ -1152,39 +1152,6 @@ fn provider_inventory_maps_to_the_bridge_without_token_ids() {
 }
 
 #[test]
-fn exhausted_kimi_monthly_pool_marks_shorter_windows_without_changing_raw_usage() {
-    use codexbar::core::{RateWindow, UsageSnapshot};
-
-    let reset = chrono::Utc::now() + chrono::Duration::days(20);
-    let usage = UsageSnapshot::new(RateWindow::with_details(0.0, Some(10_080), None, None))
-        .with_extra_rate_window(
-            "kimi-monthly",
-            "Total usage",
-            RateWindow::with_details(100.0, Some(43_200), Some(reset), None),
-        );
-    let result = ProviderFetchResult::new(usage, "web");
-    let metadata = instantiate_provider(ProviderId::Kimi).metadata().clone();
-    let snapshot =
-        ProviderUsageSnapshot::from_fetch_result(ProviderId::Kimi, &metadata, &result, None);
-
-    assert!(snapshot.primary.blocked_by_monthly_limit);
-    assert_eq!(snapshot.primary.used_percent, 0.0);
-    assert!(
-        !snapshot.extra_rate_windows[0]
-            .window
-            .blocked_by_monthly_limit
-    );
-    let json = serde_json::to_value(&snapshot).unwrap();
-    assert_eq!(json["primary"]["blockedByMonthlyLimit"], true);
-
-    // Other providers never derive a blocker from a same-named window.
-    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
-    let snapshot =
-        ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
-    assert!(!snapshot.primary.blocked_by_monthly_limit);
-}
-
-#[test]
 fn provider_cache_is_fresh_inside_stale_window() {
     assert!(super::is_provider_cache_fresh(
         Some(std::time::Instant::now()),

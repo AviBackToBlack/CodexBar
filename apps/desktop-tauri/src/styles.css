@@ -2037,6 +2037,10 @@ body:has(.tray-panel-reveal) {
   font-weight: 600;
 }
 
+.provider-usage-bar__status {
+  color: var(--text-secondary);
+}
+
 .provider-usage-bar__track {
   height: 5px;
   border-radius: 3px;
@@ -3533,7 +3537,8 @@ html:has(.menu-surface--tray) {
   max-width: 100%;
 }
 .menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset {
+.menu-surface--tray .menu-metric__reset,
+.menu-surface--tray .menu-metric__status {
   font-size: 10px;
 }
 .menu-surface--tray .menu-metric__reserve {
@@ -4082,6 +4087,17 @@ html:has(.menu-surface--tray) {
   font-size: 11px;
   font-weight: 600;
   color: var(--provider-status-error);
+}
+
+/* Upstream 0.69.0 #4091 status row: a window blocked by a longer exhausted
+   pool shows its title and one secondary footnote line instead of a bar. */
+.menu-metric__status {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .menu-metric__reserve {
   opacity: 0.7;
@@ -4796,7 +4812,8 @@ html:has(.menu-surface--tray) {
 }
 
 .menu-metric__pct,
-.menu-metric__reset {
+.menu-metric__reset,
+.menu-metric__status {
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,

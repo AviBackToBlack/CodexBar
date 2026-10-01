@@ -8,6 +8,8 @@ import { InventoryItemRow } from "../../../../components/InventoryRows";
 import { ProviderDisplayRow } from "../../../../components/ProviderDisplayRow";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
+import { useMonthlyLimitBlockNow } from "../../../../hooks/useMonthlyLimitBlockNow";
+import { isMonthlyLimitBlockActive } from "../../../../lib/monthlyLimitBlock";
 import { isUsageItemVisible } from "../../../../lib/usageItemVisibility";
 
 interface Props {
@@ -68,6 +70,10 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
     });
   }
 
+  // Cached snapshots outlive the pool reset; re-check blocks on the clock.
+  const monthlyLimitBlockNow = useMonthlyLimitBlockNow(
+    bars.map((bar) => bar.rate.monthlyLimitBlock),
+  );
   const inventory = provider.inventory ?? [];
   const displayDetails = provider.displayDetails ?? [];
   if (bars.length === 0 && inventory.length === 0 && displayDetails.length === 0) {
@@ -82,6 +88,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
           key={b.key}
           label={b.label}
           rate={b.rate}
+          blocked={isMonthlyLimitBlockActive(b.rate.monthlyLimitBlock, monthlyLimitBlockNow)}
           resetTimeRelative={resetTimeRelative}
           t={t}
         />
@@ -110,11 +117,13 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
 function UsageBar({
   label,
   rate,
+  blocked,
   resetTimeRelative,
   t,
 }: {
   label: string;
   rate: RateWindowSnapshot;
+  blocked: boolean;
   resetTimeRelative: boolean;
   t: (key: LocaleKey) => string;
 }) {
@@ -122,10 +131,21 @@ function UsageBar({
   const pct = Math.min(100, usedPct);
   const isInformational = rate.isInformational === true;
   const formattedReset = useFormattedResetTime(
-    rate.resetsAt,
-    rate.resetDescription,
+    blocked ? null : rate.resetsAt,
+    blocked ? null : rate.resetDescription,
     resetTimeRelative,
   );
+  if (blocked) {
+    // Upstream 0.69.0 #4091 status row: title and status, no bar or reset.
+    return (
+      <div className="provider-usage-bar provider-usage-bar--blocked">
+        <div className="provider-usage-bar__header">
+          <span className="provider-usage-bar__label">{label}</span>
+          <span className="provider-usage-bar__status">{t("PanelBlockedByMonthlyLimit")}</span>
+        </div>
+      </div>
+    );
+  }
   const resetHint = formattedReset
     ? resetTimeRelative
       ? formattedReset
