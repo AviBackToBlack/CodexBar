@@ -55,6 +55,42 @@ fn explicit_zero_custom_rate_is_known_free_but_missing_rate_is_unknown() {
 }
 
 #[test]
+fn custom_pricing_reads_each_entry_on_its_own_like_upstream() {
+    let custom = CustomPricing::parse(
+        br#"{
+            " GPT-5 ": {"input": 1.25, "output": 10, "cacheRead": 0.125, "cache_read": 9},
+            "negative-input": {"input": -1, "output": 2},
+            "string-rate": {"input": "3", "output": 4},
+            "snake": {"cache_write": 0, "cacheCreation": 7},
+            "empty": {},
+            "only-unusable": {"input": -1, "output": "free"},
+            "not-an-object": 5,
+            "  ": {"input": 1}
+        }"#,
+    );
+    let rates = |key: &str| {
+        let rates = custom.entries.get(key).expect(key);
+        (
+            rates.input,
+            rates.output,
+            rates.cache_read,
+            rates.cache_write,
+        )
+    };
+    assert_eq!(rates("gpt-5"), (Some(1.25), Some(10.0), Some(0.125), None));
+    assert_eq!(rates("negative-input"), (None, Some(2.0), None, None));
+    assert_eq!(rates("string-rate"), (None, Some(4.0), None, None));
+    assert_eq!(rates("snake"), (None, None, None, Some(0.0)));
+    assert_eq!(
+        custom.entries.len(),
+        4,
+        "entries without a usable rate are dropped"
+    );
+    assert!(CustomPricing::parse(b"[1, 2]").entries.is_empty());
+    assert!(CustomPricing::parse(b"not json").entries.is_empty());
+}
+
+#[test]
 fn local_spend_contract_exposes_reasoning_tokens_and_preserves_unknown() {
     let known_summary = CostSummary {
         reasoning_tokens: Some(7),

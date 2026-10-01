@@ -167,6 +167,24 @@ fn partial_custom_price_remains_unknown_instead_of_silently_falling_through() {
 }
 
 #[test]
+fn override_entries_without_a_usable_rate_never_block_the_catalog() {
+    // Upstream drops an entry with no usable rate, so the row keeps its
+    // catalog price and is not marked custom-priced.
+    for json in [
+        r#"{"openai/gpt-5.4":{}}"#,
+        r#"{"openai/gpt-5.4":{"input":-1,"output":"free"}}"#,
+    ] {
+        let source = priced(
+            vec![row("openrouter", "openai/gpt-5.4")],
+            &custom(json),
+            &catalog(),
+        );
+        assert_cost(&source, 0.001_42);
+        assert!(!source.models[0].custom_pricing, "{json}");
+    }
+}
+
+#[test]
 fn custom_pricing_counts_cached_tokens_once_and_partial_usage_remains_unknown() {
     let overlay = custom(r#"{"openrouter/openai/gpt-5.4":{"input":10,"output":40,"cacheRead":1}}"#);
     let source = priced(
