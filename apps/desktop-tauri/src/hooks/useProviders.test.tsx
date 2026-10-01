@@ -62,6 +62,13 @@ function provider(id: string, usedPercent = 20): ProviderUsageSnapshot {
   };
 }
 
+function providerResettingAt(id: string, resetsAt: string): ProviderUsageSnapshot {
+  const snapshot = provider(id);
+  return { ...snapshot, primary: { ...snapshot.primary, resetsAt } };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1_000;
+
 function emitProviderEvent(event: string, payload: unknown) {
   for (const listener of eventMocks.listeners.get(event) ?? []) {
     listener({ payload });
@@ -398,6 +405,75 @@ describe("useProviders", () => {
         providerCount: 1,
         errorCount: 0,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes once the soonest reset has passed", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-01T00:00:00Z") });
+    try {
+      tauriMocks.getCachedProviders.mockResolvedValue([
+        providerResettingAt("codex", "2026-10-01T00:10:00Z"),
+      ]);
+      const { result } = renderHook(() => useProviders({ refreshOnMount: false }));
+      await act(async () => {});
+      expect(result.current.providers).toHaveLength(1);
+
+      // The timer waits one second past the reset.
+      await act(async () => {
+        vi.advanceTimersByTime(10 * 60_000);
+      });
+      expect(tauriMocks.refreshProviders).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a reset beyond the 32-bit timer limit instead of refreshing at once", async () => {
+    vi.useFakeTimers({ now: new Date("2026-10-01T00:00:00Z") });
+    try {
+      // 30 days is past the 2^31 - 1 ms (about 24.8 days) that setTimeout can
+      // hold. A longer delay runs at once, which forced a refresh on every
+      // provider update.
+      tauriMocks.getCachedProviders.mockResolvedValue([
+        providerResettingAt("cursor", "2026-10-31T00:00:00Z"),
+      ]);
+      const { result } = renderHook(() => useProviders({ refreshOnMount: false }));
+      await act(async () => {});
+      expect(result.current.providers).toHaveLength(1);
+
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(tauriMocks.refreshProviders).not.toHaveBeenCalled();
+
+      // A fresh snapshot with the same reset re-arms the timer; it must still wait.
+      act(() => {
+        emitProviderEvent("provider-updated", providerResettingAt("cursor", "2026-10-31T00:00:00Z"));
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(80);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(25 * DAY_MS);
+      });
+      expect(tauriMocks.refreshProviders).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(5 * DAY_MS - 60_080);
+      });
+      expect(tauriMocks.refreshProviders).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
