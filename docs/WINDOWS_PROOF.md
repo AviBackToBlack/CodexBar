@@ -90,12 +90,12 @@ the list below. Check each item off in §4.
 
 1. **Tray icon visible** in the Windows notification area (may require
    "Show all icons" in the taskbar settings on first run).
-2. **Left-click the tray icon** → borderless pop-out panel anchored
+2. **Left-click the tray icon** → borderless tray panel anchored
    near the tray. On multi-monitor setups it should appear on the
    display hosting the tray.
 3. **Right-click the tray icon** → native Windows context menu with
-   Pop Out / Refresh / Settings / Check for updates / Quit entries.
-4. **Preferences window** opens from the tray menu or from the pop-out
+   Pop Out Dashboard / Refresh / Settings / Check for updates / Quit entries.
+4. **Preferences window** opens from the tray menu or from the tray panel
    settings gear; all tabs render (General, Providers, Display, API
    keys, Cookies, Token accounts, Advanced, About).
 5. **Theme toggle** — Appearance → Theme cycles `Auto ↔ Light ↔ Dark`
@@ -105,15 +105,15 @@ the list below. Check each item off in §4.
    e.g. `Ctrl+Shift+K`. Chip shows the combo, `Saved` appears, and the
    shortcut toggles the tray panel globally.
 7. **Provider rows drag-reorder** in Preferences → Providers: grab the
-   handle, drop above/below another provider, refresh the pop-out, and
+   handle, drop above/below another provider, refresh the tray panel, and
    confirm the new order is persisted across app restarts.
 8. **Chart tooltip** — open a provider detail → Cost/Credits chart.
    Hovering a bar/point shows a tooltip with value + date.
-9. **Reset countdown** — pop-out card shows `Resets in Xh Ym` and
+9. **Reset countdown** — tray panel card shows `Resets in Xh Ym` and
    re-renders at least once during a 1-minute stare (internal tick is
    30 s).
 10. **Update banner** — Advanced → Check for updates; when an update is
-    offered the banner appears at the top of the pop-out and dismiss /
+    offered the banner appears at the top of the tray panel and dismiss /
     download / install-and-restart buttons all respond.
 
 ---
@@ -160,7 +160,7 @@ Tick each entry as it is verified on the Windows target.
 [ ] release.doctor                .\scripts\release-doctor.ps1 -Version <version>
 
 [ ] runtime.tray-icon-visible
-[ ] runtime.tray-left-click-popout
+[ ] runtime.tray-left-click-opens-panel
 [ ] runtime.tray-context-menu
 [ ] runtime.preferences-opens
 [ ] runtime.preferences-all-tabs

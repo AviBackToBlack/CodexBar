@@ -9,7 +9,7 @@ Upstream `docs/architecture.md` describes Swift modules (`CodexBarCore`, menu ba
 |------|------|------|
 | Shared backend + CLI | `rust/` (`codexbar` crate) | Providers, settings, browser cookies, tray icon pixels, CLI |
 | Desktop shell | `apps/desktop-tauri/src-tauri/` (`codexbar-desktop-tauri`) | Tauri 2 host: tray, windows, IPC commands, float bar, proof harness |
-| Frontend | `apps/desktop-tauri/src/` | React 18 + Vite surfaces (tray panel, pop-out, settings, float bar) |
+| Frontend | `apps/desktop-tauri/src/` | React 18 + Vite surfaces (tray panel, settings, float bar) |
 
 Cargo workspace (root `Cargo.toml`): members `rust`, `apps/desktop-tauri/src-tauri`; **default-member** is the Tauri crate. Shell depends on `codexbar = { path = "../../../rust" }`.
 
@@ -39,7 +39,9 @@ Cargo workspace (root `Cargo.toml`): members `rust`, `apps/desktop-tauri/src-tau
 ## Surfaces (desktop)
 
 - **Tray panel** — left-click tray; blur-dismiss (suppressed in proof mode).
-- **Pop-out / flyout** — larger dashboard window.
+- **Tray panel flyout** — larger dashboard window opened from the tray
+  menu ("Pop Out Dashboard"); the tray panel itself is the only
+  dashboard layout.
 - **Settings** — detached window; tabs: `general`, `providers`, `notifications`, `menuBar`, `menu`, `usageSpend`, `advanced`, `about`.
 - **Float bar** — optional capacity strip.
 
