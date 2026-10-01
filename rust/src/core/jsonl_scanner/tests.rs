@@ -1614,6 +1614,7 @@ fn stale_loaded_cache_does_not_replace_newer_baseline() {
     let mut stale = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
     let mut newer = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
     newer.last_scan_unix_ms = 2;
+    newer.scan_since_key = Some("2026-01-01".to_string());
     JsonlScanner::save_cache(ProviderId::Codex, &mut newer, Some(cache_root));
 
     stale.last_scan_unix_ms = 3;
@@ -1813,3 +1814,7 @@ fn save_cache_one_over_limit_is_refused_and_removes_destination() {
 #[cfg(test)]
 #[path = "tests/codex_metadata.rs"]
 mod codex_metadata;
+
+#[cfg(test)]
+#[path = "tests/save_skip.rs"]
+mod save_skip;
