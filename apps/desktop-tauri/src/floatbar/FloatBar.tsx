@@ -182,6 +182,11 @@ function CostPill({
  * Color follows usage: green default, amber when remaining drops below the
  * high-usage threshold, red when remaining is below the critical threshold
  * or the provider is exhausted.
+ *
+ * An informational metric (no budget set, a balance line, no active session)
+ * has no quota percentage. Like the tray card and the tray tooltip, the pill
+ * shows its text instead, keeps the neutral tone, and never turns that text
+ * into reset wording.
  */
 function ProviderPill({
   provider,
@@ -207,21 +212,29 @@ function ProviderPill({
   stateLabel: string;
 }) {
   const rateWindow = provider.selectedMetric;
+  const informational = rateWindow.isInformational === true;
   const remaining = Math.max(0, Math.min(100, rateWindow.remainingPercent));
   const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
   const state = describeProviderState(provider.errorState);
-  const exhausted = rateWindow.isExhausted || state.isProblem;
   let tone: "ok" | "warn" | "crit" = "ok";
-  if (exhausted || remaining <= critRemaining) tone = "crit";
-  else if (remaining <= highRemaining) tone = "warn";
+  if (state.isProblem) tone = "crit";
+  else if (!informational) {
+    if (rateWindow.isExhausted || remaining <= critRemaining) tone = "crit";
+    else if (remaining <= highRemaining) tone = "warn";
+  }
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = state.isProblem ? stateLabel : `${Math.round(displayPercent)}%`;
+  const infoText = rateWindow.resetDescription?.trim() || "—";
+  const label = state.isProblem
+    ? stateLabel
+    : informational
+      ? infoText
+      : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
-    rateWindow.resetDescription,
+    informational ? null : rateWindow.resetDescription,
     resetRelative,
   );
   const resetSuffix = resetText ? `\n${resetText}` : "";
@@ -237,7 +250,9 @@ function ProviderPill({
       title={
         state.isProblem
           ? `${provider.displayName}: ${stateLabel}`
-          : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
+          : informational
+            ? `${provider.displayName}: ${infoText}${resetSuffix}`
+            : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
       }
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
