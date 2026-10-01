@@ -5385,6 +5385,23 @@ html:has(.menu-surface--tray) {
   font-size: var(--font-caption);
 }
 
+.usage-spend-daily {
+  margin-top: 20px;
+}
+
+.usage-spend-daily h4 {
+  margin: 0;
+}
+
+.usage-spend-daily__table {
+  overflow-x: auto;
+  margin-top: 10px;
+}
+
+.usage-spend-daily__toggle {
+  margin-top: 8px;
+}
+
 /* About update controls block */
 .about-update-controls {
   display: flex;

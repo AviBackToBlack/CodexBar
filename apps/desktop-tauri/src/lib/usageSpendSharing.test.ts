@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatSpendTokens,
   formatUsageSpendReportingDay,
   filterUsageSpendSummaryForOverview,
   renderUsageSpendSharePng,
@@ -23,6 +24,15 @@ describe("usage spend sharing", () => {
     expect(formatUsageSpendReportingDay("2026-09-19", "Pacific/Kiritimati")).toBe("Sep 19, 2026");
     expect(formatUsageSpendReportingDay("2026-09-19", "America/Los_Angeles")).toBe("Sep 19, 2026");
     expect(formatUsageSpendReportingDay("2026-10-01", "Pacific/Norfolk")).toBe("Oct 1, 2026");
+  });
+
+  it("keeps a zero token count distinct from an unknown one", () => {
+    expect(formatSpendTokens(0, "tokens", "Unknown")).toBe("0 tokens");
+    expect(formatSpendTokens(8100, "tokens", "Unknown")).toBe("8,100 tokens");
+    expect(formatSpendTokens(null, "tokens", "Unknown")).toBe("Unknown");
+    expect(formatSpendTokens(undefined, "tokens", "Unknown")).toBe("Unknown");
+    expect(formatSpendTokens(-1, "tokens", "Unknown")).toBe("Unknown");
+    expect(formatSpendTokens(Number.NaN, "tokens", "Unknown")).toBe("Unknown");
   });
 
   it("falls back for an invalid dashboard timezone or date", () => {

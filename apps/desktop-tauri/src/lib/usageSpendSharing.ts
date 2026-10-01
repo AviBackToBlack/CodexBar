@@ -139,6 +139,16 @@ export function formatSpendMetric(
   return parts.length > 0 ? parts.join(" · ") : "—";
 }
 
+/** Canonical token cell for spend ledgers; a missing or negative count is unknown, zero is known. */
+export function formatSpendTokens(
+  tokens: number | null | undefined,
+  tokenLabel: string,
+  unknownLabel: string,
+): string {
+  if (tokens == null || !Number.isFinite(tokens) || tokens < 0) return unknownLabel;
+  return `${tokens.toLocaleString()} ${tokenLabel}`;
+}
+
 /**
  * Render the sanitized share-card PNG.
  *
