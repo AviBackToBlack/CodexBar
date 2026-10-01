@@ -323,31 +323,25 @@ describe("TrayPanel provider grid", () => {
       reportingDay: "2026-09-19",
       dashboardTimezone: "UTC",
       rows: [
-        {
-          providerId: "codex",
-          displayName: "Codex",
-          sevenDay: 1,
-          thirtyDay: 2,
-          currency: "USD",
-          source: "local",
-          includedInOverview: true,
-        },
-        {
-          providerId: "claude",
-          displayName: "Claude",
-          sevenDay: 3,
-          thirtyDay: 4,
-          currency: "USD",
-          source: "hidden",
-          includedInOverview: false,
-        },
+        { providerId: "codex", displayName: "Codex", sevenDay: 1, thirtyDay: 2,
+          currency: "USD", source: "local", includedInOverview: true },
+        { providerId: "claude", displayName: "Claude", sevenDay: 3, thirtyDay: 4,
+          currency: "USD", source: "hidden", includedInOverview: false },
+        // A known subtotal is a partial estimate: counted for coverage, not in the total.
+        { providerId: "antigravity", displayName: "Antigravity", sevenDay: null, thirtyDay: null,
+          thirtyDayEstimate: {
+            knownSubtotalUsd: 9,
+            coverage: { priced: 0, unpriced: 1, unmetered: 0, estimated: 1 },
+          },
+          currency: "USD", source: "known subtotal", includedInOverview: true },
       ],
     });
 
     renderTrayPanel([provider("codex", "Codex", 35)]);
 
     expect(await screen.findByRole("button", { name: "UsageSpendShare" })).toBeInTheDocument();
-    expect(screen.getByText(/1 of 1 OverviewSpendProviderCoverage/)).toBeInTheDocument();
+    expect(screen.getByText("~$2.00")).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 OverviewSpendProviderCoverage/)).toBeInTheDocument();
   });
 
   it("dismisses the tray panel on unmodified Escape", async () => {

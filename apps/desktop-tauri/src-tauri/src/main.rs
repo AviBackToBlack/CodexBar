@@ -19,6 +19,7 @@ mod surface_target;
 mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
+mod tray_presentation;
 mod tray_visibility;
 mod usage_metric;
 mod window_positioner;
@@ -148,17 +149,27 @@ fn main() {
 
     let mut initial_state = AppState::new();
     initial_state.proof_config = proof_config;
-    // Proof-harness seed: CODEXBAR_SEED_USAGE_JSON plants one synthetic Codex
-    // ProviderUsageSnapshot before the event loop and any WebView read. The
-    // cache timestamp makes the seeded cache count as fresh so the first
-    // frontend refresh-if-stale call does not evict the synthetic data.
-    if let Some(snapshot) = proof_harness::seed_usage_snapshot_from_env() {
-        tracing::info!(
-            "proof-harness: seeded provider snapshot for '{}'",
-            snapshot.provider_id
-        );
-        initial_state.provider_cache.push(snapshot);
-        initial_state.provider_cache_updated_at = Some(std::time::Instant::now());
+    // Validate the complete proof seed before installing any snapshots, so an
+    // invalid multi-provider fixture cannot leave a partial cache behind.
+    if let Some(snapshots) =
+        proof_harness::seed_usage_snapshots_from_env(initial_state.proof_config.as_ref())
+    {
+        let seeded_at = std::time::Instant::now();
+        for snapshot in &snapshots {
+            tracing::info!(
+                "proof-harness: seeded provider snapshot for '{}'",
+                snapshot.provider_id
+            );
+            if let Some(provider) = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id)
+            {
+                initial_state
+                    .provider_cache_updated_at_by_provider
+                    .insert(provider, seeded_at);
+            }
+        }
+        initial_state.provider_cache.extend(snapshots);
+        initial_state.provider_cache_seeded = true;
+        initial_state.provider_cache_updated_at = Some(seeded_at);
     }
 
     let context = tauri::generate_context!();
