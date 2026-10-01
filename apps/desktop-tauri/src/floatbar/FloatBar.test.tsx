@@ -329,33 +329,100 @@ describe("FloatBar", () => {
 
   it("keeps an informational primary window when no secondary window is available", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
-      snapshot("claude", "Claude", 10, { informational: true }),
-    ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
-
-    const { container } = renderFloatBar(bootstrap());
-    await waitFor(() => {
-      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
-        "Claude: 10% used",
-      );
-    });
-  });
-
-  it("keeps an informational primary window when the secondary window is informational", async () => {
-    tauriMocks.getCachedProviders.mockResolvedValue([
-      snapshot("claude", "Claude", 10, {
+      snapshot("claude", "Claude", 0, {
         informational: true,
-        secondary: { used: 90, informational: true },
+        resetDescription: "No active 5h session",
       }),
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
     const { container } = renderFloatBar(bootstrap());
     await waitFor(() => {
-      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
-        "Claude: 10% used",
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toBe(
+        "Claude: No active 5h session",
       );
     });
+  });
+
+  it("keeps an informational primary window when the secondary window is informational", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 0, {
+        informational: true,
+        resetDescription: "No active 5h session",
+        secondary: { used: 90, informational: true, resetDescription: "Weekly unavailable" },
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toBe(
+        "Claude: No active 5h session",
+      );
+    });
+  });
+
+  it("shows an informational metric's text instead of a percentage or reset wording", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("litellm", "LiteLLM", 0, {
+        informational: true,
+        resetDescription: "No budget set",
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["litellm"], floatBarShowResetInline: true }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["litellm"], floatBarShowResetInline: true }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    const pill = container.querySelector(".floatbar__pill");
+    expect(pill?.getAttribute("title")).toBe("LiteLLM: No budget set");
+    expect(pill?.querySelector(".floatbar__pct")?.textContent).toBe("No budget set");
+    expect(pill?.textContent).not.toMatch(/%|Resets/);
+    expect(pill?.querySelector(".floatbar__reset")).toBeNull();
+    expect(pill?.classList.contains("floatbar__pill--ok")).toBe(true);
+  });
+
+  it("keeps the neutral tone for an informational metric in remaining mode", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("cursor", "Cursor", 100, {
+        informational: true,
+        resetDescription: "$12.40 API-rate",
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["cursor"], showAsUsed: false }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["cursor"], showAsUsed: false }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    const pill = container.querySelector(".floatbar__pill");
+    expect(pill?.getAttribute("title")).toBe("Cursor: $12.40 API-rate");
+    expect(pill?.classList.contains("floatbar__pill--ok")).toBe(true);
+  });
+
+  it("uses an em dash for an informational metric without text and keeps a timestamp reset", async () => {
+    const resetsAt = new Date(Date.now() + (2 * 60 + 5) * 60_000).toISOString();
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 0, { informational: true, resetsAt }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toMatch(
+        /^Codex: —\nResets in 2h \d+m$/,
+      );
+    });
+    expect(container.querySelector(".floatbar__pct")?.textContent).toBe("—");
   });
 
   it("sorts providers by their selected rate window", async () => {
