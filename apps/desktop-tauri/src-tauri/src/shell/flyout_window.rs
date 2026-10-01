@@ -2,9 +2,10 @@
 //! panel with optional always-on-top behavior that auto-hides on click-outside.
 //!
 //! Runs as an auxiliary Tauri window labeled `flyout`, independent of the
-//! `main` window's surface state machine — it coexists with "Show Window"
-//! (`SurfaceMode::PopOut`, which stays on `main`) instead of being a
-//! mutually-exclusive state of the same window.
+//! `main` window's surface state machine. It is the only dashboard layout:
+//! tray left-click, "Pop Out Dashboard", the global shortcut, app launch and
+//! single-instance relaunch all open it. The legacy PopOut layout on `main`
+//! is retired.
 //!
 //! Structurally modeled on `crate::floatbar` (self-contained module owning
 //! its window + a `handle_window_event` hook dispatched from `main.rs`
@@ -13,6 +14,7 @@
 //! pass, `WebviewUrl::App` with a `?window=` query marker).
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use codexbar::settings::Settings;
@@ -41,6 +43,15 @@ const BLUR_DISMISS_CLICK_WINDOW: Duration = Duration::from_millis(250);
 /// blur (tray click focus race) is ignored — mirrors `main.rs`'s 500ms
 /// `was_tray_panel_recently_shown` guard for the old shared window.
 const RECENTLY_SHOWN_GRACE: Duration = Duration::from_millis(500);
+
+/// Set once at startup by `CODEXBAR_START_VISIBLE`: keeps the flyout open
+/// when it loses focus, for automation flows that need it to stay visible.
+static KEEP_OPEN_ON_BLUR: AtomicBool = AtomicBool::new(false);
+
+/// Keep the flyout open on focus loss for the rest of this process.
+pub fn keep_open_on_blur() {
+    KEEP_OPEN_ON_BLUR.store(true, Ordering::Relaxed);
+}
 
 /// Read the remembered flyout size, if any (migrating a legacy
 /// `"trayPanel"`-keyed size on first read — see `geometry_store::load_size`).
@@ -259,7 +270,8 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                 let _ = window.set_always_on_top(true);
                 return true;
             }
-            if crate::proof_harness::is_proof_mode(app) {
+            if crate::proof_harness::is_proof_mode(app) || KEEP_OPEN_ON_BLUR.load(Ordering::Relaxed)
+            {
                 return true;
             }
             let Some(st) = app.try_state::<Mutex<AppState>>() else {
