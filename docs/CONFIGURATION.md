@@ -127,6 +127,23 @@ skills, and other Grok home files stay in place. `XAI_API_KEY` and
 `GROK_OAUTH_TOKEN` are unset for the isolated sign-in so the browser OAuth
 flow is used.
 
+## Antigravity CLI path
+
+When neither the Antigravity desktop app nor a signed-in `agy` session is
+running, the Antigravity provider can use the `agy` CLI. Win-CodexBar looks
+for it on `PATH`, then at `%LOCALAPPDATA%\agy\bin\agy.exe`, then at
+`%USERPROFILE%\.local\bin\agy.exe`. Set `ANTIGRAVITY_CLI_PATH` to the full
+path of `agy.exe` when it is installed somewhere else.
+
+A set `ANTIGRAVITY_CLI_PATH` is authoritative. If it is empty or does not
+point to a file, Win-CodexBar skips the CLI source and names the variable in
+the provider error instead of discovering another `agy` through `PATH` or the
+install directories, so a background refresh never starts a different CLI
+that could ask for an interactive sign-in. A running desktop app still
+answers first, and offline conversation history is still shown when it
+exists. Unset the variable to restore automatic discovery. Other providers
+keep their own override behavior.
+
 ## Source mode
 
 CLI `--source` values on this port (see `codexbar usage --help`): `auto`, `web`, `cli`, `oauth`.
