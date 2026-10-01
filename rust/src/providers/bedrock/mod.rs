@@ -3,15 +3,19 @@
 //! Fetches current-month Bedrock spend from AWS Cost Explorer using SigV4.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, Duration, TimeZone, Utc};
 use reqwest::Client;
 use serde_json::{Value, json};
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256, sha256_hex,
+    CostDailyPoint, CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256,
+    sha256_hex,
 };
-use crate::cost_reporting_period::{CostReportingPeriod, CostTimeZone};
+
+mod daily;
+
+use daily::{all_available_range, current_month_range, parse_daily_costs};
 
 const COST_EXPLORER_URL: &str = "https://ce.us-east-1.amazonaws.com";
 const COST_EXPLORER_TARGET: &str = "AWSInsightsIndexService.GetCostAndUsage";
@@ -310,27 +314,59 @@ impl BedrockProvider {
         credentials: &AwsCredentials,
     ) -> Result<f64, ProviderError> {
         let (start_date, end_date) = current_month_range();
-        let mut total = 0.0;
+        let pages = self
+            .fetch_cost_pages(credentials, &start_date, &end_date, "MONTHLY")
+            .await?;
+        Ok(pages.iter().map(parse_bedrock_cost).sum())
+    }
+
+    /// Daily Bedrock spend over every month Cost Explorer exposes, so a
+    /// month-to-date or all-available selection can be answered from it.
+    async fn fetch_daily_spend(
+        &self,
+        credentials: &AwsCredentials,
+    ) -> Result<Vec<CostDailyPoint>, ProviderError> {
+        let (start_date, end_date) = all_available_range();
+        let pages = self
+            .fetch_cost_pages(credentials, &start_date, &end_date, "DAILY")
+            .await?;
+        Ok(parse_daily_costs(&pages))
+    }
+
+    async fn fetch_cost_pages(
+        &self,
+        credentials: &AwsCredentials,
+        start_date: &str,
+        end_date: &str,
+        granularity: &str,
+    ) -> Result<Vec<Value>, ProviderError> {
+        let mut pages = Vec::new();
+        let mut seen_tokens = std::collections::HashSet::new();
         let mut next_page_token: Option<String> = None;
 
         loop {
             let page = self
                 .fetch_cost_page(
                     credentials,
-                    &start_date,
-                    &end_date,
+                    start_date,
+                    end_date,
+                    granularity,
                     next_page_token.as_deref(),
                 )
                 .await?;
-            total += parse_bedrock_cost(&page);
             next_page_token = extract_next_page_token(&page);
+            pages.push(page);
 
-            if next_page_token.is_none() {
-                break;
+            match &next_page_token {
+                None => return Ok(pages),
+                Some(token) if !seen_tokens.insert(token.clone()) => {
+                    return Err(ProviderError::Parse(
+                        "Cost Explorer returned repeated NextPageToken".to_string(),
+                    ));
+                }
+                Some(_) => {}
             }
         }
-
-        Ok(total)
     }
 
     async fn fetch_claude_activity(
@@ -394,9 +430,10 @@ impl BedrockProvider {
         credentials: &AwsCredentials,
         start_date: &str,
         end_date: &str,
+        granularity: &str,
         next_page_token: Option<&str>,
     ) -> Result<Value, ProviderError> {
-        let body_bytes = cost_request_body(start_date, end_date, next_page_token)?;
+        let body_bytes = cost_request_body(start_date, end_date, granularity, next_page_token)?;
         let body_hash = sha256_hex(&body_bytes);
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -471,6 +508,10 @@ impl BedrockProvider {
         }
 
         let mut cost = CostSnapshot::new(spend, "USD", "Monthly");
+        match self.fetch_daily_spend(&credentials).await {
+            Ok(daily) => cost = cost.with_daily(daily),
+            Err(error) => tracing::debug!(%error, "Bedrock daily cost history unavailable"),
+        }
         if let Some(limit) = budget {
             cost = cost.with_limit(limit);
         }
@@ -538,6 +579,7 @@ impl Provider for BedrockProvider {
 fn cost_request_body(
     start_date: &str,
     end_date: &str,
+    granularity: &str,
     next_page_token: Option<&str>,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut body = json!({
@@ -545,7 +587,7 @@ fn cost_request_body(
             "Start": start_date,
             "End": end_date,
         },
-        "Granularity": "MONTHLY",
+        "Granularity": granularity,
         "Metrics": ["UnblendedCost"],
         "GroupBy": [
             { "Type": "DIMENSION", "Key": "SERVICE" }
@@ -667,36 +709,6 @@ fn parse_aws_profile_credentials(stdout: &[u8]) -> Result<AwsCredentials, Provid
     })
 }
 
-/// Cost Explorer `TimePeriod` for daily buckets (upstream `dailyRange`).
-///
-/// Cost Explorer buckets are UTC, so the month is resolved in UTC. It exposes
-/// the current month plus thirteen earlier months, so `since` never reaches
-/// further back than that; the exclusive end is tomorrow. An all-available
-/// request passes any early `since` and gets the whole exposed range.
-fn daily_range(since: NaiveDate, now: DateTime<Utc>) -> (String, String) {
-    let month_start = utc_month_start(now);
-    let earliest = month_start
-        .checked_sub_months(Months::new(13))
-        .unwrap_or(month_start);
-    let tomorrow = now.date_naive() + Duration::days(1);
-    (
-        since.max(earliest).format("%Y-%m-%d").to_string(),
-        tomorrow.format("%Y-%m-%d").to_string(),
-    )
-}
-
-fn utc_month_start(now: DateTime<Utc>) -> NaiveDate {
-    CostReportingPeriod::MonthToDate
-        .bounds(now, CostTimeZone::Named(chrono_tz::UTC), None)
-        .start
-}
-
-/// Current-month range: month to date through tomorrow (exclusive).
-fn current_month_range() -> (String, String) {
-    let now = Utc::now();
-    daily_range(utc_month_start(now), now)
-}
-
 fn end_of_current_month() -> Option<chrono::DateTime<Utc>> {
     let now = Utc::now();
     let (year, month) = if now.month() == 12 {
@@ -707,18 +719,13 @@ fn end_of_current_month() -> Option<chrono::DateTime<Utc>> {
     Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0).single()
 }
 
-fn parse_bedrock_cost(page: &Value) -> f64 {
-    page.get("ResultsByTime")
+/// Amounts of the Bedrock service groups in one `ResultsByTime` entry.
+fn bedrock_group_amounts(result: &Value) -> impl Iterator<Item = f64> + '_ {
+    result
+        .get("Groups")
         .and_then(|v| v.as_array())
         .into_iter()
         .flatten()
-        .flat_map(|result| {
-            result
-                .get("Groups")
-                .and_then(|v| v.as_array())
-                .into_iter()
-                .flatten()
-        })
         .filter(|group| {
             group
                 .get("Keys")
@@ -735,6 +742,14 @@ fn parse_bedrock_cost(page: &Value) -> f64 {
                 .and_then(|v| v.as_str())
                 .and_then(|amount| amount.parse::<f64>().ok())
         })
+}
+
+fn parse_bedrock_cost(page: &Value) -> f64 {
+    page.get("ResultsByTime")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .flat_map(bedrock_group_amounts)
         .sum()
 }
 
@@ -832,49 +847,6 @@ fn sanitized_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn utc(y: i32, m: u32, d: u32, h: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(y, m, d, h, 0, 0).single().unwrap()
-    }
-
-    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(y, m, d).unwrap()
-    }
-
-    #[test]
-    fn daily_range_month_to_date_starts_at_utc_month_start() {
-        let now = utc(2026, 5, 15, 12);
-        let (start, end) = daily_range(utc_month_start(now), now);
-        assert_eq!(start, "2026-05-01");
-        assert_eq!(end, "2026-05-16");
-    }
-
-    #[test]
-    fn daily_range_month_start_uses_utc_not_local_time() {
-        // 23:30 UTC on the last day of April is still April in Cost Explorer.
-        let now = Utc
-            .with_ymd_and_hms(2026, 4, 30, 23, 30, 0)
-            .single()
-            .unwrap();
-        let (start, end) = daily_range(utc_month_start(now), now);
-        assert_eq!(start, "2026-04-01");
-        assert_eq!(end, "2026-05-01");
-    }
-
-    #[test]
-    fn daily_range_all_is_capped_at_current_month_plus_thirteen() {
-        let now = utc(2026, 5, 15, 12);
-        let (start, end) = daily_range(date(2000, 1, 1), now);
-        assert_eq!(start, "2025-04-01");
-        assert_eq!(end, "2026-05-16");
-    }
-
-    #[test]
-    fn daily_range_keeps_a_recent_since() {
-        let now = utc(2026, 5, 15, 12);
-        let (start, _) = daily_range(date(2026, 3, 10), now);
-        assert_eq!(start, "2026-03-10");
-    }
 
     #[test]
     fn parses_bedrock_cost_only() {

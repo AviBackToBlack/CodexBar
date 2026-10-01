@@ -33,8 +33,11 @@ pub struct PowerToysProviderSnapshot {
     secondary_label: Option<String>,
     secondary: Option<RateWindowSnapshot>,
     today_cost: Option<f64>,
+    /// Published pipe contract: always the trailing 30 days, independent of
+    /// the History window setting (`cost_reporting_period`).
     thirty_day_cost: Option<f64>,
     latest_tokens: Option<u64>,
+    /// Published pipe contract: always the trailing 30 days.
     thirty_day_tokens: Option<u64>,
     top_model: Option<String>,
     updated_at: String,
@@ -228,6 +231,10 @@ mod tests {
                 today_cost: Some(1.25),
                 thirty_day_cost: Some(12.5),
                 thirty_day_tokens: Some(42_000),
+                // A different History window must not change the pipe values.
+                period_cost: Some(99.0),
+                period_tokens: Some(99_000),
+                reporting_period: "month-to-date".to_string(),
                 latest_tokens: Some(1_200),
                 top_model: Some("gpt-5".to_string()),
                 estimate_note: "cached".to_string(),

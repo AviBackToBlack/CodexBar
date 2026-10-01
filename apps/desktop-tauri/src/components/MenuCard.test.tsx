@@ -128,8 +128,10 @@ describe("MenuCard", () => {
         PanelBlockedByMonthlyLimit: "Blocked by monthly limit",
         PanelOnPaceBudget: "On-pace budget",
         PanelReserveSuffix: "in reserve",
-        PanelThirtyDayCost: "30d cost",
-        PanelThirtyDayTokens: "30d tokens",
+        PanelPeriodCost: "{} cost",
+        PanelPeriodTokens: "{} tokens",
+        CostPeriodShortMonthToDate: "MTD",
+        CostPeriodShortDays: "{}d",
         PanelTodayBudget: "today",
         PanelUsedSuffix: "used",
         ResetsInHoursMinutes: "Resets in {}h {}m",
@@ -169,6 +171,9 @@ describe("MenuCard", () => {
         todayCost: null,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
+        periodCost: 1.23,
+        periodTokens: 584_000,
+        reportingPeriod: "rolling:30",
         latestTokens: null,
         topModel: "glim-4.6",
         estimateNote: "Estimated from local logs",
@@ -776,6 +781,37 @@ describe("MenuCard", () => {
     });
 
     expect(bar).toHaveAttribute("title", "2026-05-24: $1.23 · 14K tokens");
+  });
+
+  it("labels local totals with the selected History window instead of 30 days", async () => {
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      providerId: "claude",
+      costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: null,
+        // The fixed 30-day fields must not leak into the period rows.
+        thirtyDayCost: 1.23,
+        thirtyDayTokens: 584_000,
+        periodCost: 7.5,
+        periodTokens: 2_000_000,
+        reportingPeriod: "month-to-date",
+        latestTokens: null,
+        topModel: "glim-4.6",
+        estimateNote: "Estimated from local logs",
+        tokenCostUpdatedAtMs: 1234,
+      },
+    });
+
+    renderCard(provider(null));
+
+    expect(await screen.findByText("MTD cost")).toBeInTheDocument();
+    expect(screen.getByText("MTD tokens")).toBeInTheDocument();
+    expect(screen.getByText("$7.50")).toBeInTheDocument();
+    expect(screen.getByText("2M")).toBeInTheDocument();
+    expect(screen.queryByText("30d cost")).not.toBeInTheDocument();
+    expect(screen.queryByText("584K")).not.toBeInTheDocument();
   });
 
   it("places Claude accounts above metrics and the collapsed usage details", async () => {

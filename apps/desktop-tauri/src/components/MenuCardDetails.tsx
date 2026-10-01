@@ -19,6 +19,7 @@ import {
   type ResetTimeFormatMode,
 } from "../hooks/useFormattedResetTime";
 import { formatEta } from "../lib/formatEta";
+import { periodCostLabel, periodTokensLabel } from "../lib/costPeriod";
 import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
@@ -129,6 +130,8 @@ function LocalUsageBlock({
   const { t } = useLocale();
   const isCodex = providerId === "codex";
   const isMuse = providerId === "muse";
+  // The selected History window; the histogram below stays a fixed 30 days.
+  const { reportingPeriod, periodCost, periodTokens } = summary;
   const visibleHistory = costHistory.slice(-30);
   const maxCost = Math.max(
     ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
@@ -153,17 +156,19 @@ function LocalUsageBlock({
         </div>
         {!isMuse && (
           <div>
-            <span className="menu-card__local-label">{t("PanelThirtyDayCost")}</span>
+            <span className="menu-card__local-label">
+              {periodCostLabel(reportingPeriod, t)}
+            </span>
             <strong>
-              {summary.thirtyDayCost != null
-                ? formatCurrency(summary.thirtyDayCost, "USD")
-                : "—"}
+              {periodCost != null ? formatCurrency(periodCost, "USD") : "—"}
             </strong>
           </div>
         )}
         <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayTokens")}</span>
-          <strong>{formatCompactCount(summary.thirtyDayTokens)}</strong>
+          <span className="menu-card__local-label">
+            {periodTokensLabel(reportingPeriod, t)}
+          </span>
+          <strong>{formatCompactCount(periodTokens)}</strong>
         </div>
         {!isMuse && (
           <div>

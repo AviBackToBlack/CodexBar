@@ -736,6 +736,9 @@ pub struct SettingsSnapshot {
     cost_summary_display_style: &'static str,
     open_codex_usage_logs_enabled: bool,
     hide_native_codex_cost_when_open_codex_present: bool,
+    /// History window as its persisted raw form (`rolling:N`,
+    /// `month-to-date`, `all`).
+    cost_reporting_period: String,
     provider_accent_colors: std::collections::HashMap<String, String>,
 }
 
@@ -868,6 +871,7 @@ impl From<Settings> for SettingsSnapshot {
             open_codex_usage_logs_enabled: settings.open_codex_usage_logs_enabled,
             hide_native_codex_cost_when_open_codex_present: settings
                 .hide_native_codex_cost_when_open_codex_present,
+            cost_reporting_period: settings.cost_reporting_period.raw(),
             provider_accent_colors: settings
                 .provider_configs
                 .iter()

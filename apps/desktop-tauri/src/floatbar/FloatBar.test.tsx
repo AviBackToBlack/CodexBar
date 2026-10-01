@@ -231,7 +231,8 @@ describe("FloatBar", () => {
         ProviderIssueSessionExpired: "Session expired",
         ProviderIssueLocalRuntimeOffline: "Local runtime offline",
         ProviderIssueUnknown: "Usage unavailable",
-        FloatBarThirtyDayShort: "30d",
+        CostPeriodShortMonthToDate: "MTD",
+        CostPeriodShortDays: "{}d",
         FloatBarNoProviders: "No providers",
         FloatBarRemainingSuffix: "remaining",
       }),
@@ -389,6 +390,9 @@ describe("FloatBar", () => {
       todayCost: 1.25,
       thirtyDayCost: 12.5,
       thirtyDayTokens: 1000,
+      periodCost: 12.5,
+      periodTokens: 1000,
+      reportingPeriod: "rolling:30",
       latestTokens: 200,
       topModel: "gpt-5",
       estimateNote: "Estimated from local logs",
@@ -410,6 +414,9 @@ describe("FloatBar", () => {
       todayCost: 1.25,
       thirtyDayCost: 12.5,
       thirtyDayTokens: 1000,
+      periodCost: 12.5,
+      periodTokens: 1000,
+      reportingPeriod: "rolling:30",
       latestTokens: 200,
       topModel: "gpt-5",
       estimateNote: "Estimated from local logs",
@@ -426,6 +433,38 @@ describe("FloatBar", () => {
     expect(container.querySelector(".floatbar__cost-pill")?.getAttribute("title")).toContain(
       "(Estimate)",
     );
+  });
+
+  it("shows the selected History window cost with its short label", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("codex", "Codex", 75)]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowCost: true, costReportingPeriod: "month-to-date" }),
+    );
+    tauriMocks.getProviderLocalUsageSummary.mockResolvedValue({
+      todayCost: 1.25,
+      // Fixed 30-day compat field stays different from the selected window.
+      thirtyDayCost: 12.5,
+      thirtyDayTokens: 1000,
+      periodCost: 4.75,
+      periodTokens: 300,
+      reportingPeriod: "month-to-date",
+      latestTokens: 200,
+      topModel: "gpt-5",
+      estimateNote: "Estimated from local logs",
+      tokenCostUpdatedAtMs: 1234,
+    });
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarShowCost: true, costReportingPeriod: "month-to-date" }),
+    );
+
+    await waitFor(() => {
+      const items = Array.from(container.querySelectorAll(".floatbar__cost-item")).map(
+        (item) => item.textContent,
+      );
+      expect(items).toEqual(["Today$1.25", "MTD$4.75"]);
+    });
+    expect(container.textContent).not.toContain("$12.50");
   });
 
   it("does not scan local costs by default", async () => {

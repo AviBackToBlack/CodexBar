@@ -12,10 +12,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::codex_workspaces::{CodexWorkspacesIndex, ProjectUsage, SessionUsage, SourceStatus};
+use crate::cost_reporting_period::{CostReportingPeriod, MAX_ROLLING_DAYS};
 use crate::cost_scanner::{
     CostScanner, CostSummary, ModelTokenCounts, get_daily_cost_history, get_daily_token_history,
 };
@@ -187,7 +188,14 @@ struct ResolvedSpendData {
 #[serde(rename_all = "camelCase")]
 pub struct SpendContract {
     pub provider_id: String,
+    /// Days of the rolling-only sidecars (workspaces, imports, per-day
+    /// history). For month to date this is the days elapsed this month; for
+    /// all available history it caps at 365. `reporting_period` names the
+    /// window the totals actually cover.
     pub history_days: u32,
+    /// Raw reporting period (`rolling:N`, `month-to-date`, `all`).
+    #[serde(default)]
+    pub reporting_period: String,
     /// Known subtotal for this window. None means unknown, never implicit zero.
     pub known_cost_usd: Option<f64>,
     pub known_zero: bool,
@@ -364,14 +372,27 @@ pub async fn refresh_opencodex_pricing_if_needed() {
 }
 
 /// Build a stable accounting contract for a local-log provider.
-///  means the upstream All-time UI window, bounded to 365 days locally.
+/// `days == 0` means the legacy All-time window, bounded to 365 days locally.
 pub fn build_local_spend_contract(
     provider_id: &str,
     days: u32,
     include_opencodex: bool,
 ) -> SpendContract {
     let history_days = if days == 0 { 365 } else { days.clamp(1, 365) };
-    let scanner = CostScanner::new(history_days);
+    build_local_spend_contract_for_period(
+        provider_id,
+        CostReportingPeriod::Rolling(history_days),
+        include_opencodex,
+    )
+}
+
+/// Scan and build the accounting contract for a reporting period.
+pub fn build_local_spend_contract_for_period(
+    provider_id: &str,
+    period: CostReportingPeriod,
+    include_opencodex: bool,
+) -> SpendContract {
+    let scanner = CostScanner::for_period(period);
     let summary = match provider_id {
         "codex" => scanner.scan_codex(),
         "claude" => scanner.scan_claude(),
@@ -379,9 +400,9 @@ pub fn build_local_spend_contract(
         "opencodego" => scanner.scan_opencodego_with_cancel(None),
         _ => CostSummary::default(),
     };
-    build_local_spend_contract_from_summary(
+    build_contract_from_period_summary(
         provider_id,
-        history_days,
+        period,
         include_opencodex,
         false,
         crate::settings::Settings::load().hide_personal_info,
@@ -398,7 +419,32 @@ pub fn build_local_spend_contract_from_summary(
     hide_personal_info: bool,
     summary: CostSummary,
 ) -> SpendContract {
-    let history_days = history_days.clamp(1, 365);
+    build_contract_from_period_summary(
+        provider_id,
+        CostReportingPeriod::Rolling(history_days.clamp(1, MAX_ROLLING_DAYS)),
+        include_opencodex,
+        hide_native_codex_when_opencodex_present,
+        hide_personal_info,
+        summary,
+    )
+}
+
+/// Build the accounting contract for `period` from a summary scanned for that
+/// same period.
+///
+/// Sources that only support rolling windows (Codex workspaces, per-day
+/// history, OpenCodex imports) use [`CostReportingPeriod::sidecar_days`]:
+/// month to date maps to the days elapsed this month and all available
+/// history caps at a year. `history_days` reports that sidecar window.
+pub fn build_contract_from_period_summary(
+    provider_id: &str,
+    period: CostReportingPeriod,
+    include_opencodex: bool,
+    hide_native_codex_when_opencodex_present: bool,
+    hide_personal_info: bool,
+    summary: CostSummary,
+) -> SpendContract {
+    let history_days = period.sidecar_days(Utc::now());
     let custom = CustomPricing::load();
     let native_models = model_rows(provider_id, &summary, &custom);
     let native_coverage = coverage_for_models(&native_models);
@@ -469,6 +515,7 @@ pub fn build_local_spend_contract_from_summary(
     SpendContract {
         provider_id: provider_id.to_string(),
         history_days,
+        reporting_period: period.raw(),
         known_cost_usd: resolved.known_cost_usd,
         known_zero,
         provenance: resolved.provenance,

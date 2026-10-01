@@ -103,6 +103,8 @@ impl CostTimeZone {
     pub fn pin_identifier() -> Option<String> {
         crate::core::try_local_timezone_name().filter(|name| Self::is_valid_identifier(name))
     }
+    /// UTC, the bucket zone of provider-reported daily costs.
+    pub const UTC: Self = Self::Named(chrono_tz::UTC);
 
     /// Zone identifier used in cache identities.
     pub fn identifier(&self) -> String {
@@ -294,6 +296,25 @@ impl CostReportingPeriod {
             bounds.end.format("%Y-%m-%d"),
         )
     }
+
+    /// Day count for sources that scan a trailing day count, resolved in the
+    /// local cost zone. All available history is not clamped to a year.
+    pub fn scan_days(&self, now: DateTime<Utc>) -> u32 {
+        clamp_window_days(self.days(now, CostTimeZone::Local, None))
+    }
+
+    /// Day count for sidecars that only support rolling windows of
+    /// `1..=365` days (Codex workspaces, OpenCodex imports). Month to date
+    /// maps to the days elapsed this month; all available history caps at a year.
+    pub fn sidecar_days(&self, now: DateTime<Utc>) -> u32 {
+        self.scan_days(now).clamp(1, MAX_ROLLING_DAYS)
+    }
+
+    /// Pick the period a request runs with: a valid raw `period` wins,
+    /// otherwise `saved`.
+    pub fn resolve_request(period: Option<&str>, saved: Self) -> Self {
+        period.and_then(Self::parse).unwrap_or(saved)
+    }
 }
 
 impl fmt::Display for CostReportingPeriod {
@@ -332,7 +353,7 @@ mod tests {
     use chrono_tz::{America::Los_Angeles, Asia::Tokyo};
 
     const LA: CostTimeZone = CostTimeZone::Named(Los_Angeles);
-    const UTC: CostTimeZone = CostTimeZone::Named(chrono_tz::UTC);
+    const UTC: CostTimeZone = CostTimeZone::UTC;
 
     fn at(value: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(value)
@@ -482,6 +503,32 @@ mod tests {
         ] {
             assert_eq!(CostReportingPeriod::parse(invalid), None, "{invalid:?}");
         }
+    }
+
+    #[test]
+    fn scan_and_sidecar_days_follow_the_selection() {
+        let now = Utc::now();
+        let elapsed = CostReportingPeriod::MonthToDate.scan_days(now);
+        assert_eq!(CostReportingPeriod::Rolling(7).scan_days(now), 7);
+        assert_eq!(CostReportingPeriod::MonthToDate.sidecar_days(now), elapsed);
+        assert!(CostReportingPeriod::AllAvailable.scan_days(now) > MAX_ROLLING_DAYS);
+        assert_eq!(
+            CostReportingPeriod::AllAvailable.sidecar_days(now),
+            MAX_ROLLING_DAYS
+        );
+    }
+
+    #[test]
+    fn request_resolution_prefers_explicit_then_saved() {
+        let saved = CostReportingPeriod::MonthToDate;
+        let resolve = |period| CostReportingPeriod::resolve_request(period, saved);
+        assert_eq!(resolve(Some("all")), CostReportingPeriod::AllAvailable);
+        assert_eq!(
+            resolve(Some("rolling:90")),
+            CostReportingPeriod::Rolling(90)
+        );
+        assert_eq!(resolve(None), saved);
+        assert_eq!(resolve(Some("bogus")), saved);
     }
 
     #[test]

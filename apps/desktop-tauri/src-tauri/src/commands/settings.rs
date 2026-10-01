@@ -88,6 +88,8 @@ pub struct SettingsUpdate {
     pub cost_summary_display_style: Option<String>,
     pub open_codex_usage_logs_enabled: Option<bool>,
     pub hide_native_codex_cost_when_open_codex_present: Option<bool>,
+    /// History window: `rolling:N` (1..=365), `month-to-date`, or `all`.
+    pub cost_reporting_period: Option<String>,
 }
 
 impl SettingsUpdate {
@@ -106,6 +108,7 @@ impl SettingsUpdate {
             || self.low_power_mode_preference.is_some()
             || self.adaptive_refresh.is_some()
             || self.codex_custom_sessions_dirs.is_some()
+            || self.cost_reporting_period.is_some()
             || self.high_usage_threshold.is_some()
             || self.critical_usage_threshold.is_some()
             || self.provider_usage_thresholds.is_some()
@@ -138,6 +141,7 @@ impl SettingsUpdate {
             || self.provider_hidden_usage_item_ids.is_some()
             || self.codex_spark_usage_visible.is_some()
             || self.copilot_seat_credit_entitlement.is_some()
+            || self.cost_reporting_period.is_some()
             || self.enabled_providers.is_some()
             || self.ui_language.is_some()
     }
@@ -172,6 +176,13 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.refresh_all_providers_on_menu_open {
             settings.refresh_all_providers_on_menu_open = v;
+        }
+        if let Some(v) = self
+            .cost_reporting_period
+            .as_deref()
+            .and_then(codexbar::cost_reporting_period::CostReportingPeriod::parse)
+        {
+            settings.cost_reporting_period = v;
         }
         if let Some(v) = self.open_codex_usage_logs_enabled {
             settings.open_codex_usage_logs_enabled = v;
@@ -432,6 +443,11 @@ impl SettingsUpdate {
         {
             return Err(format!("Invalid low power mode preference: {value}"));
         }
+        if let Some(value) = self.cost_reporting_period.as_deref()
+            && codexbar::cost_reporting_period::CostReportingPeriod::parse(value).is_none()
+        {
+            return Err(format!("Invalid cost reporting period: {value}"));
+        }
         if let Some(value) = self.copilot_seat_credit_entitlement {
             settings.set_seat_credit_entitlement(codexbar::core::ProviderId::Copilot, value)?;
         }
@@ -527,7 +543,8 @@ pub async fn update_settings(
     let mut settings = Settings::load();
     let notify_float_bar = patch.notifies_float_bar();
     let refresh_provider_data = patch.refreshes_provider_data();
-    let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some();
+    let clear_local_usage_cache =
+        patch.codex_custom_sessions_dirs.is_some() || patch.cost_reporting_period.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
     let tray_promotion_changed = patch.changes_tray_promotion();
@@ -703,6 +720,27 @@ mod tests {
             "Copilot seat AI-credit allowance must be a finite number greater than zero"
         );
         assert_eq!(settings.seat_credit_entitlement(ProviderId::Copilot), None);
+    }
+
+    #[test]
+    fn cost_reporting_period_update_is_validated_and_applied() {
+        use codexbar::cost_reporting_period::CostReportingPeriod;
+
+        let mut settings = Settings::default();
+        let bad: SettingsUpdate =
+            serde_json::from_str(r#"{"costReportingPeriod":"rolling:0"}"#).unwrap();
+        let error = bad
+            .apply_to(&mut settings)
+            .expect_err("zero-day window must be rejected");
+        assert_eq!(error, "Invalid cost reporting period: rolling:0");
+
+        let good: SettingsUpdate =
+            serde_json::from_str(r#"{"costReportingPeriod":"month-to-date"}"#).unwrap();
+        good.apply_to(&mut settings).expect("valid period applies");
+        assert_eq!(
+            settings.cost_reporting_period,
+            CostReportingPeriod::MonthToDate
+        );
     }
 
     #[test]

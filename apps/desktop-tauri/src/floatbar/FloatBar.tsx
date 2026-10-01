@@ -19,6 +19,7 @@ import {
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
+import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
 import type {
   BootstrapState,
@@ -92,7 +93,10 @@ type FloatBarCostSummary = {
   providerId: string;
   displayName: string;
   todayCost: number | null;
-  thirtyDayCost: number | null;
+  /** Cost over the selected History window. */
+  periodCost: number | null;
+  /** Raw History window `periodCost` covers. */
+  period: string;
 };
 
 type FloatBarCostTarget = {
@@ -106,7 +110,7 @@ function providerCostKey(provider: ProviderUsageSnapshot): string {
 }
 
 function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is ProviderLocalUsageSummary {
-  return summary?.todayCost != null || summary?.thirtyDayCost != null;
+  return summary?.todayCost != null || summary?.periodCost != null;
 }
 
 function formatUsd(value: number | null): string | null {
@@ -118,22 +122,22 @@ function CostPill({
   summary,
   scale,
   todayLabel,
-  thirtyDayLabel,
+  periodLabel,
   estimateLabel,
 }: {
   summary: FloatBarCostSummary;
   scale: number;
   todayLabel: string;
-  thirtyDayLabel: string;
+  periodLabel: string;
   estimateLabel: string;
 }) {
   const today = formatUsd(summary.todayCost);
-  const thirtyDay = formatUsd(summary.thirtyDayCost);
+  const periodCost = formatUsd(summary.periodCost);
   const iconSize = Math.round(10 * scale);
   const brand = getProviderIcon(summary.providerId).brandColor;
   const title = [
     today ? `${todayLabel} ${today}` : null,
-    thirtyDay ? `${thirtyDayLabel} ${thirtyDay}` : null,
+    periodCost ? `${periodLabel} ${periodCost}` : null,
   ]
     .filter(Boolean)
     .join(" / ");
@@ -159,13 +163,13 @@ function CostPill({
             </span>
           </span>
         )}
-        {thirtyDay && (
+        {periodCost && (
           <span className="floatbar__cost-item" data-tauri-drag-region>
             <span className="floatbar__cost-label" data-tauri-drag-region>
-              {thirtyDayLabel}
+              {periodLabel}
             </span>
             <span className="floatbar__cost-value" data-tauri-drag-region>
-              {thirtyDay}
+              {periodCost}
             </span>
           </span>
         )}
@@ -382,7 +386,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
           providerId: target.providerId,
           displayName: target.displayName,
           todayCost: localUsage.todayCost,
-          thirtyDayCost: localUsage.thirtyDayCost,
+          periodCost: localUsage.periodCost,
+          period: localUsage.reportingPeriod,
         } satisfies FloatBarCostSummary;
       }),
     )
@@ -403,13 +408,14 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     return () => {
       cancelled = true;
     };
-  }, [visibleCostTargets]);
+    // A History window change re-reads the local usage summaries.
+  }, [visibleCostTargets, settings.costReportingPeriod]);
 
   const visibleCosts = visible
     .map((provider) => localCosts[providerCostKey(provider)])
     .filter((summary): summary is FloatBarCostSummary => Boolean(summary));
   const visibleCostValuesKey = visibleCosts
-    .map((summary) => `${summary.key}:${summary.todayCost ?? ""}:${summary.thirtyDayCost ?? ""}`)
+    .map((summary) => `${summary.key}:${summary.todayCost ?? ""}:${summary.period ?? ""}:${summary.periodCost ?? ""}`)
     .join("|");
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);
@@ -522,7 +528,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               summary={summary}
               scale={scale}
               todayLabel={t("PanelToday")}
-              thirtyDayLabel={t("FloatBarThirtyDayShort")}
+              periodLabel={costPeriodShortLabel(summary.period, t)}
               estimateLabel={t("OverviewSpendEstimate")}
             />
           ))}
