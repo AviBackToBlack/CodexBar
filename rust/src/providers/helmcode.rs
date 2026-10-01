@@ -588,8 +588,8 @@ mod tests {
         assert_eq!(cost.period, "Prepaid balance");
     }
 
-    #[test]
-    fn premium_billing_reveals_rolling_windows_and_requires_boolean_true() {
+    #[tokio::test]
+    async fn premium_billing_reveals_rolling_windows_and_requires_boolean_true() {
         let quota: Value = serde_json::from_str(QUOTA_GOLDEN).unwrap();
         let premium = parse_models(&quota, true).unwrap();
         assert_eq!(premium.len(), 6);
@@ -610,16 +610,19 @@ mod tests {
         assert_eq!(premium[0].window_hours, None);
 
         for billing in [
-            json!({}),
-            json!({"subscription":{"premium":"true"}}),
-            json!({"subscription":{"premium":1}}),
+            "{}",
+            r#"{"subscription":{"premium":"true"}}"#,
+            r#"{"subscription":{"premium":1}}"#,
+            r#"{"subscription":{"premium":null}}"#,
         ] {
-            let premium = billing
-                .get("subscription")
-                .and_then(|value| value.get("premium"))
-                .and_then(Value::as_bool)
-                == Some(true);
-            assert_eq!(parse_models(&quota, premium).unwrap().len(), 4);
+            let result = mock_fetch(200, billing, 200, CREDITS, None)
+                .await
+                .unwrap_or_else(|error| panic!("billing {billing} failed quota fetch: {error}"));
+            assert_eq!(result.usage.extra_rate_windows.len(), 3, "{billing}");
+            assert_eq!(result.usage.primary.window_minutes, None, "{billing}");
+            for window in &result.usage.extra_rate_windows {
+                assert_eq!(window.window.window_minutes, None, "{billing}");
+            }
         }
     }
 
