@@ -627,7 +627,7 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             requires_api_key: false,
             api_key_env_var: Some("HYPER_API_KEY"),
             api_key_help: Some(
-                "Optional. Sign in through hyper.charm.land browser cookies, or save an API key for API access.",
+                "Fallback when no hyper.charm.land session is available. Save an API key here or set HYPER_API_KEY.",
             ),
             config_file_path: None,
             dashboard_url: Some("https://hyper.charm.land"),

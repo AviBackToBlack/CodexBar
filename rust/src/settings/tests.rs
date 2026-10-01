@@ -39,6 +39,15 @@ fn kimi_cookie_source_defaults_to_automatic_discovery() {
 }
 
 #[test]
+fn hyper_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream resolves `hyperCookieSource` with an `.auto` fallback.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Hyper), "auto");
+    settings.set_cookie_source(ProviderId::Hyper, "off");
+    assert_eq!(settings.cookie_source(ProviderId::Hyper), "off");
+}
+
+#[test]
 fn overview_layout_defaults_to_compact_and_round_trips() {
     let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
         .expect("missing overview layout defaults to compact");
