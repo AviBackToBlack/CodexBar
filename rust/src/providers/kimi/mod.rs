@@ -13,7 +13,10 @@
 //!   (Electron) Chromium cookie store.
 //! - [`ratio_pool`]: zero-ratio placeholder reconciliation against matching
 //!   legacy counters (upstream 0.63.0).
+//! - [`auto`]: Auto-mode order after the Code API key (CLI credential, then
+//!   web auth) and which failure is reported when neither works.
 
+mod auto;
 mod code_api;
 pub mod desktop_token;
 mod ratio_pool;
@@ -352,34 +355,23 @@ impl Provider for KimiProvider {
                     }
                 }
 
-                if let Some(cli_token) =
-                    code_api::kimi_code_cli_access_token(region, unix_now_secs())
-                {
-                    let home = code_api::kimi_code_home().unwrap_or_default();
-                    let headers = code_api::kimi_code_cli_identity_headers(&home);
-                    match code_api::fetch_via_code_api(
-                        ctx,
-                        region,
-                        Some(&cli_token),
-                        Some(&headers),
-                        "Kimi Code CLI",
-                    )
-                    .await
-                    {
-                        Ok(usage) => {
-                            return Ok(ProviderFetchResult::new(usage, "code-cli"));
-                        }
-                        Err(err) => {
-                            tracing::debug!(
-                                error = %err,
-                                "Kimi Code CLI credential fetch failed; falling back to web"
-                            );
-                        }
-                    }
-                }
-
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await?;
-                Ok(ProviderFetchResult::new(usage, "web"))
+                auto::fetch_cli_then_web(
+                    code_api::kimi_code_cli_credential(region, unix_now_secs()),
+                    |cli_token| async move {
+                        let home = code_api::kimi_code_home().unwrap_or_default();
+                        let headers = code_api::kimi_code_cli_identity_headers(&home);
+                        code_api::fetch_via_code_api(
+                            ctx,
+                            region,
+                            Some(&cli_token),
+                            Some(&headers),
+                            "Kimi Code CLI",
+                        )
+                        .await
+                    },
+                    || web::fetch_web_session(ctx.manual_cookie_header.as_deref(), region),
+                )
+                .await
             }
             SourceMode::OAuth => {
                 let usage =
