@@ -24,10 +24,12 @@ fn fixture_entries() -> Vec<OpenCodexEntry> {
         .collect()
 }
 
-fn custom_pricing(model: &str) -> CustomPricing {
+/// One 2/8/0.5/3 override under `key`, trimmed and lowercased as the loader
+/// stores it.
+fn custom_key(key: &str) -> CustomPricing {
     CustomPricing {
         entries: HashMap::from([(
-            format!("nous/{model}"),
+            key.to_string(),
             CustomRates {
                 input: Some(2.0),
                 output: Some(8.0),
@@ -36,6 +38,17 @@ fn custom_pricing(model: &str) -> CustomPricing {
             },
         )]),
     }
+}
+
+fn custom_pricing(model: &str) -> CustomPricing {
+    custom_key(&format!("nous/{model}"))
+}
+
+const SONNET_2_8: &str = r#""anthropic/claude-sonnet-4.6":{"id":"anthropic/claude-sonnet-4.6","cost":{"input":2,"output":8}}"#;
+
+fn assert_cost(cost: Option<f64>, expected: f64) {
+    let cost = cost.expect("priced");
+    assert!((cost - expected).abs() < 1e-10, "{cost} vs {expected}");
 }
 
 fn aggregate_one(entry: &OpenCodexEntry, custom: &CustomPricing) -> ImportedSpendSource {
@@ -179,16 +192,146 @@ fn nous_catalog_cache_writes_use_the_catalog_cache_write_rate() {
 }
 
 #[test]
-fn nous_custom_pricing_requires_a_provider_qualified_override() {
+fn nous_custom_pricing_accepts_the_bare_model_key() {
+    // Upstream `rates(providerID:model:)` matches the unqualified key too.
     let entry = &fixture_entries()[0];
-    let mut custom = custom_pricing(&entry.model);
-    let rates = custom
-        .entries
-        .remove(&format!("nous/{}", entry.model))
-        .expect("provider-qualified override");
-    custom.entries.insert(entry.model.clone(), rates);
+    let custom = custom_key("anthropic/claude-sonnet-4.6");
+    assert_cost(entry_cost(entry, &custom, &catalog("")), 0.044_862);
+    assert!(aggregate_one(entry, &custom).models[0].custom_pricing);
+}
 
-    assert_eq!(entry_cost(entry, &custom, &catalog("")), None);
+#[test]
+fn nous_rows_need_both_input_and_output_to_be_priced() {
+    let entry = &fixture_entries()[0];
+    let custom = custom_pricing(&entry.model);
+    let snapshot = catalog(SONNET_2_8);
+    assert_cost(entry_cost(entry, &custom, &snapshot), 0.044_862);
+    assert_cost(
+        entry_cost(entry, &CustomPricing::default(), &snapshot),
+        0.044_862,
+    );
+
+    let mut no_input = entry.clone();
+    no_input.input_tokens = None;
+    let mut no_output = entry.clone();
+    no_output.output_tokens = None;
+    for partial in [&no_input, &no_output] {
+        assert_eq!(entry_cost(partial, &custom, &snapshot), None);
+        assert_eq!(
+            entry_cost(partial, &CustomPricing::default(), &snapshot),
+            None
+        );
+    }
+}
+
+#[test]
+fn nous_catalog_never_bills_a_consumed_cache_lane_at_the_input_rate() {
+    // Row 1 reads 3,520 cached tokens; its catalog entry has no cache-read rate.
+    let entry = &fixture_entries()[1];
+    let no_cache_read = catalog(
+        r#""z-ai/glm-5.3-flash":{"id":"z-ai/glm-5.3-flash","cost":{"input":2,"output":8}}"#,
+    );
+    assert_eq!(
+        entry_cost(entry, &CustomPricing::default(), &no_cache_read),
+        None
+    );
+
+    let mut entry = parse_line(UNREPORTED).expect("row parses");
+    entry.usage_status = "estimated".to_string();
+    let no_cache_write = catalog(
+        r#""fixture-model":{"id":"fixture-model","cost":{"input":2,"output":8,"cache_read":0.5}}"#,
+    );
+    assert_eq!(
+        entry_cost(&entry, &CustomPricing::default(), &no_cache_write),
+        None
+    );
+    // Without cache writes the same entry prices: 10 input, 3 cached, 2 output.
+    entry.cache_creation_tokens = Some(0);
+    let cost = entry_cost(&entry, &CustomPricing::default(), &no_cache_write).expect("priced");
+    assert!((cost - 0.000_037_5).abs() < 1e-12, "{cost}");
+}
+
+#[test]
+fn nous_catalog_ignores_dated_and_versioned_aliases() {
+    let undated = catalog(SONNET_2_8);
+    for alias in [
+        "anthropic/claude-sonnet-4.6@20260101",
+        "anthropic/claude-sonnet-4.6-20260101",
+    ] {
+        assert_eq!(
+            entry_cost(
+                &entry_for("nous", alias),
+                &CustomPricing::default(),
+                &undated
+            ),
+            None,
+            "{alias}"
+        );
+    }
+    let dated = catalog(
+        r#""anthropic/claude-sonnet-4.6-20260101":{"id":"anthropic/claude-sonnet-4.6-20260101","cost":{"input":2,"output":8}}"#,
+    );
+    assert_eq!(
+        entry_cost(&fixture_entries()[0], &CustomPricing::default(), &dated),
+        None
+    );
+}
+
+#[test]
+fn self_prefixed_nous_models_resolve_to_the_catalog_id() {
+    let entry = entry_for("nous", "Nous/anthropic/claude-sonnet-4.6");
+    assert_cost(
+        entry_cost(&entry, &CustomPricing::default(), &catalog(SONNET_2_8)),
+        0.044_862,
+    );
+
+    // An override keyed by the catalog id prices the row and flags its model.
+    let custom = custom_key("anthropic/claude-sonnet-4.6");
+    assert_cost(entry_cost(&entry, &custom, &catalog("")), 0.044_862);
+    assert!(aggregate_one(&entry, &custom).models[0].custom_pricing);
+}
+
+#[test]
+fn legacy_openai_transport_nous_rows_are_priced_only_by_custom_overrides() {
+    let entry = entry_for("openai", "nous/anthropic/claude-sonnet-4.6");
+    assert_eq!(route_entry(&entry), RouteTarget::Subscription("nous"));
+    // Upstream keeps their OpenAI pricing route, which has no Nous catalog.
+    assert_eq!(
+        entry_cost(&entry, &CustomPricing::default(), &catalog(SONNET_2_8)),
+        None
+    );
+
+    let custom = custom_key("nous/anthropic/claude-sonnet-4.6");
+    assert_cost(entry_cost(&entry, &custom, &catalog("")), 0.044_862);
+    assert!(aggregate_one(&entry, &custom).models[0].custom_pricing);
+}
+
+#[test]
+fn malformed_nous_model_ids_stay_unpriced() {
+    let snapshot = catalog(concat!(
+        r#""x":{"id":"x","cost":{"input":2,"output":8}},"#,
+        r#""/x":{"id":"/x","cost":{"input":2,"output":8}},"#,
+        r#""x/":{"id":"x/","cost":{"input":2,"output":8}}"#,
+    ));
+    assert!(
+        entry_cost(
+            &entry_for("nous", "nous/x"),
+            &CustomPricing::default(),
+            &snapshot
+        )
+        .is_some()
+    );
+    for model in ["nous/", "nous//x", "/x", "x/", "nous/x/"] {
+        assert_eq!(
+            entry_cost(
+                &entry_for("nous", model),
+                &CustomPricing::default(),
+                &snapshot
+            ),
+            None,
+            "{model}"
+        );
+    }
 }
 
 #[test]

@@ -158,13 +158,8 @@ fn aggregate(
 
     for entry in &entries {
         // A row without a conversationId is its own session (upstream 0.68.0).
-        conversations.insert(
-            entry
-                .conversation_id
-                .as_ref()
-                .unwrap_or(&entry.request_id)
-                .clone(),
-        );
+        let session = entry.conversation_id.as_ref().unwrap_or(&entry.request_id);
+        conversations.insert(session.clone());
         token_mix.input_tokens = add_optional(token_mix.input_tokens, entry.input_tokens);
         token_mix.output_tokens = add_optional(token_mix.output_tokens, entry.output_tokens);
         token_mix.cache_read_tokens =
@@ -240,7 +235,7 @@ fn aggregate(
         if let Some(cost) = cost {
             model.cost = Some(model.cost.unwrap_or(0.0) + cost);
         }
-        model.custom_pricing |= custom.rates(&entry.provider, &entry.model).is_some();
+        model.custom_pricing |= has_custom_rates(entry, custom);
     }
 
     let mut model_rows: Vec<_> = models
@@ -368,6 +363,14 @@ fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
         }
         RouteTarget::Subscription(_) | RouteTarget::TokenOnly | RouteTarget::Unknown => None,
     }
+}
+
+/// Whether a custom override covers `entry`, resolved as its cost resolves it.
+fn has_custom_rates(entry: &OpenCodexEntry, custom: &CustomPricing) -> bool {
+    if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
+        return nous::custom_rates(entry, custom).is_some();
+    }
+    custom.rates(&entry.provider, &entry.model).is_some()
 }
 
 fn provider_model_id(entry: &OpenCodexEntry, target: RouteTarget) -> String {

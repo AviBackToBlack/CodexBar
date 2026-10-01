@@ -1,7 +1,7 @@
 //! Codex routed-model pricing (upstream 0.50.1 #2946).
 //!
 //! Codex rollouts routed through a non-OpenAI backend (DeepSeek, Kimi,
-//! OpenCode and Nous) carry the provider as a `provider/model` prefix. This module
+//! OpenCode) carry the provider as a `provider/model` prefix. This module
 //! detects the route and strips the prefix so the cost lookup prices
 //! against the right models.dev catalog instead of falling back to OpenAI.
 
@@ -9,9 +9,9 @@
 /// return the matching models.dev provider id (upstream 0.50.1 #2946).
 ///
 /// Known routes: `deepseek/` → "deepseek", `kimi/` → "kimi",
-/// `opencode/` → "opencode", `nous/` → "nous". The `openai/` prefix is
-/// stripped by [`normalize_codex_model`] and priced against the OpenAI catalog
-/// as before. Unknown `provider/` prefixes return `None` here so the caller
+/// `opencode/` → "opencode". The `openai/` prefix is stripped by
+/// [`normalize_codex_model`] and priced against the OpenAI catalog as
+/// before. Unknown `provider/` prefixes return `None` here so the caller
 /// leaves them unpriced rather than guessing.
 pub fn codex_routed_provider(model: &str) -> Option<&'static str> {
     let trimmed = model.trim();
@@ -20,8 +20,6 @@ pub fn codex_routed_provider(model: &str) -> Option<&'static str> {
         "deepseek" => Some("deepseek"),
         "kimi" => Some("kimi"),
         "opencode" => Some("opencode"),
-        // Nous Portal keeps the vendor-qualified model id whole (`nous/anthropic/claude-...`).
-        "nous" => Some("nous"),
         _ => None,
     }
 }

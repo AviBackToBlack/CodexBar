@@ -90,6 +90,36 @@ mod tests {
     }
 
     #[test]
+    fn exact_lookup_matches_only_the_trimmed_key_or_model_id() {
+        let catalog = ModelsDevCatalog::decode(
+            r#"{
+                "Nous": {
+                    "models": {
+                        "z-ai/glm-5": {"id": "z-ai/glm-5", "cost": {"input": 1, "output": 2}},
+                        "catalog-key": {"id": "deepseek/deepseek-v4", "cost": {"input": 3, "output": 4}},
+                        "gpt-5": {"id": "gpt-5", "cost": {"input": 5, "output": 6}}
+                    }
+                }
+            }"#,
+        )
+        .expect("catalog");
+        let input_rate = |model: &str| {
+            catalog
+                .lookup_exact(" NOUS ", model)
+                .map(|pricing| pricing.input_cost_per_token)
+        };
+
+        assert_eq!(input_rate(" z-ai/glm-5 "), Some(1e-6));
+        assert_eq!(input_rate("deepseek/deepseek-v4"), Some(3e-6));
+        assert_eq!(input_rate("Z-AI/GLM-5"), None);
+        // Aliases the fuzzy lookup resolves never supply an exact price.
+        for alias in ["z-ai/glm-5@20260101", "z-ai/glm-5-20260101", "openai/gpt-5"] {
+            assert!(catalog.lookup("nous", alias).is_some(), "{alias}");
+            assert_eq!(input_rate(alias), None, "{alias}");
+        }
+    }
+
+    #[test]
     fn cache_artifact_is_versioned_and_expires_after_one_day() {
         let catalog = ModelsDevCatalog::decode(
             r#"{
@@ -223,6 +253,15 @@ impl ModelsDevPricingSnapshot {
             .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
     }
 
+    /// Exact-id lookup (upstream `exactModelID: true`): the trimmed id must
+    /// equal a catalog key or model id. No dated, `@`, or vendor-prefix alias
+    /// of another model can supply the price.
+    pub fn lookup_exact(&self, provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
+        self.artifact
+            .as_ref()
+            .and_then(|artifact| artifact.catalog.lookup_exact(provider_id, model_id))
+    }
+
     #[cfg(test)]
     pub(crate) fn from_catalog_json_for_tests(json: &str) -> Option<Self> {
         let catalog = ModelsDevCatalog::decode(json)?;
@@ -291,6 +330,22 @@ impl ModelsDevCatalog {
                 .then(|| DynamicModelPricing::from_model(model))
                 .flatten()
         })
+    }
+
+    fn lookup_exact(&self, provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
+        let provider = self.providers.get(&normalize_provider_id(provider_id))?;
+        let model_id = normalize_model_id(model_id);
+        provider
+            .models
+            .get(&model_id)
+            .and_then(DynamicModelPricing::from_model)
+            .or_else(|| {
+                provider.models.values().find_map(|model| {
+                    (normalize_model_id(&model.id) == model_id)
+                        .then(|| DynamicModelPricing::from_model(model))
+                        .flatten()
+                })
+            })
     }
 
     fn is_plausible_refresh(&self) -> bool {
