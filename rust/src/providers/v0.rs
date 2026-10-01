@@ -49,7 +49,7 @@ impl V0Provider {
                 supports_credits: true,
                 default_enabled: false,
                 is_primary: false,
-                dashboard_url: Some("https://v0.app/chat/settings/billing"),
+                dashboard_url: Some("https://v0.app/settings/billing"),
                 status_page_url: Some("https://www.vercel-status.com/"),
                 tertiary_label_key: None,
             },
@@ -353,6 +353,17 @@ fn parse_failure(field: impl AsRef<str>) -> ProviderError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn dashboard_url_matches_upstream_billing_page() {
+        const BILLING: &str = "https://v0.app/settings/billing";
+        assert_eq!(V0Provider::new().metadata().dashboard_url, Some(BILLING));
+        let configured = crate::settings::get_api_key_providers()
+            .into_iter()
+            .find(|info| info.id == ProviderId::V0)
+            .expect("v0 api key config");
+        assert_eq!(configured.dashboard_url, Some(BILLING));
+    }
 
     #[test]
     fn parses_token_billing_and_rate_limit_without_fabricating_windows() {
