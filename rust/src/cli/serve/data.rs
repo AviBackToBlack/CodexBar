@@ -6,9 +6,11 @@
 
 use serde_json::json;
 
+use crate::cli::cost_period::{cost_totals_json, rolling_window_days, stamp_period, window_days};
 use crate::cli::usage::ProviderSelection;
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::{self, CostScanner};
+use crate::settings::Settings;
 
 use super::json_response;
 
@@ -64,50 +66,62 @@ pub async fn cost_response(provider: Option<&str>) -> String {
             return json_response(400, json!({ "error": error.to_string() }));
         }
     };
-    let scanner = CostScanner::new(30).with_options(CostScanOptions::app_driven());
+    // The saved selection is read per request, so a change in Settings (or a
+    // month rollover for month to date) applies without restarting `serve`.
+    // There is no `/cost` response cache; the scanners' own caches are keyed by
+    // the resolved day range, so one period never reuses another's entries.
+    let period = Settings::load().cost_reporting_period;
+    let days = window_days(period);
+    let scanner = CostScanner::for_period(period).with_options(CostScanOptions::app_driven());
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
         if provider_id == ProviderId::Antigravity {
             use crate::providers::antigravity::local_sessions;
-            let history = local_sessions::summarize(30);
+            let history = local_sessions::summarize(days);
             // Upstream 0.64 `serve` refreshes unknown-model pricing in the
             // background; a later `/cost` read picks up the new prices.
             if let Some(refresh) = local_sessions::background_pricing_refresh(&history) {
                 tokio::spawn(refresh);
             }
-            results.push(crate::spend_contract::local_token_history_json(
-                "antigravity",
-                &history,
-                30,
-            ));
+            let mut payload =
+                crate::spend_contract::local_token_history_json("antigravity", &history, days);
+            stamp_period(&mut payload, period);
+            results.push(payload);
             continue;
         }
         if provider_id == ProviderId::Muse {
-            let report = crate::providers::muse::local_usage::scan(30, None);
-            let history = report.into();
-            results.push(crate::spend_contract::local_token_history_json(
-                "muse", &history, 30,
-            ));
+            let report = crate::providers::muse::local_usage::scan(days, None);
+            let mut payload =
+                crate::spend_contract::local_token_history_json("muse", report.into(), days);
+            stamp_period(&mut payload, period);
+            results.push(payload);
             continue;
         }
-        let (supported, summary) = match provider_id {
-            ProviderId::Codex => (true, scanner.scan_codex()),
-            ProviderId::Claude => (true, scanner.scan_claude()),
-            ProviderId::Pi => (true, scanner.scan_pi()),
-            _ => (false, Default::default()),
+        let (supported, summary, daily) = match provider_id {
+            ProviderId::Codex => (true, scanner.scan_codex(), None),
+            ProviderId::Claude => {
+                let snapshot = scanner.scan_claude_chart_snapshot_with_cancel(None);
+                (true, snapshot.summary, Some(snapshot.daily_cost))
+            }
+            ProviderId::Pi => (true, scanner.scan_pi(), None),
+            _ => (false, Default::default(), None),
         };
         if supported {
-            // Daily spend history for the dashboard bar charts. The debounced
-            // helper reuses the cache the summary scan just warmed, so no
-            // second disk walk happens per request.
-            let daily = daily_json(cost_scanner::get_daily_cost_history(
-                provider_id.cli_name(),
-                30,
-            ));
-            results.push(json!({
+            // Claude's snapshot derives the summary and chart rows in one
+            // transcript walk. Other providers use the shared daily-history
+            // path, capped at one year for All.
+            let daily = daily.unwrap_or_else(|| {
+                cost_scanner::get_daily_cost_history(
+                    provider_id.cli_name(),
+                    rolling_window_days(period),
+                )
+            });
+            let daily = daily_json(daily);
+            let mut payload = json!({
                 "provider": provider_id.cli_name(),
                 "supported": true,
-                "days_scanned": 30,
+                "days_scanned": days,
+                "totals": cost_totals_json(&summary),
                 "cost": {
                     "total_usd": summary.total_cost_usd,
                     "currency": "USD"
@@ -120,7 +134,9 @@ pub async fn cost_response(provider: Option<&str>) -> String {
                 },
                 "sessions_count": summary.sessions_count,
                 "by_model": summary.by_model,
-            }));
+            });
+            stamp_period(&mut payload, period);
+            results.push(payload);
         } else {
             results.push(json!({
                 "provider": provider_id.cli_name(),

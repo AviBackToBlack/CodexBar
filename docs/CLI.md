@@ -64,11 +64,21 @@ codexbar cost
 codexbar cost -p codex -f json --pretty
 codexbar cost -p codex --remote user@mac-host
 codexbar cost -p codex --format json --summary-only --provider-native-only --days 30
+codexbar cost --period month-to-date --json
+codexbar cost --period all --json
+codexbar cost --days 7 --json
 ```
 
 Claude/Codex costs come from local session logs. Antigravity reads supported local token history; known models receive API list-price estimates from the bundled price table or the models.dev pricing catalog, and unknown models stay unpriced rather than becoming a false `$0`. Antigravity's Gemini 3.1 Pro aliases (`gemini-pro-default`, `gemini-pro-agent`, and the `gemini-3.1-pro` effort tiers) price as `gemini-3.1-pro-preview`, the only catalogued Gemini 3.1 Pro row; the alias is provider-local and recorded model names stay unchanged. These estimates are not Antigravity charges or credit deductions. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
 
 Antigravity history that stopped short is never shown as exact. A scan whose decoded rows are trustworthy reports `tokensAreLowerBound` / `costIsLowerBound` (text: "at least N"); a scan cut off by a hard limit, or one whose sources contradict each other, is withheld and publishes no total. A later partial read does not replace an earlier complete read of the same window and roots within one process. Reading the history never waits on the network. When a recorded model has no known public price, the desktop Usage & Spend view and `serve /cost` start one bounded models.dev pricing refresh in the background and a later read picks up the new prices; `codexbar cost --provider antigravity --refresh` waits for that refresh and rescans, while a plain `codexbar cost` starts no download. The request carries no account identity or usage data, and a failure leaves the affected models unpriced. Empty or absent history never starts a pricing download.
+**Reporting period.** `--period month-to-date|all` selects the calendar month so far (midnight on the first of the month, in the machine's local zone, through today) or all available local history. `--days N` (1..=365) always selects a rolling window and wins over `--period`. With neither flag the saved `cost_reporting_period` in `settings.json` applies (`rolling:30`, `month-to-date` or `all`; 30 days when unset). Text headings show the period label (`Last 30 days`, `Month to date`, `All`, `Today`). JSON payloads add `reportingPeriod` (the raw value), `historyLabel`, and a `totals` object (`inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens`, `totalTokens`, `totalCost`) for the selected window, and `days_scanned` is the resolved day count; the existing `cost`, `tokens`, and `sessions_count` fields keep their meaning. `totals` is `null` when a scan found nothing without establishing a known zero.
+
+`--remote` and `--summary-only` keep the 1..=365 day protocol: month to date is sent as its current day count, and All is rejected unless you pass an explicit `--days N`. `--group-by session` lists the most recent 365 days at most when All is selected. All reads every available local log, including logs older than a year; missing or deleted logs cannot be recovered and incomplete scans stay marked incomplete.
+
+`serve` `/cost` reads the saved period on every request, so `days_scanned`, `totals`, the scanner windows and the `daily` chart rows follow it (`daily` covers at most the latest 365 days for All). The dashboard cost line, the dashboard snapshot, and the Prometheus gauge `codexbar_cost_last_30_days_usd` keep their 30-day meaning.
+
+Claude/Codex costs come from local session logs. Antigravity exposes local **token history only** through `cost`; dollar cost remains unknown rather than becoming a false `$0`. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
 
 `--remote` adds one separate native Codex report fetched through non-interactive SSH; overlapping local and remote histories are never combined. `--summary-only` emits the versioned, path-free JSON contract used by the remote comparison and accepts only `--provider codex --format json`. Both modes reject session grouping and other provider selections.
 

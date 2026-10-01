@@ -217,6 +217,17 @@ impl CostReportingPeriod {
         }
     }
 
+    /// Human label shown next to totals: "Today", "Last N days", "Month to
+    /// date" or "All".
+    pub fn label(&self) -> String {
+        match self {
+            Self::Rolling(1) => "Today".to_string(),
+            Self::Rolling(days) => format!("Last {days} days"),
+            Self::MonthToDate => "Month to date".to_string(),
+            Self::AllAvailable => "All".to_string(),
+        }
+    }
+
     /// Resolve a saved selection, falling back to a legacy day count and then
     /// to the 30-day default. An unreadable saved value migrates like a
     /// missing one.
@@ -354,6 +365,14 @@ mod tests {
             assert_eq!(period.bounds(now, LA, None).start, day(start), "{now}");
             assert_eq!(period.bounds(now, LA, None).end, LA.date(now), "{now}");
         }
+    }
+
+    #[test]
+    fn labels_match_upstream_wording() {
+        assert_eq!(CostReportingPeriod::Rolling(1).label(), "Today");
+        assert_eq!(CostReportingPeriod::Rolling(30).label(), "Last 30 days");
+        assert_eq!(CostReportingPeriod::MonthToDate.label(), "Month to date");
+        assert_eq!(CostReportingPeriod::AllAvailable.label(), "All");
     }
 
     #[test]
