@@ -42,9 +42,31 @@ struct VeniceBalances {
     usd: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct VeniceSessionResponse {
-    token: String,
+/// Why a `/api/auth/session` reply carried no usable session token.
+#[derive(Debug, PartialEq, Eq)]
+enum SessionTokenError {
+    /// The reply parsed but has a missing, null, non-string or blank `token`.
+    /// Upstream treats this as invalid credentials (an expired Clerk session).
+    Invalid,
+    /// The body is not a JSON object.
+    Malformed(String),
+}
+
+/// Extracts the session token from a `/api/auth/session` body the way upstream
+/// `VeniceWebUsageFetcher.snapshot(fromSessionData:)` does: a JSON object whose
+/// `token` is a non-blank string.
+fn session_token_from_body(body: &[u8]) -> Result<String, SessionTokenError> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|error| SessionTokenError::Malformed(error.to_string()))?;
+    let Some(object) = value.as_object() else {
+        return Err(SessionTokenError::Malformed(
+            "expected a JSON object".to_string(),
+        ));
+    };
+    match object.get("token").and_then(Value::as_str) {
+        Some(token) if !token.trim().is_empty() => Ok(token.to_string()),
+        _ => Err(SessionTokenError::Invalid),
+    }
 }
 
 pub struct VeniceProvider {
@@ -139,14 +161,17 @@ impl VeniceProvider {
             )));
         }
 
-        let session: VeniceSessionResponse = response.json().await.map_err(|e| {
-            ProviderError::Parse(format!("Failed to parse Venice web session: {e}"))
-        })?;
-        if session.token.trim().is_empty() {
-            return Err(invalid_session_error());
-        }
-        let token = session.token.as_str();
-        let claims = crate::codex_accounts::api::jwt_payload(token)
+        let body = response.bytes().await?;
+        let token = match session_token_from_body(&body) {
+            Ok(token) => token,
+            Err(SessionTokenError::Invalid) => return Err(invalid_session_error()),
+            Err(SessionTokenError::Malformed(detail)) => {
+                return Err(ProviderError::Parse(format!(
+                    "Failed to parse Venice web session: {detail}"
+                )));
+            }
+        };
+        let claims = crate::codex_accounts::api::jwt_payload(&token)
             .ok_or_else(|| ProviderError::Parse("Venice session token is not a JWT".into()))?;
         snapshot_from_web_claims(&claims, Utc::now())
     }
@@ -817,6 +842,45 @@ mod tests {
         assert_eq!(
             epoch_value_to_datetime(Some(&serde_json::json!("1900000000"))),
             DateTime::<Utc>::from_timestamp(1_900_000_000, 0)
+        );
+    }
+
+    #[test]
+    fn session_body_without_a_usable_token_is_invalid_credentials() {
+        for body in [
+            r#"{}"#,
+            r#"{"token":null}"#,
+            r#"{"token":""}"#,
+            r#"{"token":"   "}"#,
+            r#"{"token":42}"#,
+            r#"{"token":{"jwt":"x"}}"#,
+        ] {
+            assert_eq!(
+                session_token_from_body(body.as_bytes()),
+                Err(SessionTokenError::Invalid),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_body_that_is_not_an_object_is_malformed() {
+        for body in ["", "not json", "[]", "\"token\"", "null"] {
+            assert!(
+                matches!(
+                    session_token_from_body(body.as_bytes()),
+                    Err(SessionTokenError::Malformed(_))
+                ),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_body_with_a_token_returns_it() {
+        assert_eq!(
+            session_token_from_body(br#"{"token":"a.b.c","extra":1}"#),
+            Ok("a.b.c".to_string())
         );
     }
 
