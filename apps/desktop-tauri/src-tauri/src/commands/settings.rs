@@ -29,6 +29,7 @@ pub struct SettingsUpdate {
     pub switcher_shows_icons: Option<bool>,
     pub menu_bar_shows_highest_usage: Option<bool>,
     pub menu_bar_shows_percent: Option<bool>,
+    pub menu_bar_color_pace: Option<bool>,
     pub show_as_used: Option<bool>,
     pub show_all_token_accounts_in_menu: Option<bool>,
     pub enable_animations: Option<bool>,
@@ -124,6 +125,7 @@ impl SettingsUpdate {
             || self.switcher_shows_icons.is_some()
             || self.menu_bar_shows_highest_usage.is_some()
             || self.menu_bar_shows_percent.is_some()
+            || self.menu_bar_color_pace.is_some()
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
@@ -257,6 +259,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.menu_bar_shows_percent {
             settings.menu_bar_shows_percent = v;
+        }
+        if let Some(v) = self.menu_bar_color_pace {
+            settings.menu_bar_color_pace = v;
         }
         if let Some(v) = self.show_all_token_accounts_in_menu {
             settings.show_all_token_accounts_in_menu = v;
@@ -700,6 +705,33 @@ mod tests {
             }
             .refreshes_tray_presentation()
         );
+        assert!(
+            SettingsUpdate {
+                menu_bar_color_pace: Some(true),
+                ..Default::default()
+            }
+            .refreshes_tray_presentation()
+        );
+    }
+
+    #[test]
+    fn apply_display_settings_updates_tray_pace_color() {
+        let mut settings = Settings::default();
+        assert!(!settings.menu_bar_color_pace);
+
+        SettingsUpdate {
+            menu_bar_color_pace: Some(true),
+            ..Default::default()
+        }
+        .apply_display_settings(&mut settings);
+        assert!(settings.menu_bar_color_pace);
+
+        SettingsUpdate {
+            menu_bar_color_pace: Some(false),
+            ..Default::default()
+        }
+        .apply_display_settings(&mut settings);
+        assert!(!settings.menu_bar_color_pace);
     }
 
     #[test]

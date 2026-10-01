@@ -19,6 +19,7 @@ const baseSettings = {
   switcherShowsIcons: false,
   menuBarShowsHighestUsage: false,
   menuBarShowsPercent: false,
+  menuBarColorPace: false,
   menuBarDisplayMode: "detailed",
   overviewLayout: "detailed",
   windowScalePercent: 100,
@@ -29,9 +30,17 @@ const baseSettings = {
   showPace: false,
 } as unknown as SettingsSnapshot;
 
-function renderTab(set: (patch: Record<string, unknown>) => void) {
+function renderTab(
+  set: (patch: Record<string, unknown>) => void,
+  mode: "menuBar" | "menu" = "menu",
+) {
   return render(
-    <DisplayTab settings={baseSettings} set={set as never} saving={false} />,
+    <DisplayTab
+      mode={mode}
+      settings={baseSettings}
+      set={set as never}
+      saving={false}
+    />,
   );
 }
 
@@ -82,5 +91,14 @@ describe("DisplayTab menu settings", () => {
     );
 
     expect(set).toHaveBeenCalledWith({ trayPanelAlwaysOnTop: true });
+  });
+
+  it("updates the tray pace color preference", () => {
+    const set = vi.fn();
+    renderTab(set, "menuBar");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "ColorPaceInTray" }));
+
+    expect(set).toHaveBeenCalledWith({ menuBarColorPace: true });
   });
 });

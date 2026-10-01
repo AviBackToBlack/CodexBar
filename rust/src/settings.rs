@@ -148,6 +148,10 @@ pub struct Settings {
     #[serde(default)]
     pub menu_bar_shows_percent: bool,
 
+    /// Colour the Windows tray usage indicator by pace when enabled.
+    #[serde(default)]
+    pub menu_bar_color_pace: bool,
+
     /// Show usage bars as "used" (true) or "remaining" (false)
     pub show_as_used: bool,
 
@@ -544,6 +548,7 @@ impl Default for Settings {
             switcher_shows_icons: true,
             menu_bar_shows_highest_usage: false,
             menu_bar_shows_percent: false,
+            menu_bar_color_pace: false,
             show_as_used: true,        // Show as "used" by default
             enable_animations: true,   // Animations enabled by default
             reset_time_relative: true, // Show relative times by default
