@@ -8,7 +8,7 @@
 //! debounce (default 60s; `app_driven` forces a fresh inspection), and checks
 //! cancel flags between files.
 
-use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -29,7 +29,7 @@ use crate::core::{
     CachedCostReport, CodexScanPauseReason, CostScanOptions, CostUsageCache, CostUsageDayRange,
     CostUsageFileUsage, JsonlScanner, ProviderId,
 };
-use crate::cost_reporting_period::{CostReportingPeriod, MAX_ROLLING_DAYS};
+use crate::cost_reporting_period::{CostReportingPeriod, MAX_ROLLING_DAYS, cost_bucket_zone};
 use crate::providers::claude::quota_history::{
     ClaudeHistoryAttribution, ClaudeQuotaDedupKey, ClaudeQuotaHistoryRecord,
 };
@@ -659,7 +659,7 @@ impl CostScanner {
     ) -> ClaudeChartSnapshot {
         let projects_dir = self.get_claude_projects_dir();
         let now = Utc::now();
-        let window = self.transcript_window(now, Local::now().date_naive());
+        let window = self.transcript_window(now, cost_bucket_zone().date(now));
         let cutoff = window.cutoff;
         let mut summary = CostSummary {
             period_start: Some(window.start),
@@ -1114,7 +1114,7 @@ fn quota_history_record_from_usage(record: &ClaudeUsageRecord) -> Option<ClaudeQ
 }
 
 /// Add one usage record to the per-day cost buckets, keyed by the record's
-/// own timestamp in the local timezone. Records outside the initialized
+/// own timestamp in the pinned bucket zone. Records outside the initialized
 /// date range (or without a timestamp) are ignored.
 fn add_claude_record_to_daily_costs(
     daily_costs: &mut HashMap<String, Option<f64>>,
@@ -1123,9 +1123,8 @@ fn add_claude_record_to_daily_costs(
     let Some(timestamp) = record.timestamp else {
         return;
     };
-    let date_str = timestamp
-        .with_timezone(&Local)
-        .date_naive()
+    let date_str = cost_bucket_zone()
+        .date(timestamp)
         .format("%Y-%m-%d")
         .to_string();
     if let Some(cost) = daily_costs.get_mut(&date_str) {
@@ -1155,7 +1154,7 @@ pub fn has_cost_usage_sources() -> bool {
 /// is unscanned or contains unpriced Codex usage; `Some(0)` is a known zero.
 pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<f64>)> {
     let scanner = CostScanner::new(days);
-    let today = Local::now().date_naive();
+    let today = cost_bucket_zone().date(Utc::now());
     let mut daily_costs: HashMap<String, Option<f64>> = HashMap::new();
 
     // Initialize all days with 0
@@ -1275,7 +1274,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
 /// marker; upstream 0.50.0 #2930).
 pub fn get_daily_token_history(provider: &str, days: u32) -> (Vec<(String, u64)>, bool) {
     let scanner = CostScanner::new(days);
-    let today = Local::now().date_naive();
+    let today = cost_bucket_zone().date(Utc::now());
     let mut daily_tokens: HashMap<String, u64> = HashMap::new();
     let mut covered_days: HashSet<String> = HashSet::new();
 
@@ -1378,9 +1377,8 @@ fn add_claude_record_to_daily_tokens(
     let Some(timestamp) = record.timestamp else {
         return;
     };
-    let date_str = timestamp
-        .with_timezone(&Local)
-        .date_naive()
+    let date_str = cost_bucket_zone()
+        .date(timestamp)
         .format("%Y-%m-%d")
         .to_string();
     if let Some(slot) = daily_tokens.get_mut(&date_str) {

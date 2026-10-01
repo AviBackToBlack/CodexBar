@@ -91,7 +91,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     let mut stats = CostScanStats::default();
     let sessions_dirs = scanner.get_codex_sessions_dirs();
     let now = Utc::now();
-    let today = Local::now().date_naive();
+    let today = crate::cost_reporting_period::cost_bucket_zone().date(now);
     // All-available history opens at the first existing partition; with no
     // partitions it is just today, so an empty tree costs no directory probes.
     let earliest = (scanner.period == CostReportingPeriod::AllAvailable)

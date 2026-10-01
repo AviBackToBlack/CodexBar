@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 
 use crate::agent_sessions::CodexRolloutFirstLineParser;
@@ -156,7 +156,7 @@ impl CodexWorkspacesIndex {
         }
 
         progress(Progress::phase(ProgressPhase::ScanningLogs));
-        let today = Local::now().date_naive();
+        let today = crate::cost_reporting_period::cost_bucket_zone().date(Utc::now());
         let since = codex_period_start(today, self.history_days);
         let range = CostUsageDayRange::new(since, today);
 
@@ -745,6 +745,7 @@ fn meta_day_out_of_range(path: &Path, range: &CostUsageDayRange) -> bool {
 mod tests {
     use super::*;
     use crate::codex_workspaces::types::SourceStatus;
+    use chrono::Local;
     use rusqlite::Connection;
     use std::fs::File;
     use std::io::Write;

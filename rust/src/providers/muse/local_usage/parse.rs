@@ -110,7 +110,9 @@ pub(crate) fn parse_line(line: &[u8]) -> Result<Option<Event>, ()> {
     let timestamp = Utc.timestamp_opt(seconds, nanos).single().ok_or(())?;
     Ok(Some(Event {
         id: id.to_string(),
-        day: timestamp.with_timezone(&Local).date_naive().to_string(),
+        day: crate::cost_reporting_period::cost_bucket_zone()
+            .date(timestamp)
+            .to_string(),
         model,
         input_tokens: input,
         output_tokens: output,

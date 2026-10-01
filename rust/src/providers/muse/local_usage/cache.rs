@@ -105,7 +105,7 @@ pub(crate) fn load_cache(root: &Path, sessions: &Path, since: &str, until: &str)
         && cache.sessions_root == sessions.to_string_lossy()
         && cache.since_day == since
         && cache.until_day == until
-        && cache.timezone == Local::now().offset().to_string()
+        && cache.timezone == crate::cost_reporting_period::cost_bucket_zone().identifier()
     {
         cache
     } else {
@@ -117,7 +117,7 @@ pub(crate) fn save_cache(root: &Path, sessions: &Path, since: &str, until: &str,
     cache.sessions_root = sessions.to_string_lossy().into_owned();
     cache.since_day = since.to_string();
     cache.until_day = until.to_string();
-    cache.timezone = Local::now().offset().to_string();
+    cache.timezone = crate::cost_reporting_period::cost_bucket_zone().identifier();
     let Ok(bytes) = serde_json::to_vec(&cache) else {
         return;
     };

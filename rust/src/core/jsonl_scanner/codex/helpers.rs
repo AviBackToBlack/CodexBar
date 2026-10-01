@@ -1,5 +1,5 @@
 use super::CodexTotals;
-use chrono::{DateTime, FixedOffset, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::Value;
 use std::io::BufRead;
@@ -346,9 +346,8 @@ impl ParsedCodexTimestamp {
         self.parsed
             .as_ref()
             .map(|timestamp| {
-                timestamp
-                    .with_timezone(&Local)
-                    .date_naive()
+                crate::cost_reporting_period::cost_bucket_zone()
+                    .date(timestamp.with_timezone(&Utc))
                     .format("%Y-%m-%d")
                     .to_string()
             })

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration as StdDuration, Instant};
 
-use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, types::ValueRef};
 
 use self::local_bot_id::{ExactStepTimestamp, embedded_timestamps_agree, record_exact_bot_id};
@@ -138,7 +138,8 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         return SQLiteScan::NoDatabases;
     }
 
-    let first_day = now.with_timezone(&Local).date_naive()
+    let zone = crate::cost_reporting_period::cost_bucket_zone();
+    let first_day = zone.date(now)
         - Duration::days(i64::from(
             crate::cost_reporting_period::clamp_window_days(days).saturating_sub(1),
         ));
@@ -226,7 +227,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
             continue;
         };
         rows.insert(row_key, event.clone());
-        if at > now || at.with_timezone(&Local).date_naive() < first_day {
+        if at > now || zone.date(at) < first_day {
             continue;
         }
         match total_tokens.checked_add(event.total) {

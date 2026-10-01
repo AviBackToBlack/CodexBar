@@ -43,6 +43,8 @@ struct CachedCostReadStatusProjection {
     previous_report: Option<CachedCostReport>,
     #[serde(default)]
     codex_scan_pause_reason: Option<CodexScanPauseReason>,
+    #[serde(default)]
+    bucket_time_zone: Option<String>,
 }
 
 fn deserialize_nonempty_object<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -239,6 +241,11 @@ pub struct CostUsageCache {
     /// caches remain valid and can be upgraded lazily.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub codex_source_rows: HashMap<String, CodexSourceRowCache>,
+    /// Zone the day keys were bucketed in (upstream `timeZoneIdentifier`).
+    /// A cache from another zone is rebuilt; caches written before the stamp
+    /// existed are kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bucket_time_zone: Option<String>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
@@ -592,7 +599,8 @@ impl JsonlScanner {
             return CachedCostReadStatus::default();
         };
         if provider == ProviderId::Codex
-            && !codex::codex_cache_schema_is_current(projection.codex_cache_schema_version)
+            && (!codex::codex_cache_schema_is_current(projection.codex_cache_schema_version)
+                || !codex::codex_cache_zone_is_current(projection.bucket_time_zone.as_deref()))
         {
             return CachedCostReadStatus::default();
         }

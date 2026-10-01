@@ -4,13 +4,14 @@
 //! window describes the account now; these rows describe local historical
 //! evidence for a future display/transport surface.
 
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::core::{
     CodexSourceRowCache, CodexSourceUsageRow, CostUsageCache, CostUsagePricing, RateWindow,
 };
+use crate::cost_reporting_period::cost_bucket_zone;
 
 const NOMINAL_WEEK_MINUTES: i64 = 7 * 24 * 60;
 const RESET_TOLERANCE_SECONDS: i64 = 2 * 60;
@@ -146,7 +147,7 @@ pub fn codex_quota_windows_from_cache(
     let history_start = cache
         .scan_since_key
         .as_deref()
-        .and_then(local_day_start)
+        .and_then(bucket_day_start)
         .unwrap_or_else(|| {
             let count = i32::try_from(count).expect("quota window count is capped");
             current_end - duration * (count + 1)
@@ -359,9 +360,9 @@ fn cache_slices(cache: &CostUsageCache) -> Vec<Slice> {
 }
 
 fn slice_from_row(row: &CodexSourceUsageRow) -> Slice {
-    let timestamp = row.timestamp.or_else(|| local_day_start(&row.day_key));
+    let timestamp = row.timestamp.or_else(|| bucket_day_start(&row.day_key));
     let end = row.timestamp.map(|_| None).unwrap_or_else(|| {
-        local_day_start(&row.day_key).and_then(|start| start.checked_add_signed(Duration::days(1)))
+        bucket_day_start(&row.day_key).and_then(|start| start.checked_add_signed(Duration::days(1)))
     });
     let input = u64::try_from(row.input.max(0)).unwrap_or(0);
     let output = u64::try_from(row.output.max(0)).unwrap_or(0);
@@ -374,7 +375,7 @@ fn slice_from_row(row: &CodexSourceUsageRow) -> Slice {
         } else {
             model.to_string()
         };
-        let date = timestamp.map(|value| value.with_timezone(&Local).date_naive())?;
+        let date = timestamp.map(|value| cost_bucket_zone().date(value))?;
         CostUsagePricing::codex_cost_usd_at_date(
             &model,
             input,
@@ -398,7 +399,7 @@ fn legacy_day_slices(cache: &CostUsageCache) -> Vec<Slice> {
     let mut days: Vec<_> = cache.days.iter().collect();
     days.sort_by_key(|(day, _)| *day);
     for (day, models) in days {
-        let Some(start) = local_day_start(day) else {
+        let Some(start) = bucket_day_start(day) else {
             continue;
         };
         let Some(end) = start.checked_add_signed(Duration::days(1)) else {
@@ -425,7 +426,7 @@ fn legacy_day_slices(cache: &CostUsageCache) -> Vec<Slice> {
                 output,
                 NaiveDate::parse_from_str(day, "%Y-%m-%d")
                     .ok()
-                    .unwrap_or_else(|| start.with_timezone(&Local).date_naive()),
+                    .unwrap_or_else(|| cost_bucket_zone().date(start)),
             );
             slices.push(Slice {
                 start,
@@ -440,15 +441,10 @@ fn legacy_day_slices(cache: &CostUsageCache) -> Vec<Slice> {
     slices
 }
 
-fn local_day_start(day: &str) -> Option<DateTime<Utc>> {
+/// The instant a `YYYY-MM-DD` day key begins in the pinned bucket zone.
+fn bucket_day_start(day: &str) -> Option<DateTime<Utc>> {
     let date = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
-    let naive = date.and_hms_opt(0, 0, 0)?;
-    Local
-        .from_local_datetime(&naive)
-        .single()
-        .or_else(|| Local.from_local_datetime(&naive).earliest())
-        .or_else(|| Local.from_local_datetime(&naive).latest())
-        .map(|value| value.with_timezone(&Utc))
+    Some(cost_bucket_zone().start_of_day_utc(date))
 }
 
 #[cfg(test)]

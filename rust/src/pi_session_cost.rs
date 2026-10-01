@@ -4,7 +4,7 @@
 //! openai-codex / anthropic assistant rows into cost summaries without
 //! double-counting the same entry id across shared files.
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs::File;
@@ -184,9 +184,8 @@ fn scan_pi_daily_from_roots(
                     missing_timestamp = true;
                     return;
                 };
-                let day = timestamp
-                    .with_timezone(&Local)
-                    .date_naive()
+                let day = crate::cost_reporting_period::cost_bucket_zone()
+                    .date(timestamp)
                     .format("%Y-%m-%d")
                     .to_string();
                 if !entry.pricing_known {

@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde_json::Value;
 
 const MAX_SESSION_FILES: usize = 2048;
@@ -140,7 +140,8 @@ fn summarize_paths(
     days: u32,
     truncated: bool,
 ) -> LocalSessionSummary {
-    let first_day = now.with_timezone(&Local).date_naive()
+    let zone = crate::cost_reporting_period::cost_bucket_zone();
+    let first_day = zone.date(now)
         - Duration::days(i64::from(
             crate::cost_reporting_period::clamp_window_days(days).saturating_sub(1),
         ));
@@ -202,7 +203,7 @@ fn summarize_paths(
             let Some(at) = Utc.timestamp_millis_opt(timestamp_ms).single() else {
                 continue;
             };
-            if at > now || at.with_timezone(&Local).date_naive() < first_day {
+            if at > now || zone.date(at) < first_day {
                 continue;
             }
 

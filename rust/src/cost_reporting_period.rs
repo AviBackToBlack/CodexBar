@@ -6,8 +6,12 @@
 //! goes stale across midnight or a month rollover. All arithmetic runs on
 //! calendar dates, never on 24-hour multiples, so leap years and 23/25-hour
 //! daylight-saving days need no special cases.
+//!
+//! Days are bucketed in one pinned zone ([`cost_bucket_zone`]) so history
+//! keeps its day boundaries when the machine's zone changes.
 
 use std::fmt;
+use std::sync::{PoisonError, RwLock};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -38,13 +42,68 @@ pub fn clamp_window_days(days: u32) -> u32 {
 /// Zone whose midnights bound a reporting day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CostTimeZone {
-    /// The machine's local zone (what the local scanners bucket by today).
+    /// The machine's zone, used while no zone is pinned.
     Local,
     /// A pinned IANA zone.
     Named(chrono_tz::Tz),
 }
 
+/// Pinned zone that local cost history is bucketed in. `None` buckets in the
+/// machine zone.
+static COST_BUCKET_ZONE: RwLock<Option<chrono_tz::Tz>> = RwLock::new(None);
+
+/// The zone local cost history is bucketed in (upstream's pinned bucket
+/// calendar, `tokenCostUsageBucketTimeZone`).
+///
+/// The desktop app and the CLI apply the saved
+/// `Settings::cost_usage_bucket_time_zone` at startup. Until then, and while
+/// nothing is pinned, history is bucketed in the machine zone.
+pub fn cost_bucket_zone() -> CostTimeZone {
+    let pinned = *COST_BUCKET_ZONE
+        .read()
+        .unwrap_or_else(PoisonError::into_inner);
+    pinned.map_or(CostTimeZone::Local, CostTimeZone::Named)
+}
+
+/// Bucket local cost history in the zone `identifier` names, or in the
+/// machine zone when it is empty or not an IANA zone. Returns the zone now in
+/// effect.
+pub fn set_cost_bucket_zone(identifier: &str) -> CostTimeZone {
+    let zone = CostTimeZone::from_identifier(identifier);
+    let pinned = match zone {
+        CostTimeZone::Named(tz) => Some(tz),
+        CostTimeZone::Local => None,
+    };
+    *COST_BUCKET_ZONE
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = pinned;
+    zone
+}
+
 impl CostTimeZone {
+    /// Resolve a saved identifier (upstream
+    /// `CostUsageBucketTimeZone.timeZone(identifier:)`): a trimmed IANA name
+    /// selects that zone; an empty or unknown name selects the machine zone.
+    pub fn from_identifier(identifier: &str) -> Self {
+        identifier
+            .trim()
+            .parse::<chrono_tz::Tz>()
+            .map_or(Self::Local, Self::Named)
+    }
+
+    /// Whether `identifier` names an IANA zone (upstream `isValidIdentifier`).
+    pub fn is_valid_identifier(identifier: &str) -> bool {
+        identifier.parse::<chrono_tz::Tz>().is_ok()
+    }
+
+    /// The machine zone's IANA name to pin (upstream `pinIdentifier()`).
+    ///
+    /// `None` when the system zone cannot be read safely or is not a known
+    /// IANA name, so a fallback zone is never persisted as the pin.
+    pub fn pin_identifier() -> Option<String> {
+        crate::core::try_local_timezone_name().filter(|name| Self::is_valid_identifier(name))
+    }
+
     /// Zone identifier used in cache identities.
     pub fn identifier(&self) -> String {
         match self {
@@ -252,7 +311,17 @@ impl Serialize for CostReportingPeriod {
 /// Settings files must keep loading, so an unreadable value reads as the default.
 impl<'de> Deserialize<'de> for CostReportingPeriod {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = Option::<String>::deserialize(deserializer)?;
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum SavedPeriod {
+            Text(String),
+            Unreadable(serde::de::IgnoredAny),
+        }
+
+        let raw = match SavedPeriod::deserialize(deserializer)? {
+            SavedPeriod::Text(raw) => Some(raw),
+            SavedPeriod::Unreadable(_) => None,
+        };
         Ok(Self::migrated(raw.as_deref(), None))
     }
 }
@@ -471,5 +540,50 @@ mod tests {
         assert_eq!(read("\"all\""), CostReportingPeriod::AllAvailable);
         assert_eq!(read("\"nonsense\""), CostReportingPeriod::Rolling(30));
         assert_eq!(read("null"), CostReportingPeriod::Rolling(30));
+        assert_eq!(read("42"), CostReportingPeriod::Rolling(30));
+        assert_eq!(read(r#"{"a":1}"#), CostReportingPeriod::Rolling(30));
+    }
+
+    #[test]
+    fn saved_zone_identifiers_resolve_like_upstream() {
+        assert_eq!(
+            CostTimeZone::from_identifier(" Asia/Tokyo\n"),
+            CostTimeZone::Named(Tokyo)
+        );
+        for fallback in ["", "   ", "Mars/Olympus", "local"] {
+            assert_eq!(
+                CostTimeZone::from_identifier(fallback),
+                CostTimeZone::Local,
+                "{fallback:?}"
+            );
+        }
+        assert!(CostTimeZone::is_valid_identifier("America/Los_Angeles"));
+        assert!(CostTimeZone::is_valid_identifier("UTC"));
+        assert!(!CostTimeZone::is_valid_identifier(""));
+        assert!(!CostTimeZone::is_valid_identifier("Mars/Olympus"));
+    }
+
+    #[test]
+    fn pin_identifier_is_the_machine_zone_or_nothing() {
+        if let Some(name) = CostTimeZone::pin_identifier() {
+            assert!(CostTimeZone::is_valid_identifier(&name), "{name}");
+            assert_eq!(name, crate::core::local_timezone_name());
+        }
+    }
+
+    #[test]
+    fn the_bucket_zone_applies_a_saved_identifier_process_wide() {
+        // Other tests bucket through `cost_bucket_zone()` in parallel, so this
+        // only ever applies the machine's own zone, which keeps their days.
+        let Some(machine) = CostTimeZone::pin_identifier() else {
+            return;
+        };
+        let applied = set_cost_bucket_zone(&machine);
+        assert_eq!(applied, CostTimeZone::from_identifier(&machine));
+        assert_eq!(cost_bucket_zone(), applied);
+        assert_eq!(cost_bucket_zone().identifier(), machine);
+        assert_eq!(set_cost_bucket_zone("Mars/Olympus"), CostTimeZone::Local);
+        assert_eq!(cost_bucket_zone(), CostTimeZone::Local);
+        assert_eq!(set_cost_bucket_zone(""), CostTimeZone::Local);
     }
 }
