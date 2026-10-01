@@ -36,7 +36,7 @@ impl CodexProvider {
                 supports_credits: true,
                 default_enabled: true,
                 is_primary: true,
-                dashboard_url: Some("https://chatgpt.com/codex/settings/usage"),
+                dashboard_url: Some("https://chatgpt.com/codex/cloud/settings/analytics#usage"),
                 status_page_url: Some("https://status.openai.com"),
                 tertiary_label_key: None,
             },
@@ -215,5 +215,29 @@ mod pat_strategy_tests {
             provider.last_good_failure_policy_for_error(&ProviderError::AuthRequired),
             LastGoodFailurePolicy::Replace
         );
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+
+    /// Upstream 0.68.0 (#4005): the Usage Dashboard resolves the Codex cloud
+    /// analytics page, not the retired `codex/settings/usage` route.
+    #[test]
+    fn usage_dashboard_resolves_the_registered_codex_analytics_usage_url() {
+        let provider = CodexProvider::new();
+        let dashboard_url = provider
+            .metadata()
+            .dashboard_url
+            .expect("Codex registers a Usage Dashboard URL");
+        let url = reqwest::Url::parse(dashboard_url).expect("dashboard URL parses");
+        assert_eq!(
+            url.as_str(),
+            "https://chatgpt.com/codex/cloud/settings/analytics#usage"
+        );
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("chatgpt.com"));
+        assert_eq!(url.fragment(), Some("usage"));
     }
 }

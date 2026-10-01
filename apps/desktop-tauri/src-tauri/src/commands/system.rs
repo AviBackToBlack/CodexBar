@@ -414,7 +414,7 @@ mod tests {
     fn dashboard_url_resolves_from_codex_provider_metadata() {
         assert_eq!(
             dashboard_url_for_provider("codex").as_deref(),
-            Some("https://chatgpt.com/codex/settings/usage")
+            Some("https://chatgpt.com/codex/cloud/settings/analytics#usage")
         );
     }
 
