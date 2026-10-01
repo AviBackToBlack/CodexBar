@@ -15,6 +15,8 @@ const RESET_TOLERANCE_SECONDS: i64 = 2 * 60;
 const STABLE_BOUNDARY_TOLERANCE_SECONDS: i64 = 1;
 const CANDIDATE_MINIMUM_AGE_SECONDS: i64 = 60;
 const CANDIDATE_MAXIMUM_AGE_SECONDS: i64 = 30 * 60;
+const WEEKLY_WINDOW_MINUTES: u32 = 7 * 24 * 60;
+const WEEKLY_WINDOW_SECONDS: i64 = WEEKLY_WINDOW_MINUTES as i64 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +93,16 @@ pub(super) enum DelayedDecision {
     Publish,
     Retain,
     Discard,
+}
+
+impl DelayedDecision {
+    const fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::Publish => "publish",
+            Self::Retain => "retain",
+            Self::Discard => "discard",
+        }
+    }
 }
 
 mod diagnostics;
@@ -490,133 +502,85 @@ fn delayed_candidate_decision(
     exact_oauth: bool,
     observed_at: DateTime<Utc>,
 ) -> DelayedDecision {
+    let (decision, reason) = delayed_candidate_evaluation(
+        state,
+        candidate,
+        current,
+        current_inventory,
+        exact_oauth,
+        observed_at,
+    );
+    log_reset_diagnostic("delayedCandidate", decision.diagnostic_code(), reason);
+    decision
+}
+
+/// Pure delayed-candidate revalidation: the decision plus the fixed reason
+/// code that `delayed_candidate_decision` logs (upstream `DelayedEvaluation`).
+fn delayed_candidate_evaluation(
+    state: &AccountState,
+    candidate: &DelayedCandidate,
+    current: &UsageSnapshot,
+    current_inventory: Option<&CreditInventory>,
+    exact_oauth: bool,
+    observed_at: DateTime<Utc>,
+) -> (DelayedDecision, ResetDiagnosticReason) {
+    use DelayedDecision::{Discard, Publish, Retain};
+    use ResetDiagnosticReason as Reason;
+
     let age = observed_at
         .signed_duration_since(candidate.created_at)
         .num_seconds();
     if candidate.evidence_version != EVIDENCE_VERSION {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::EvidenceVersionMismatch,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::EvidenceVersionMismatch);
     }
     if age < 0 {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::FutureCandidate,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::FutureCandidate);
     }
     if age > CANDIDATE_MAXIMUM_AGE_SECONDS {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::ExpiredCandidate,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::ExpiredCandidate);
     }
     if !exact_oauth {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::SourceNotExactOAuth,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::SourceNotExactOAuth);
     }
     let Some(previous_weekly) = state.published_weekly.as_ref() else {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::MissingPreviousSnapshot,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::MissingPreviousSnapshot);
     };
     let Some(current_weekly) = weekly(current) else {
         // Credits-only refreshes do not carry the weekly window (or necessarily
         // the plan/inventory fields). Preserve the candidate and let the next
         // complete usage observation validate it.
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "retain",
-            ResetDiagnosticReason::MissingWeeklyWindow,
-        );
-        return DelayedDecision::Retain;
+        return (Retain, Reason::MissingWeeklyWindow);
     };
     if !plans_match(state.plan.as_deref(), current, current) {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::PlanMismatch,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::PlanMismatch);
     }
     if previous_weekly.used_percent <= RESET_THRESHOLD
         || current_weekly.used_percent > RESET_THRESHOLD
     {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::ResetThresholdMismatch,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::ResetThresholdMismatch);
     }
     if current.updated_at <= candidate.snapshot_updated_at {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::StaleObservation,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::StaleObservation);
     }
     if !is_valid_boundary(current_weekly, current.updated_at) {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::InvalidResetBoundary,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::InvalidResetBoundary);
     }
-    if boundary_distance_seconds(&candidate.weekly, current_weekly).abs() >= RESET_TOLERANCE_SECONDS
-    {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::InconsistentResetBoundary,
-        );
-        return DelayedDecision::Discard;
+    if !delayed_boundaries_consistent(candidate, current_weekly, current.updated_at) {
+        return (Discard, Reason::InconsistentResetBoundary);
     }
     if !supported_delayed_boundary(previous_weekly, current_weekly) {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::UnsupportedResetBoundary,
-        );
-        return DelayedDecision::Discard;
+        return (Discard, Reason::UnsupportedResetBoundary);
     }
-    if current_inventory != Some(&candidate.inventory) {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "discard",
-            ResetDiagnosticReason::ChangedCreditInventory,
-        );
-        return DelayedDecision::Discard;
+    let Some(current_inventory) = current_inventory else {
+        return (Discard, Reason::MissingCreditInventory);
+    };
+    if current_inventory != &candidate.inventory {
+        return (Discard, Reason::ChangedCreditInventory);
     }
     if age >= CANDIDATE_MINIMUM_AGE_SECONDS {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "publish",
-            ResetDiagnosticReason::ConfirmedObservation,
-        );
-        DelayedDecision::Publish
+        (Publish, Reason::ConfirmedObservation)
     } else {
-        log_reset_diagnostic(
-            "delayedCandidate",
-            "retain",
-            ResetDiagnosticReason::MinimumDelay,
-        );
-        DelayedDecision::Retain
+        (Retain, Reason::MinimumDelay)
     }
 }
 
@@ -663,6 +627,41 @@ fn boundary_distance_seconds(left: &RateWindow, right: &RateWindow) -> i64 {
 
 fn boundary_moves_backward(previous: &RateWindow, current: &RateWindow) -> bool {
     boundary_distance_seconds(previous, current) < -RESET_TOLERANCE_SECONDS
+}
+
+/// Delayed confirmation accepts equivalent boundaries, or an unused rolling
+/// weekly window whose reset date advances with each zero-use observation.
+fn delayed_boundaries_consistent(
+    candidate: &DelayedCandidate,
+    current_weekly: &RateWindow,
+    current_updated_at: DateTime<Utc>,
+) -> bool {
+    if boundary_distance_seconds(&candidate.weekly, current_weekly).abs() < RESET_TOLERANCE_SECONDS
+    {
+        return true;
+    }
+    let (Some(candidate_boundary), Some(current_boundary)) =
+        (candidate.weekly.resets_at, current_weekly.resets_at)
+    else {
+        return false;
+    };
+    is_unused_rolling_weekly(&candidate.weekly, candidate.snapshot_updated_at)
+        && is_unused_rolling_weekly(current_weekly, current_updated_at)
+        && current_boundary >= candidate_boundary
+}
+
+/// Zero usage, a seven-day window, and a reset within two minutes of one full
+/// week after capture. Compared at full timestamp precision, like upstream's
+/// floating-point interval check, so sub-second capture skew cannot flip the
+/// two-minute edge.
+fn is_unused_rolling_weekly(window: &RateWindow, captured_at: DateTime<Utc>) -> bool {
+    window.used_percent == 0.0
+        && window.window_minutes == Some(WEEKLY_WINDOW_MINUTES)
+        && window.resets_at.is_some_and(|boundary| {
+            let offset = boundary.signed_duration_since(captured_at)
+                - chrono::TimeDelta::seconds(WEEKLY_WINDOW_SECONDS);
+            offset.abs() < chrono::TimeDelta::seconds(RESET_TOLERANCE_SECONDS)
+        })
 }
 
 fn supported_delayed_boundary(previous: &RateWindow, current: &RateWindow) -> bool {
