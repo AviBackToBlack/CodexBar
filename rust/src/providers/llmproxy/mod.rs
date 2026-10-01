@@ -153,8 +153,8 @@ impl LLMProxyProvider {
         })?;
         let summary = parse_summary(&body)?;
         let mut result = ProviderFetchResult::new(snapshot_from_summary(&summary), "api");
-        if let Some(cost) = summary.approximate_cost_usd {
-            result = result.with_cost(CostSnapshot::new(cost, "USD", "Approx. spend"));
+        if let Some(cost) = cost_from_summary(&summary) {
+            result = result.with_cost(cost);
         }
         Ok(result)
     }
@@ -361,27 +361,27 @@ fn parse_summary(data: &[u8]) -> Result<LLMProxySummary, ProviderError> {
 }
 
 fn snapshot_from_summary(summary: &LLMProxySummary) -> UsageSnapshot {
-    let used_percent = summary
+    // Upstream leaves the primary lane out when no quota group reports a
+    // remaining percentage. A Windows snapshot always has a primary lane, so
+    // it becomes informational instead of a made-up 0%.
+    let primary = summary
         .minimum_remaining_percent
-        .map(|remaining| (100.0 - remaining).clamp(0.0, 100.0))
-        .unwrap_or(0.0);
-    let mut primary = RateWindow::with_details(used_percent, None, summary.next_reset_at, None);
-    primary.reset_description = summary
-        .minimum_remaining_percent
-        .map(|remaining| format!("{remaining:.1}% minimum remaining"));
+        .map(|remaining| {
+            RateWindow::with_details(
+                (100.0 - remaining).clamp(0.0, 100.0),
+                None,
+                summary.next_reset_at,
+                None,
+            )
+        })
+        .unwrap_or_else(|| RateWindow::informational("No quota reported"));
 
-    let secondary = RateWindow::with_details(
-        0.0,
-        None,
-        None,
-        Some(format!("{} requests", format_count(summary.total_requests))),
-    );
-    let tertiary = RateWindow::with_details(
-        0.0,
-        None,
-        None,
-        Some(format!("{} tokens", format_count(summary.total_tokens))),
-    );
+    // Totals and provider rows are counts, not quotas. Informational rows keep
+    // them from rendering as empty bars with a "Resets" prefix.
+    let secondary =
+        RateWindow::informational(format!("{} requests", format_count(summary.total_requests)));
+    let tertiary =
+        RateWindow::informational(format!("{} tokens", format_count(summary.total_tokens)));
 
     let mut snapshot = UsageSnapshot::new(primary)
         .with_secondary(secondary)
@@ -393,22 +393,42 @@ fn snapshot_from_summary(summary: &LLMProxySummary) -> UsageSnapshot {
         .with_organization(format!("{} providers", summary.provider_count));
 
     for provider in summary.top_providers.iter().take(3) {
-        let mut detail = format!(
-            "{} req / {} tok",
-            format_count(provider.requests),
-            format_count(provider.tokens)
-        );
+        let mut parts = vec![
+            format!("{} req", format_count(provider.requests)),
+            format!("{} tok", format_count(provider.tokens)),
+        ];
         if let Some(cost) = provider.approximate_cost_usd {
-            detail.push_str(&format!(" / ${cost:.2}"));
+            parts.push(format_usd(cost));
         }
         snapshot = snapshot.with_extra_rate_window(
             provider.name.clone(),
             provider.name.clone(),
-            RateWindow::with_details(0.0, None, None, Some(detail)),
+            RateWindow::informational(parts.join(" · ")),
         );
     }
 
     snapshot
+}
+
+/// Approximate spend, kept even at $0. Upstream gives it the soonest quota
+/// reset as its reset time.
+fn cost_from_summary(summary: &LLMProxySummary) -> Option<CostSnapshot> {
+    let cost = CostSnapshot::new(summary.approximate_cost_usd?, "USD", "Approx. spend");
+    Some(match summary.next_reset_at {
+        Some(resets_at) => cost.with_resets_at(resets_at),
+        None => cost,
+    })
+}
+
+/// US-dollar amount with thousands separators and cents, like `$1,234.50`.
+fn format_usd(value: f64) -> String {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "f64-to-u64 casts saturate in Rust; display amounts never approach u64::MAX"
+    )]
+    let cents = (value.abs() * 100.0).round() as u64;
+    let sign = if value < 0.0 && cents > 0 { "-" } else { "" };
+    format!("{sign}${}.{:02}", format_count(cents / 100), cents % 100)
 }
 
 fn token_total(tokens: Option<&TokenStats>) -> u64 {
@@ -524,6 +544,183 @@ mod tests {
         assert_eq!(snapshot.extra_rate_windows.len(), 2);
     }
 
+    fn utc(raw: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(raw)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    /// Upstream `LLMProxyUsageFetcherTests` "parses quota stats summary", with
+    /// the reset moved into the future because the port reads the real clock.
+    #[test]
+    fn snapshot_matches_upstream_quota_stats_summary() {
+        let summary = parse_summary(
+            br#"{
+              "providers": {
+                "openai": {
+                  "credential_count": 3, "active_count": 2, "exhausted_count": 1,
+                  "total_requests": 120,
+                  "tokens": {"input_cached": 1000, "input_uncached": 2000, "output": 3000},
+                  "approx_cost": 12.5,
+                  "quota_groups": {"default": {"remaining_percent": 42, "reset_time": "2099-05-18T12:00:00Z"}}
+                },
+                "anthropic": {
+                  "credential_count": 1, "active_count": 1, "exhausted_count": 0,
+                  "total_requests": 40,
+                  "tokens": {"input_cached": 0, "input_uncached": 500, "output": 500},
+                  "approx_cost": 3.0,
+                  "quota_groups": [{"remaining_percent": 80}]
+                }
+              },
+              "summary": {"total_requests": 160, "total_tokens": 7000, "approx_cost": 15.5}
+            }"#,
+        )
+        .unwrap();
+        let snapshot = snapshot_from_summary(&summary);
+
+        assert!(!snapshot.primary.is_informational);
+        assert_eq!(snapshot.primary.used_percent, 58.0);
+        assert_eq!(
+            snapshot.primary.resets_at,
+            Some(utc("2099-05-18T12:00:00Z"))
+        );
+        assert_eq!(snapshot.primary.reset_description, None);
+
+        let secondary = snapshot.secondary.as_ref().unwrap();
+        assert!(secondary.is_informational);
+        assert_eq!(secondary.reset_description.as_deref(), Some("160 requests"));
+        let tertiary = snapshot.tertiary.as_ref().unwrap();
+        assert!(tertiary.is_informational);
+        assert_eq!(tertiary.reset_description.as_deref(), Some("7,000 tokens"));
+
+        let first = &snapshot.extra_rate_windows[0];
+        assert_eq!(first.id, "openai");
+        assert!(first.window.is_informational);
+        assert_eq!(
+            first.window.reset_description.as_deref(),
+            Some("120 req · 6,000 tok · $12.50")
+        );
+        assert_eq!(
+            snapshot.extra_rate_windows[1]
+                .window
+                .reset_description
+                .as_deref(),
+            Some("40 req · 1,000 tok · $3.00")
+        );
+
+        let cost = cost_from_summary(&summary).unwrap();
+        assert_eq!(cost.used, 15.5);
+        assert_eq!(cost.currency_code, "USD");
+        assert_eq!(cost.period, "Approx. spend");
+        assert_eq!(cost.resets_at, Some(utc("2099-05-18T12:00:00Z")));
+    }
+
+    /// Upstream "zero summary spend is retained and empty providers stay
+    /// displayable": no quota groups means no quota lane (here: informational).
+    #[test]
+    fn empty_providers_keep_zero_spend_without_a_quota_lane() {
+        let summary = parse_summary(br#"{"providers":{},"summary":{"approx_cost":0}}"#).unwrap();
+        let snapshot = snapshot_from_summary(&summary);
+
+        assert!(snapshot.primary.is_informational);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("No quota reported")
+        );
+        assert_eq!(
+            snapshot
+                .secondary
+                .as_ref()
+                .unwrap()
+                .reset_description
+                .as_deref(),
+            Some("0 requests")
+        );
+        assert!(snapshot.extra_rate_windows.is_empty());
+        let cost = cost_from_summary(&summary).unwrap();
+        assert_eq!(cost.used, 0.0);
+        assert_eq!(cost.resets_at, None);
+    }
+
+    /// Upstream "sums missing summary ignores elapsed resets and limits sorted
+    /// provider rows", with the future reset moved past the real clock.
+    #[test]
+    fn sums_missing_summary_ignores_elapsed_resets_and_keeps_top_three() {
+        let summary = parse_summary(
+            br#"{"providers":{
+              "delta":{"total_requests":1,"tokens":{"output":2},"approx_cost":0},
+              "charlie":{"total_requests":3,"approx_cost":2,"quota_groups":"invalid"},
+              "bravo":{"total_requests":3,"quota_groups":[{"remaining_percent":-10,"reset_time":"1970-01-01T00:00:00Z"}]},
+              "alpha":{"total_requests":4,"approx_cost":3,"quota_groups":{"a":{"reset_time":"2099-05-01T00:00:00Z"}}}
+            }}"#,
+        )
+        .unwrap();
+        let snapshot = snapshot_from_summary(&summary);
+
+        assert_eq!(snapshot.primary.used_percent, 100.0);
+        assert_eq!(
+            snapshot.primary.resets_at,
+            Some(utc("2099-05-01T00:00:00Z"))
+        );
+        assert_eq!(
+            snapshot
+                .secondary
+                .as_ref()
+                .unwrap()
+                .reset_description
+                .as_deref(),
+            Some("11 requests")
+        );
+        assert_eq!(
+            snapshot
+                .tertiary
+                .as_ref()
+                .unwrap()
+                .reset_description
+                .as_deref(),
+            Some("2 tokens")
+        );
+        assert_eq!(cost_from_summary(&summary).unwrap().used, 5.0);
+        let ids: Vec<_> = snapshot
+            .extra_rate_windows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect();
+        assert_eq!(ids, ["alpha", "bravo", "charlie"]);
+        assert_eq!(
+            snapshot.extra_rate_windows[1]
+                .window
+                .reset_description
+                .as_deref(),
+            Some("3 req · 0 tok")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_payloads() {
+        let bodies: [&[u8]; 3] = [
+            b"not json",
+            b"{}",
+            br#"{"providers":{"a":{"total_requests":"3"}}}"#,
+        ];
+        for body in bodies {
+            assert!(
+                matches!(parse_summary(body), Err(ProviderError::Parse(_))),
+                "parsed {}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn formats_usd_with_thousands_separators() {
+        assert_eq!(format_usd(12.5), "$12.50");
+        assert_eq!(format_usd(1234.5), "$1,234.50");
+        assert_eq!(format_usd(0.0), "$0.00");
+        assert_eq!(format_usd(0.004), "$0.00");
+        assert_eq!(format_usd(-3.0), "-$3.00");
+    }
+
     fn stats_url(raw: &str) -> String {
         let base = crate::providers::validated_https_or_private_http_url(raw, "LLM Proxy").unwrap();
         quota_stats_url(base).to_string()
@@ -586,7 +783,9 @@ mod tests {
             "http://192.168.1.10:8000",
             "http://169.254.1.1",
             "http://proxy.local",
+            "http://printer.local.:8000",
             "http://[fd00::1]",
+            "http://[fe80::1]",
         ] {
             assert!(
                 crate::providers::validated_https_or_private_http_url(ok, "LLM Proxy").is_ok(),
@@ -600,6 +799,16 @@ mod tests {
             "ftp://proxy.local",
             "https://user:pass@proxy.example.com",
             "http://user@192.168.1.10",
+            // `.local` needs a label in front of it.
+            "http://.local",
+            "http://.local.",
+            "http://app.localhost:8000",
+            // Upstream compares `localhost` before dropping a trailing dot.
+            "http://localhost.:8000",
+            // IPv4-mapped and global IPv6 addresses are not private literals.
+            "http://[::ffff:10.0.0.1]",
+            "http://[2001:db8::1]",
+            "http://proxy.local%2f.evil.test",
             "",
         ] {
             assert!(

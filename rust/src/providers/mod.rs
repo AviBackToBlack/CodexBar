@@ -328,14 +328,21 @@ pub(crate) fn validated_https_or_private_http_url(
 }
 
 fn is_private_network_host(host: &str) -> bool {
-    let normalized = host.trim_end_matches('.').to_ascii_lowercase();
-    if normalized == "localhost" || normalized.ends_with(".local") {
+    let host = host.to_ascii_lowercase();
+    // Upstream `isPrivateNetworkHost`: `localhost` exactly, or a non-empty
+    // label before `.local` once one trailing dot is dropped.
+    let hostname = host.strip_suffix('.').unwrap_or(&host);
+    if host == "localhost"
+        || hostname
+            .strip_suffix(".local")
+            .is_some_and(|label| !label.is_empty())
+    {
         return true;
     }
-    let ip_candidate = normalized
+    let ip_candidate = host
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
-        .unwrap_or(&normalized);
+        .unwrap_or(&host);
     match ip_candidate.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
         Ok(std::net::IpAddr::V6(ip)) => {
