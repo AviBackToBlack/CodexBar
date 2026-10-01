@@ -1,8 +1,58 @@
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
+
 use crate::core::CostUsagePricing;
+use crate::spend_contract::LocalCostEstimate;
 
 /// Antigravity records routing variants of a vendor model that bill at the base model's public
 /// price. The alias stays provider-local so shared Claude pricing keeps unknown variants unpriced.
 const ROUTING_VARIANT_SUFFIXES: [&str; 3] = ["-tiered", "-low", "-thinking"];
+
+/// models.dev entries worth refreshing for unpriced history, grouped by
+/// models.dev provider: each unpriced model and, for a routing variant, its
+/// base model, routed the way a rescan prices them (Gemini models through
+/// `google`, Claude models through `anthropic`, GPT models through `openai`).
+fn refresh_targets(estimate: &LocalCostEstimate) -> BTreeMap<&'static str, HashSet<String>> {
+    let mut targets = BTreeMap::<&'static str, HashSet<String>>::new();
+    for model in &estimate.unpriced_models {
+        for name in [Some(model.as_str()), pricing_base_model(model)]
+            .into_iter()
+            .flatten()
+        {
+            for (provider, model_id) in CostUsagePricing::claude_models_dev_pricing_targets(name) {
+                targets.entry(provider).or_default().insert(model_id);
+            }
+        }
+    }
+    targets
+}
+
+/// One bounded models.dev refresh for the unpriced models of a scan, or None
+/// when nothing recorded lacks a price: empty or fully priced history never
+/// downloads. The refresh resolves to true when a rescan can now price at
+/// least one of those models.
+pub(super) fn unpriced_model_pricing_refresh(
+    estimate: &LocalCostEstimate,
+) -> Option<impl Future<Output = bool> + Send + use<>> {
+    let targets = refresh_targets(estimate);
+    (!targets.is_empty()).then(|| refresh_pricing_targets(targets))
+}
+
+async fn refresh_pricing_targets(targets: BTreeMap<&'static str, HashSet<String>>) -> bool {
+    for (provider, model_ids) in &targets {
+        if crate::core::refresh_unknown_models_if_needed(provider, model_ids).await {
+            return true;
+        }
+    }
+    // An earlier provider group may refresh the shared catalog without
+    // resolving its own models while a later group's models became priced.
+    let snapshot = crate::core::pricing_snapshot();
+    targets.iter().any(|(provider, model_ids)| {
+        model_ids
+            .iter()
+            .any(|model_id| snapshot.lookup(provider, model_id).is_some())
+    })
+}
 
 pub(super) fn estimate_cost_usd(
     model: Option<&str>,
@@ -36,7 +86,59 @@ fn pricing_base_model(model: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{estimate_cost_usd, pricing_base_model};
+    use std::collections::HashSet;
+
+    use super::{
+        estimate_cost_usd, pricing_base_model, refresh_targets, unpriced_model_pricing_refresh,
+    };
+    use crate::spend_contract::LocalCostEstimate;
+
+    fn ids(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn refresh_targets_route_unpriced_models_and_their_routing_base_by_vendor() {
+        let mut estimate = LocalCostEstimate::default();
+        estimate.record_list_price(Some("claude-future-9-thinking"), None);
+        estimate.record_list_price(Some("claude-future-9-thinking"), None);
+        estimate.record_list_price(Some("gemini-future-pro-low"), None);
+        estimate.record_list_price(Some("gpt-future"), None);
+        estimate.record_list_price(None, None);
+        let targets = refresh_targets(&estimate);
+        assert_eq!(
+            targets.keys().copied().collect::<Vec<_>>(),
+            ["anthropic", "google", "openai"]
+        );
+        assert_eq!(
+            targets["anthropic"],
+            ids(&["claude-future-9-thinking", "claude-future-9"])
+        );
+        assert_eq!(
+            targets["google"],
+            ids(&["gemini-future-pro-low", "gemini-future-pro"])
+        );
+        assert_eq!(targets["openai"], ids(&["gpt-future"]));
+        assert!(refresh_targets(&LocalCostEstimate::default()).is_empty());
+    }
+
+    #[test]
+    fn pricing_refresh_is_offered_only_for_named_unpriced_models() {
+        assert!(unpriced_model_pricing_refresh(&LocalCostEstimate::default()).is_none());
+
+        let mut priced = LocalCostEstimate::default();
+        priced.record_list_price(Some("claude-sonnet-4-6"), Some(0.25));
+        assert!(unpriced_model_pricing_refresh(&priced).is_none());
+
+        let mut unnamed = priced.clone();
+        unnamed.record_list_price(None, None);
+        assert_eq!(unnamed.coverage.unpriced, 1);
+        assert!(unpriced_model_pricing_refresh(&unnamed).is_none());
+
+        let mut unpriced = priced;
+        unpriced.record_list_price(Some("gemini-future-pro"), None);
+        assert!(unpriced_model_pricing_refresh(&unpriced).is_some());
+    }
 
     #[test]
     fn prices_known_models_and_provider_local_routing_variants() {

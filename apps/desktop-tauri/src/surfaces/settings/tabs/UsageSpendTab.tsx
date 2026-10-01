@@ -243,6 +243,7 @@ export default function UsageSpendTab(_props: TabProps) {
                     t("UsageSpendTokens"),
                     row.sevenDayEstimate?.knownSubtotalUsd,
                     t("UsageSpendKnownSubtotal"),
+                    row.sevenDayTokensLowerBound,
                   )}
                 </td>
                 <td>
@@ -253,6 +254,7 @@ export default function UsageSpendTab(_props: TabProps) {
                     t("UsageSpendTokens"),
                     row.thirtyDayEstimate?.knownSubtotalUsd,
                     t("UsageSpendKnownSubtotal"),
+                    row.thirtyDayTokensLowerBound,
                   )}
                 </td>
                 <td>{row.currency || "USD"}</td>

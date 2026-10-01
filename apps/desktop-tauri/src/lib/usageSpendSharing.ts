@@ -127,6 +127,7 @@ export function formatUsd(value: number | null | undefined, currency: string): s
 /**
  * Canonical "cost · tokens" cell for spend tables and share renders.
  * `knownSubtotalTemplate` is the localized subtotal label; `{}` is the amount.
+ * `tokensAreLowerBound` marks a token floor from an incomplete scan ("≥N").
  */
 export function formatSpendMetric(
   cost: number | null | undefined,
@@ -135,6 +136,7 @@ export function formatSpendMetric(
   tokenLabel: string,
   knownSubtotal?: number | null,
   knownSubtotalTemplate = "≥{} known",
+  tokensAreLowerBound = false,
 ): string {
   const parts: string[] = [];
   if (cost != null && Number.isFinite(cost)) {
@@ -143,7 +145,7 @@ export function formatSpendMetric(
     parts.push(knownSubtotalTemplate.replace("{}", formatUsd(knownSubtotal, currency)));
   }
   if (tokens != null && Number.isFinite(tokens)) {
-    parts.push(`${Math.max(0, tokens).toLocaleString()} ${tokenLabel}`);
+    parts.push(`${tokensAreLowerBound ? "≥" : ""}${Math.max(0, tokens).toLocaleString()} ${tokenLabel}`);
   }
   return parts.length > 0 ? parts.join(" · ") : "—";
 }
@@ -227,6 +229,8 @@ export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: stri
           row.currency,
           "tokens",
           row.sevenDayEstimate?.knownSubtotalUsd,
+          undefined,
+          row.sevenDayTokensLowerBound,
         ),
         formatSpendMetric(
           row.thirtyDay,
@@ -234,6 +238,8 @@ export function renderUsageSpendSharePng(summary: UsageSpendSummary, title: stri
           row.currency,
           "tokens",
           row.thirtyDayEstimate?.knownSubtotalUsd,
+          undefined,
+          row.thirtyDayTokensLowerBound,
         ),
         row.currency || "USD",
         row.source,

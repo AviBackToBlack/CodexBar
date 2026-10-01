@@ -60,6 +60,9 @@ struct Budget {
     bytes: usize,
     schema_bytes: usize,
     deadline: Instant,
+    /// A hard scan limit (databases, rows, bytes, duration) stopped the read.
+    /// A truncated read is withheld rather than published as a lower bound.
+    exhausted: bool,
 }
 
 impl Budget {
@@ -75,6 +78,7 @@ impl Budget {
             bytes: 0,
             schema_bytes: 0,
             deadline,
+            exhausted: false,
         }
     }
 
@@ -151,11 +155,13 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
     for path in &paths {
         if !budget.check() {
             complete = false;
+            budget.exhausted = true;
             break;
         }
         budget.databases += 1;
         if budget.databases > MAX_DATABASES {
             complete = false;
+            budget.exhausted = true;
             break;
         }
         match read_database(path, &mut budget) {
@@ -178,6 +184,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         complete &= budget.check();
         if budget.rows >= MAX_ROWS || budget.bytes >= MAX_TOTAL_BYTES {
             complete = false;
+            budget.exhausted = true;
             break;
         }
     }
@@ -186,6 +193,13 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         return SQLiteScan::Unsupported;
     }
 
+    // A truncated read or two sources disagreeing about one request means the
+    // surviving rows may be wrong, not merely incomplete: withhold them.
+    if budget.exhausted || !budget.check() {
+        return SQLiteScan::Summary(LocalTokenHistorySummary::withheld());
+    }
+
+    let mut contradicted = false;
     let mut total_tokens = 0_u64;
     let mut cost_estimate = crate::spend_contract::LocalCostEstimate::default();
     let mut sessions = HashSet::new();
@@ -212,6 +226,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
         if let Some(prior) = rows.get(&row_key) {
             if prior != &event {
                 complete = false;
+                contradicted = true;
             }
             continue;
         }
@@ -226,6 +241,7 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
             if let Some(prior) = responses.get(&response_key) {
                 if prior.turn != event.turn {
                     complete = false;
+                    contradicted = true;
                 } else {
                     rows.insert(row_key, event);
                 }
@@ -254,15 +270,15 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
             }
         }
         if event.total > 0 {
+            let inherited_model = event.turn.label.as_ref().and_then(|label| {
+                let key = (event.session.clone(), label.clone());
+                (!conflicting_labels.contains(&key))
+                    .then(|| label_models.get(&key))
+                    .flatten()
+                    .map(String::as_str)
+            });
+            let model = event.turn.model.as_deref().or(inherited_model);
             let estimated_cost = event.turn.usage.as_ref().and_then(|usage| {
-                let inherited_model = event.turn.label.as_ref().and_then(|label| {
-                    let key = (event.session.clone(), label.clone());
-                    (!conflicting_labels.contains(&key))
-                        .then(|| label_models.get(&key))
-                        .flatten()
-                        .map(String::as_str)
-                });
-                let model = event.turn.model.as_deref().or(inherited_model);
                 let input = usage.system_prompt.checked_add(usage.new_input);
                 let output = usage.output.checked_add(usage.reasoning);
                 if let (Some(input), Some(output)) = (input, output) {
@@ -271,21 +287,29 @@ pub(super) fn summarize(roots: &[PathBuf], now: DateTime<Utc>, days: u32) -> SQL
                     None
                 }
             });
-            cost_estimate.record_list_price(estimated_cost);
+            cost_estimate.record_list_price(model, estimated_cost);
         }
         sessions.insert(event.session);
     }
 
-    SQLiteScan::Summary(LocalTokenHistorySummary {
-        total_tokens,
-        session_count: sessions.len(),
-        coverage: if complete {
-            LocalHistoryCoverage::Complete
-        } else {
-            LocalHistoryCoverage::Partial
-        },
-        cost_estimate,
-    })
+    if contradicted {
+        return SQLiteScan::Summary(LocalTokenHistorySummary::withheld());
+    }
+
+    SQLiteScan::Summary(
+        LocalTokenHistorySummary {
+            total_tokens,
+            session_count: sessions.len(),
+            coverage: if complete {
+                LocalHistoryCoverage::Complete
+            } else {
+                LocalHistoryCoverage::Partial
+            },
+            cost_estimate,
+            lower_bound: false,
+        }
+        .with_lower_bound_if_partial(),
+    )
 }
 
 fn discover_databases(roots: &[PathBuf], budget: &mut Budget) -> (Vec<PathBuf>, bool) {
@@ -294,6 +318,7 @@ fn discover_databases(roots: &[PathBuf], budget: &mut Budget) -> (Vec<PathBuf>, 
 
     for root in roots {
         if !budget.check() {
+            budget.exhausted = true;
             return (paths, false);
         }
         let resolved_root = match fs::canonicalize(root) {
@@ -320,10 +345,12 @@ fn discover_databases(roots: &[PathBuf], budget: &mut Budget) -> (Vec<PathBuf>, 
         };
         for entry in entries {
             if !budget.check() {
+                budget.exhausted = true;
                 return (paths, false);
             }
             budget.directory_entries += 1;
             if budget.directory_entries > MAX_DIRECTORY_ENTRIES {
+                budget.exhausted = true;
                 return (paths, false);
             }
             let entry = match entry {
@@ -363,6 +390,7 @@ fn discover_databases(roots: &[PathBuf], budget: &mut Budget) -> (Vec<PathBuf>, 
                 }
             }
             if paths.len() >= MAX_DATABASES {
+                budget.exhausted = true;
                 return (paths, false);
             }
             paths.push(resolved);
@@ -509,12 +537,14 @@ fn read_generation_rows(
     while let Some(row) = query.next()? {
         if !budget.check() {
             complete = false;
+            budget.exhausted = true;
             break;
         }
         database_rows += 1;
         budget.rows += 1;
         if database_rows > MAX_ROWS_PER_DATABASE || budget.rows > MAX_ROWS {
             complete = false;
+            budget.exhausted = true;
             break;
         }
 
@@ -534,6 +564,7 @@ fn read_generation_rows(
             Some(value) if value <= MAX_DATABASE_BYTES => value,
             _ => {
                 complete = false;
+                budget.exhausted = true;
                 break;
             }
         };
@@ -541,6 +572,7 @@ fn read_generation_rows(
             Some(value) if value <= MAX_TOTAL_BYTES => value,
             _ => {
                 complete = false;
+                budget.exhausted = true;
                 break;
             }
         };
@@ -639,11 +671,13 @@ fn read_step_timestamps(
     while let Some(row) = query.next()? {
         if !budget.check() {
             complete = false;
+            budget.exhausted = true;
             break;
         }
         budget.rows += 1;
         if budget.rows > MAX_ROWS {
             complete = false;
+            budget.exhausted = true;
             break;
         }
 
@@ -663,6 +697,7 @@ fn read_step_timestamps(
             Some(value) if value <= MAX_DATABASE_BYTES => value,
             _ => {
                 complete = false;
+                budget.exhausted = true;
                 break;
             }
         };
@@ -670,6 +705,7 @@ fn read_step_timestamps(
             Some(value) if value <= MAX_TOTAL_BYTES => value,
             _ => {
                 complete = false;
+                budget.exhausted = true;
                 break;
             }
         };

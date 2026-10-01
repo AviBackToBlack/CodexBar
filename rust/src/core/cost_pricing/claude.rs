@@ -174,6 +174,13 @@ impl CostUsagePricing {
         claude_routed_pricing::models_dev_target(model, Self::normalize_claude_model(model))
     }
 
+    /// models.dev `(provider, model)` entries the routed Claude resolver tries
+    /// for `model`, in order. A pricing refresh for unpriced history targets
+    /// exactly the entries a rescan prices from.
+    pub(crate) fn claude_models_dev_pricing_targets(model: &str) -> Vec<(&'static str, String)> {
+        claude_routed_pricing::models_dev_targets(model, Self::normalize_claude_model(model))
+    }
+
     /// Calculate cost for Claude usage in USD
     pub fn claude_cost_usd(
         model: &str,

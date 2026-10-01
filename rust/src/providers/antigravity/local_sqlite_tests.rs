@@ -280,6 +280,70 @@ fn schema_entry_budget_is_incomplete_not_foreign() {
 }
 
 #[test]
+fn undecodable_row_beside_valid_rows_yields_a_lower_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".gemini/antigravity-cli/conversations");
+    fs::create_dir_all(&root).unwrap();
+    let timestamp = u64::try_from(Utc::now().timestamp()).unwrap();
+    let conn = Connection::open(root.join("one.db")).unwrap();
+    conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+        [valid_turn_blob(100, timestamp)],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES(2, ?1)",
+        params!["not-a-blob"],
+    )
+    .unwrap();
+    drop(conn);
+
+    let SQLiteScan::Summary(summary) =
+        summarize(&database_roots(&dir.path().join(".gemini")), Utc::now(), 30)
+    else {
+        panic!("supported database should produce coverage");
+    };
+
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+    assert!(summary.total_tokens > 0);
+    assert!(summary.lower_bound);
+    assert_eq!(summary.published_tokens(), Some(summary.total_tokens));
+    assert_eq!(summary.total_usd(), None);
+}
+
+#[test]
+fn contradicting_rows_for_one_index_are_withheld_not_published() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".gemini/antigravity-cli/conversations");
+    fs::create_dir_all(&root).unwrap();
+    let timestamp = u64::try_from(Utc::now().timestamp()).unwrap();
+    let conn = Connection::open(root.join("one.db")).unwrap();
+    conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+        .unwrap();
+    for input in [100_u64, 900_u64] {
+        conn.execute(
+            "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+            [valid_turn_blob(input, timestamp)],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let SQLiteScan::Summary(summary) =
+        summarize(&database_roots(&dir.path().join(".gemini")), Utc::now(), 30)
+    else {
+        panic!("supported database should produce coverage");
+    };
+
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Partial);
+    assert_eq!(summary.total_tokens, 0);
+    assert!(!summary.lower_bound);
+    assert_eq!(summary.published_tokens(), None);
+}
+
+#[test]
 fn list_price_uses_prompt_plus_input_and_output_plus_reasoning() {
     // Upstream AntigravityLocalReaderTests: a known model gets a list-price estimate, a routing
     // variant prices from its base model, and an unknown model stays unpriced.
@@ -338,4 +402,66 @@ fn list_price_uses_prompt_plus_input_and_output_plus_reasoning() {
         summary.cost_estimate.known_subtotal_usd,
         Some(per_request * 2.0)
     );
+    assert_eq!(
+        summary
+            .cost_estimate
+            .unpriced_models
+            .iter()
+            .collect::<Vec<_>>(),
+        ["fixture-unpriced"]
+    );
+}
+
+/// Upstream 0.64 `AntigravityPricingRefreshTests` ("routine local reads do not
+/// wait for pricing", "empty history starts no download"): a routine read
+/// returns its scan as is and offers a background pricing refresh only when
+/// the history records a model with no known public price.
+#[test]
+fn routine_read_offers_background_pricing_only_for_unpriced_history() {
+    use crate::providers::antigravity::local_sessions::background_pricing_refresh;
+
+    let now = Utc::now();
+    let timestamp = u64::try_from(now.timestamp()).unwrap();
+    // `None`: no database at all; `Some(None)`: a supported database without
+    // rows; `Some(Some(model))`: one recorded request for `model`.
+    let routine_read = |database: Option<Option<&str>>| {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".gemini/antigravity-cli/conversations");
+        fs::create_dir_all(&root).unwrap();
+        if let Some(model) = database {
+            let conn = Connection::open(root.join("one.db")).unwrap();
+            conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+                .unwrap();
+            if let Some(model) = model {
+                conn.execute(
+                    "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+                    [valid_turn_blob_with_model(100, timestamp, Some(model))],
+                )
+                .unwrap();
+            }
+        }
+        match summarize(&[root], now, 30) {
+            SQLiteScan::Summary(summary) => summary,
+            SQLiteScan::NoDatabases | SQLiteScan::Unsupported => {
+                LocalTokenHistorySummary::default()
+            }
+        }
+    };
+
+    for empty in [routine_read(None), routine_read(Some(None))] {
+        assert_eq!(empty.total_tokens, 0);
+        assert!(empty.cost_estimate.unpriced_models.is_empty());
+        assert!(background_pricing_refresh(&empty).is_none());
+    }
+
+    let known = routine_read(Some(Some("claude-sonnet-4-6")));
+    assert_eq!(known.total_tokens, 198);
+    assert!(known.total_usd().is_some());
+    assert!(background_pricing_refresh(&known).is_none());
+
+    let unknown = routine_read(Some(Some("gemini-fixture-unpriced")));
+    assert_eq!(unknown.coverage, LocalHistoryCoverage::Complete);
+    assert_eq!(unknown.total_tokens, 198);
+    assert_eq!(unknown.total_usd(), None);
+    assert!(background_pricing_refresh(&unknown).is_some());
 }
