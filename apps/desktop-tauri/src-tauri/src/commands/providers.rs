@@ -1247,4 +1247,3 @@ mod predictive_warning_tests {
         }
     }
 }
-

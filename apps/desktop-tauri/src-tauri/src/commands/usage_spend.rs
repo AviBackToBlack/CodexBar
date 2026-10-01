@@ -700,8 +700,9 @@ fn build_usage_spend_summary(
                 }
                 {
                     use codexbar::providers::antigravity::local_sessions::LocalHistoryCoverage;
-                    spend.seven_day_tokens = matches!(seven.coverage, LocalHistoryCoverage::Complete)
-                        .then_some(seven.total_tokens);
+                    spend.seven_day_tokens =
+                        matches!(seven.coverage, LocalHistoryCoverage::Complete)
+                            .then_some(seven.total_tokens);
                     spend.thirty_day_tokens =
                         matches!(thirty.coverage, LocalHistoryCoverage::Complete)
                             .then_some(thirty.total_tokens);
@@ -1096,7 +1097,11 @@ mod cache_key_tests {
 
         let seven = local_history(100, LocalHistoryCoverage::Partial, Some(1.25), 0);
         let thirty = local_history(200, LocalHistoryCoverage::Partial, Some(2.50), 0);
-        let spend = antigravity_spend_values(cached_spend(None, CostReportingPeriod::Rolling(30), chrono::Utc::now()), &seven, &thirty);
+        let spend = antigravity_spend_values(
+            cached_spend(None, CostReportingPeriod::Rolling(30), chrono::Utc::now()),
+            &seven,
+            &thirty,
+        );
 
         assert_eq!(spend.seven_day, None);
         assert_eq!(spend.thirty_day, None);
@@ -1112,7 +1117,11 @@ mod cache_key_tests {
         let mut seven = local_history(100, LocalHistoryCoverage::Partial, Some(1.25), 0);
         seven.lower_bound = true;
         let withheld = local_history(0, LocalHistoryCoverage::Partial, None, 0);
-        let spend = antigravity_spend_values(cached_spend(None, CostReportingPeriod::Rolling(30), chrono::Utc::now()), &seven, &withheld);
+        let spend = antigravity_spend_values(
+            cached_spend(None, CostReportingPeriod::Rolling(30), chrono::Utc::now()),
+            &seven,
+            &withheld,
+        );
 
         assert_eq!(spend.seven_day, None);
         assert_eq!(spend.seven_day_tokens, Some(100));
@@ -1126,7 +1135,11 @@ mod cache_key_tests {
 
         let seven = local_history(0, LocalHistoryCoverage::Complete, None, 0);
         let thirty = local_history(0, LocalHistoryCoverage::Complete, None, 0);
-        let spend = antigravity_spend_values(cached_spend(None, CostReportingPeriod::Rolling(30), chrono::Utc::now()), &seven, &thirty);
+        let spend = antigravity_spend_values(
+            cached_spend(None, CostReportingPeriod::Rolling(30), chrono::Utc::now()),
+            &seven,
+            &thirty,
+        );
 
         assert_eq!(spend.seven_day, Some(0.0));
         assert_eq!(spend.thirty_day, Some(0.0));

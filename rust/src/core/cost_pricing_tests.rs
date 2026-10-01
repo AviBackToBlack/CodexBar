@@ -634,4 +634,172 @@ fn gpt6_astra_unknown_models_fail_closed() {
 }
 
 // Upstream 0.65.0 #3820: Priority rows and day aggregates.
+// Upstream 0.70.0 #4094 `CodexAliasedModelPricingTests`.
+#[test]
+fn normalize_codex_model_maps_daybreak_aliases_and_cyber_ids() {
+    for (raw, expected) in [
+        ("gpt-daybreak-blue-latest", "gpt-5.6-sol"),
+        ("openai/gpt-daybreak-blue-latest", "gpt-5.6-sol"),
+        ("gpt-daybreak-red-latest", "gpt-5.6-cyber"),
+        ("gpt-5.6-cyber", "gpt-5.6-cyber"),
+        ("gpt-5.5-cyber", "gpt-5.5-cyber"),
+    ] {
+        assert_eq!(
+            CostUsagePricing::normalize_codex_model(raw),
+            expected,
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn codex_cost_prices_daybreak_aliases_and_cyber_bundled_fallback() {
+    let cost = |model: &str, writes: u64| {
+        CostUsagePricing::codex_cost_usd_with_cache_write(model, 100, 10, writes, 5).unwrap()
+    };
+    // Cyber rates per token: $12.50 input, $1.25 cached input, $75 output per 1M.
+    let cyber = 90.0 * 1.25e-5 + 10.0 * 1.25e-6 + 5.0 * 7.5e-5;
+    assert!((cost("gpt-5.6-cyber", 0) - cyber).abs() < 1e-12);
+    assert!((cost("gpt-5.5-cyber", 0) - cyber).abs() < 1e-12);
+    let expected_write = 70.0 * 1.25e-5 + 10.0 * 1.25e-6 + 20.0 * 1.5625e-5 + 5.0 * 7.5e-5;
+    assert!((cost("gpt-5.6-cyber", 20) - expected_write).abs() < 1e-12);
+    // gpt-5.5-cyber lists no cache-write rate, so its writes bill as input.
+    assert!((cost("gpt-5.5-cyber", 20) - cyber).abs() < 1e-12);
+    assert!((cost("gpt-daybreak-blue-latest", 0) - cost("gpt-5.6-sol", 0)).abs() < 1e-12);
+    assert!((cost("gpt-daybreak-red-latest", 0) - cyber).abs() < 1e-12);
+}
+
+// Upstream 0.70.0 #4094 `CodexSolHistoricalPricingTests`. Windows prices by
+// usage day, so 2026-08-20 stands in for upstream's `cutoff - 1s`.
+#[test]
+fn sol_keeps_historical_rates_before_its_august_repricing() {
+    use chrono::NaiveDate;
+    use models_dev_pricing::ModelsDevPricingSnapshot;
+
+    let catalog = ModelsDevPricingSnapshot::from_catalog_json_for_tests(
+        r#"{"openai":{"id":"openai","models":{"gpt-5.6-sol":{
+          "id":"gpt-5.6-sol","cost":{"input":4,"cache_read":0.4,"cache_write":5,"output":20}
+        }}}}"#,
+    )
+    .expect("catalog fixture");
+    let empty = ModelsDevPricingSnapshot::from_catalog_json_for_tests("{}").expect("empty");
+    let last_historical_day = NaiveDate::from_ymd_opt(2026, 8, 20).unwrap();
+    let cutoff = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
+    for model in ["gpt-5.6-sol", "gpt-5.6"] {
+        for input in [100_u64, 272_001] {
+            let long = input > 272_000;
+            for (day, historical) in [(last_historical_day, true), (cutoff, false)] {
+                // Per 1M tokens; cache reads bill at 0.1x and writes at 1.25x input.
+                let (input_rate, output_rate) = match (historical, long) {
+                    (true, false) => (5.0, 30.0),
+                    (true, true) => (10.0, 45.0),
+                    (false, false) => (4.0, 20.0),
+                    (false, true) => (8.0, 30.0),
+                };
+                let expected = ((input - 30) as f64 * input_rate
+                    + input_rate
+                    + 25.0 * input_rate
+                    + 5.0 * output_rate)
+                    / 1_000_000.0;
+                for snapshot in [Some(&catalog), Some(&empty)] {
+                    let standard =
+                        CostUsagePricing::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+                            model, input, 10, 20, 5, day, snapshot,
+                        )
+                        .unwrap();
+                    assert!((standard - expected).abs() < 1e-12, "{model} {input} {day}");
+                }
+                // Windows' Fast lane has no cache-write input; price it without writes.
+                let expected_without_writes =
+                    ((input - 10) as f64 * input_rate + input_rate + 5.0 * output_rate)
+                        / 1_000_000.0;
+                let fast = CostUsagePricing::codex_fast_cost_usd_at_date(model, input, 10, 5, day);
+                if long {
+                    assert!(fast.is_none(), "{model} {input} {day}");
+                } else {
+                    let fast = fast.unwrap();
+                    assert!((fast - expected_without_writes * 2.0).abs() < 1e-12);
+                }
+            }
+        }
+    }
+    assert!(
+        CostUsagePricing::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+            "fixture-unknown-model",
+            100,
+            0,
+            0,
+            5,
+            cutoff,
+            Some(&catalog),
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn gpt56_bundled_rates_price_cache_writes_at_125_percent() {
+    let cost = |model: &str, input: u64, output: u64| {
+        CostUsagePricing::codex_cost_usd_with_cache_write(model, input, 10, 20, output).unwrap()
+    };
+    let sol = 70.0 * 4e-6 + 10.0 * 4e-7 + 20.0 * 5e-6 + 5.0 * 2e-5;
+    assert!((cost("gpt-5.6-sol", 100, 5) - sol).abs() < 1e-12);
+    // Long-context (>272K) rates apply to the entire request. Total input
+    // contains 10 cached, 20 cache-write, and 271,971 ordinary input tokens.
+    for (model, expected) in [
+        (
+            "gpt-5.6-sol",
+            271_971.0 * 8e-6 + 10.0 * 8e-7 + 20.0 * 1e-5 + 10.0 * 3e-5,
+        ),
+        (
+            "gpt-5.6-terra",
+            271_971.0 * 4e-6 + 10.0 * 4e-7 + 20.0 * 5e-6 + 10.0 * 1.8e-5,
+        ),
+        (
+            "gpt-5.6-luna",
+            271_971.0 * 4e-7 + 10.0 * 4e-8 + 20.0 * 5e-7 + 10.0 * 1.8e-6,
+        ),
+    ] {
+        assert!(
+            (cost(model, 272_001, 10) - expected).abs() < 1e-12,
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn gpt54_and_gpt55_bill_the_whole_request_at_long_context_rates_above_272k() {
+    let cost = |model: &str, input: u64| {
+        CostUsagePricing::codex_cost_usd(model, input, 1_000, 100).unwrap()
+    };
+    for (model, standard, long) in [
+        ("gpt-5.4", (2.5e-6, 2.5e-7, 1.5e-5), (5e-6, 5e-7, 2.25e-5)),
+        (
+            "gpt-5.4-codex",
+            (2.5e-6, 2.5e-7, 1.5e-5),
+            (5e-6, 5e-7, 2.25e-5),
+        ),
+        ("gpt-5.5", (5e-6, 5e-7, 3e-5), (1e-5, 1e-6, 4.5e-5)),
+        (
+            "openai/gpt-5.5-2026-04-23",
+            (5e-6, 5e-7, 3e-5),
+            (1e-5, 1e-6, 4.5e-5),
+        ),
+    ] {
+        let price = |(input_rate, cached_rate, output_rate): (f64, f64, f64), input: u64| {
+            (input - 1_000) as f64 * input_rate + 1_000.0 * cached_rate + 100.0 * output_rate
+        };
+        // The 272K boundary itself still bills standard rates.
+        assert!(
+            (cost(model, 272_000) - price(standard, 272_000)).abs() < 1e-12,
+            "{model}"
+        );
+        assert!(
+            (cost(model, 272_001) - price(long, 272_001)).abs() < 1e-12,
+            "{model}"
+        );
+    }
+    // Fast mode keeps its 272K cutoff for these models.
+    assert!(CostUsagePricing::codex_fast_cost_usd("gpt-5.5-priority", 272_001, 0, 1).is_none());
+    assert!(CostUsagePricing::codex_fast_cost_usd("gpt-5.4-fast", 272_000, 0, 1).is_some());
 }

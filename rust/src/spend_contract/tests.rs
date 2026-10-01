@@ -688,6 +688,9 @@ fn unpriced_model_names_are_recorded_but_not_serialized() {
     );
     let json = serde_json::to_value(&estimate).unwrap();
     assert!(json.get("unpricedModels").is_none());
+}
+
+#[test]
 fn period_contract_reports_its_period_and_sidecar_window() {
     let now = Utc::now();
     let cases = [

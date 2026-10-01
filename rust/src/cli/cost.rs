@@ -839,6 +839,8 @@ mod tests {
         assert_eq!(payload["cost"]["pricingCoverage"]["estimated"], 1);
         assert_eq!(payload["cost"]["pricingCoverage"]["unpriced"], 1);
         assert!(payload["note"].as_str().unwrap().contains("subtotal"));
+    }
+
     #[derive(clap::Parser)]
     struct Wrapper {
         #[command(flatten)]
