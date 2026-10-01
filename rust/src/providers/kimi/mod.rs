@@ -19,6 +19,8 @@
 mod auto;
 mod code_api;
 pub mod desktop_token;
+#[cfg(test)]
+mod monthly_blocking_tests;
 mod ratio_pool;
 mod region;
 mod web;
@@ -35,6 +37,9 @@ use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
     RateWindow, SourceMode, UsageSnapshot,
 };
+
+/// Extra-window id of the monthly membership pool (`Total usage`).
+pub const MONTHLY_WINDOW_ID: &str = "kimi-monthly";
 
 const KIMI_WEB_USAGE_SERVICE: &str = "kimi.gateway.billing.v1.BillingService/GetUsages";
 const KIMI_SUBSCRIPTION_STATS_SERVICE: &str =
@@ -436,7 +441,7 @@ fn apply_subscription_windows(
     {
         // Verified monthly sentinel (#2431 / #2566).
         usage = usage.with_extra_rate_window(
-            "kimi-monthly",
+            MONTHLY_WINDOW_ID,
             "Total usage",
             RateWindow::with_details(
                 ratio * 100.0,

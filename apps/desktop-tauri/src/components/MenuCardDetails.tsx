@@ -25,6 +25,7 @@ import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
+import { isMonthlyLimitBlockActive } from "../lib/monthlyLimitBlock";
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
@@ -313,6 +314,8 @@ type MetricRowDisplay = {
   showAsUsed?: boolean;
   compactOverview?: boolean;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  /** Epoch ms that monthly-limit blocks are checked against (defaults to now). */
+  monthlyLimitBlockNow?: number;
 };
 
 /**
@@ -347,7 +350,14 @@ function MetricRow({
     showPace = true,
     showAsUsed = false,
     compactOverview = false,
+    monthlyLimitBlockNow,
   } = display;
+  // Upstream 0.69.0 #4091: a longer exhausted pool (Kimi's monthly membership)
+  // blocks this window until the pool resets. Raw percentages stay untouched.
+  const blocked = isMonthlyLimitBlockActive(
+    snap.monthlyLimitBlock,
+    monthlyLimitBlockNow ?? Date.now(),
+  );
   const isInformational = snap.isInformational === true;
   const usedPct = Number.isFinite(snap.usedPercent) ? Math.max(0, snap.usedPercent) : 0;
   const barPct = Math.min(100, usedPct);
@@ -357,8 +367,8 @@ function MetricRow({
   const displayLabel = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
   const level = levelOf(remain, snap.isExhausted);
   const resetText = useFormattedResetTime(
-    snap.resetsAt,
-    isInformational ? null : snap.resetDescription,
+    blocked ? null : snap.resetsAt,
+    isInformational || blocked ? null : snap.resetDescription,
     resetTimeRelative,
     resetFormatMode ?? "reset",
   );
@@ -373,6 +383,17 @@ function MetricRow({
   const paceView = showPace ? getMetricPaceView(snap) : { kind: "none" as const };
   const reserveDescription = formatReserveDescription(snap, t);
   const forecastText = formatSessionEquivalentEstimate(sessionEquivalentForecast);
+  if (blocked) {
+    // Upstream `MetricRow` status layout: title plus one secondary status line,
+    // no bar, percent, reset, pace, reserve, or forecast. The pool's own row
+    // keeps its reset; the shorter resets cannot restore access.
+    return (
+      <div className="menu-metric menu-metric--blocked">
+        <span className="menu-metric__title">{title}</span>
+        <span className="menu-metric__status">{t("PanelBlockedByMonthlyLimit")}</span>
+      </div>
+    );
+  }
   return (
     <div className="menu-metric">
       <span className="menu-metric__title">{title}</span>
@@ -482,6 +503,7 @@ export function describeCard(
   costSummaryDisplayStyle: CostSummaryDisplayStyle = "detailed",
   showPace = true,
   compactOverview = false,
+  monthlyLimitBlockNow: number = Date.now(),
 ): MenuCardPresence {
   const hasCostHistory =
     chartData !== null && chartData.costHistory.some((point) => point.value != null);
@@ -502,10 +524,13 @@ export function describeCard(
   const hasCost =
     !!provider.cost &&
     (costSummaryDisplayStyle !== "hidden" || provider.cost.alwaysVisible === true);
+  // Upstream drops the pace forecast of a window blocked by a longer exhausted
+  // pool; the provider-level pace comes from such a window when it is blocked.
   const hasPace =
     showPace &&
     providerAllowsPace(provider.providerId, provider.sourceLabel) &&
-    !!provider.pace;
+    !!provider.pace &&
+    !isMonthlyLimitBlockActive(provider.pace.monthlyLimitBlock, monthlyLimitBlockNow);
   const hasDetails =
     !provider.error &&
     (hasMetrics ||

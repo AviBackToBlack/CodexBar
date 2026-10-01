@@ -124,6 +124,70 @@ describe("UsageSection", () => {
     expect(label.parentElement?.querySelector(".provider-usage-bar__track")).toBeNull();
   });
 
+  function kimiDetailBlockedUntil(blockResetsAt: string) {
+    const detail = provider();
+    detail.id = "kimi";
+    detail.displayName = "Kimi";
+    detail.session = {
+      ...rateWindow(0),
+      resetsAt: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+      monthlyLimitBlock: { resetsAt: blockResetsAt },
+    };
+    detail.extraRateWindows = [
+      {
+        id: "kimi-monthly",
+        title: "Total usage",
+        window: { ...rateWindow(100), isExhausted: true, resetsAt: blockResetsAt },
+      },
+    ];
+    return detail;
+  }
+
+  it("shows a window blocked by the monthly pool as title and status only", async () => {
+    const poolReset = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString();
+
+    render(
+      <LocaleProvider>
+        <UsageSection
+          provider={kimiDetailBlockedUntil(poolReset)}
+          resetTimeRelative={true}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
+    );
+
+    const label = await screen.findByText("ProviderSessionLabel");
+    const row = label.closest(".provider-usage-bar");
+    expect(row).toHaveTextContent(/^ProviderSessionLabelPanelBlockedByMonthlyLimit$/);
+    expect(row?.querySelector(".provider-usage-bar__track")).toBeNull();
+    expect(row?.querySelector(".provider-usage-bar__reset")).toBeNull();
+    // The pool's own row keeps its bar, exhausted state and reset.
+    const pool = screen.getByText("Total usage").closest(".provider-usage-bar");
+    expect(pool?.querySelector(".provider-usage-bar__track")).not.toBeNull();
+    expect(pool).toHaveTextContent("DetailWindowExhausted");
+    expect(pool?.querySelector(".provider-usage-bar__reset")).not.toBeNull();
+  });
+
+  it("shows the raw window again once the monthly pool reset has passed", async () => {
+    const past = new Date(Date.now() - 60 * 1000).toISOString();
+
+    render(
+      <LocaleProvider>
+        <UsageSection
+          provider={kimiDetailBlockedUntil(past)}
+          resetTimeRelative={true}
+          t={(key) => key}
+        />
+      </LocaleProvider>,
+    );
+
+    const label = await screen.findByText("ProviderSessionLabel");
+    const row = label.closest(".provider-usage-bar");
+    expect(row).toHaveTextContent("0%");
+    expect(row).not.toHaveTextContent("PanelBlockedByMonthlyLimit");
+    expect(row?.querySelector(".provider-usage-bar__track")).not.toBeNull();
+  });
+
   it("renders discrete inventory without turning it into a quota bar", async () => {
     const detail = provider();
     detail.session = null;

@@ -560,6 +560,15 @@ export interface BootstrapState {
 
 // ── Provider usage snapshot types ────────────────────────────────────
 
+/**
+ * A longer exhausted pool (Kimi monthly, upstream 0.69.0 #4091) blocks the
+ * window until `resetsAt`; `null` means the reset is unknown and the block
+ * holds. Surfaces re-check it at render time because snapshots are cached.
+ */
+export interface MonthlyLimitBlock {
+  resetsAt: string | null;
+}
+
 export interface RateWindowSnapshot {
   usedPercent: number;
   remainingPercent: number;
@@ -572,6 +581,8 @@ export interface RateWindowSnapshot {
   reserveDescription: string | null;
   reserveWillLastToReset?: boolean;
   reserveEtaSeconds?: number | null;
+  /** Set while a longer exhausted pool blocks this window; raw percentages stay the provider data. */
+  monthlyLimitBlock?: MonthlyLimitBlock | null;
 }
 
 export interface CostDailyPoint {
@@ -608,6 +619,8 @@ export interface PaceSnapshot {
   etaSeconds: number | null;
   expectedUsedPercent: number;
   actualUsedPercent: number;
+  /** Block of the window this pace comes from; no pace is shown while it is active. */
+  monthlyLimitBlock?: MonthlyLimitBlock | null;
 }
 
 export interface SessionEquivalentForecastSnapshot {

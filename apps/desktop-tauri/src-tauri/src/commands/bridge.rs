@@ -1,8 +1,11 @@
 pub(crate) mod pace;
+mod quota_block;
 mod status;
+pub use quota_block::MonthlyLimitBlockSnapshot;
 pub(crate) use status::{compact_tray_status_label, friendly_provider_error};
 
 use super::*;
+use codexbar::core::BlockedWindows;
 
 // ── Bridge snapshot types ────────────────────────────────────────────
 
@@ -31,6 +34,10 @@ pub struct RateWindowSnapshot {
     pub reserve_will_last_to_reset: bool,
     #[serde(default)]
     pub reserve_eta_seconds: Option<f64>,
+    /// Set while a longer exhausted pool (Kimi's monthly membership) blocks
+    /// this window; presentation only, the raw percentages above stay as is.
+    #[serde(default)]
+    pub monthly_limit_block: Option<MonthlyLimitBlockSnapshot>,
 }
 
 /// Serde default for [`RateWindowSnapshot::remaining_percent`] — the common
@@ -53,6 +60,7 @@ impl RateWindowSnapshot {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            monthly_limit_block: None,
         }
     }
 
@@ -159,6 +167,9 @@ pub struct PaceSnapshot {
     pub expected_used_percent: f64,
     #[serde(default)]
     pub actual_used_percent: f64,
+    /// Block of the window this pace comes from (upstream hides its pace).
+    #[serde(default)]
+    pub monthly_limit_block: Option<MonthlyLimitBlockSnapshot>,
 }
 
 /// Session-equivalent weekly forecast for Claude/Codex menu secondary line.
@@ -337,6 +348,7 @@ impl ProviderUsageSnapshot {
         });
         let primary_pace = primary_pace.flatten();
 
+        let blocked = BlockedWindows::evaluate(id, usage, chrono::Utc::now());
         let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
             stage: pace::stage_str(p.stage).to_string(),
             delta_percent: p.delta_percent,
@@ -344,6 +356,7 @@ impl ProviderUsageSnapshot {
             eta_seconds: p.eta_seconds,
             expected_used_percent: p.expected_used_percent,
             actual_used_percent: p.actual_used_percent,
+            monthly_limit_block: MonthlyLimitBlockSnapshot::for_pace(usage, &blocked),
         });
 
         // Compute pace for secondary window (weekly) to derive reserve info
@@ -355,10 +368,12 @@ impl ProviderUsageSnapshot {
         });
         let secondary_pace = secondary_pace.flatten();
 
-        let primary_snap = RateWindowSnapshot::from_rate_window(&usage.primary);
+        let primary_snap = RateWindowSnapshot::from_rate_window(&usage.primary)
+            .with_quota_block(blocked.primary, &blocked);
 
         let secondary_snap = usage.secondary.as_ref().map(|sw| {
-            let mut s = RateWindowSnapshot::from_rate_window(sw);
+            let mut s = RateWindowSnapshot::from_rate_window(sw)
+                .with_quota_block(blocked.secondary, &blocked);
             if let Some(ref p) = secondary_pace {
                 s = s.with_pace_reserve(p);
             }
@@ -394,14 +409,13 @@ impl ProviderUsageSnapshot {
                     .clone()
                     .unwrap_or_else(|| metadata.weekly_label.to_string())
             }),
-            model_specific: usage
-                .model_specific
-                .as_ref()
-                .map(RateWindowSnapshot::from_rate_window),
-            tertiary: usage
-                .tertiary
-                .as_ref()
-                .map(RateWindowSnapshot::from_rate_window),
+            model_specific: usage.model_specific.as_ref().map(|w| {
+                RateWindowSnapshot::from_rate_window(w)
+                    .with_quota_block(blocked.model_specific, &blocked)
+            }),
+            tertiary: usage.tertiary.as_ref().map(|w| {
+                RateWindowSnapshot::from_rate_window(w).with_quota_block(blocked.tertiary, &blocked)
+            }),
             // F5 (upstream 0.48.0): label the tertiary lane by its duration cadence
             // so surfaces (MenuCard, CLI, tray) can show "Monthly" instead of the
             // generic "DetailWindowTertiary" slot key.
@@ -416,10 +430,12 @@ impl ProviderUsageSnapshot {
             extra_rate_windows: usage
                 .extra_rate_windows
                 .iter()
-                .map(|extra| NamedRateWindowSnapshot {
+                .zip(&blocked.extra)
+                .map(|(extra, &is_blocked)| NamedRateWindowSnapshot {
                     id: extra.id.clone(),
                     title: extra.title.clone(),
-                    window: RateWindowSnapshot::from_rate_window(&extra.window),
+                    window: RateWindowSnapshot::from_rate_window(&extra.window)
+                        .with_quota_block(is_blocked, &blocked),
                     fallback_lane: extra.fallback_lane,
                 })
                 .collect(),
@@ -518,6 +534,7 @@ impl ProviderUsageSnapshot {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                monthly_limit_block: None,
             },
             primary_label: Some(metadata.session_label.to_string()),
             secondary: None,
@@ -990,6 +1007,7 @@ mod tests {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            monthly_limit_block: None,
         }
     }
 

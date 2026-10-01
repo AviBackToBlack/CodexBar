@@ -663,6 +663,7 @@ export const ALL_LOCALE_KEYS = [
   "PanelFiveHours",
   "PanelTodayBudget",
   "PanelReserveSuffix",
+  "PanelBlockedByMonthlyLimit",
   "PanelReserveLastsUntilReset",
   "PanelReserveRunsOutInDaysHours",
   "PanelReserveRunsOutInHours",

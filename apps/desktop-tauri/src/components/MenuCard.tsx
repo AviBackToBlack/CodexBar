@@ -17,6 +17,7 @@ import { DEEPSEEK_PRICING_EVENT } from "../hooks/useDeepSeekPricingStatus";
 import { getDeepSeekPricingStatus } from "../lib/tauri";
 import type { DeepSeekPricingStatus } from "../types/bridge";
 import { isUsageItemVisible } from "../lib/usageItemVisibility";
+import { useMonthlyLimitBlockNow } from "../hooks/useMonthlyLimitBlockNow";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -241,6 +242,12 @@ export default function MenuCard({
   const visibleMetrics = metrics
     .filter((metric) => isUsageItemVisible(provider.hiddenUsageItemIds, metric.id))
     .slice(0, compactOverview ? 2 : metrics.length);
+  // Snapshots are cached across failed refreshes, so monthly-limit blocks are
+  // re-checked against the clock and lift when the pool's reset passes.
+  const monthlyLimitBlockNow = useMonthlyLimitBlockNow([
+    ...visibleMetrics.map((metric) => metric.snap.monthlyLimitBlock),
+    provider.pace?.monthlyLimitBlock,
+  ]);
 
   const presence = describeCard(
     provider,
@@ -249,6 +256,7 @@ export default function MenuCard({
     costSummaryDisplayStyle,
     showPace,
     compactOverview,
+    monthlyLimitBlockNow,
   );
   const { hasDetails } = presence;
   const cardClassName = [
@@ -322,6 +330,7 @@ export default function MenuCard({
             showAsUsed,
             compactOverview,
             costSummaryDisplayStyle,
+            monthlyLimitBlockNow,
           }}
           metrics={visibleMetrics}
           chartData={chartData}

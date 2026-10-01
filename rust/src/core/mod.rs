@@ -2,6 +2,7 @@
 
 mod adaptive_refresh;
 mod aws_signing;
+mod blocking_quota;
 mod claude_routed_pricing;
 mod codex_routed_pricing;
 mod cost_cache_budget;
@@ -32,6 +33,7 @@ mod widget_snapshot;
 
 pub use adaptive_refresh::*;
 pub use aws_signing::*;
+pub use blocking_quota::*;
 pub use cost_cache_budget::*;
 pub use cost_pricing::*;
 pub use curl_capture::*;

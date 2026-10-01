@@ -25,6 +25,7 @@ fn fake_snapshot_with(
         reserve_description: None,
         reserve_will_last_to_reset: false,
         reserve_eta_seconds: None,
+        monthly_limit_block: None,
     };
 
     ProviderUsageSnapshot {
@@ -375,6 +376,7 @@ fn fake_extra_window(percent: f64) -> crate::commands::NamedRateWindowSnapshot {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            monthly_limit_block: None,
         },
     }
 }
@@ -596,6 +598,7 @@ fn claude_automatic_prefers_weekly_when_model_exhausted() {
         reserve_description: None,
         reserve_will_last_to_reset: false,
         reserve_eta_seconds: None,
+        monthly_limit_block: None,
     });
 
     let (primary, _) = selected_tray_percents(&snapshot, &settings);
@@ -639,6 +642,7 @@ fn automatic_picks_highest_among_model_and_extra_windows() {
         reserve_description: None,
         reserve_will_last_to_reset: false,
         reserve_eta_seconds: None,
+        monthly_limit_block: None,
     });
     snapshot.extra_rate_windows.push(fake_extra_window(90.0));
 

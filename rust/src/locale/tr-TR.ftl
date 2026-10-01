@@ -556,6 +556,7 @@ PanelOneHour = 1 sa
 PanelFiveHours = 5 sa
 PanelTodayBudget = bugün
 PanelReserveSuffix = yedekte
+PanelBlockedByMonthlyLimit = Aylık limit nedeniyle engellendi
 PanelReserveLastsUntilReset = Sıfırlamaya kadar sürer
 PanelReserveRunsOutInDaysHours = { "{}" } g { "{}" } sa içinde tükenir
 PanelReserveRunsOutInHours = { "{}" } sa içinde tükenir

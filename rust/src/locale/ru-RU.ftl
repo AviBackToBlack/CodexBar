@@ -521,6 +521,7 @@ PanelOneHour = 1 час
 PanelFiveHours = 5 часов
 PanelTodayBudget = сегодня
 PanelReserveSuffix = в резерве
+PanelBlockedByMonthlyLimit = Заблокировано месячным лимитом
 PanelReserveLastsUntilReset = Длится до сброса
 PanelReserveRunsOutInDaysHours = Заканчивается через { "{}" }d { "{}" }h
 PanelReserveRunsOutInHours = Заканчивается через { "{}" }h
