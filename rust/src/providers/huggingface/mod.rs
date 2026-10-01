@@ -325,6 +325,12 @@ impl Provider for HuggingFaceProvider {
     fn available_sources(&self) -> Vec<SourceMode> {
         vec![SourceMode::Auto, SourceMode::OAuth]
     }
+
+    /// Upstream keeps the user's source for a selected API token account, so an
+    /// `Auto` fetch still reads the prepaid wallet from the browser session.
+    fn token_account_preserves_auto_source(&self) -> bool {
+        true
+    }
 }
 
 fn resolve_token(ctx: &FetchContext) -> Result<String, ProviderError> {

@@ -92,7 +92,9 @@ pub(crate) fn build_fetch_context(
 
     let (mut source_mode, mut cookie_header, fails_closed_without_cookie) =
         if id.cookie_domain().is_none() {
-            let source_mode = if active_token_env.is_some() {
+            let keeps_auto =
+                usage_source == SourceMode::Auto && provider.token_account_preserves_auto_source();
+            let source_mode = if active_token_env.is_some() && !keeps_auto {
                 SourceMode::OAuth
             } else {
                 usage_source
