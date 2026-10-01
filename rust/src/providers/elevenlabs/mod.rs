@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::Deserialize;
 
 use crate::core::{
@@ -12,7 +12,10 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
-const ELEVENLABS_SUBSCRIPTION_URL: &str = "https://api.elevenlabs.io/v1/user/subscription";
+const ELEVENLABS_API_BASE_URL: &str = "https://api.elevenlabs.io";
+const ELEVENLABS_API_URL_ENV: &str = "ELEVENLABS_API_URL";
+const INVALID_ENDPOINT_OVERRIDE: &str =
+    "ElevenLabs endpoint override ELEVENLABS_API_URL must use HTTPS or a bare host.";
 const ELEVENLABS_CREDENTIAL_TARGET: &str = "codexbar-elevenlabs";
 const MAX_AUTH_ERROR_BODY_BYTES: usize = 8 * 1024;
 
@@ -69,9 +72,12 @@ impl ElevenLabsProvider {
     }
 
     async fn fetch_api(&self, api_key: &str) -> Result<UsageSnapshot, ProviderError> {
+        let endpoint_override = std::env::var(ELEVENLABS_API_URL_ENV).ok();
+        let endpoint = subscription_url(endpoint_override.as_deref())
+            .map_err(|message| ProviderError::Other(message.to_string()))?;
         let response = self
             .client
-            .get(ELEVENLABS_SUBSCRIPTION_URL)
+            .get(endpoint)
             .header("xi-api-key", api_key)
             .header("Accept", "application/json")
             .send()
@@ -171,7 +177,7 @@ impl Provider for ElevenLabsProvider {
                 let api_key = resolve_api_key(
                     ctx.api_key.as_deref(),
                     ELEVENLABS_CREDENTIAL_TARGET,
-                    &["ELEVENLABS_API_KEY"],
+                    &["ELEVENLABS_API_KEY", "XI_API_KEY"],
                 )?;
                 Ok(ProviderFetchResult::new(
                     self.fetch_api(&api_key).await?,
@@ -206,7 +212,10 @@ fn snapshot_from_subscription(subscription: &ElevenLabsSubscriptionResponse) -> 
         .next_character_count_reset_unix
         .and_then(|timestamp| Utc.timestamp_opt(timestamp, 0).single());
 
-    let mut snapshot = UsageSnapshot::new(primary).with_login_method(display_tier(subscription));
+    let mut snapshot = UsageSnapshot::new(primary);
+    if let Some(login_method) = display_tier(subscription) {
+        snapshot = snapshot.with_login_method(login_method);
+    }
 
     if let (Some(used), Some(limit)) = (subscription.voice_slots_used, subscription.voice_limit)
         && limit > 0
@@ -243,19 +252,45 @@ fn snapshot_from_subscription(subscription: &ElevenLabsSubscriptionResponse) -> 
     snapshot
 }
 
-fn display_tier(subscription: &ElevenLabsSubscriptionResponse) -> String {
+fn display_tier(subscription: &ElevenLabsSubscriptionResponse) -> Option<String> {
     let tier = subscription
         .tier
         .as_deref()
-        .map(|tier| tier.replace('_', " "))
-        .filter(|tier| !tier.trim().is_empty())
-        .unwrap_or_else(|| "Subscription".to_string());
-    match subscription.status.as_deref() {
-        Some(status) if !status.is_empty() && !status.eq_ignore_ascii_case("active") => {
-            format!("{tier} - {status}")
-        }
-        _ => tier,
+        .map(str::trim)
+        .filter(|tier| !tier.is_empty());
+    let Some(tier) = tier else {
+        return subscription
+            .status
+            .as_deref()
+            .filter(|status| !status.is_empty())
+            .map(str::to_string);
+    };
+
+    let tier = title_case_tier(tier);
+    match subscription
+        .status
+        .as_deref()
+        .filter(|status| !status.is_empty() && !status.eq_ignore_ascii_case("active"))
+    {
+        Some(status) => Some(format!("{tier} · {status}")),
+        None => Some(tier),
     }
+}
+
+fn title_case_tier(tier: &str) -> String {
+    let normalized = tier.replace('_', " ").to_lowercase();
+    let mut title = String::with_capacity(normalized.len());
+    let mut previous_is_word = false;
+    for character in normalized.chars() {
+        let is_word = character.is_ascii_alphanumeric() || character == '_';
+        if is_word && !previous_is_word {
+            title.push(character.to_ascii_uppercase());
+        } else {
+            title.push(character);
+        }
+        previous_is_word = is_word;
+    }
+    title
 }
 
 fn format_count(value: u64) -> String {
@@ -286,17 +321,145 @@ fn resolve_api_key(
     {
         return Ok(key);
     }
-    for env in env_names {
-        if let Ok(key) = std::env::var(env)
-            && !key.trim().is_empty()
-        {
-            return Ok(key);
-        }
+    if let Some(key) = resolve_env_api_key(env_names, |name| std::env::var(name).ok()) {
+        return Ok(key);
     }
     Err(ProviderError::NotInstalled(format!(
         "API key not found. Set {} in Preferences or environment.",
         env_names.join(" / ")
     )))
+}
+
+fn resolve_env_api_key<F>(env_names: &[&str], mut lookup: F) -> Option<String>
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    env_names
+        .iter()
+        .find_map(|name| lookup(name).and_then(|value| cleaned(&value)))
+}
+
+fn subscription_url(raw_override: Option<&str>) -> Result<String, &'static str> {
+    let base = match raw_override.and_then(cleaned) {
+        Some(raw) => normalized_https_url(&raw).ok_or(INVALID_ENDPOINT_OVERRIDE)?,
+        None => Url::parse(ELEVENLABS_API_BASE_URL).expect("default API base URL is valid"),
+    };
+    endpoint_from_base(base).map(|url| url.to_string())
+}
+
+fn endpoint_from_base(mut base: Url) -> Result<Url, &'static str> {
+    let has_v1_suffix = base.path().trim_end_matches('/').rsplit('/').next() == Some("v1");
+    let mut path = base
+        .path_segments_mut()
+        .map_err(|_| INVALID_ENDPOINT_OVERRIDE)?;
+    path.pop_if_empty();
+    if has_v1_suffix {
+        path.extend(["user", "subscription"]);
+    } else {
+        path.extend(["v1", "user", "subscription"]);
+    }
+    drop(path);
+    Ok(base)
+}
+
+fn normalized_https_url(raw: &str) -> Option<Url> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let candidate = if has_explicit_scheme(raw) {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let url = Url::parse(&candidate).ok()?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let host = url.host_str()?;
+    if host.is_empty()
+        || host.contains('%')
+        || host
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return None;
+    }
+    let authority = candidate
+        .split_once("://")
+        .map(|(_, authority)| authority)
+        .or_else(|| {
+            candidate
+                .split_once(':')
+                .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
+                .map(|(_, authority)| authority)
+        })?
+        .split(['/', '?', '#'])
+        .next()?;
+    if authority.is_empty()
+        || authority.contains('@')
+        || authority.contains('%')
+        || authority.contains('\\')
+        || authority
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return None;
+    }
+    let is_bracketed_ipv6 = authority.starts_with('[') && host.contains(':');
+    if !is_bracketed_ipv6
+        && host
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | '?' | '#' | '@' | ':'))
+    {
+        return None;
+    }
+    Some(url)
+}
+
+fn has_explicit_scheme(raw: &str) -> bool {
+    if raw.contains("://") {
+        return true;
+    }
+    let Some((prefix, remainder)) = raw.split_once(':') else {
+        return false;
+    };
+    let mut characters = prefix.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic()
+        || !characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')
+        })
+    {
+        return false;
+    }
+    let possible_port = remainder.split(['/', '?', '#']).next().unwrap_or_default();
+    let prefix_looks_like_host = prefix.contains('.') || prefix.eq_ignore_ascii_case("localhost");
+    !(prefix_looks_like_host
+        && !possible_port.is_empty()
+        && possible_port
+            .chars()
+            .all(|character| character.is_ascii_digit()))
+}
+
+fn cleaned(raw: &str) -> Option<String> {
+    let mut value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        value = value[1..value.len() - 1].trim();
+    }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -323,7 +486,149 @@ mod tests {
             Some("25,000 / 100,000 credits")
         );
         assert_eq!(snapshot.extra_rate_windows.len(), 2);
-        assert_eq!(snapshot.login_method.as_deref(), Some("creator"));
+        assert_eq!(snapshot.login_method.as_deref(), Some("Creator"));
+    }
+
+    fn subscription(tier: Option<&str>, status: Option<&str>) -> ElevenLabsSubscriptionResponse {
+        ElevenLabsSubscriptionResponse {
+            tier: tier.map(str::to_string),
+            character_count: 0,
+            character_limit: 0,
+            voice_slots_used: None,
+            professional_voice_slots_used: None,
+            voice_limit: None,
+            professional_voice_limit: None,
+            status: status.map(str::to_string),
+            next_character_count_reset_unix: None,
+        }
+    }
+
+    #[test]
+    fn subscription_endpoint_matches_upstream_base_url_rules() {
+        let cases = [
+            (
+                "https://elevenlabs.test",
+                "https://elevenlabs.test/v1/user/subscription",
+            ),
+            (
+                "https://elevenlabs.test/v1/",
+                "https://elevenlabs.test/v1/user/subscription",
+            ),
+            (
+                "https:elevenlabs.test",
+                "https://elevenlabs.test/v1/user/subscription",
+            ),
+            (
+                "elevenlabs.test/proxy",
+                "https://elevenlabs.test/proxy/v1/user/subscription",
+            ),
+            (
+                "https://elevenlabs.test/v1/?fixture=1",
+                "https://elevenlabs.test/v1/user/subscription?fixture=1",
+            ),
+            (
+                "https://[::1]:8443/v1",
+                "https://[::1]:8443/v1/user/subscription",
+            ),
+            (
+                "elevenlabs.test:8443/proxy",
+                "https://elevenlabs.test:8443/proxy/v1/user/subscription",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(subscription_url(Some(input)).unwrap(), expected, "{input}");
+        }
+        assert_eq!(
+            subscription_url(None).unwrap(),
+            "https://api.elevenlabs.io/v1/user/subscription"
+        );
+        assert_eq!(
+            subscription_url(Some("  ")).unwrap(),
+            "https://api.elevenlabs.io/v1/user/subscription"
+        );
+        assert_eq!(
+            subscription_url(Some(" 'https://elevenlabs.test/v1/' ")).unwrap(),
+            "https://elevenlabs.test/v1/user/subscription"
+        );
+    }
+
+    #[test]
+    fn invalid_endpoint_overrides_are_rejected_with_the_upstream_message() {
+        for input in [
+            "http://attacker.test/v1",
+            "ftp://attacker.test/v1",
+            "https://user:password@elevenlabs.test",
+            "https://@elevenlabs.test",
+            "https://elevenlabs%2etest",
+            "https://elevenlabs.test\\@attacker.test",
+        ] {
+            assert_eq!(
+                subscription_url(Some(input)),
+                Err(INVALID_ENDPOINT_OVERRIDE),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn environment_api_key_lookup_prefers_primary_and_skips_blank_values() {
+        use std::collections::HashMap;
+
+        let both = HashMap::from([
+            ("ELEVENLABS_API_KEY".to_string(), " primary ".to_string()),
+            ("XI_API_KEY".to_string(), "alias".to_string()),
+        ]);
+        assert_eq!(
+            resolve_env_api_key(&["ELEVENLABS_API_KEY", "XI_API_KEY"], |name| {
+                both.get(name).cloned()
+            })
+            .as_deref(),
+            Some("primary")
+        );
+
+        let alias_only = HashMap::from([("XI_API_KEY".to_string(), " 'alias-key' ".to_string())]);
+        assert_eq!(
+            resolve_env_api_key(&["ELEVENLABS_API_KEY", "XI_API_KEY"], |name| {
+                alias_only.get(name).cloned()
+            })
+            .as_deref(),
+            Some("alias-key")
+        );
+
+        let blank_primary = HashMap::from([
+            ("ELEVENLABS_API_KEY".to_string(), "   ".to_string()),
+            ("XI_API_KEY".to_string(), "alias-key".to_string()),
+        ]);
+        assert_eq!(
+            resolve_env_api_key(&["ELEVENLABS_API_KEY", "XI_API_KEY"], |name| {
+                blank_primary.get(name).cloned()
+            })
+            .as_deref(),
+            Some("alias-key")
+        );
+    }
+
+    #[test]
+    fn tier_and_status_display_matches_upstream_casing_and_suffix() {
+        let cases = [
+            (Some("creator"), Some("active"), Some("Creator")),
+            (
+                Some(" growing_business "),
+                Some("past_due"),
+                Some("Growing Business · past_due"),
+            ),
+            (Some("PRO"), Some("ACTIVE"), Some("Pro")),
+            (Some(""), Some("trialing"), Some("trialing")),
+            (Some("starter"), Some(""), Some("Starter")),
+            (None, None, None),
+        ];
+        for (tier, status, expected) in cases {
+            assert_eq!(
+                display_tier(&subscription(tier, status)).as_deref(),
+                expected,
+                "tier={tier:?}, status={status:?}"
+            );
+        }
     }
 
     #[test]

@@ -501,7 +501,7 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             id: ProviderId::ElevenLabs,
             name: "ElevenLabs",
             requires_api_key: true,
-            api_key_env_var: Some("ELEVENLABS_API_KEY"),
+            api_key_env_var: Some("ELEVENLABS_API_KEY / XI_API_KEY"),
             api_key_help: Some("Get your API key from ElevenLabs Settings > API Keys."),
             config_file_path: None,
             dashboard_url: Some("https://elevenlabs.io/app/settings/api-keys"),
@@ -633,7 +633,20 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::ApiKeys;
+    use super::{ApiKeys, get_api_key_providers};
+    use crate::core::ProviderId;
+
+    #[test]
+    fn elevenlabs_lists_both_api_key_environment_names() {
+        let provider = get_api_key_providers()
+            .into_iter()
+            .find(|provider| provider.id == ProviderId::ElevenLabs)
+            .unwrap();
+        assert_eq!(
+            provider.api_key_env_var,
+            Some("ELEVENLABS_API_KEY / XI_API_KEY")
+        );
+    }
 
     #[test]
     fn api_version_survives_api_key_update() {
