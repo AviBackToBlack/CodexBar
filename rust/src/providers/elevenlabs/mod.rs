@@ -368,8 +368,12 @@ fn normalized_https_url(raw: &str) -> Option<Url> {
         return None;
     }
     let candidate = if has_explicit_scheme(raw) {
-        // Foundation's URL(string:) yields no host for "https:host", so upstream rejects it.
-        if !raw.contains("://") {
+        // Foundation's URL(string:) yields no host unless "//" directly follows the scheme
+        // colon, so upstream rejects "https:host" even when "://" appears later in the value.
+        if !raw
+            .split_once(':')
+            .is_some_and(|(_, rest)| rest.starts_with("//"))
+        {
             return None;
         }
         raw.to_string()
@@ -562,6 +566,12 @@ mod tests {
             "https://@elevenlabs.test",
             "https://elevenlabs%2etest",
             "https://elevenlabs.test\\@attacker.test",
+            "https:elevenlabs.test",
+            "https:/elevenlabs.test",
+            "https:",
+            "https:elevenlabs.test/v1?next=https://x",
+            "https:/elevenlabs.test/x://y",
+            "https:elevenlabs.test#://frag",
         ] {
             assert_eq!(
                 subscription_url(Some(input)),
