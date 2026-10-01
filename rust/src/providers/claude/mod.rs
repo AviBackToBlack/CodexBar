@@ -416,7 +416,7 @@ async fn run_claude_pty_probe(
         if let Some((trigger, keys)) = probe.send_on_substring {
             options = options.with_send_on_substring(trigger, keys);
         }
-        options.env = env;
+        options.env = env.into();
 
         TtyCommandRunner::new()
             .run(&claude_path.to_string_lossy(), probe.script, options)

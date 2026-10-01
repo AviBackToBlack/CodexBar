@@ -543,7 +543,7 @@ impl LocalAgentSessionScanner {
         let pi_input = pi_family::PiFamilyScanInput {
             processes: &pi_processes,
             cwd_by_pid: std::collections::HashMap::new(),
-            environment: pi_family::PiFamilySessionScanner::scan_environment(),
+            environment: pi_family::PiFamilySessionScanner::scan_environment().into(),
             now,
             host: host.to_string(),
             config: self.config,
