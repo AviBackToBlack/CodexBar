@@ -264,7 +264,9 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             name: "OpenRouter",
             requires_api_key: true,
             api_key_env_var: Some("OPENROUTER_API_KEY"),
-            api_key_help: Some("Get your API key from openrouter.ai/settings/keys"),
+            api_key_help: Some(
+                "Required. Enter a regular API key or a Management API key here. Management keys also enable account Activity on the official OpenRouter API.",
+            ),
             config_file_path: None,
             dashboard_url: Some("https://openrouter.ai/settings/credits"),
         },

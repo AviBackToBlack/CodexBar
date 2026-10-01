@@ -71,7 +71,7 @@ Optional status polling (provider status pages) is available via CLI `--status` 
 
 ## Usage & Spend
 
-Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, DeepSeek, or Nous Portal subscription instead of appearing as a second fake provider. Ledger rows with `provider: "nous"` are priced only from a custom pricing override (`nous/<model>` or the bare model id) or an exact Nous models.dev entry, never from another vendor's rates, and never touch Portal credit meters; a row missing input or output tokens, or consuming a cache lane its catalog entry does not price, stays unpriced. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only. Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
+Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, or DeepSeek subscription instead of appearing as a second fake provider. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only. Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
 
 ### AWS Bedrock monitoring
 
@@ -83,29 +83,21 @@ The shared refresh interval controls automatic provider polling. `0` / Manual di
 
 Custom pricing overlays are exact-match overrides used only where the local spend contract has matching provider/model token evidence. Explicit zero rates mean free; omitted rate fields stay unknown. The Usage & Spend surface keeps provenance/coverage visible, preserves cost-only model rows when token coverage is partial, and can Copy JSON or save the same JSON contract through the native file picker.
 
-### Codex model pricing
-
-Codex usage is priced from the bundled OpenAI rate table first and the models.dev catalog second. OpenAI's [Daybreak aliases](https://developers.openai.com/api/docs/pricing) resolve like the unsuffixed `gpt-5.6` alias: `gpt-daybreak-blue-latest` prices as `gpt-5.6-sol` and `gpt-daybreak-red-latest` as `gpt-5.6-cyber`. Recorded model names stay unchanged. `gpt-5.6-cyber` and `gpt-5.5-cyber` use the published Cyber rates of $12.50 input, $1.25 cached input and $75 output per 1M tokens. GPT-5.4, GPT-5.5 and GPT-5.6 bill the whole request at their long-context rates once input passes 272K tokens.
-
-Dated Codex usage keeps the prior GPT-5.6 Sol rates ($5 input, $30 output per 1M tokens) before **2026-08-21**, the repricing date in the [OpenAI changelog](https://developers.openai.com/api/docs/changelog). Current and undated usage use the current $4/$20 rates. Terra and Luna keep their separate 2026-07-30 cutoff. Windows compares calendar days rather than event instants: the Codex cost scanners and the workspace index use their local day keys, and Pi session rows use the UTC date of their timestamp. Custom pricing overlays keep precedence.
-
 ### OpenCode, Codex quota, and local cost boundaries
 
 OpenCode-held OpenAI/Codex OAuth can be reused for **remote Codex account quota** only when the Codex provider's `External OAuth sources` setting is explicitly enabled. Native Codex credentials still take precedence, an explicit `CODEX_HOME` stays isolated, and external credentials remain read-only. This does **not** import ordinary OpenCode sessions into Codex token or spend totals. OpenCode Go's local SQLite reader remains scoped to its own `opencode-go` assistant records; OpenAI API-platform usage is a separate provider.
 
 Codex local cost prices **Priority (Fast) turns** at the Fast rate. A turn counts as Priority when `<CODEX_HOME>/logs_2.sqlite` (Codex's trace database) holds a `response.create` websocket request with `service_tier == "priority"` for that turn's id. The database is opened read-only, scanned incrementally with a persisted cursor in the cost cache, and only turn ids, model names, and timestamps are kept; row bodies contain prompts and are never stored or logged. A missing or unreadable database keeps Standard pricing, and turn evidence never crosses `CODEX_HOME` scopes. Models without a Fast lane stay Standard. Older cost caches rebuild once (Codex cache schema v4 records each row's turn id).
 
+### OpenRouter keys
+
+The **API key** field (or `OPENROUTER_API_KEY`) is required and accepts either a regular API key or a Management API key. A Management key entered there also enables account Activity on the official OpenRouter API. The separate **Management API key** field (or `OPENROUTER_MANAGEMENT_API_KEY`) is an optional additional key for account Activity, only needed to use a Management key different from the one in the required field. Filling only the Management field does not select an account for quota or balance; with no primary key, the provider reports the missing-key message instead.
+
 ### z.ai Coding Plan quotas
 
 z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shortest known Coding Plan window becomes primary and the longest becomes secondary; `TIME_LIMIT` is the separate MCP lane. When absolute usage/remaining counts are available they determine the used percentage, otherwise the provider percentage is used, always clamped to 0–100%. This behavior is shared by the tray, provider detail, CLI, and other Windows surfaces.
 
 Upstream's independent **WidgetKit** provider-widget configuration has no Windows analogue in this repository. Win-CodexBar has no WidgetKit extension; provider cards and tray entries are already independent Windows/Tauri surfaces.
-
-### Kimi Code quotas
-
-Kimi Code API responses can carry the older count-based fields, the newer `usages` ratio pools, or both. Ratio pools take precedence for the 5-hour, weekly, and monthly Total usage windows they provide; an invalid ratio falls back to that lane's legacy counts instead of hiding them. Missing windows stay absent: an unreported weekly quota shows as an informational "No weekly quota reported" row rather than 0%, and percentages keep the API's precision without implying request counts. The monthly Total usage pool comes straight from the Code API, without browser authentication, and optional web enrichment only fills it in when the API did not report one. A response without any supported window is a parse error, so Auto mode moves on to the Kimi Code CLI credential and web auth.
-
-Weekly is the primary lane and the 5-hour rate limit the secondary on every Kimi source. When the monthly pool is the only reported quota, Automatic and the Session or Weekly preferences use it for the tray icon and float bar. An exhausted monthly pool blocks the shorter Code windows until its reset.
 
 ## Upstream doc warning
 

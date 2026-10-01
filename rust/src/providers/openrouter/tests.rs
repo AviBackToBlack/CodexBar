@@ -551,3 +551,12 @@ async fn slow_response_reports_a_timeout_and_other_transport_errors_a_failure() 
     let failed = Degraded::from(client.get("ftp://127.0.0.1/").send().await.unwrap_err());
     assert_eq!(failed.reason, "Request failed");
 }
+// Upstream 0.67.0 `OpenRouterSettingsError.missingToken` copy: a Management key
+// is a valid primary key, and the optional Management field never replaces it.
+#[test]
+fn missing_key_message_explains_primary_and_management_fields() {
+    assert_eq!(
+        MISSING_API_KEY_MESSAGE,
+        "Enter a regular API key or a Management API key in the API key field, or set OPENROUTER_API_KEY. In Settings, the optional Management API key field does not replace it."
+    );
+}
