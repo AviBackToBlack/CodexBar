@@ -368,6 +368,10 @@ fn normalized_https_url(raw: &str) -> Option<Url> {
         return None;
     }
     let candidate = if has_explicit_scheme(raw) {
+        // Foundation's URL(string:) yields no host for "https:host", so upstream rejects it.
+        if !raw.contains("://") {
+            return None;
+        }
         raw.to_string()
     } else {
         format!("https://{raw}")
@@ -386,14 +390,8 @@ fn normalized_https_url(raw: &str) -> Option<Url> {
         return None;
     }
     let authority = candidate
-        .split_once("://")
-        .map(|(_, authority)| authority)
-        .or_else(|| {
-            candidate
-                .split_once(':')
-                .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
-                .map(|(_, authority)| authority)
-        })?
+        .split_once("://")?
+        .1
         .split(['/', '?', '#'])
         .next()?;
     if authority.is_empty()
@@ -417,31 +415,32 @@ fn normalized_https_url(raw: &str) -> Option<Url> {
     Some(url)
 }
 
+/// Mirrors upstream `ProviderEndpointOverrideValidator.hasExplicitURLScheme`.
 fn has_explicit_scheme(raw: &str) -> bool {
-    if raw.contains("://") {
+    let Some(colon) = raw.find(':') else {
+        return false;
+    };
+    if raw[colon..].starts_with("://") {
         return true;
     }
-    let Some((prefix, remainder)) = raw.split_once(':') else {
-        return false;
-    };
-    let mut characters = prefix.chars();
-    let Some(first) = characters.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic()
-        || !characters.all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-')
-        })
-    {
+    if raw.find(['/', '?', '#']).is_some_and(|end| colon > end) {
         return false;
     }
-    let possible_port = remainder.split(['/', '?', '#']).next().unwrap_or_default();
-    let prefix_looks_like_host = prefix.contains('.') || prefix.eq_ignore_ascii_case("localhost");
-    !(prefix_looks_like_host
-        && !possible_port.is_empty()
-        && possible_port
-            .chars()
-            .all(|character| character.is_ascii_digit()))
+    let after_colon = &raw[colon + 1..];
+    if after_colon.is_empty() {
+        return true;
+    }
+    let suffix = after_colon
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    if !suffix.is_empty() && suffix.chars().all(char::is_numeric) {
+        return false;
+    }
+    let mut scheme = raw[..colon].chars();
+    scheme.next().is_some_and(char::is_alphabetic)
+        && scheme
+            .all(|character| character.is_alphanumeric() || matches!(character, '+' | '-' | '.'))
 }
 
 fn cleaned(raw: &str) -> Option<String> {
@@ -514,9 +513,11 @@ mod tests {
                 "https://elevenlabs.test/v1/",
                 "https://elevenlabs.test/v1/user/subscription",
             ),
+            ("myproxy:8443", "https://myproxy:8443/v1/user/subscription"),
+            ("proxy:8443/v1", "https://proxy:8443/v1/user/subscription"),
             (
-                "https:elevenlabs.test",
-                "https://elevenlabs.test/v1/user/subscription",
+                "mock-elevenlabs:8443",
+                "https://mock-elevenlabs:8443/v1/user/subscription",
             ),
             (
                 "elevenlabs.test/proxy",
