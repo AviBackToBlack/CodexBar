@@ -17,6 +17,7 @@ menu-bar layout.
 ### Fixed
 - Claude: when Hide Personal Info is enabled, keep saved account rows distinguishable with stable localized `Account N` labels and matching redacted tooltips.
 - Codex: a fork of a fork whose parent has no token snapshot before the child forked now inherits the whole chain's cumulative counter origin instead of staying unresolved; ancestor chains deeper than 64 stay unresolved, and the Codex cost cache is rebuilt once (cache schema 5).
+- Codex: a fork larger than the per-refresh scan budget continues where the last refresh stopped instead of restarting from the top and never finishing, and a finished fork that grows is no longer billed for usage it inherited from its parent.
 
 ---
 
