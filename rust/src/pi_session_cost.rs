@@ -547,13 +547,31 @@ fn parse_pi_assistant_entry_any(value: &Value) -> Option<PiEntry> {
         return None;
     }
 
+    let timestamp = entry_timestamp(value);
     let (cost, pricing_known) = match mapped {
-        PiMappedProvider::Codex => match CostUsagePricing::codex_cost_usd_with_cache_write(
-            &model,
-            input,
-            cache_read,
-            cache_create,
-            output,
+        // Upstream prices each row at its timestamp, so usage from before a
+        // model's repricing keeps the rates it was billed at.
+        PiMappedProvider::Codex => match timestamp.map_or_else(
+            || {
+                CostUsagePricing::codex_cost_usd_with_cache_write(
+                    &model,
+                    input,
+                    cache_read,
+                    cache_create,
+                    output,
+                )
+            },
+            |ts| {
+                CostUsagePricing::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+                    &model,
+                    input,
+                    cache_read,
+                    cache_create,
+                    output,
+                    ts.date_naive(),
+                    None,
+                )
+            },
         ) {
             Some(cost) => (cost, true),
             None => (0.0, false),
@@ -597,7 +615,7 @@ fn parse_pi_assistant_entry_any(value: &Value) -> Option<PiEntry> {
     };
 
     Some(PiEntry {
-        timestamp: entry_timestamp(value),
+        timestamp,
         provider: mapped,
         model,
         input,
@@ -690,6 +708,34 @@ mod tests {
         assert_eq!(entry.cache_create, 300);
         assert!((entry.cost - expected).abs() < 1e-12);
         assert!(entry.pricing_known);
+    }
+
+    #[test]
+    fn prices_codex_rows_at_their_utc_timestamp() {
+        let cost = |timestamp: Option<&str>| {
+            let mut raw = serde_json::json!({
+                "id": "sol-1", "role": "assistant", "provider": "openai-codex",
+                "model": "gpt-5.6-sol",
+                "usage": { "input": 100, "output": 5, "cacheRead": 10, "cacheWrite": 20 }
+            });
+            if let Some(timestamp) = timestamp {
+                raw["timestamp"] = timestamp.into();
+            }
+            parse_pi_assistant_entry(&raw, PiMappedProvider::Codex)
+                .unwrap()
+                .cost
+        };
+        let historical = 70.0 * 5e-6 + 10.0 * 5e-7 + 20.0 * 6.25e-6 + 5.0 * 3e-5;
+        let current = 70.0 * 4e-6 + 10.0 * 4e-7 + 20.0 * 5e-6 + 5.0 * 2e-5;
+        for (timestamp, expected) in [
+            (Some("2026-07-10T12:00:00Z"), historical),
+            (Some("2026-08-20T23:59:59Z"), historical),
+            (Some("2026-08-21T00:00:00Z"), current),
+            (Some("2026-09-10T12:00:00Z"), current),
+            (None, current),
+        ] {
+            assert!((cost(timestamp) - expected).abs() < 1e-12, "{timestamp:?}");
+        }
     }
 
     #[test]

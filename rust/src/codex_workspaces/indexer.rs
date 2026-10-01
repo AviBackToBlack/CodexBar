@@ -483,7 +483,7 @@ fn index_one_file(path: &Path, range: &CostUsageDayRange) -> Option<ParsedFile> 
         day_entry.1 = day_entry.1.saturating_add(cached);
         day_entry.2 = day_entry.2.saturating_add(output);
 
-        match CostUsagePricing::codex_cost_usd(&model, input, cached, output) {
+        match codex_cost_on_day(&record.day_key, &model, input, cached, output) {
             Some(usd) => cost.known_usd += usd,
             None => cost.unknown_tokens = cost.unknown_tokens.saturating_add(tokens),
         }
@@ -526,11 +526,20 @@ fn merge_daily(
             let tokens = input.saturating_add(*output);
             acc.total_tokens = acc.total_tokens.saturating_add(tokens);
             acc.cached_input_tokens = acc.cached_input_tokens.saturating_add(*cached);
-            match CostUsagePricing::codex_cost_usd(model, *input, *cached, *output) {
+            match codex_cost_on_day(day, model, *input, *cached, *output) {
                 Some(usd) => acc.known_usd += usd,
                 None => acc.unknown_tokens = acc.unknown_tokens.saturating_add(tokens),
             }
         }
+    }
+}
+
+/// Prices at the usage day's rates, like the cost scanners, so usage from
+/// before a model's repricing keeps the rates it was billed at.
+fn codex_cost_on_day(day: &str, model: &str, input: u64, cached: u64, output: u64) -> Option<f64> {
+    match CostUsageDayRange::parse_day_key(day) {
+        Some(day) => CostUsagePricing::codex_cost_usd_at_date(model, input, cached, output, day),
+        None => CostUsagePricing::codex_cost_usd(model, input, cached, output),
     }
 }
 
@@ -873,6 +882,20 @@ mod tests {
             first_snapshot.scope_signature,
             second_snapshot.scope_signature
         );
+    }
+
+    #[test]
+    fn daily_costs_use_each_day_rates() {
+        let sol = |day: &str| {
+            let models = HashMap::from([("gpt-5.6-sol".to_string(), (100, 10, 5))]);
+            let mut daily = HashMap::new();
+            merge_daily(&mut daily, &HashMap::from([(day.to_string(), models)]));
+            daily[day].known_usd
+        };
+        let historical = 90.0 * 5e-6 + 10.0 * 5e-7 + 5.0 * 3e-5;
+        let current = 90.0 * 4e-6 + 10.0 * 4e-7 + 5.0 * 2e-5;
+        assert!((sol("2026-08-20") - historical).abs() < 1e-12);
+        assert!((sol("2026-08-21") - current).abs() < 1e-12);
     }
 
     #[test]
