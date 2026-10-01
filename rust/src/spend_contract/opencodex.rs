@@ -910,6 +910,17 @@ mod tests {
     }
 
     #[test]
+    fn opencodex_historical_gpt56_bills_cache_writes_at_their_own_rate() {
+        let mut entry = entry("openai", "gpt-5.6-terra");
+        entry.cache_creation_tokens = Some(20);
+        let empty = ModelsDevPricingSnapshot::from_catalog_json_for_tests("{}").expect("catalog");
+        let cost = entry_cost(&entry, &CustomPricing::default(), &empty).unwrap();
+        // Input includes cache reads and writes; each lane has its own rate.
+        let expected = 70.0 * 2.5e-6 + 10.0 * 2.5e-7 + 20.0 * 3.125e-6 + 5.0 * 1.5e-5;
+        assert!((cost - expected).abs() < 1e-12);
+    }
+
+    #[test]
     fn parser_keeps_reported_token_classes() {
         let value = serde_json::json!({
             "requestId": "r1", "timestamp": "2026-08-18T10:00:00Z", "provider": "openai",
