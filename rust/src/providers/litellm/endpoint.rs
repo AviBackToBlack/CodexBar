@@ -72,11 +72,17 @@ pub(super) fn management_url(
     Ok(url)
 }
 
+/// Upstream `isPrivateNetworkHost`: `localhost`, `.local` names, and IP
+/// literals that are loopback, RFC 1918, link-local, or IPv6 unique-local.
+/// Other names (including `*.localhost`) and IPv4-mapped IPv6 literals stay
+/// HTTPS-only, because a bearer key would otherwise cross the network in
+/// plain text if the name resolved somewhere public.
 fn is_private_network_host(host: &str) -> bool {
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
     if normalized == "localhost"
-        || normalized.ends_with(".localhost")
-        || normalized.ends_with(".local")
+        || normalized
+            .strip_suffix(".local")
+            .is_some_and(|label| !label.is_empty())
     {
         return true;
     }
@@ -96,9 +102,6 @@ fn is_private_ipv4(ip: Ipv4Addr) -> bool {
 }
 
 fn is_private_ipv6(ip: Ipv6Addr) -> bool {
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return is_private_ipv4(mapped);
-    }
     ip.is_loopback()
         || (ip.segments()[0] & 0xfe00) == 0xfc00
         || (ip.segments()[0] & 0xffc0) == 0xfe80
@@ -141,6 +144,9 @@ mod tests {
             "https://user:pass@litellm.example.com",
             "http://user@10.0.0.1",
             "https://example.com%2f.evil.test",
+            "http://app.localhost:4000",
+            "http://[::ffff:10.0.0.1]",
+            "http://.local:4000",
         ] {
             assert!(validated_base_url(value).is_err(), "accepted {value}");
         }

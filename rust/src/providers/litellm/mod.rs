@@ -34,10 +34,10 @@ impl LiteLLMProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::LiteLLM,
                 display_name: "LiteLLM",
-                session_label: "Budget",
-                weekly_label: "Spend",
+                session_label: "Personal budget",
+                weekly_label: "Team budget",
                 supports_opus: false,
-                supports_credits: true,
+                supports_credits: false,
                 default_enabled: false,
                 is_primary: false,
                 dashboard_url: None,
@@ -100,6 +100,12 @@ impl Provider for LiteLLMProvider {
 
     fn metadata(&self) -> &ProviderMetadata {
         &self.metadata
+    }
+
+    /// Upstream's LiteLLM menu bar resolver: the team budget is enforced for
+    /// the key, so Automatic shows it unless a budget is already exhausted.
+    fn automatic_metric_prefers_secondary_window(&self) -> bool {
+        true
     }
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {

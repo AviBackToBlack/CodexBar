@@ -137,6 +137,20 @@ fn automatic_window(
         return None;
     }
 
+    if policy.prefers_secondary_window {
+        let primary = non_informational(Some(&snapshot.primary));
+        let secondary = non_informational(snapshot.secondary.as_ref());
+        let preferred = primary
+            .into_iter()
+            .chain(secondary)
+            .find(|window| automatic_window_is_exhausted(window))
+            .or(secondary)
+            .or(primary);
+        if let Some(window) = preferred {
+            return Some(window.clone());
+        }
+    }
+
     let mut windows = Vec::with_capacity(4 + snapshot.extra_rate_windows.len());
     windows.push(&snapshot.primary);
     windows.extend(snapshot.secondary.iter());
@@ -181,6 +195,9 @@ struct AutomaticMetricPolicy {
     /// is a dead end for Automatic selection. False for providers whose
     /// fallback lanes (seat credits) should still be considered.
     missing_core_is_terminal: bool,
+    /// Whether the secondary lane represents the provider unless a core lane
+    /// is exhausted (upstream's LiteLLM team-budget resolver).
+    prefers_secondary_window: bool,
 }
 
 fn automatic_metric_policy(provider: Option<ProviderId>) -> AutomaticMetricPolicy {
@@ -190,12 +207,16 @@ fn automatic_metric_policy(provider: Option<ProviderId>) -> AutomaticMetricPolic
     let missing_core_is_terminal = |id: ProviderId| {
         codexbar::core::instantiate_provider(id).automatic_metric_missing_core_is_terminal()
     };
+    let prefers_secondary = |id: ProviderId| {
+        codexbar::core::instantiate_provider(id).automatic_metric_prefers_secondary_window()
+    };
     match provider {
         Some(ProviderId::Antigravity) => AutomaticMetricPolicy {
             prefers_available_window: true,
             prioritizes_exhausted_window: false,
             uses_extra_windows: false,
             missing_core_is_terminal: true,
+            prefers_secondary_window: false,
         },
         // Cursor's monthly Auto lane is the semantic weekly pace. Grok Bot is
         // a named extra allowance and must stay available through the explicit
@@ -205,18 +226,21 @@ fn automatic_metric_policy(provider: Option<ProviderId>) -> AutomaticMetricPolic
             prioritizes_exhausted_window: prioritizes(ProviderId::Cursor),
             uses_extra_windows: false,
             missing_core_is_terminal: true,
+            prefers_secondary_window: false,
         },
         Some(id) => AutomaticMetricPolicy {
             prefers_available_window: false,
             prioritizes_exhausted_window: prioritizes(id),
             uses_extra_windows: true,
             missing_core_is_terminal: missing_core_is_terminal(id),
+            prefers_secondary_window: prefers_secondary(id),
         },
         None => AutomaticMetricPolicy {
             prefers_available_window: false,
             prioritizes_exhausted_window: true,
             uses_extra_windows: true,
             missing_core_is_terminal: false,
+            prefers_secondary_window: false,
         },
     }
 }
@@ -681,5 +705,57 @@ mod tests {
             "claude-routines"
         );
         assert!(restored.hidden_usage_item_ids.is_empty());
+    }
+
+    fn litellm_budgets(personal: f64, team: Option<f64>) -> ProviderUsageSnapshot {
+        let mut snapshot = snapshot();
+        snapshot.provider_id = "litellm".to_string();
+        snapshot.primary = window(personal);
+        snapshot.secondary = team.map(window);
+        snapshot
+    }
+
+    #[test]
+    fn litellm_automatic_prefers_the_team_budget_over_a_fuller_personal_budget() {
+        let snapshot = litellm_budgets(60.0, Some(7.0));
+
+        assert_eq!(
+            selected_usage_window(&snapshot, &Settings::default()).used_percent,
+            7.0
+        );
+        let (selected, companion) = selected_usage_icon_windows(&snapshot, &Settings::default());
+        assert_eq!(selected.used_percent, 7.0);
+        assert_eq!(companion.map(|window| window.used_percent), Some(60.0));
+    }
+
+    #[test]
+    fn litellm_automatic_shows_an_exhausted_budget_first() {
+        let personal_exhausted = litellm_budgets(100.0, Some(7.0));
+        assert_eq!(
+            selected_usage_window(&personal_exhausted, &Settings::default()).used_percent,
+            100.0
+        );
+
+        let team_exhausted = litellm_budgets(40.0, Some(100.0));
+        assert_eq!(
+            selected_usage_window(&team_exhausted, &Settings::default()).used_percent,
+            100.0
+        );
+    }
+
+    #[test]
+    fn litellm_automatic_uses_the_only_budget_and_explicit_choices_still_win() {
+        let personal_only = litellm_budgets(25.0, None);
+        assert_eq!(
+            selected_usage_window(&personal_only, &Settings::default()).used_percent,
+            25.0
+        );
+
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::LiteLLM, MetricPreference::Session);
+        assert_eq!(
+            selected_usage_window(&litellm_budgets(60.0, Some(7.0)), &settings).used_percent,
+            60.0
+        );
     }
 }
