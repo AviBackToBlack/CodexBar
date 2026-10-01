@@ -12,7 +12,7 @@ A Windows port of [CodexBar](https://github.com/steipete/CodexBar) - a system tr
   - MiniMax, Kiro, Vertex AI, Augment, OpenCode, OpenCode Go, Kimi, Kimi K2
   - Amp, Warp, Ollama, OpenRouter, JetBrains AI, Alibaba
   - NanoGPT, Infini, Perplexity, Abacus AI, Mistral, Kilo, AWS Bedrock, Codebuff, DeepSeek, Windsurf
-  - Manus, Xiaomi MiMo, Doubao, Command Code, Crof, StepFun, Venice, OpenAI API
+  - Manus, Xiaomi MiMo, Doubao, Command Code, StepFun, Venice, OpenAI API
 - **Usage Notifications** - Windows toast alerts when usage hits thresholds
 - **Settings Panel** - Enable/disable providers, configure refresh intervals
 - **Manual Cookie Input** - Fallback for when automatic cookie extraction fails
