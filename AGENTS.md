@@ -13,7 +13,7 @@
 - Cargo workspace (root `Cargo.toml`): members `rust`, `apps/desktop-tauri/src-tauri`; **default-member** is the Tauri crate.
 - Path dependency: `codexbar-desktop-tauri` → `codexbar = { path = "../../../rust" }`.
 - Frontend: React 18 + Vite in `apps/desktop-tauri/src/`. Typed invoke bridge in `src/lib/tauri.ts`; DTOs in `src/types/bridge.ts`.
-- Surfaces: the hidden `main` webview routes by window label / surface mode — TrayPanel, PopOut, Settings, FloatBar. Settings, float bar, and flyout use detached windows where needed.
+- Surfaces: the hidden `main` webview routes by window label / surface mode — TrayPanel, Settings, FloatBar. Settings, float bar, and the tray-panel flyout use detached windows. The flyout's TrayPanel is the only dashboard layout; the legacy PopOut layout is retired (`SurfaceMode::PopOut` remains only as a data key).
 - **Provider refresh**: `codexbar::core::instantiate_provider` (`rust/src/core/provider_factory.rs`) → `Provider::fetch_usage` → shell `commands/providers.rs` (semaphore + timeout) → `AppState.provider_cache` → events → React `useProviders`.
 - **Settings**: `%config%/CodexBar/settings.json` via `Settings::load` / `save` and `secure_file` (DPAPI-capable on Windows). Frontend `updateSettings` patch → save → `codexbar:settings-updated` / float-bar config events.
 - **Tray**: `tray_bridge` + `tray_menu`. Icon pixels from shared `codexbar::tray::{render_bar_icon_rgba, render_percent_icon_rgba}`.

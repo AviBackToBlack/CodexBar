@@ -11,9 +11,15 @@
 //!   from a signed-in Kimi Desktop session (#2622).
 //! - [`desktop_token`]: read-only, WAL-safe reader for the Kimi Desktop
 //!   (Electron) Chromium cookie store.
+//! - [`ratio_pool`]: zero-ratio placeholder reconciliation against matching
+//!   legacy counters (upstream 0.63.0).
+//! - [`auto`]: Auto-mode order after the Code API key (CLI credential, then
+//!   web auth) and which failure is reported when neither works.
 
+mod auto;
 mod code_api;
 pub mod desktop_token;
+mod ratio_pool;
 mod region;
 mod web;
 
@@ -352,12 +358,12 @@ impl Provider for KimiProvider {
                     }
                 }
 
-                let mut cli_credential_unusable = false;
-                match code_api::kimi_code_cli_credential(region, unix_now_secs()) {
-                    code_api::KimiCliCredential::Fresh(cli_token) => {
+                auto::fetch_cli_then_web(
+                    code_api::kimi_code_cli_credential(region, unix_now_secs()),
+                    |cli_token| async move {
                         let home = code_api::kimi_code_home().unwrap_or_default();
                         let headers = code_api::kimi_code_cli_identity_headers(&home);
-                        match code_api::fetch_via_code_api(
+                        code_api::fetch_via_code_api(
                             ctx,
                             region,
                             Some(&cli_token),
@@ -365,42 +371,10 @@ impl Provider for KimiProvider {
                             "Kimi Code CLI",
                         )
                         .await
-                        {
-                            Ok(usage) => {
-                                return Ok(ProviderFetchResult::new(usage, "code-cli"));
-                            }
-                            Err(err) => {
-                                cli_credential_unusable |=
-                                    matches!(err, ProviderError::AuthRequired);
-                                tracing::debug!(
-                                    error = %err,
-                                    "Kimi Code CLI credential fetch failed; falling back to web"
-                                );
-                            }
-                        }
-                    }
-                    code_api::KimiCliCredential::Stale => {
-                        cli_credential_unusable = true;
-                        tracing::debug!("Kimi Code CLI credential is stale; falling back to web");
-                    }
-                    code_api::KimiCliCredential::Unavailable => {}
-                }
-
-                match web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await {
-                    Ok(usage) => Ok(ProviderFetchResult::new(usage, "web")),
-                    // The CLI credential is the only source the user can
-                    // still repair, so name it instead of a generic web error.
-                    Err(err)
-                        if cli_credential_unusable
-                            && web::is_session_unavailable(
-                                ctx.manual_cookie_header.as_deref(),
-                                &err,
-                            ) =>
-                    {
-                        Err(code_api::kimi_cli_credential_error())
-                    }
-                    Err(err) => Err(err),
-                }
+                    },
+                    || web::fetch_web_session(ctx.manual_cookie_header.as_deref(), region),
+                )
+                .await
             }
             SourceMode::OAuth => {
                 let usage =

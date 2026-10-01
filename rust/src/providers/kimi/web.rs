@@ -41,26 +41,21 @@ fn browser_import_error(cookie_source: &str) -> ProviderError {
     ProviderError::Other(message.into())
 }
 
-/// Whether a failed web fetch means no usable web session exists: the server
-/// rejected every candidate, none was found, or web auth is switched off.
-/// Transport and parse failures are not session problems.
-pub(super) fn is_session_unavailable(manual_header: Option<&str>, error: &ProviderError) -> bool {
-    session_unavailable_for(manual_header, &cookie_source(), error)
+/// A failed web fetch. `had_token` records whether web auth had a token to
+/// send (upstream `KimiWebFetchStrategy.isAvailable`); Auto mode reports an
+/// earlier CLI failure only when web auth had nothing to try.
+#[derive(Debug)]
+pub(super) struct WebFetchFailure {
+    pub(super) error: ProviderError,
+    pub(super) had_token: bool,
 }
 
-fn session_unavailable_for(
-    manual_header: Option<&str>,
-    cookie_source: &str,
-    error: &ProviderError,
-) -> bool {
-    match error {
-        ProviderError::AuthRequired | ProviderError::NoCookies => true,
-        ProviderError::Other(_) => {
-            let manual_token = manual_header
-                .is_some_and(|header| KimiProvider::auth_token_from_cookie_header(header).is_ok());
-            !manual_token && !browser_import_allowed(cookie_source)
+impl WebFetchFailure {
+    fn after_token(error: ProviderError) -> Self {
+        Self {
+            error,
+            had_token: true,
         }
-        _ => false,
     }
 }
 
@@ -156,47 +151,90 @@ pub(crate) async fn fetch_via_web(
     cookie_header: Option<&str>,
     region: KimiRegion,
 ) -> Result<UsageSnapshot, ProviderError> {
+    fetch_web_session(cookie_header, region)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// [`fetch_via_web`], also reporting whether web auth had a token to try.
+pub(super) async fn fetch_web_session(
+    cookie_header: Option<&str>,
+    region: KimiRegion,
+) -> Result<UsageSnapshot, WebFetchFailure> {
     let source = cookie_source();
-    if let Some(token) =
-        cookie_header.and_then(|header| KimiProvider::auth_token_from_cookie_header(header).ok())
+    let input = WebTokenInput {
+        manual_header: cookie_header,
+        cookie_source: &source,
+        region,
+        desktop_token: KimiDesktopAuthToken::load_for_region,
+        browser_token: browser_auth_token,
+    };
+    // One HTTP client for every token attempt, built on first use.
+    let mut shared_client: Option<Client> = None;
+    fetch_with_web_tokens(input, |token| {
+        let http = match &shared_client {
+            Some(http) => Ok(http.clone()),
+            None => client().inspect(|http| shared_client = Some(http.clone())),
+        };
+        async move { fetch_via_web_token(&http?, &token, region).await }
+    })
+    .await
+}
+
+/// The web fetch over the token chain. An explicit manual token is
+/// authoritative; otherwise (automatic source only) the Kimi Desktop session
+/// is tried, then browser import. Only a server rejection moves on to the
+/// next automatic token.
+async fn fetch_with_web_tokens<F, Fut>(
+    input: WebTokenInput<'_>,
+    mut fetch: F,
+) -> Result<UsageSnapshot, WebFetchFailure>
+where
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<UsageSnapshot, ProviderError>>,
+{
+    if let Some(token) = input
+        .manual_header
+        .and_then(|header| KimiProvider::auth_token_from_cookie_header(header).ok())
     {
         // An explicit manual credential is authoritative. A rejected manual
         // token must not silently switch accounts underneath the user.
-        let client = client()?;
-        return fetch_via_web_token(&client, &token, region).await;
+        return fetch(token).await.map_err(WebFetchFailure::after_token);
     }
 
-    if !browser_import_allowed(&source) {
-        return Err(browser_import_error(&source));
+    if !browser_import_allowed(input.cookie_source) {
+        return Err(WebFetchFailure {
+            error: browser_import_error(input.cookie_source),
+            had_token: false,
+        });
     }
-
-    let client = client()?;
-    let mut seen = std::collections::HashSet::new();
 
     // Read and try the desktop session first. Browser cookies are intentionally
     // read only after the server rejects this automatic session, so a healthy
     // desktop account never causes another credential store to be touched.
-    if let Some(token) = KimiDesktopAuthToken::load_for_region(region)
-        && seen.insert(token.clone())
-    {
-        match fetch_via_web_token(&client, &token, region).await {
+    let desktop_token = (input.desktop_token)(input.region);
+    if let Some(token) = desktop_token.clone() {
+        match fetch(token).await {
             Ok(usage) => return Ok(usage),
             Err(ProviderError::AuthRequired) => {}
-            Err(error) => return Err(error),
+            Err(error) => return Err(WebFetchFailure::after_token(error)),
         }
     }
 
-    if let Some(token) = browser_auth_token(region)
-        && seen.insert(token.clone())
-    {
-        match fetch_via_web_token(&client, &token, region).await {
+    let browser_token =
+        (input.browser_token)(input.region).filter(|token| desktop_token.as_ref() != Some(token));
+    if let Some(token) = browser_token.clone() {
+        match fetch(token).await {
             Ok(usage) => return Ok(usage),
             Err(ProviderError::AuthRequired) => {}
-            Err(error) => return Err(error),
+            Err(error) => return Err(WebFetchFailure::after_token(error)),
         }
     }
 
-    Err(ProviderError::AuthRequired)
+    Err(WebFetchFailure {
+        error: ProviderError::AuthRequired,
+        had_token: desktop_token.is_some() || browser_token.is_some(),
+    })
 }
 
 fn client() -> Result<reqwest::Client, ProviderError> {
@@ -362,44 +400,139 @@ mod tests {
         None
     }
 
-    #[test]
-    fn session_unavailable_covers_rejected_missing_and_disabled_web_auth() {
-        let manual = Some("kimi-auth=synthetic-web");
-        assert!(session_unavailable_for(
-            None,
-            "auto",
-            &ProviderError::AuthRequired
-        ));
-        assert!(session_unavailable_for(
-            None,
-            "auto",
-            &ProviderError::NoCookies
-        ));
-        assert!(session_unavailable_for(
-            None,
-            "off",
-            &browser_import_error("off")
-        ));
-        assert!(session_unavailable_for(
-            None,
-            "manual",
-            &browser_import_error("manual")
-        ));
-        // A usable manual token, or automatic import, means an `Other` error
-        // is a real web failure rather than an absent session.
-        let server_error = ProviderError::Other("API error: 500".into());
-        assert!(!session_unavailable_for(manual, "off", &server_error));
-        assert!(!session_unavailable_for(None, "auto", &server_error));
-        assert!(!session_unavailable_for(
-            None,
-            "off",
-            &ProviderError::Timeout
-        ));
-        assert!(!session_unavailable_for(
-            None,
-            "off",
-            &ProviderError::Parse("bad".into())
-        ));
+    fn unread(_: KimiRegion) -> Option<String> {
+        panic!("automatic Kimi token sources must not be read here")
+    }
+
+    fn usage(percent: f64) -> UsageSnapshot {
+        UsageSnapshot::new(crate::core::RateWindow::new(percent))
+    }
+
+    fn reject_all(_: &str) -> Result<UsageSnapshot, ProviderError> {
+        Err(ProviderError::AuthRequired)
+    }
+
+    fn accept_all(_: &str) -> Result<UsageSnapshot, ProviderError> {
+        Ok(usage(25.0))
+    }
+
+    fn accept_browser_only(token: &str) -> Result<UsageSnapshot, ProviderError> {
+        if token == "browser-token" {
+            Ok(usage(25.0))
+        } else {
+            Err(ProviderError::AuthRequired)
+        }
+    }
+
+    fn server_error(_: &str) -> Result<UsageSnapshot, ProviderError> {
+        Err(ProviderError::Other(
+            "API error: 500 Internal Server Error".into(),
+        ))
+    }
+
+    /// Runs the web token chain against a scripted server; returns the
+    /// outcome and every token the server saw, in order.
+    async fn run_chain(
+        input: WebTokenInput<'_>,
+        respond: fn(&str) -> Result<UsageSnapshot, ProviderError>,
+    ) -> (Result<UsageSnapshot, WebFetchFailure>, Vec<String>) {
+        let sent = std::cell::RefCell::new(Vec::new());
+        let result = fetch_with_web_tokens(input, |token| {
+            let response = respond(&token);
+            sent.borrow_mut().push(token);
+            async move { response }
+        })
+        .await;
+        (result, sent.into_inner())
+    }
+
+    #[tokio::test]
+    async fn web_auth_without_a_token_reports_that_none_was_tried() {
+        for source in ["off", "manual"] {
+            for manual in [None, Some("not-a-token")] {
+                let (result, sent) =
+                    run_chain(input(manual, source, unread, unread), accept_all).await;
+                let failure = result.expect_err("no web token to try");
+                assert!(!failure.had_token);
+                assert_eq!(
+                    failure.error.to_string(),
+                    browser_import_error(source).to_string()
+                );
+                assert!(sent.is_empty());
+            }
+        }
+
+        let (result, sent) = run_chain(input(None, "auto", no_token, no_token), accept_all).await;
+        let failure = result.expect_err("no automatic token found");
+        assert!(!failure.had_token);
+        assert!(matches!(failure.error, ProviderError::AuthRequired));
+        assert!(sent.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejected_manual_token_is_authoritative_and_counts_as_tried() {
+        let (result, sent) = run_chain(
+            input(Some("kimi-auth=synthetic-web"), "auto", unread, unread),
+            reject_all,
+        )
+        .await;
+        let failure = result.expect_err("manual token rejected");
+        assert!(failure.had_token);
+        assert!(matches!(failure.error, ProviderError::AuthRequired));
+        assert_eq!(sent, ["synthetic-web"]);
+    }
+
+    #[tokio::test]
+    async fn rejected_desktop_session_falls_through_to_browser_import() {
+        let (result, sent) = run_chain(
+            input(None, "auto", static_desktop, static_browser),
+            accept_browser_only,
+        )
+        .await;
+        assert_eq!(
+            result.expect("browser token accepted").primary.used_percent,
+            25.0
+        );
+        assert_eq!(sent, ["desktop-token", "browser-token"]);
+
+        let (result, sent) = run_chain(
+            input(None, "auto", static_desktop, static_browser),
+            reject_all,
+        )
+        .await;
+        let failure = result.expect_err("every automatic token rejected");
+        assert!(failure.had_token);
+        assert!(matches!(failure.error, ProviderError::AuthRequired));
+        assert_eq!(sent, ["desktop-token", "browser-token"]);
+    }
+
+    #[tokio::test]
+    async fn healthy_desktop_session_never_reads_browser_cookies() {
+        let (result, sent) =
+            run_chain(input(None, "auto", static_desktop, unread), accept_all).await;
+        assert!(result.is_ok());
+        assert_eq!(sent, ["desktop-token"]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_browser_token_is_not_sent_twice() {
+        let (result, sent) = run_chain(
+            input(None, "auto", static_desktop, duplicate_browser),
+            reject_all,
+        )
+        .await;
+        assert!(result.expect_err("desktop token rejected").had_token);
+        assert_eq!(sent, ["desktop-token"]);
+    }
+
+    #[tokio::test]
+    async fn non_auth_web_error_stops_the_token_chain() {
+        let (result, sent) =
+            run_chain(input(None, "auto", static_desktop, unread), server_error).await;
+        let failure = result.expect_err("server error");
+        assert!(failure.had_token);
+        assert!(matches!(failure.error, ProviderError::Other(message) if message.contains("500")));
+        assert_eq!(sent, ["desktop-token"]);
     }
 
     fn input<'a>(
