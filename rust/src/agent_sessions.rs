@@ -343,7 +343,7 @@ mod focus;
 mod parsers;
 pub mod pi_family;
 mod remote;
-pub use focus::focus_session;
+pub use focus::{focus_session, request_session_attention};
 
 struct CodexRollout {
     path: PathBuf,

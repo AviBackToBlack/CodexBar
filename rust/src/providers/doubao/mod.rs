@@ -582,10 +582,20 @@ fn run_arkcli_usage_plan() -> Result<Vec<u8>, ProviderError> {
                 .into(),
         )
     })?;
-    let mut child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command
         .args(["usage", "plan", "--format", "json"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // Runs during background refreshes: keep the CLI's console window hidden
+    // so it does not flash up or take focus.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| ProviderError::Other(format!("Failed to launch arkcli: {e}")))?;
 

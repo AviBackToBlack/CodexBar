@@ -294,7 +294,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             // default position (same placement chain the old TrayPanel
             // transition used) when no explicit position is given.
             crate::auto_refresh::note_menu_open();
-            let _ = shell::flyout_window::open_or_focus(app, None);
+            let _ = shell::flyout_window::open_or_focus(
+                app,
+                None,
+                shell::activation::Activation::UserAction,
+            );
         }
         Some(MenuAction::Refresh) => {
             let handle = app.clone();

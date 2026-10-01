@@ -638,7 +638,12 @@ impl Drop for Attributes {
     }
 }
 
-fn build_command_line(program: &Path, args: &[OsString]) -> ManagedProcessResult<Vec<u16>> {
+/// NUL-terminated `CreateProcessW` command line: `program` and `args`, each
+/// quoted with the MSDN rules. Also used by `host::console_launch`.
+pub(crate) fn build_command_line(
+    program: &Path,
+    args: &[OsString],
+) -> ManagedProcessResult<Vec<u16>> {
     let mut cmdline = Vec::new();
     append_quoted(program.as_os_str(), &mut cmdline)?;
     for arg in args {

@@ -546,6 +546,14 @@ bad line
             focus_session(&file_only),
             SessionFocusResult::Unsupported { .. }
         ));
+        assert!(matches!(
+            request_session_attention(&remote),
+            Err(SessionFocusResult::Unsupported { .. })
+        ));
+        assert!(matches!(
+            request_session_attention(&file_only),
+            Err(SessionFocusResult::Unsupported { .. })
+        ));
     }
 
     #[test]

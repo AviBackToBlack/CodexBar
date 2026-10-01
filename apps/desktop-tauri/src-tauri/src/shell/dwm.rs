@@ -264,11 +264,13 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool) {
             }
         }
 
-        // Force frame recalculation
+        // Force frame recalculation. SWP_NOACTIVATE: without it SetWindowPos
+        // activates the window, and this runs on every surface transition.
         const SWP_FRAMECHANGED: u32 = 0x0020;
         const SWP_NOMOVE: u32 = 0x0002;
         const SWP_NOSIZE: u32 = 0x0001;
         const SWP_NOZORDER: u32 = 0x0004;
+        const SWP_NOACTIVATE: u32 = 0x0010;
         SetWindowPos(
             hwnd,
             0,
@@ -276,7 +278,7 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool) {
             0,
             0,
             0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
 }

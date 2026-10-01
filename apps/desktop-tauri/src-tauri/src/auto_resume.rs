@@ -6,13 +6,12 @@
 
 use codexbar::agent_sessions::{
     AgentSession, AgentSessionProvider, AgentSessionSource, AgentSessionState,
-    LocalAgentSessionScanner, SessionFocusResult,
+    LocalAgentSessionScanner,
 };
 use codexbar::core::{ProviderId, TokenAccountStore};
 use codexbar::settings::Settings;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
@@ -20,10 +19,6 @@ use crate::state::AppState;
 use tauri::Manager;
 
 const MAX_SESSION_ID_LEN: usize = 256;
-#[cfg(windows)]
-const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-#[cfg(windows)]
-const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum QuotaSlot {
@@ -633,19 +628,22 @@ async fn resume_captured_session(
     }
     if let Some(session) = matching_session(&target, &result.sessions) {
         // A live process already owns this exact session. Reopening it would
-        // create a duplicate terminal, so focus the existing window instead.
+        // create a duplicate terminal, so point the user at the existing
+        // window instead. This runs after a background refresh, not a user
+        // action: flash the window's taskbar button rather than restoring and
+        // activating it over the app the user is working in.
         if session.pid.is_some() {
             if !resume_attempt_is_still_valid(app, &target, operation, account_identity) {
                 clear_provider_if_resume_owner(app, target.provider, operation);
                 return;
             }
-            let focus_result = codexbar::agent_sessions::focus_session(session);
-            let succeeded = matches!(focus_result, SessionFocusResult::Focused);
+            let attention = codexbar::agent_sessions::request_session_attention(session);
+            let succeeded = attention.is_ok();
             tracing::info!(
                 provider = target.provider.cli_name(),
-                focus_result = ?focus_result,
+                attention = ?attention,
                 succeeded,
-                "captured CLI session is already running; attempting to focus it"
+                "captured CLI session is already running; flashing its window"
             );
             finish_resume_attempt(app, &target, operation, succeeded);
             return;
@@ -804,14 +802,15 @@ fn launch_resume(target: &ResumeTarget) -> Result<(), String> {
     .ok_or_else(|| format!("{} CLI was not found", target.provider.display_name()))?;
 
     let command = build_resume_command(target, executable)?;
-    let mut process = Command::new(&command.program);
-    process.args(&command.args).current_dir(&command.cwd);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        process.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
-    }
-    process.spawn().map(|_| ()).map_err(|error| {
+    // This runs after a background refresh, not a user action: the console
+    // starts minimized and inactive, so it waits on the taskbar instead of
+    // taking focus from the app the user is working in.
+    codexbar::host::console_launch::spawn_minimized_console(
+        &command.program,
+        &command.args,
+        &command.cwd,
+    )
+    .map_err(|error| {
         format!(
             "failed to launch {} CLI: {error}",
             target.provider.display_name()
@@ -835,38 +834,14 @@ fn build_resume_command(
         _ => return Err("provider does not support auto-resume".to_string()),
     };
 
-    #[cfg(windows)]
-    if executable
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "cmd" | "bat"))
-    {
-        let command_line = std::iter::once(quote_cmd_arg(&executable.to_string_lossy()))
-            .chain(cli_args.iter().map(|arg| quote_cmd_arg(arg)))
-            .collect::<Vec<_>>()
-            .join(" ");
-        return Ok(ResumeCommand {
-            program: PathBuf::from("cmd.exe"),
-            args: vec![
-                "/d".to_string(),
-                "/s".to_string(),
-                "/c".to_string(),
-                command_line,
-            ],
-            cwd: target.cwd.clone(),
-        });
-    }
-
+    // Batch shims such as npm's `claude.cmd` stay the program here;
+    // `spawn_minimized_console` runs them through cmd.exe with quoting cmd.exe
+    // parses.
     Ok(ResumeCommand {
         program: executable,
         args: cli_args,
         cwd: target.cwd.clone(),
     })
-}
-
-#[cfg(windows)]
-fn quote_cmd_arg(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
 }
 
 #[cfg(test)]

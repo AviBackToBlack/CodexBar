@@ -179,7 +179,7 @@ pub(super) fn recover_onto_primary<R: tauri::Runtime, M: WindowGeometry<R>>(
     if window.is_minimized().unwrap_or(false)
         || is_windows_minimized_position(position.x, position.y)
     {
-        let _ = window.unminimize();
+        let _ = window.restore_without_activation();
     }
     if window.set_physical_position(target).is_err() {
         return false;
@@ -230,10 +230,10 @@ pub fn opacity_to_alpha(opacity: u8) -> u8 {
     ((clamped as u32) * 255 / 100) as u8
 }
 
-/// Open the floating-bar window, or focus + reapply attributes if already
-/// open. Position is restored from the geometry store keyed by
-/// `floatbar`; on first launch the window is centered horizontally near
-/// the top of the primary monitor.
+/// Open the floating-bar window, or re-show it and reapply attributes if
+/// already open. The bar never takes focus. Position is restored from the
+/// geometry store keyed by `floatbar`; on first launch the window is
+/// centered horizontally near the top of the primary monitor.
 pub fn show(
     app: &tauri::AppHandle,
     opacity: u8,
@@ -266,6 +266,9 @@ pub fn show(
         .resizable(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        // Show with SW_SHOWNOACTIVATE: a plain first show activates the bar
+        // and takes focus from the app the user is typing in.
+        .focused(false)
         // Pin Dark: the floatbar is the only window without a theme pin, and
         // WebView2 resolves prefers-color-scheme per shared process profile,
         // so an unpinned (light-default) webview flips the Settings window's
@@ -381,7 +384,10 @@ pub trait WindowGeometry<R: tauri::Runtime> {
     fn is_minimized(&self) -> tauri::Result<bool>;
     fn primary_monitor(&self) -> tauri::Result<Option<tauri::Monitor>>;
     fn available_monitors(&self) -> tauri::Result<Vec<tauri::Monitor>>;
-    fn unminimize(&self) -> tauri::Result<()>;
+    /// Un-minimize without taking the foreground. The bar is never meant to
+    /// be focused, and a plain `unminimize` activates it (see
+    /// [`crate::shell::activation::restore_minimized_without_activation`]).
+    fn restore_without_activation(&self) -> tauri::Result<()>;
     fn set_physical_position(&self, position: PhysicalPosition<i32>) -> tauri::Result<()>;
 }
 
@@ -404,7 +410,14 @@ impl<R: tauri::Runtime> WindowGeometry<R> for tauri::WebviewWindow<R> {
     fn available_monitors(&self) -> tauri::Result<Vec<tauri::Monitor>> {
         tauri::WebviewWindow::available_monitors(self)
     }
-    fn unminimize(&self) -> tauri::Result<()> {
+    fn restore_without_activation(&self) -> tauri::Result<()> {
+        // Queued on the main thread ahead of the calls below, so the restore
+        // lands before `unminimize` re-reads the state and before the caller
+        // moves the window.
+        let window = self.clone();
+        tauri::WebviewWindow::run_on_main_thread(self, move || {
+            crate::shell::activation::restore_minimized_without_activation(&window);
+        })?;
         tauri::WebviewWindow::unminimize(self)
     }
     fn set_physical_position(&self, position: PhysicalPosition<i32>) -> tauri::Result<()> {
@@ -431,7 +444,11 @@ impl<R: tauri::Runtime> WindowGeometry<R> for tauri::Window<R> {
     fn available_monitors(&self) -> tauri::Result<Vec<tauri::Monitor>> {
         tauri::Window::available_monitors(self)
     }
-    fn unminimize(&self) -> tauri::Result<()> {
+    fn restore_without_activation(&self) -> tauri::Result<()> {
+        let window = self.clone();
+        tauri::Window::run_on_main_thread(self, move || {
+            crate::shell::activation::restore_minimized_without_activation(&window);
+        })?;
         tauri::Window::unminimize(self)
     }
     fn set_physical_position(&self, position: PhysicalPosition<i32>) -> tauri::Result<()> {
