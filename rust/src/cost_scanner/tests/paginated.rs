@@ -140,7 +140,7 @@ fn paginated_continuation_raises_inherited_baseline_from_total_last() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
-    let base = Utc::now() - Duration::hours(1);
+    let base = recent_codex_fixture_time();
     write_codex_fork_session_fixture(
         &sessions,
         "ancestor.jsonl",
@@ -201,7 +201,7 @@ fn paginated_history_base_equal_parent_keeps_true_fork_subtraction() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
-    let base = Utc::now() - Duration::hours(1);
+    let base = recent_codex_fixture_time();
     write_codex_fork_session_fixture(
         &sessions,
         "parent.jsonl",

@@ -1,5 +1,6 @@
 use super::*;
 use crate::core::{CodexSessionLineage, CostUsagePricing};
+use chrono::{FixedOffset, NaiveTime, TimeZone};
 use std::io::Write;
 
 #[test]
@@ -671,17 +672,59 @@ fn claude_scan_counts_final_incomplete_jsonl_line() {
     let _removed = std::fs::remove_file(&path);
 }
 
+/// An event time for a fresh Codex session fixture: an hour ago, kept on today's local date.
+///
+/// The scanner files each event under its local date, and the session fixtures live in today's
+/// date folder. A plain `now - 1h` lands on yesterday in the first hour after local midnight
+/// (00:00-01:00Z on the UTC CI runner), so tests that read today's bucket or rely on the day
+/// folder scan order failed in that hour.
+fn recent_codex_fixture_time() -> DateTime<Utc> {
+    recent_fixture_time_at(Local::now())
+}
+
+/// `now - 1h`, or the start of `now`'s local day when that hour reaches back into yesterday.
+fn recent_fixture_time_at<Tz: TimeZone>(now: DateTime<Tz>) -> DateTime<Utc> {
+    let hour_ago = now.clone() - Duration::hours(1);
+    if hour_ago.date_naive() == now.date_naive() {
+        return hour_ago.with_timezone(&Utc);
+    }
+    now.timezone()
+        .from_local_datetime(&now.date_naive().and_time(NaiveTime::MIN))
+        .earliest()
+        .unwrap_or(now)
+        .with_timezone(&Utc)
+}
+
+#[test]
+fn recent_codex_fixture_time_stays_on_the_local_day() {
+    let utc_plus_7 = FixedOffset::east_opt(7 * 3600).unwrap();
+    let at = |hour, minute| {
+        utc_plus_7
+            .with_ymd_and_hms(2026, 10, 1, hour, minute, 0)
+            .unwrap()
+    };
+    assert_eq!(recent_fixture_time_at(at(8, 30)), at(7, 30));
+    assert_eq!(recent_fixture_time_at(at(1, 0)), at(0, 0));
+    assert_eq!(recent_fixture_time_at(at(0, 40)), at(0, 0));
+    assert_eq!(recent_fixture_time_at(at(0, 0)), at(0, 0));
+
+    let ci_run = Utc.with_ymd_and_hms(2026, 10, 1, 0, 45, 0).unwrap();
+    assert_eq!(
+        recent_fixture_time_at(ci_run),
+        Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap()
+    );
+}
+
 fn write_codex_session_fixture(sessions_root: &Path, name: &str, input_tokens: u64) -> PathBuf {
-    let today = Local::now().date_naive();
+    let event_time = recent_codex_fixture_time();
+    let today = event_time.with_timezone(&Local).date_naive();
     let day_dir = sessions_root
         .join(today.format("%Y").to_string())
         .join(today.format("%m").to_string())
         .join(today.format("%d").to_string());
     std::fs::create_dir_all(&day_dir).unwrap();
     let path = day_dir.join(name);
-    let ts = (Utc::now() - Duration::hours(1))
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
+    let ts = event_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let body = format!(
         r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{input_tokens},"cached_input_tokens":0,"output_tokens":5}}}}}}}}
 "#
@@ -695,13 +738,13 @@ fn write_codex_session_fixture_with_inputs(
     name: &str,
     input_tokens: &[u64],
 ) -> PathBuf {
-    let today = Local::now().date_naive();
+    let base = recent_codex_fixture_time();
+    let today = base.with_timezone(&Local).date_naive();
     let day_dir = sessions_root
         .join(today.format("%Y").to_string())
         .join(today.format("%m").to_string())
         .join(today.format("%d").to_string());
     std::fs::create_dir_all(&day_dir).unwrap();
-    let base = Utc::now() - Duration::hours(1);
     let mut body = String::new();
     for (index, input) in input_tokens.iter().enumerate() {
         let timestamp = (base
@@ -1565,9 +1608,9 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
     first_cache.last_scan_unix_ms = 1;
     JsonlScanner::save_cache(ProviderId::Codex, &mut first_cache, Some(&cache_root));
 
-    let timestamp = (Utc::now() - Duration::minutes(30))
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
+    // Half an hour after the fixture's row, so both rows share one local day.
+    let appended_time = recent_codex_fixture_time() + Duration::minutes(30);
+    let timestamp = appended_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let appended = format!(
         r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":200,"cached_input_tokens":0,"output_tokens":10}}}}}}}}"#
     ) + "\n";
@@ -1580,7 +1623,10 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
 
     let (_, _, second_cache) = scanner.scan_codex_detailed_with_cache(None);
     let usage = second_cache.files.get(&path_key).expect("file cache");
-    let day = Local::now().format("%Y-%m-%d").to_string();
+    let day = appended_time
+        .with_timezone(&Local)
+        .format("%Y-%m-%d")
+        .to_string();
     assert_eq!(usage.days[&day]["gpt-5-priority"], vec![100, 0, 5]);
     assert_eq!(
         usage.days[&day][CostUsagePricing::CODEX_UNATTRIBUTED_MODEL],
