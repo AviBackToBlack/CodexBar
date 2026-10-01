@@ -4,6 +4,7 @@
 //! Uses Windows process detection to find CSRF token
 
 mod cli_fallback;
+mod cli_print_failure;
 mod cli_resolution;
 mod cost;
 mod legacy_status;
@@ -13,9 +14,11 @@ pub mod local_sessions;
 mod local_sessions_reader;
 mod local_sqlite;
 mod local_step_resolver;
+mod offline_reason;
 mod quota_summary;
 
 use legacy_status::{UserStatus, UserStatusResponse};
+use offline_reason::LiveFailure;
 
 #[cfg(windows)]
 use crate::managed_process::{ManagedProcess, ManagedProcessConfig, ManagedProcessError};
@@ -373,7 +376,7 @@ impl AntigravityProvider {
         usage
     }
 
-    async fn fetch_user_status(&self) -> Result<Option<ProviderFetchResult>, ProviderError> {
+    async fn fetch_user_status(&self) -> Result<Option<ProviderFetchResult>, LiveFailure> {
         let process_info = tokio::task::spawn_blocking(Self::detect_process_info)
             .await
             .map_err(|error| {
@@ -394,7 +397,7 @@ impl AntigravityProvider {
         &self,
         process_info: &ProcessInfo,
         api_port: u16,
-    ) -> Result<ProviderFetchResult, ProviderError> {
+    ) -> Result<ProviderFetchResult, LiveFailure> {
         // SECURITY: TLS verification disabled only for this loopback language server.
         let client = crate::core::credentialed_http_client_builder()
             .no_proxy()
@@ -473,8 +476,8 @@ impl AntigravityProvider {
         .await?;
         let response: UserStatusResponse = serde_json::from_slice(&bytes)
             .map_err(|e| ProviderError::Parse(format!("Failed to parse response: {e}")))?;
-        self.parse_user_status(response)
-            .map(|usage| Self::fetch_result(usage, AntigravityStrategyId::Local))
+        let usage = self.parse_user_status(response)?;
+        Ok(Self::fetch_result(usage, AntigravityStrategyId::Local))
     }
 
     pub(super) fn fetch_result(
@@ -484,7 +487,7 @@ impl AntigravityProvider {
         ProviderFetchResult::new(Self::with_cadence_labels(usage), strategy.as_str())
     }
 
-    async fn try_print_usage_fallback(&self) -> Result<Option<ProviderFetchResult>, ProviderError> {
+    async fn try_print_usage_fallback(&self) -> Result<Option<ProviderFetchResult>, LiveFailure> {
         cli_fallback::try_fetch(cli_resolution::locate_agy_binary()?).await
     }
 
@@ -512,7 +515,7 @@ impl AntigravityProvider {
         match tokio::time::timeout(recheck_budget, self.fetch_user_status()).await {
             Ok(Ok(Some(usage))) => return Ok(ManagedAgyOutcome::Reused(usage)),
             Ok(Ok(None)) => {}
-            Ok(Err(error)) => return Err(error),
+            Ok(Err(error)) => return Err(error.into_error()),
             Err(_) => return Err(Self::managed_agy_timeout()),
         }
 
@@ -573,10 +576,10 @@ impl AntigravityProvider {
                             .await
                             {
                                 Ok(Ok(usage)) => return Ok(ManagedAgyOutcome::Fetched(usage)),
-                                Ok(Err(ProviderError::AuthRequired)) => {
+                                Ok(Err(error)) if error.is_auth_required() => {
                                     return Err(ProviderError::AuthRequired);
                                 }
-                                Ok(Err(error)) => last_error = Some(error),
+                                Ok(Err(error)) => last_error = Some(error.into_error()),
                                 Err(_) => break,
                             }
                         }
@@ -651,15 +654,19 @@ impl AntigravityProvider {
     /// A failed sign-in is actionable, so it always surfaces. Every other
     /// failure means the runtime/CLI is unavailable or inconclusive, so an
     /// available offline conversation-history snapshot is preferred over
-    /// discarding it for a transient error.
+    /// discarding it for a transient error. The offline snapshot carries the
+    /// failure's fixed-text reason, never the error message.
     fn resolve_probe_failure(
-        error: ProviderError,
+        failure: impl Into<LiveFailure>,
         offline: Option<ProviderFetchResult>,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        if matches!(error, ProviderError::AuthRequired) {
-            return Err(error);
+        let failure = failure.into();
+        match offline {
+            Some(result) if !failure.is_auth_required() => {
+                Ok(result.with_display_detail(failure.offline_detail()))
+            }
+            _ => Err(failure.into_error()),
         }
-        offline.ok_or(error)
     }
 
     /// Map a managed-lifecycle outcome onto provider policy.
@@ -700,12 +707,12 @@ impl AntigravityProvider {
     /// terminal and never starts another CLI process.
     async fn resolve_runtime_fallback<F, Fut>(
         &self,
-        local_result: Result<Option<ProviderFetchResult>, ProviderError>,
+        local_result: Result<Option<ProviderFetchResult>, LiveFailure>,
         cli_fallback: F,
     ) -> Result<ProviderFetchResult, ProviderError>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Option<ProviderFetchResult>, ProviderError>>,
+        Fut: Future<Output = Result<Option<ProviderFetchResult>, LiveFailure>>,
     {
         self.resolve_runtime_fallback_with_offline(
             local_result,
@@ -717,19 +724,19 @@ impl AntigravityProvider {
 
     async fn resolve_runtime_fallback_with_offline<F, Fut>(
         &self,
-        local_result: Result<Option<ProviderFetchResult>, ProviderError>,
+        local_result: Result<Option<ProviderFetchResult>, LiveFailure>,
         cli_fallback: F,
         offline: Option<ProviderFetchResult>,
     ) -> Result<ProviderFetchResult, ProviderError>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Option<ProviderFetchResult>, ProviderError>>,
+        Fut: Future<Output = Result<Option<ProviderFetchResult>, LiveFailure>>,
     {
         let (mut failure, allow_managed_runtime) = match local_result {
             Ok(Some(result)) => return Ok(result),
             Ok(None) => (None, true),
             Err(error) => {
-                if !matches!(error, ProviderError::AuthRequired) {
+                if !error.is_auth_required() {
                     tracing::debug!(%error, "Antigravity local probe failed");
                 }
                 (Some(error), false)
@@ -758,14 +765,14 @@ impl AntigravityProvider {
                                     return Err(error);
                                 }
                                 tracing::debug!(%error, "managed Antigravity CLI probe failed");
-                                failure = Some(error);
+                                failure = Some(error.into());
                             }
                         }
                     }
                 }
                 Err(error) => {
                     tracing::debug!(%error, "managed Antigravity CLI resolution failed");
-                    failure = Some(error);
+                    failure = Some(error.into());
                 }
             }
         }
@@ -777,7 +784,7 @@ impl AntigravityProvider {
             Ok(Some(result)) => return Ok(result),
             Ok(None) => {}
             Err(error) => {
-                if !matches!(error, ProviderError::AuthRequired) {
+                if !error.is_auth_required() {
                     tracing::debug!(%error, "structured Antigravity CLI fallback failed");
                 }
                 // A failed CLI attempt is an inconclusive runtime probe. Let
@@ -787,12 +794,7 @@ impl AntigravityProvider {
             }
         }
 
-        match failure {
-            Some(error) => Self::resolve_probe_failure(error, offline),
-            None => {
-                offline.ok_or_else(|| ProviderError::NotInstalled(AGY_NOT_FOUND_MESSAGE.into()))
-            }
-        }
+        Self::resolve_probe_failure(failure.unwrap_or_else(LiveFailure::not_running), offline)
     }
 
     async fn fetch_local_payload(
@@ -802,7 +804,7 @@ impl AntigravityProvider {
         path: &str,
         body: &serde_json::Value,
         timeout: std::time::Duration,
-    ) -> Result<Vec<u8>, ProviderError> {
+    ) -> Result<Vec<u8>, LiveFailure> {
         let url = format!("https://127.0.0.1:{api_port}{path}");
         let requires_csrf = process_info.source == ProcessSource::Ide;
         let csrf_token = process_info
@@ -821,13 +823,13 @@ impl AntigravityProvider {
         let response = request
             .send()
             .await
-            .map_err(|e| ProviderError::Other(format!("API request failed: {e}")))?;
+            .map_err(|e| LiveFailure::request("API request failed", &e))?;
         if response.status().is_success() {
             return response
                 .bytes()
                 .await
                 .map(|bytes| bytes.to_vec())
-                .map_err(|e| ProviderError::Other(format!("Failed to read response: {e}")));
+                .map_err(|e| LiveFailure::request("Failed to read response", &e));
         }
 
         let status = response.status();
@@ -849,7 +851,7 @@ impl AntigravityProvider {
                     .bytes()
                     .await
                     .map(|bytes| bytes.to_vec())
-                    .map_err(|e| ProviderError::Other(format!("Failed to read response: {e}")));
+                    .map_err(|e| LiveFailure::request("Failed to read response", &e));
             }
         }
 
@@ -860,9 +862,12 @@ impl AntigravityProvider {
                 || text.to_ascii_lowercase().contains("login method")
                 || text.to_ascii_lowercase().contains("keyring"))
         {
-            return Err(ProviderError::AuthRequired);
+            return Err(ProviderError::AuthRequired.into());
         }
-        Err(ProviderError::Other(format!("API error {status}: {text}")))
+        Err(LiveFailure::http_status(
+            status.as_u16(),
+            ProviderError::Other(format!("API error {status}: {text}")),
+        ))
     }
 
     fn resolve_plan_name(status: &UserStatus) -> Option<String> {

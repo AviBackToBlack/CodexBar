@@ -546,7 +546,7 @@ fn strategy_ids_are_stable_and_reject_unknown_sources() {
     assert_eq!(AntigravityStrategyId::Cli.as_str(), "cli");
 }
 
-fn offline_result() -> ProviderFetchResult {
+pub(super) fn offline_result() -> ProviderFetchResult {
     ProviderFetchResult::new(
         UsageSnapshot::new(RateWindow::informational("Offline · 2 conversations"))
             .with_login_method("offline"),
@@ -639,7 +639,7 @@ async fn local_probe_success_wins_over_an_invalid_cli_override() {
 #[tokio::test]
 async fn local_auth_probe_failure_uses_structured_cli_fallback() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async {
+        .resolve_runtime_fallback(Err(ProviderError::AuthRequired.into()), || async {
             Ok(Some(structured_cli_result()))
         })
         .await
@@ -653,7 +653,7 @@ async fn local_auth_probe_failure_uses_structured_cli_fallback() {
 async fn generic_local_probe_failure_uses_valid_structured_cli_json() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback(
-            Err(ProviderError::Other("local API unavailable".to_string())),
+            Err(ProviderError::Other("local API unavailable".to_string()).into()),
             || async { Ok(Some(structured_cli_result())) },
         )
         .await
@@ -666,7 +666,9 @@ async fn generic_local_probe_failure_uses_valid_structured_cli_json() {
 #[tokio::test]
 async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async { Ok(None) })
+        .resolve_runtime_fallback(Err(ProviderError::AuthRequired.into()), || async {
+            Ok(None)
+        })
         .await;
 
     assert!(matches!(result, Err(ProviderError::AuthRequired)));
@@ -676,11 +678,11 @@ async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() 
 async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
                 let error = quota_summary::parse_cli_usage_report(br#"{"status":"SUCCESS""#)
                     .expect_err("malformed JSON must fail parsing");
-                Err(error)
+                Err(LiveFailure::from(error))
             },
             None,
         )
@@ -693,11 +695,11 @@ async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
 async fn cli_fallback_error_prefers_offline_history() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
-                Err(ProviderError::Parse(
+                Err(LiveFailure::from(ProviderError::Parse(
                     "Antigravity CLI usage report: malformed JSON".to_string(),
-                ))
+                )))
             },
             Some(offline_result()),
         )
