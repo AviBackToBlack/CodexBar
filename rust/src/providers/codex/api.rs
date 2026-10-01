@@ -21,6 +21,11 @@ const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const USAGE_PATH: &str = "/wham/usage";
 const RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
+/// Upstream 0.69.0 #4088: the Codex CLI owns `auth.json` and may be publishing a
+/// replacement while we read it. A failed or stale read is repeated up to this many
+/// times, `CREDENTIAL_READ_RETRY_DELAY` apart, before the error is reported.
+const CREDENTIAL_READ_RETRIES: u32 = 2;
+const CREDENTIAL_READ_RETRY_DELAY: Duration = Duration::from_millis(50);
 const EXTERNAL_OAUTH_REFRESH_WINDOW: chrono::TimeDelta = chrono::Duration::minutes(5);
 
 static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceLock::new();
@@ -113,7 +118,7 @@ impl CodexApi {
     pub async fn fetch_usage(
         &self,
     ) -> Result<(UsageSnapshot, Option<CostSnapshot>, Option<String>), ProviderError> {
-        let creds = self.load_credentials()?;
+        let creds = self.load_credentials().await?;
         let base_url = self.resolve_base_url();
         let auth_path = self.get_auth_path();
         let scope = weekly_reset::scope_key(creds.account_id.as_deref(), &auth_path);
@@ -306,42 +311,84 @@ impl CodexApi {
         decode_reset_credits(&response.bytes().await?)
     }
 
-    fn load_credentials(&self) -> Result<CodexCredentials, ProviderError> {
+    /// Load credentials, tolerating a brief owner publication of `auth.json`.
+    ///
+    /// Upstream 0.69.0 #4088 (`CodexOAuthFetchStrategy.loadCredentials` on the
+    /// usage path, `retryStale: true`): every failed read is repeated. That covers
+    /// a missing (`NotInstalled`), unreadable (`Other`), malformed or incomplete
+    /// (`Parse`) file, and a credential the gate rejects as stale (`AuthRequired`,
+    /// such as a token inside its renewal window), because the CLI may be
+    /// publishing its renewal. This only rereads the file: no token is redeemed,
+    /// nothing is written, and the credential cache semantics are unchanged. After
+    /// the last read the error keeps its category, so unchanged stale credentials
+    /// still need their owner's renewal.
+    async fn load_credentials(&self) -> Result<CodexCredentials, ProviderError> {
+        Self::reread_during_owner_publication(|| self.load_credentials_once()).await
+    }
+
+    /// The bounded reread behind [`Self::load_credentials`]: `read` runs up to
+    /// `1 + CREDENTIAL_READ_RETRIES` times, `CREDENTIAL_READ_RETRY_DELAY` apart,
+    /// until it succeeds, and the last result is returned unchanged. Dropping the
+    /// returned future cancels the pending delay and any further read (upstream
+    /// checks task cancellation before each read).
+    async fn reread_during_owner_publication<T>(
+        mut read: impl FnMut() -> Result<T, ProviderError>,
+    ) -> Result<T, ProviderError> {
+        let mut retries_remaining = CREDENTIAL_READ_RETRIES;
+        loop {
+            match read() {
+                Err(_) if retries_remaining > 0 => {
+                    retries_remaining -= 1;
+                    tokio::time::sleep(CREDENTIAL_READ_RETRY_DELAY).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    fn load_credentials_once(&self) -> Result<CodexCredentials, ProviderError> {
         let auth_path = self.get_auth_path();
 
-        if !auth_path.exists() {
-            // Upstream 0.50.0 #2679: when the CLI targets Amazon Bedrock or
-            // another custom backend without ChatGPT auth, sign-in guidance
-            // is wrong — rate limits simply are not available there.
-            if self.uses_custom_backend() {
-                return Err(ProviderError::NotInstalled(
-                    "Codex uses a custom backend (chatgpt_base_url / model_provider) without \
-                     ChatGPT auth. ChatGPT rate limits are unavailable for this setup."
-                        .to_string(),
-                ));
-            }
-            return Err(ProviderError::NotInstalled(
-                "Codex auth.json not found. Run `codex login` in a terminal to sign in."
-                    .to_string(),
-            ));
-        }
-
-        let modified = std::fs::metadata(&auth_path)
-            .ok()
-            .and_then(|metadata| metadata.modified().ok());
+        let metadata =
+            std::fs::metadata(&auth_path).map_err(|error| self.credential_file_error(error))?;
+        let modified = metadata.modified().ok();
         if let Some(cached) = Self::cached_credentials(&auth_path, modified) {
             Self::enforce_external_oauth_gate(&cached)?;
             return Ok(cached);
         }
 
-        let content = std::fs::read_to_string(&auth_path).map_err(|e| {
-            ProviderError::Other(format!("Failed to read Codex credentials: {}", e))
-        })?;
+        let content = std::fs::read_to_string(&auth_path)
+            .map_err(|error| self.credential_file_error(error))?;
 
         let credentials = Self::parse_credentials_json(&content)?;
         Self::enforce_external_oauth_gate(&credentials)?;
         Self::store_cached_credentials(auth_path, modified, credentials.clone());
         Ok(credentials)
+    }
+
+    fn missing_credentials_error(&self) -> ProviderError {
+        // Upstream 0.50.0 #2679: when the CLI targets Amazon Bedrock or
+        // another custom backend without ChatGPT auth, sign-in guidance
+        // is wrong — rate limits simply are not available there.
+        if self.uses_custom_backend() {
+            return ProviderError::NotInstalled(
+                "Codex uses a custom backend (chatgpt_base_url / model_provider) without \
+                 ChatGPT auth. ChatGPT rate limits are unavailable for this setup."
+                    .to_string(),
+            );
+        }
+
+        ProviderError::NotInstalled(
+            "Codex auth.json not found. Run `codex login` in a terminal to sign in.".to_string(),
+        )
+    }
+
+    fn credential_file_error(&self, error: std::io::Error) -> ProviderError {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return self.missing_credentials_error();
+        }
+
+        ProviderError::Other(format!("Failed to read Codex credentials: {error}"))
     }
 
     fn parse_credentials_json(content: &str) -> Result<CodexCredentials, ProviderError> {
@@ -414,11 +461,14 @@ impl CodexApi {
     /// request may use it. When the access token is a JWT, its native expiry
     /// is the validity authority; opaque tokens are sent to the server.
     fn enforce_external_oauth_gate(credentials: &CodexCredentials) -> Result<(), ProviderError> {
-        Self::enforce_external_oauth_gate_at(
-            credentials,
-            crate::settings::Settings::load().codex_external_oauth_sources_allowed,
-            Utc::now(),
-        )
+        if !credentials.is_external_oauth {
+            return Ok(());
+        }
+        // The opt-in only matters without refresh provenance. Skip the settings
+        // load otherwise: credential reads repeat while the owner publishes.
+        let external_sources_allowed = credentials.last_refresh.is_some()
+            || crate::settings::Settings::load().codex_external_oauth_sources_allowed;
+        Self::enforce_external_oauth_gate_at(credentials, external_sources_allowed, Utc::now())
     }
 
     fn enforce_external_oauth_gate_at(
@@ -1349,6 +1399,9 @@ fn capitalize(s: &str) -> String {
         Some(first) => first.to_uppercase().chain(chars).collect(),
     }
 }
+
+#[cfg(test)]
+mod credential_retry_tests;
 
 #[cfg(test)]
 mod tests {
