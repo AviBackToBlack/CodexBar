@@ -17,6 +17,7 @@ pub mod config;
 pub mod cost;
 pub mod dashboard;
 pub mod diagnose;
+mod fetch_context;
 pub mod guard;
 pub mod hooks;
 pub mod serve;

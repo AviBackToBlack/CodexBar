@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use chrono::{Local, Utc};
 
+use crate::cli::fetch_context::populate_api_region_from_settings;
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::{self, CostScanner};
 use crate::settings::Settings;
@@ -92,10 +93,12 @@ impl SnapshotProducer {
         for (index, provider_id) in provider_ids.iter().enumerate() {
             let provider_id = *provider_id;
             let fetch_timeout = self.fetch_timeout;
+            let mut ctx = provider_fetch_context();
+            populate_api_region_from_settings(provider_id, &settings, &mut ctx);
             set.spawn(async move {
                 (
                     index,
-                    fetch_provider_envelope(provider_id, fetch_timeout).await,
+                    fetch_provider_envelope(provider_id, ctx, fetch_timeout).await,
                 )
             });
         }
@@ -114,7 +117,7 @@ impl SnapshotProducer {
 
         let costs = collect_costs(provider_ids.contains(&ProviderId::Pi)).await;
         let claude_accounts =
-            collect_claude_accounts(provider_ids.contains(&ProviderId::Claude)).await;
+            collect_claude_accounts(provider_ids.contains(&ProviderId::Claude), &settings).await;
 
         let order: Vec<String> = provider_ids
             .iter()
@@ -147,11 +150,24 @@ impl SnapshotProducer {
 /// failure instead of failing the whole snapshot (F9 semantics).
 async fn fetch_provider_envelope(
     provider_id: ProviderId,
+    ctx: FetchContext,
     fetch_timeout: Option<Duration>,
 ) -> ProviderFetchEnvelope {
     let provider = instantiate_provider(provider_id);
     let metadata = provider.metadata();
-    let ctx = FetchContext {
+
+    let fetch = bounded_fetch(provider_id, ctx, None, fetch_timeout).await;
+    ProviderFetchEnvelope {
+        id: provider_id.cli_name().to_string(),
+        display_name: metadata.display_name.to_string(),
+        session_label: metadata.session_label.to_string(),
+        weekly_label: metadata.weekly_label.to_string(),
+        fetch,
+    }
+}
+
+fn provider_fetch_context() -> FetchContext {
+    FetchContext {
         source_mode: SourceMode::Auto,
         include_credits: true,
         web_timeout: 60,
@@ -165,14 +181,6 @@ async fn fetch_provider_envelope(
         gateway_url: None,
         auto_prefer_web: false,
         requires_optional_usage_completeness: false,
-    };
-    let fetch = bounded_fetch(provider_id, ctx, None, fetch_timeout).await;
-    ProviderFetchEnvelope {
-        id: provider_id.cli_name().to_string(),
-        display_name: metadata.display_name.to_string(),
-        session_label: metadata.session_label.to_string(),
-        weekly_label: metadata.weekly_label.to_string(),
-        fetch,
     }
 }
 
@@ -264,7 +272,10 @@ async fn collect_costs(pi_selected: bool) -> HashMap<String, RawCostPayload> {
 
 /// Claude token-account rows (upstream "claude-swap" analog): per-account
 /// cookie-override fetches, active flag from the store, errors as rows.
-async fn collect_claude_accounts(claude_enabled: bool) -> Option<ClaudeAccountsInput> {
+async fn collect_claude_accounts(
+    claude_enabled: bool,
+    settings: &Settings,
+) -> Option<ClaudeAccountsInput> {
     if !claude_enabled {
         return None;
     }
@@ -279,26 +290,27 @@ async fn collect_claude_accounts(claude_enabled: bool) -> Option<ClaudeAccountsI
     let active_index = data.active_account().map(|active| active.id);
     let mut set = tokio::task::JoinSet::new();
     for (index, account) in data.accounts.iter().cloned().enumerate() {
+        let header = crate::core::TokenAccountSupport::normalized_cookie_header(
+            ProviderId::Claude,
+            &account.token,
+        );
+        let mut ctx = FetchContext {
+            source_mode: SourceMode::Auto,
+            include_credits: true,
+            web_timeout: 60,
+            verbose: false,
+            manual_cookie_header: Some(header),
+            manual_cookie_missing: false,
+            api_key: None,
+            workspace_id: None,
+            seat_credit_entitlement: None,
+            api_region: None,
+            gateway_url: None,
+            auto_prefer_web: false,
+            requires_optional_usage_completeness: false,
+        };
+        populate_api_region_from_settings(ProviderId::Claude, settings, &mut ctx);
         set.spawn(async move {
-            let header = crate::core::TokenAccountSupport::normalized_cookie_header(
-                ProviderId::Claude,
-                &account.token,
-            );
-            let ctx = FetchContext {
-                source_mode: SourceMode::Auto,
-                include_credits: true,
-                web_timeout: 60,
-                verbose: false,
-                manual_cookie_header: Some(header),
-                manual_cookie_missing: false,
-                api_key: None,
-                workspace_id: None,
-                seat_credit_entitlement: None,
-                api_region: None,
-                gateway_url: None,
-                auto_prefer_web: false,
-                requires_optional_usage_completeness: false,
-            };
             let fetch = bounded_fetch(
                 ProviderId::Claude,
                 ctx,

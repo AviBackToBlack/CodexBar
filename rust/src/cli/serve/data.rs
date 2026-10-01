@@ -6,9 +6,11 @@
 
 use serde_json::json;
 
+use crate::cli::fetch_context::populate_api_region_from_settings;
 use crate::cli::usage::ProviderSelection;
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::{self, CostScanner};
+use crate::settings::Settings;
 
 use super::json_response;
 
@@ -37,11 +39,14 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         // for the full completeness window.
         requires_optional_usage_completeness: false,
     };
+    let settings = Settings::load();
 
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
         let provider = instantiate_provider(provider_id);
-        match provider.fetch_usage(&ctx).await {
+        let mut provider_ctx = ctx.clone();
+        populate_api_region_from_settings(provider_id, &settings, &mut provider_ctx);
+        match provider.fetch_usage(&provider_ctx).await {
             Ok(result) => results.push(json!({
                 "provider": provider_id.cli_name(),
                 "source": result.source_label,
