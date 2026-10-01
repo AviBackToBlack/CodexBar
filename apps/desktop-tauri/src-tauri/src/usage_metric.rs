@@ -485,6 +485,38 @@ mod tests {
     }
 
     #[test]
+    fn kimi_monthly_only_snapshot_selects_the_total_usage_lane() {
+        // Upstream 0.60.5 #3694: a Code API response may report only the
+        // monthly Total usage pool. The weekly lane is then an informational
+        // placeholder, and every metric preference lands on the monthly lane.
+        let mut snapshot = snapshot();
+        snapshot.provider_id = "kimi".to_string();
+        snapshot.primary = RateWindowSnapshot {
+            is_informational: true,
+            ..window(0.0)
+        };
+        snapshot.secondary = None;
+        snapshot.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "kimi-monthly".to_string(),
+            title: "Total usage".to_string(),
+            window: window(100.0),
+            fallback_lane: false,
+        }];
+
+        for preference in [
+            MetricPreference::Automatic,
+            MetricPreference::Session,
+            MetricPreference::Weekly,
+        ] {
+            let mut settings = Settings::default();
+            settings.set_provider_metric(ProviderId::Kimi, preference);
+            let selected = selected_usage_window(&snapshot, &settings);
+            assert!(!selected.is_informational, "{preference:?}");
+            assert_eq!(selected.used_percent, 100.0, "{preference:?}");
+        }
+    }
+
+    #[test]
     fn opencodego_automatic_prefers_explicitly_exhausted_window_over_higher_percentage() {
         let mut snapshot = snapshot();
         snapshot.provider_id = "opencodego".to_string();

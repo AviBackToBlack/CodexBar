@@ -8,8 +8,9 @@ use reqwest::Url;
 use std::path::{Path, PathBuf};
 
 use super::{
-    FetchContext, KimiCodeApiUsageResponse, KimiProvider, KimiRegion, ProviderError, UsageSnapshot,
-    ascii_header_value, cleaned_env, cleaned_owned, kimi_window_minutes,
+    FetchContext, KimiCodeApiUsageResponse, KimiProvider, KimiRegion, MONTHLY_WINDOW_ID,
+    ProviderError, RateWindow, UsageSnapshot, ascii_header_value, cleaned_env, cleaned_owned,
+    kimi_window_minutes,
 };
 use super::{ratio_pool, web};
 
@@ -21,6 +22,12 @@ const KIMI_OAUTH_HOST_ENV: &str = "KIMI_OAUTH_HOST";
 const KIMI_CODE_CLI_PLATFORM: &str = "kimi_code_cli";
 /// CLI access tokens must remain valid for at least this long to be reused.
 const KIMI_CODE_CREDENTIAL_MIN_TTL_SECS: f64 = 60.0;
+const SESSION_WINDOW_MINUTES: u32 = 5 * 60;
+const WEEKLY_WINDOW_MINUTES: u32 = 7 * 24 * 60;
+/// Monthly sentinel shared with the web `Total usage` lane.
+const MONTHLY_WINDOW_MINUTES: u32 = 30 * 24 * 60;
+/// Placeholder text for a Code API response that reports no weekly quota.
+pub(super) const MISSING_WEEKLY_DESCRIPTION: &str = "No weekly quota reported";
 
 #[derive(Debug, serde::Deserialize)]
 struct KimiCodeCredentialFile {
@@ -117,77 +124,77 @@ fn code_api_status_error(status: reqwest::StatusCode) -> ProviderError {
     }
 }
 
+/// Upstream `KimiUsageSnapshot.toUsageSnapshot` (0.60.5 #3694): weekly is the
+/// primary lane and the 5-hour rate limit the secondary, as on the web path.
+/// Each ratio pool takes precedence over the legacy counters of its lane; an
+/// absent or invalid pool falls back to those counters. The monthly pool is
+/// the `Total usage` extra lane. Missing lanes are not invented: an absent
+/// weekly quota stays an informational primary, and a response without any
+/// supported window is a parse error.
 pub(super) fn snapshot_from_code_api_response(
     response: KimiCodeApiUsageResponse,
 ) -> Result<UsageSnapshot, ProviderError> {
-    let pools_present = response.usages.is_some();
+    let pools = response.usages.as_ref();
     let legacy_limit = response.limits.as_ref().and_then(|limits| limits.first());
-    let legacy_session_minutes =
+    let legacy_rate_limit_minutes =
         legacy_limit.and_then(|limit| limit.window.as_ref().and_then(kimi_window_minutes));
-    let session_pool = response
-        .usages
-        .as_ref()
-        .and_then(|pools| pools.session.as_ref())
-        .and_then(|pool| {
-            ratio_pool::resolved_ratio_window(
-                &response,
-                pool,
-                legacy_limit.map(|limit| &limit.detail),
-                300,
-                legacy_session_minutes,
-            )
-        });
-    let weekly_pool = response
-        .usages
-        .as_ref()
+    let weekly = pools
         .and_then(|pools| pools.weekly.as_ref())
         .and_then(|pool| {
             ratio_pool::resolved_ratio_window(
                 &response,
                 pool,
                 response.usage.as_ref(),
-                10_080,
-                Some(10_080),
+                WEEKLY_WINDOW_MINUTES,
+                Some(WEEKLY_WINDOW_MINUTES),
             )
-        });
-    let monthly_pool = response
-        .usages
-        .as_ref()
-        .and_then(|pools| pools.monthly.as_ref())
-        .and_then(|pool| pool.rate_window(43_200));
-    let primary = if pools_present {
-        session_pool.ok_or_else(|| {
-            ProviderError::Parse("Kimi Code API returned an unusable session quota pool".into())
-        })?
-    } else {
-        response
-            .usage
-            .as_ref()
-            .and_then(|detail| {
-                KimiProvider::rate_window_from_usage_detail(detail, Some(10_080)).ok()
+        })
+        .or_else(|| {
+            response.usage.as_ref().and_then(|detail| {
+                KimiProvider::rate_window_from_usage_detail(detail, Some(WEEKLY_WINDOW_MINUTES))
+                    .ok()
             })
-            .ok_or_else(|| {
-                ProviderError::Parse("Kimi Code API has no usable quota window".into())
-            })?
-    };
+        });
+    let rate_limit = pools
+        .and_then(|pools| pools.session.as_ref())
+        .and_then(|pool| {
+            ratio_pool::resolved_ratio_window(
+                &response,
+                pool,
+                legacy_limit.map(|limit| &limit.detail),
+                SESSION_WINDOW_MINUTES,
+                legacy_rate_limit_minutes,
+            )
+        })
+        .or_else(|| {
+            legacy_limit.and_then(|limit| {
+                KimiProvider::rate_window_from_usage_detail(
+                    &limit.detail,
+                    legacy_rate_limit_minutes,
+                )
+                .ok()
+            })
+        });
+    let monthly = pools
+        .and_then(|pools| pools.monthly.as_ref())
+        .and_then(|pool| pool.rate_window(MONTHLY_WINDOW_MINUTES));
+    if weekly.is_none() && rate_limit.is_none() && monthly.is_none() {
+        return Err(ProviderError::Parse(
+            "No supported quota windows in Code usage response".into(),
+        ));
+    }
+
+    let primary = weekly.unwrap_or_else(|| RateWindow::informational(MISSING_WEEKLY_DESCRIPTION));
     let mut usage = UsageSnapshot::new(primary).with_login_method(
         response
             .plan_name()
             .unwrap_or_else(|| "Code API".to_string()),
     );
-    if let Some(weekly) = weekly_pool {
-        usage = usage.with_secondary(weekly);
-    } else if !pools_present
-        && let Some(limit) = response.limits.unwrap_or_default().into_iter().next()
-    {
-        let window_minutes = limit.window.as_ref().and_then(kimi_window_minutes);
-        usage = usage.with_secondary(KimiProvider::rate_window_from_usage_detail(
-            &limit.detail,
-            window_minutes,
-        )?);
+    if let Some(rate_limit) = rate_limit {
+        usage = usage.with_secondary(rate_limit);
     }
-    if let Some(monthly) = monthly_pool {
-        usage = usage.with_tertiary(monthly);
+    if let Some(monthly) = monthly {
+        usage = usage.with_extra_rate_window(MONTHLY_WINDOW_ID, "Total usage", monthly);
     }
     Ok(usage)
 }
@@ -697,6 +704,7 @@ mod tests {
     fn credential_freshness_requires_sixty_second_margin() {
         assert!((KIMI_CODE_CREDENTIAL_MIN_TTL_SECS - 60.0).abs() < f64::EPSILON);
     }
+
     #[test]
     fn ratio_pools_preserve_unknown_weekly_and_explicit_monthly_zero() {
         let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
@@ -712,42 +720,70 @@ mod tests {
         }))
         .expect("ratio-pool fixture parses");
         let snapshot = snapshot_from_code_api_response(response).expect("ratio pools are usable");
-        assert_eq!(snapshot.primary.window_minutes, Some(300));
-        assert_eq!(snapshot.primary.used_percent, 25.0);
         assert!(
-            snapshot.secondary.is_none(),
+            snapshot.primary.is_informational,
             "missing weekly pool stays unknown"
         );
-        let monthly = snapshot.tertiary.expect("explicit monthly zero is known");
-        assert_eq!(monthly.window_minutes, Some(43_200));
-        assert_eq!(monthly.used_percent, 0.0);
-        assert!(monthly.usage_known);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some(MISSING_WEEKLY_DESCRIPTION)
+        );
+        let rate_limit = snapshot
+            .secondary
+            .expect("session pool is the rate-limit lane");
+        assert_eq!(rate_limit.window_minutes, Some(300));
+        assert_eq!(rate_limit.used_percent, 25.0);
+        assert!(snapshot.tertiary.is_none());
+        let [monthly] = snapshot.extra_rate_windows.as_slice() else {
+            panic!("explicit monthly zero is the Total usage lane");
+        };
+        assert_eq!(monthly.id, MONTHLY_WINDOW_ID);
+        assert_eq!(monthly.window.window_minutes, Some(43_200));
+        assert_eq!(monthly.window.used_percent, 0.0);
+        assert!(monthly.window.usage_known);
     }
 
     #[test]
-    fn ratio_pools_do_not_invent_zero_for_missing_or_invalid_primary() {
+    fn invalid_ratio_pools_without_counters_fail_to_parse() {
         for fixture in [
-            json!({ "usages": { "limit_5h": {} } }),
             json!({ "usages": { "limit_5h": { "used_ratio": -0.1 } } }),
+            json!({
+                "usages": {
+                    "limit_7d": { "used_ratio": "abc" },
+                    "limit_month_total": { "used_ratio": null }
+                }
+            }),
         ] {
             let response: KimiCodeApiUsageResponse =
                 serde_json::from_value(fixture).expect("fixture parses");
-            assert!(snapshot_from_code_api_response(response).is_err());
+            assert!(matches!(
+                snapshot_from_code_api_response(response),
+                Err(ProviderError::Parse(message))
+                    if message == "No supported quota windows in Code usage response"
+            ));
         }
     }
 
+    // Upstream 0.60.5 #3694 replaces the earlier rule that an unusable
+    // session pool fails the whole response: each lane falls back to its own
+    // legacy counters, and lanes without any source stay absent.
     #[test]
-    fn unusable_explicit_session_pool_does_not_fall_back_to_legacy_usage() {
+    fn invalid_session_pool_keeps_the_legacy_weekly_counters() {
         let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
             "usages": { "limit_5h": { "used_ratio": -0.1 } },
             "usage": { "limit": "100", "used": "20" }
         }))
         .expect("fixture parses");
 
-        assert!(matches!(
-            snapshot_from_code_api_response(response),
-            Err(ProviderError::Parse(message))
-                if message.contains("unusable session quota pool")
-        ));
+        let snapshot = snapshot_from_code_api_response(response).expect("weekly counters");
+        assert!(!snapshot.primary.is_informational);
+        assert_eq!(snapshot.primary.used_percent, 20.0);
+        assert_eq!(snapshot.primary.window_minutes, Some(10_080));
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("20/100 credits")
+        );
+        assert!(snapshot.secondary.is_none());
+        assert!(snapshot.extra_rate_windows.is_empty());
     }
 }
