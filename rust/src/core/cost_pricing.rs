@@ -748,35 +748,70 @@ impl CostUsagePricing {
         pricing_date: NaiveDate,
         pricing_snapshot: Option<&models_dev_pricing::ModelsDevPricingSnapshot>,
     ) -> Option<f64> {
+        Self::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+            model,
+            input_tokens,
+            cached_input_tokens,
+            0,
+            output_tokens,
+            pricing_date,
+            pricing_snapshot,
+        )
+    }
+
+    /// Codex cost on a historical usage day when the prompt also wrote cache
+    /// tokens. `input_tokens` is the inclusive prompt size: cache reads and
+    /// writes are subsets of it. The pre-cutoff GPT-5.6 Terra/Luna rates carry
+    /// their own 1.25x cache-write rate (upstream `codexHistoricalPricing`).
+    pub fn codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        cache_write_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: NaiveDate,
+        pricing_snapshot: Option<&models_dev_pricing::ModelsDevPricingSnapshot>,
+    ) -> Option<f64> {
         let key = Self::normalize_codex_model(model);
         let cutoff = NaiveDate::from_ymd_opt(2026, 7, 30).expect("valid pricing cutoff");
         if pricing_date < cutoff {
             let long = input_tokens > codex_pricing::CODEX_LONG_CONTEXT_THRESHOLD;
+            // (input, cache read, cache write, output) per token.
             let rates = match (key.as_str(), long) {
-                ("gpt-5.6-terra", false) => Some((2.5e-6, 2.5e-7, 1.5e-5)),
-                ("gpt-5.6-terra", true) => Some((5e-6, 5e-7, 2.25e-5)),
-                ("gpt-5.6-luna", false) => Some((1e-6, 1e-7, 6e-6)),
-                ("gpt-5.6-luna", true) => Some((2e-6, 2e-7, 9e-6)),
+                ("gpt-5.6-terra", false) => Some((2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5)),
+                ("gpt-5.6-terra", true) => Some((5e-6, 5e-7, 6.25e-6, 2.25e-5)),
+                ("gpt-5.6-luna", false) => Some((1e-6, 1e-7, 1.25e-6, 6e-6)),
+                ("gpt-5.6-luna", true) => Some((2e-6, 2e-7, 2.5e-6, 9e-6)),
                 _ => None,
             };
-            if let Some((input_rate, cache_rate, output_rate)) = rates {
-                return Some(codex_pricing::codex_cost_from_rates(
+            if let Some((input_rate, cache_read_rate, cache_write_rate, output_rate)) = rates {
+                return Some(codex_pricing::codex_cost_from_rates_with_cache_write(
                     input_tokens,
                     cached_input_tokens,
+                    cache_write_input_tokens,
                     output_tokens,
                     input_rate,
-                    cache_rate,
+                    cache_read_rate,
+                    cache_write_rate,
                     output_rate,
                 ));
             }
         }
-        Self::codex_cost_usd_with_pricing_snapshot(
+        Self::codex_cost_usd_with_cache_write_and_pricing_snapshot(
             model,
             input_tokens,
             cached_input_tokens,
+            cache_write_input_tokens,
             output_tokens,
             pricing_snapshot,
         )
+    }
+
+    /// True when the bundled Codex table prices `model`. Windows resolves the
+    /// bundled rates before any models.dev entry, so such a model never needs
+    /// a catalog refresh.
+    pub fn has_bundled_codex_pricing(model: &str) -> bool {
+        CODEX_PRICING.contains_key(Self::normalize_codex_model(model).as_str())
     }
 
     pub fn codex_fast_cost_usd_at_date(

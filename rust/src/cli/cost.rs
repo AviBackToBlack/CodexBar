@@ -202,6 +202,13 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
             print_text_output(&results, use_color, args.days, group_by);
         }
         OutputFormat::Json => {
+            // Upstream 0.60.4 refreshes OpenCodex prices before the JSON
+            // payload; on Windows the import lives in the Codex contract.
+            if results.iter().any(|result| result.provider == "codex")
+                && Settings::load().open_codex_usage_logs_enabled
+            {
+                crate::spend_contract::refresh_opencodex_pricing_if_needed().await;
+            }
             print_json_output(&results, args.pretty, args.days)?;
         }
     }

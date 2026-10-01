@@ -1,15 +1,17 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::CostUsagePricing;
+use crate::core::{
+    CostUsagePricing, ModelsDevPricingSnapshot, ModelsDevPricingTarget, models_dev_pricing_targets,
+};
 
 use super::{
-    CostCoverageCounts, CostProvenance, CustomPricing, ImportedSpendSource, SpendActivityCell,
-    SpendDailyPoint, SpendModelRow, SpendTokenMix,
+    CostCoverageCounts, CostProvenance, CustomPricing, CustomRates, ImportedSpendSource,
+    SpendActivityCell, SpendDailyPoint, SpendModelRow, SpendTokenMix,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +34,8 @@ mod cache;
 mod nous;
 #[cfg(test)]
 mod nous_tests;
+#[cfg(test)]
+mod pricing_tests;
 
 #[derive(Default)]
 struct ModelAccumulator {
@@ -111,11 +115,65 @@ pub(super) fn load_for_subscription(
     aggregate(entries, Utc::now(), history_days.clamp(1, 365), custom)
 }
 
+/// Refreshes the models.dev catalog when a ledger row that a Usage & Spend
+/// build may import needs a price it lacks (upstream 0.60.4
+/// `OpenCodexUsageStore.refreshPricingIfNeeded`).
+pub(super) async fn refresh_pricing_if_needed() {
+    let targets = tokio::task::spawn_blocking(|| {
+        let entries = cache::load_entries(&usage_path()?)?;
+        Some(pricing_targets(&entries, Utc::now()))
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    crate::core::refresh_exact_pricing_targets_if_needed(&targets).await;
+}
+
+/// The exact models.dev identities the cached catalog must price for the
+/// rows a build may show. Windows imports only rows routed to a
+/// subscription. A direct OpenAI model with bundled Codex rates never reads
+/// the catalog, and a model-less row is never priced, so neither refreshes.
+fn pricing_targets(entries: &[OpenCodexEntry], now: DateTime<Utc>) -> Vec<ModelsDevPricingTarget> {
+    let mut targets = BTreeSet::new();
+    for entry in entries {
+        if entry.timestamp > now
+            || !is_priceable_status(entry)
+            || !matches!(route_entry(entry), RouteTarget::Subscription(_))
+        {
+            continue;
+        }
+        let resolved = models_dev_pricing_targets(&pricing_provider(entry), &entry.model);
+        match resolved.first() {
+            Some(first) if is_codex_target(first) => {
+                if !CostUsagePricing::has_bundled_codex_pricing(&first.model_id)
+                    && !CostUsagePricing::is_codex_unattributed_model(&first.model_id)
+                {
+                    targets.insert(first.clone());
+                }
+            }
+            _ => targets.extend(resolved),
+        }
+    }
+    targets.into_iter().collect()
+}
+
 fn aggregate(
     entries: Vec<OpenCodexEntry>,
     now: DateTime<Utc>,
     history_days: u32,
     custom: &CustomPricing,
+) -> Option<ImportedSpendSource> {
+    aggregate_with_pricing(entries, now, history_days, custom, None)
+}
+
+/// `pricing_snapshot` pins the models.dev catalog; `None` reads the cached one.
+fn aggregate_with_pricing(
+    entries: Vec<OpenCodexEntry>,
+    now: DateTime<Utc>,
+    history_days: u32,
+    custom: &CustomPricing,
+    pricing_snapshot: Option<&ModelsDevPricingSnapshot>,
 ) -> Option<ImportedSpendSource> {
     let first_day = now.with_timezone(&Local).date_naive()
         - Duration::days(i64::from(history_days.saturating_sub(1)));
@@ -154,7 +212,9 @@ fn aggregate(
     let mut saw_metered_cost = false;
     // Upstream 0.55.0 #3136: resolve the dynamic pricing catalog once per
     // aggregate instead of re-checking its cache metadata for every usage row.
-    let pricing_snapshot = crate::core::pricing_snapshot();
+    let pricing_snapshot = pricing_snapshot
+        .cloned()
+        .unwrap_or_else(crate::core::pricing_snapshot);
 
     for entry in &entries {
         // A row without a conversationId is its own session (upstream 0.68.0).
@@ -169,7 +229,8 @@ fn aggregate(
         token_mix.reasoning_tokens =
             add_optional(token_mix.reasoning_tokens, entry.reasoning_tokens);
 
-        let cost = entry_cost(entry, custom, &pricing_snapshot);
+        let pricing = RowPricing::resolve(entry, custom);
+        let cost = pricing.cost(entry, &pricing_snapshot);
         match entry.usage_status.as_str() {
             "reported" => saw_vendor_provenance = true,
             "estimated" => saw_list_provenance = true,
@@ -235,7 +296,7 @@ fn aggregate(
         if let Some(cost) = cost {
             model.cost = Some(model.cost.unwrap_or(0.0) + cost);
         }
-        model.custom_pricing |= has_custom_rates(entry, custom);
+        model.custom_pricing |= pricing.custom.is_some();
     }
 
     let mut model_rows: Vec<_> = models
@@ -310,85 +371,174 @@ fn aggregate(
     })
 }
 
+/// Providers a legacy OpenAI-transport row may name in its model prefix as
+/// the billing route (upstream `CostUsagePricing.codexModelsDevProviderIDs`).
+const ROUTED_MODEL_PROVIDER_IDS: [&str; 7] = [
+    "deepseek",
+    "kimi-coding",
+    "kimi-for-coding",
+    "openai",
+    "opencode",
+    "opencode-free",
+    "opencode-go",
+];
+
+/// The provider whose catalog prices `entry` (upstream
+/// `OpenCodexUsagePricing.providerID(for:)`): the recorded provider, except
+/// that a legacy OpenAI-transport row names a known route in its model prefix.
+fn pricing_provider(entry: &OpenCodexEntry) -> String {
+    let provider = entry.provider.trim().to_ascii_lowercase();
+    if provider == "openai"
+        && let Some((prefix, _)) = entry.model.trim().split_once('/')
+    {
+        let prefix = prefix.to_ascii_lowercase();
+        if ROUTED_MODEL_PROVIDER_IDS.contains(&prefix.as_str()) {
+            return prefix;
+        }
+    }
+    provider
+}
+
+fn is_priceable_status(entry: &OpenCodexEntry) -> bool {
+    matches!(entry.usage_status.as_str(), "reported" | "estimated")
+}
+
+/// A direct OpenAI model keeps the Codex pricing convention.
+fn is_codex_target(target: &ModelsDevPricingTarget) -> bool {
+    target.provider_id == "openai" && !target.model_id.contains('/')
+}
+
+/// The token lanes of a priceable row. A row without both input and output
+/// is unpriced (upstream `listPriceUSD`); a missing cache lane is zero.
+#[derive(Debug, Clone, Copy)]
+struct RowTokens {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+impl RowTokens {
+    fn of(entry: &OpenCodexEntry) -> Option<Self> {
+        if !is_priceable_status(entry) {
+            return None;
+        }
+        Some(Self {
+            input: entry.input_tokens?,
+            output: entry.output_tokens?,
+            cache_read: entry.cache_read_tokens.unwrap_or(0),
+            cache_write: entry.cache_creation_tokens.unwrap_or(0),
+        })
+    }
+}
+
+/// How one ledger row is priced (upstream 0.60.4 `OpenCodexUsagePricing`):
+/// by a custom override, or by the models.dev catalog of its recorded
+/// billing route. Another vendor's namespace in the model id never borrows
+/// that vendor's rates.
+struct RowPricing<'a> {
+    /// The override that prices the row. It also marks the model row as
+    /// custom-priced, even when its rates leave the cost unknown.
+    custom: Option<&'a CustomRates>,
+    targets: Vec<ModelsDevPricingTarget>,
+}
+
+impl<'a> RowPricing<'a> {
+    /// Overrides resolve in upstream order: the recorded provider and model,
+    /// then (for a resolvable row) the billing route, then each catalog
+    /// identity. The first match wins whole; a rate it lacks is never filled
+    /// from a later override or from the catalog.
+    fn resolve(entry: &OpenCodexEntry, custom: &'a CustomPricing) -> Self {
+        let provider = pricing_provider(entry);
+        let targets = models_dev_pricing_targets(&provider, &entry.model);
+        let custom = custom
+            .overlay_rates(&entry.provider, &entry.model)
+            .or_else(|| {
+                targets
+                    .first()
+                    .and_then(|_| custom.overlay_rates(&provider, &entry.model))
+            })
+            .or_else(|| {
+                targets
+                    .iter()
+                    .find_map(|target| custom.overlay_rates(&target.provider_id, &target.model_id))
+            });
+        Self { custom, targets }
+    }
+
+    fn cost(&self, entry: &OpenCodexEntry, snapshot: &ModelsDevPricingSnapshot) -> Option<f64> {
+        let tokens = RowTokens::of(entry)?;
+        let Some(rates) = self.custom else {
+            return self.catalog_cost(tokens, entry.timestamp.date_naive(), snapshot);
+        };
+        // Custom rates keep the historical convention that input includes
+        // cache reads and writes. Nous rows record input without them and
+        // bill each lane on its own (upstream 0.68.0 Nous fixtures).
+        let input = if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
+            tokens.input
+        } else {
+            tokens
+                .input
+                .saturating_sub(tokens.cache_read)
+                .saturating_sub(tokens.cache_write)
+        };
+        rates.lane_cost(input, tokens.output, tokens.cache_read, tokens.cache_write)
+    }
+
+    /// Upstream `providerCostUSD`. A direct OpenAI model keeps the Codex
+    /// convention: inclusive input, request-day rates, bundled rates before
+    /// the catalog. Every other identity needs an exact catalog entry and
+    /// bills independent token lanes; a consumed cache lane without its own
+    /// catalog rate leaves the row unpriced instead of borrowing the input
+    /// rate.
+    fn catalog_cost(
+        &self,
+        tokens: RowTokens,
+        day: NaiveDate,
+        snapshot: &ModelsDevPricingSnapshot,
+    ) -> Option<f64> {
+        let first = self.targets.first()?;
+        if is_codex_target(first) {
+            return CostUsagePricing::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+                &first.model_id,
+                tokens.input,
+                tokens.cache_read,
+                tokens.cache_write,
+                tokens.output,
+                day,
+                Some(snapshot),
+            );
+        }
+        let pricing = self
+            .targets
+            .iter()
+            .find_map(|target| snapshot.lookup_exact(&target.provider_id, &target.model_id))?;
+        if (tokens.cache_read > 0 && pricing.cache_read_input_cost_per_token.is_none())
+            || (tokens.cache_write > 0 && pricing.cache_write_input_cost_per_token.is_none())
+        {
+            return None;
+        }
+        let inclusive_input = tokens
+            .input
+            .checked_add(tokens.cache_read)?
+            .checked_add(tokens.cache_write)?;
+        Some(CostUsagePricing::models_dev_cost_usd(
+            &pricing,
+            inclusive_input,
+            tokens.cache_read,
+            tokens.cache_write,
+            tokens.output,
+        ))
+    }
+}
+
+#[cfg(test)]
 fn entry_cost(
     entry: &OpenCodexEntry,
     custom: &CustomPricing,
-    pricing_snapshot: &crate::core::ModelsDevPricingSnapshot,
+    snapshot: &ModelsDevPricingSnapshot,
 ) -> Option<f64> {
-    if !matches!(entry.usage_status.as_str(), "reported" | "estimated") {
-        return None;
-    }
-    let has_usage = entry.total_tokens.is_some()
-        || entry.input_tokens.is_some()
-        || entry.output_tokens.is_some()
-        || entry.cache_read_tokens.is_some()
-        || entry.cache_creation_tokens.is_some();
-    if !has_usage {
-        return None;
-    }
-    if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
-        return nous::cost(entry, custom, pricing_snapshot);
-    }
-    let input = entry.input_tokens.unwrap_or(0);
-    let output = entry.output_tokens.unwrap_or(0);
-    let cache_read = entry.cache_read_tokens.unwrap_or(0);
-    let cache_write = entry.cache_creation_tokens.unwrap_or(0);
-    if let Some(rates) = custom.rates(&entry.provider, &entry.model) {
-        return rates.cost_parts(input, output, cache_read, cache_write);
-    }
-    let pricing_model = pricing_model(entry)?;
-    CostUsagePricing::codex_cost_usd_at_date_with_pricing_snapshot(
-        &pricing_model,
-        input,
-        cache_read,
-        output,
-        entry.timestamp.date_naive(),
-        Some(pricing_snapshot),
-    )
-}
-
-fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
-    let target = route_entry(entry);
-    let model = entry.model.trim();
-    match target {
-        RouteTarget::Subscription("codex") => Some(model.to_string()),
-        RouteTarget::Subscription("opencodego") => {
-            Some(format!("opencode/{}", provider_model_id(entry, target)))
-        }
-        RouteTarget::Subscription("kimi") => {
-            Some(format!("kimi/{}", provider_model_id(entry, target)))
-        }
-        RouteTarget::Subscription("deepseek") => {
-            Some(format!("deepseek/{}", provider_model_id(entry, target)))
-        }
-        RouteTarget::Subscription(_) | RouteTarget::TokenOnly | RouteTarget::Unknown => None,
-    }
-}
-
-/// Whether a custom override covers `entry`, resolved as its cost resolves it.
-fn has_custom_rates(entry: &OpenCodexEntry, custom: &CustomPricing) -> bool {
-    if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
-        return nous::custom_rates(entry, custom).is_some();
-    }
-    custom.rates(&entry.provider, &entry.model).is_some()
-}
-
-fn provider_model_id(entry: &OpenCodexEntry, target: RouteTarget) -> String {
-    let model = entry.model.trim();
-    let Some((model_prefix, model_tail)) = model.split_once('/') else {
-        return model.to_string();
-    };
-    let recorded_provider = entry.provider.trim();
-    let prefix_matches_recorded_provider = model_prefix.eq_ignore_ascii_case(recorded_provider)
-        || (recorded_provider.eq_ignore_ascii_case("kimi-for-coding")
-            && model_prefix.eq_ignore_ascii_case("kimi-coding"));
-    let is_legacy_openai_route =
-        recorded_provider.eq_ignore_ascii_case("openai") && route_provider(model_prefix) == target;
-    if prefix_matches_recorded_provider || is_legacy_openai_route {
-        model_tail.to_string()
-    } else {
-        model.to_string()
-    }
+    RowPricing::resolve(entry, custom).cost(entry, snapshot)
 }
 
 fn usage_path() -> Option<PathBuf> {
@@ -688,6 +838,18 @@ mod tests {
         );
     }
 
+    /// The models.dev identities that price a row, as (provider, model).
+    fn targets_of(provider: &str, model: &str) -> Vec<(String, String)> {
+        models_dev_pricing_targets(&pricing_provider(&entry(provider, model)), model)
+            .into_iter()
+            .map(|target| (target.provider_id, target.model_id))
+            .collect()
+    }
+
+    fn pair(provider: &str, model: &str) -> (String, String) {
+        (provider.to_string(), model.to_string())
+    }
+
     #[test]
     fn legacy_openai_transport_still_uses_explicit_route() {
         assert_eq!(
@@ -695,53 +857,54 @@ mod tests {
             RouteTarget::Subscription("opencodego")
         );
         assert_eq!(
-            pricing_model(&entry("openai", "opencode-go/gpt-5")),
-            Some("opencode/gpt-5".to_string())
+            targets_of("openai", "opencode-go/gpt-5"),
+            vec![pair("opencode-go", "gpt-5")]
         );
     }
 
     #[test]
-    fn pricing_model_uses_routed_vendor_catalog() {
+    fn pricing_targets_follow_the_recorded_provider() {
         assert_eq!(
-            pricing_model(&entry("opencode-go", "gpt-5")).as_deref(),
-            Some("opencode/gpt-5")
+            targets_of("opencode-go", "gpt-5"),
+            vec![pair("opencode-go", "gpt-5")]
         );
         assert_eq!(
-            pricing_model(&entry("kimi-coding", "k2p5")).as_deref(),
-            Some("kimi/k2p5")
+            targets_of("kimi-coding", "k2p5"),
+            vec![pair("kimi-coding", "k2p5"), pair("kimi-for-coding", "k2p5")]
         );
         assert_eq!(
-            pricing_model(&entry("deepseek", "deepseek-chat")).as_deref(),
-            Some("deepseek/deepseek-chat")
+            targets_of("deepseek", "deepseek-chat"),
+            vec![pair("deepseek", "deepseek-chat")]
         );
+        // Another vendor's namespace is part of the model id on the recorded
+        // provider's catalog, never a route to that vendor's own rates.
         assert_eq!(
-            pricing_model(&entry("opencode-go", "openai/gpt-5")),
-            Some("opencode/openai/gpt-5".to_string())
+            targets_of("opencode-go", "openai/gpt-5"),
+            vec![pair("opencode-go", "openai/gpt-5")]
         );
     }
 
     #[test]
     fn unknown_provider_or_namespace_fails_closed_for_routing_and_pricing() {
-        assert_eq!(
-            route_entry(&entry("private-proxy", "openai/gpt-5")),
-            RouteTarget::Unknown
-        );
-        assert_eq!(pricing_model(&entry("private-proxy", "openai/gpt-5")), None);
-        assert_eq!(
-            route_entry(&entry("openai", "/gpt-5")),
-            RouteTarget::Subscription("codex")
-        );
-        assert_eq!(
-            pricing_model(&entry("openai", "/gpt-5")),
-            Some("/gpt-5".to_string())
-        );
+        let snapshot = ModelsDevPricingSnapshot::from_catalog_json_for_tests(
+            r#"{"openai":{"models":{"gpt-5":{"id":"gpt-5","cost":{"input":2,"output":8,"cache_read":0.2}}}}}"#,
+        )
+        .expect("catalog");
+        let none = CustomPricing::default();
+        let proxy = entry("private-proxy", "openai/gpt-5");
+        assert_eq!(route_entry(&proxy), RouteTarget::Unknown);
+        assert_eq!(entry_cost(&proxy, &none, &snapshot), None);
+        let malformed = entry("openai", "/gpt-5");
+        assert_eq!(route_entry(&malformed), RouteTarget::Subscription("codex"));
+        assert!(targets_of("openai", "/gpt-5").is_empty());
+        assert_eq!(entry_cost(&malformed, &none, &snapshot), None);
     }
 
     #[test]
     fn opencodex_uses_request_day_for_historical_gpt56_pricing() {
         let entry = entry("openai", "gpt-5.6-terra");
-        let pricing_snapshot = crate::core::pricing_snapshot();
-        let cost = entry_cost(&entry, &CustomPricing::default(), &pricing_snapshot).unwrap();
+        let empty = ModelsDevPricingSnapshot::from_catalog_json_for_tests("{}").expect("catalog");
+        let cost = entry_cost(&entry, &CustomPricing::default(), &empty).unwrap();
         let expected = 90.0 * 2.5e-6 + 10.0 * 2.5e-7 + 5.0 * 1.5e-5;
         assert!((cost - expected).abs() < 1e-12);
     }
