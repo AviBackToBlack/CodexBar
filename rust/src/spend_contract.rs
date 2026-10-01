@@ -212,18 +212,13 @@ struct CustomPricing {
     entries: HashMap<String, CustomRates>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+/// One `custom-pricing.json` entry, in USD per million tokens. `Some(0.0)` is
+/// free; `None` is unknown and is never filled from another source.
+#[derive(Debug, Clone, Default)]
 struct CustomRates {
     input: Option<f64>,
     output: Option<f64>,
-    #[serde(rename = "cacheRead", alias = "cache_read")]
     cache_read: Option<f64>,
-    #[serde(
-        rename = "cacheWrite",
-        alias = "cache_write",
-        alias = "cacheCreation",
-        alias = "cache_creation"
-    )]
     cache_write: Option<f64>,
 }
 
@@ -235,17 +230,30 @@ impl CustomPricing {
     fn load() -> Self {
         Self::default_path()
             .and_then(|path| fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice::<HashMap<String, CustomRates>>(&bytes).ok())
-            .map(|entries| Self {
-                entries: entries
-                    .into_iter()
-                    .filter_map(|(key, rates)| {
-                        let key = key.trim().to_ascii_lowercase();
-                        (!key.is_empty() && rates.is_valid()).then_some((key, rates))
-                    })
-                    .collect(),
-            })
+            .map(|bytes| Self::parse(&bytes))
             .unwrap_or_default()
+    }
+
+    /// Upstream `CostUsageCustomPricing.parse`: keys are trimmed and
+    /// lowercased, and every entry is read on its own, so one malformed entry
+    /// never discards the others. An entry without a single usable rate is
+    /// dropped. A document that is not a JSON object is empty.
+    fn parse(bytes: &[u8]) -> Self {
+        let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(bytes) else {
+            return Self::default();
+        };
+        Self {
+            entries: object
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let key = key.trim().to_ascii_lowercase();
+                    if key.is_empty() {
+                        return None;
+                    }
+                    CustomRates::from_value(&value).map(|rates| (key, rates))
+                })
+                .collect(),
+        }
     }
 
     fn rates(&self, provider_id: &str, model: &str) -> Option<&CustomRates> {
@@ -255,14 +263,52 @@ impl CustomPricing {
             .get(&provider_key)
             .or_else(|| self.entries.get(&model_key))
     }
+
+    /// Upstream `CostUsageCustomPricing.rates(providerID:model:)` for imported
+    /// ledgers: the bare model key first, then `provider/model`. An empty model
+    /// has no override.
+    fn overlay_rates(&self, provider_id: &str, model: &str) -> Option<&CustomRates> {
+        let model_key = model.trim().to_ascii_lowercase();
+        if model_key.is_empty() {
+            return None;
+        }
+        self.entries.get(&model_key).or_else(|| {
+            let provider_key = format!("{}/{}", provider_id.trim(), model.trim());
+            self.entries.get(&provider_key.to_ascii_lowercase())
+        })
+    }
 }
 
 impl CustomRates {
-    fn is_valid(&self) -> bool {
-        [self.input, self.output, self.cache_read, self.cache_write]
-            .into_iter()
-            .flatten()
-            .all(|value| value.is_finite() && value >= 0.0)
+    /// Upstream `rates(from:)`: a rate that is missing, not a number,
+    /// negative or non-finite is unknown, and the camelCase spelling wins over
+    /// the snake_case one. `None` when the entry has no usable rate at all.
+    fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let rate = |key: &str| {
+            object
+                .get(key)
+                .and_then(serde_json::Value::as_f64)
+                .filter(|rate| rate.is_finite() && *rate >= 0.0)
+        };
+        let rates = Self {
+            input: rate("input"),
+            output: rate("output"),
+            cache_read: rate("cacheRead").or_else(|| rate("cache_read")),
+            cache_write: rate("cacheWrite")
+                .or_else(|| rate("cache_write"))
+                .or_else(|| rate("cacheCreation"))
+                .or_else(|| rate("cache_creation")),
+        };
+        [
+            rates.input,
+            rates.output,
+            rates.cache_read,
+            rates.cache_write,
+        ]
+        .iter()
+        .any(Option::is_some)
+        .then_some(rates)
     }
 
     fn cost(&self, counts: &ModelTokenCounts) -> Option<f64> {
@@ -282,22 +328,39 @@ impl CustomRates {
         cache_write: u64,
     ) -> Option<f64> {
         let cached = cache_read.min(input);
-        let uncached = input.saturating_sub(cached);
+        self.lane_cost(input.saturating_sub(cached), output, cached, cache_write)
+    }
+
+    /// Upstream `CostUsageCustomPricing.costUSD(rates:...)`: every token lane is
+    /// billed on its own, and a lane with tokens but no rate leaves the cost
+    /// unknown. A missing rate is never filled from another source.
+    fn lane_cost(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> Option<f64> {
         let mut total = 0.0;
-        if uncached > 0 {
-            total += uncached as f64 * self.input? / 1_000_000.0;
+        if input > 0 {
+            total += input as f64 * self.input? / 1_000_000.0;
         }
         if output > 0 {
             total += output as f64 * self.output? / 1_000_000.0;
         }
-        if cached > 0 {
-            total += cached as f64 * self.cache_read? / 1_000_000.0;
+        if cache_read > 0 {
+            total += cache_read as f64 * self.cache_read? / 1_000_000.0;
         }
         if cache_write > 0 {
             total += cache_write as f64 * self.cache_write? / 1_000_000.0;
         }
         total.is_finite().then_some(total)
     }
+}
+
+/// Refreshes models.dev prices for the OpenCodex ledger before a fresh
+/// Usage & Spend build (upstream 0.60.4 `refreshPricingIfNeeded`).
+///
+/// Call it only when a summary will be rebuilt: a cached read must never
+/// start network work. It fetches at most once per models.dev cache path per
+/// 15 minutes, and only when the catalog is stale or a priced row's exact
+/// identity is missing from it.
+pub async fn refresh_opencodex_pricing_if_needed() {
+    opencodex::refresh_pricing_if_needed().await;
 }
 
 /// Build a stable accounting contract for a local-log provider.

@@ -18,6 +18,10 @@ pub async fn get_spend_contract(
     }
     let days = history_days.unwrap_or(30);
     let include_import = include_open_codex.unwrap_or(false) && provider == "codex";
+    if include_import {
+        // Upstream 0.60.4: price imported OpenCodex rows from a fresh catalog.
+        codexbar::spend_contract::refresh_opencodex_pricing_if_needed().await;
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let history_days = if days == 0 { 365 } else { days.clamp(1, 365) };
         let scanner = CostScanner::new(history_days);

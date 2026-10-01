@@ -1,15 +1,17 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
-use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::CostUsagePricing;
+use crate::core::{
+    CostUsagePricing, ModelsDevPricingSnapshot, ModelsDevPricingTarget, models_dev_pricing_targets,
+};
 
 use super::{
-    CostCoverageCounts, CostProvenance, CustomPricing, ImportedSpendSource, SpendActivityCell,
-    SpendDailyPoint, SpendModelRow, SpendTokenMix,
+    CostCoverageCounts, CostProvenance, CustomPricing, CustomRates, ImportedSpendSource,
+    SpendActivityCell, SpendDailyPoint, SpendModelRow, SpendTokenMix,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +34,8 @@ mod cache;
 mod nous;
 #[cfg(test)]
 mod nous_tests;
+#[cfg(test)]
+mod pricing_tests;
 
 #[derive(Default)]
 struct ModelAccumulator {
@@ -111,11 +115,65 @@ pub(super) fn load_for_subscription(
     aggregate(entries, Utc::now(), history_days.clamp(1, 365), custom)
 }
 
+/// Refreshes the models.dev catalog when a ledger row that a Usage & Spend
+/// build may import needs a price it lacks (upstream 0.60.4
+/// `OpenCodexUsageStore.refreshPricingIfNeeded`).
+pub(super) async fn refresh_pricing_if_needed() {
+    let targets = tokio::task::spawn_blocking(|| {
+        let entries = cache::load_entries(&usage_path()?)?;
+        Some(pricing_targets(&entries, Utc::now()))
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    crate::core::refresh_exact_pricing_targets_if_needed(&targets).await;
+}
+
+/// The exact models.dev identities the cached catalog must price for the
+/// rows a build may show. Windows imports only rows routed to a
+/// subscription. A direct OpenAI model with bundled Codex rates never reads
+/// the catalog, and a model-less row is never priced, so neither refreshes.
+fn pricing_targets(entries: &[OpenCodexEntry], now: DateTime<Utc>) -> Vec<ModelsDevPricingTarget> {
+    let mut targets = BTreeSet::new();
+    for entry in entries {
+        if entry.timestamp > now
+            || !is_priceable_status(entry)
+            || !matches!(route_entry(entry), RouteTarget::Subscription(_))
+        {
+            continue;
+        }
+        let resolved = models_dev_pricing_targets(&pricing_provider(entry), &entry.model);
+        match resolved.first() {
+            Some(first) if is_codex_target(first) => {
+                if !CostUsagePricing::has_bundled_codex_pricing(&first.model_id)
+                    && !CostUsagePricing::is_codex_unattributed_model(&first.model_id)
+                {
+                    targets.insert(first.clone());
+                }
+            }
+            _ => targets.extend(resolved),
+        }
+    }
+    targets.into_iter().collect()
+}
+
 fn aggregate(
     entries: Vec<OpenCodexEntry>,
     now: DateTime<Utc>,
     history_days: u32,
     custom: &CustomPricing,
+) -> Option<ImportedSpendSource> {
+    aggregate_with_pricing(entries, now, history_days, custom, None)
+}
+
+/// `pricing_snapshot` pins the models.dev catalog; `None` reads the cached one.
+fn aggregate_with_pricing(
+    entries: Vec<OpenCodexEntry>,
+    now: DateTime<Utc>,
+    history_days: u32,
+    custom: &CustomPricing,
+    pricing_snapshot: Option<&ModelsDevPricingSnapshot>,
 ) -> Option<ImportedSpendSource> {
     let first_day = now.with_timezone(&Local).date_naive()
         - Duration::days(i64::from(history_days.saturating_sub(1)));
@@ -154,7 +212,9 @@ fn aggregate(
     let mut saw_metered_cost = false;
     // Upstream 0.55.0 #3136: resolve the dynamic pricing catalog once per
     // aggregate instead of re-checking its cache metadata for every usage row.
-    let pricing_snapshot = crate::core::pricing_snapshot();
+    let pricing_snapshot = pricing_snapshot
+        .cloned()
+        .unwrap_or_else(crate::core::pricing_snapshot);
 
     for entry in &entries {
         // A row without a conversationId is its own session (upstream 0.68.0).
@@ -169,7 +229,8 @@ fn aggregate(
         token_mix.reasoning_tokens =
             add_optional(token_mix.reasoning_tokens, entry.reasoning_tokens);
 
-        let cost = entry_cost(entry, custom, &pricing_snapshot);
+        let pricing = RowPricing::resolve(entry, custom);
+        let cost = pricing.cost(entry, &pricing_snapshot);
         match entry.usage_status.as_str() {
             "reported" => saw_vendor_provenance = true,
             "estimated" => saw_list_provenance = true,
@@ -235,7 +296,7 @@ fn aggregate(
         if let Some(cost) = cost {
             model.cost = Some(model.cost.unwrap_or(0.0) + cost);
         }
-        model.custom_pricing |= has_custom_rates(entry, custom);
+        model.custom_pricing |= pricing.custom.is_some();
     }
 
     let mut model_rows: Vec<_> = models
@@ -310,85 +371,174 @@ fn aggregate(
     })
 }
 
+/// Providers a legacy OpenAI-transport row may name in its model prefix as
+/// the billing route (upstream `CostUsagePricing.codexModelsDevProviderIDs`).
+const ROUTED_MODEL_PROVIDER_IDS: [&str; 7] = [
+    "deepseek",
+    "kimi-coding",
+    "kimi-for-coding",
+    "openai",
+    "opencode",
+    "opencode-free",
+    "opencode-go",
+];
+
+/// The provider whose catalog prices `entry` (upstream
+/// `OpenCodexUsagePricing.providerID(for:)`): the recorded provider, except
+/// that a legacy OpenAI-transport row names a known route in its model prefix.
+fn pricing_provider(entry: &OpenCodexEntry) -> String {
+    let provider = entry.provider.trim().to_ascii_lowercase();
+    if provider == "openai"
+        && let Some((prefix, _)) = entry.model.trim().split_once('/')
+    {
+        let prefix = prefix.to_ascii_lowercase();
+        if ROUTED_MODEL_PROVIDER_IDS.contains(&prefix.as_str()) {
+            return prefix;
+        }
+    }
+    provider
+}
+
+fn is_priceable_status(entry: &OpenCodexEntry) -> bool {
+    matches!(entry.usage_status.as_str(), "reported" | "estimated")
+}
+
+/// A direct OpenAI model keeps the Codex pricing convention.
+fn is_codex_target(target: &ModelsDevPricingTarget) -> bool {
+    target.provider_id == "openai" && !target.model_id.contains('/')
+}
+
+/// The token lanes of a priceable row. A row without both input and output
+/// is unpriced (upstream `listPriceUSD`); a missing cache lane is zero.
+#[derive(Debug, Clone, Copy)]
+struct RowTokens {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+impl RowTokens {
+    fn of(entry: &OpenCodexEntry) -> Option<Self> {
+        if !is_priceable_status(entry) {
+            return None;
+        }
+        Some(Self {
+            input: entry.input_tokens?,
+            output: entry.output_tokens?,
+            cache_read: entry.cache_read_tokens.unwrap_or(0),
+            cache_write: entry.cache_creation_tokens.unwrap_or(0),
+        })
+    }
+}
+
+/// How one ledger row is priced (upstream 0.60.4 `OpenCodexUsagePricing`):
+/// by a custom override, or by the models.dev catalog of its recorded
+/// billing route. Another vendor's namespace in the model id never borrows
+/// that vendor's rates.
+struct RowPricing<'a> {
+    /// The override that prices the row. It also marks the model row as
+    /// custom-priced, even when its rates leave the cost unknown.
+    custom: Option<&'a CustomRates>,
+    targets: Vec<ModelsDevPricingTarget>,
+}
+
+impl<'a> RowPricing<'a> {
+    /// Overrides resolve in upstream order: the recorded provider and model,
+    /// then (for a resolvable row) the billing route, then each catalog
+    /// identity. The first match wins whole; a rate it lacks is never filled
+    /// from a later override or from the catalog.
+    fn resolve(entry: &OpenCodexEntry, custom: &'a CustomPricing) -> Self {
+        let provider = pricing_provider(entry);
+        let targets = models_dev_pricing_targets(&provider, &entry.model);
+        let custom = custom
+            .overlay_rates(&entry.provider, &entry.model)
+            .or_else(|| {
+                targets
+                    .first()
+                    .and_then(|_| custom.overlay_rates(&provider, &entry.model))
+            })
+            .or_else(|| {
+                targets
+                    .iter()
+                    .find_map(|target| custom.overlay_rates(&target.provider_id, &target.model_id))
+            });
+        Self { custom, targets }
+    }
+
+    fn cost(&self, entry: &OpenCodexEntry, snapshot: &ModelsDevPricingSnapshot) -> Option<f64> {
+        let tokens = RowTokens::of(entry)?;
+        let Some(rates) = self.custom else {
+            return self.catalog_cost(tokens, entry.timestamp.date_naive(), snapshot);
+        };
+        // Custom rates keep the historical convention that input includes
+        // cache reads and writes. Nous rows record input without them and
+        // bill each lane on its own (upstream 0.68.0 Nous fixtures).
+        let input = if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
+            tokens.input
+        } else {
+            tokens
+                .input
+                .saturating_sub(tokens.cache_read)
+                .saturating_sub(tokens.cache_write)
+        };
+        rates.lane_cost(input, tokens.output, tokens.cache_read, tokens.cache_write)
+    }
+
+    /// Upstream `providerCostUSD`. A direct OpenAI model keeps the Codex
+    /// convention: inclusive input, request-day rates, bundled rates before
+    /// the catalog. Every other identity needs an exact catalog entry and
+    /// bills independent token lanes; a consumed cache lane without its own
+    /// catalog rate leaves the row unpriced instead of borrowing the input
+    /// rate.
+    fn catalog_cost(
+        &self,
+        tokens: RowTokens,
+        day: NaiveDate,
+        snapshot: &ModelsDevPricingSnapshot,
+    ) -> Option<f64> {
+        let first = self.targets.first()?;
+        if is_codex_target(first) {
+            return CostUsagePricing::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+                &first.model_id,
+                tokens.input,
+                tokens.cache_read,
+                tokens.cache_write,
+                tokens.output,
+                day,
+                Some(snapshot),
+            );
+        }
+        let pricing = self
+            .targets
+            .iter()
+            .find_map(|target| snapshot.lookup_exact(&target.provider_id, &target.model_id))?;
+        if (tokens.cache_read > 0 && pricing.cache_read_input_cost_per_token.is_none())
+            || (tokens.cache_write > 0 && pricing.cache_write_input_cost_per_token.is_none())
+        {
+            return None;
+        }
+        let inclusive_input = tokens
+            .input
+            .checked_add(tokens.cache_read)?
+            .checked_add(tokens.cache_write)?;
+        Some(CostUsagePricing::models_dev_cost_usd(
+            &pricing,
+            inclusive_input,
+            tokens.cache_read,
+            tokens.cache_write,
+            tokens.output,
+        ))
+    }
+}
+
+#[cfg(test)]
 fn entry_cost(
     entry: &OpenCodexEntry,
     custom: &CustomPricing,
-    pricing_snapshot: &crate::core::ModelsDevPricingSnapshot,
+    snapshot: &ModelsDevPricingSnapshot,
 ) -> Option<f64> {
-    if !matches!(entry.usage_status.as_str(), "reported" | "estimated") {
-        return None;
-    }
-    let has_usage = entry.total_tokens.is_some()
-        || entry.input_tokens.is_some()
-        || entry.output_tokens.is_some()
-        || entry.cache_read_tokens.is_some()
-        || entry.cache_creation_tokens.is_some();
-    if !has_usage {
-        return None;
-    }
-    if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
-        return nous::cost(entry, custom, pricing_snapshot);
-    }
-    let input = entry.input_tokens.unwrap_or(0);
-    let output = entry.output_tokens.unwrap_or(0);
-    let cache_read = entry.cache_read_tokens.unwrap_or(0);
-    let cache_write = entry.cache_creation_tokens.unwrap_or(0);
-    if let Some(rates) = custom.rates(&entry.provider, &entry.model) {
-        return rates.cost_parts(input, output, cache_read, cache_write);
-    }
-    let pricing_model = pricing_model(entry)?;
-    CostUsagePricing::codex_cost_usd_at_date_with_pricing_snapshot(
-        &pricing_model,
-        input,
-        cache_read,
-        output,
-        entry.timestamp.date_naive(),
-        Some(pricing_snapshot),
-    )
-}
-
-fn pricing_model(entry: &OpenCodexEntry) -> Option<String> {
-    let target = route_entry(entry);
-    let model = entry.model.trim();
-    match target {
-        RouteTarget::Subscription("codex") => Some(model.to_string()),
-        RouteTarget::Subscription("opencodego") => {
-            Some(format!("opencode/{}", provider_model_id(entry, target)))
-        }
-        RouteTarget::Subscription("kimi") => {
-            Some(format!("kimi/{}", provider_model_id(entry, target)))
-        }
-        RouteTarget::Subscription("deepseek") => {
-            Some(format!("deepseek/{}", provider_model_id(entry, target)))
-        }
-        RouteTarget::Subscription(_) | RouteTarget::TokenOnly | RouteTarget::Unknown => None,
-    }
-}
-
-/// Whether a custom override covers `entry`, resolved as its cost resolves it.
-fn has_custom_rates(entry: &OpenCodexEntry, custom: &CustomPricing) -> bool {
-    if route_entry(entry) == RouteTarget::Subscription(nous::SUBSCRIPTION_ID) {
-        return nous::custom_rates(entry, custom).is_some();
-    }
-    custom.rates(&entry.provider, &entry.model).is_some()
-}
-
-fn provider_model_id(entry: &OpenCodexEntry, target: RouteTarget) -> String {
-    let model = entry.model.trim();
-    let Some((model_prefix, model_tail)) = model.split_once('/') else {
-        return model.to_string();
-    };
-    let recorded_provider = entry.provider.trim();
-    let prefix_matches_recorded_provider = model_prefix.eq_ignore_ascii_case(recorded_provider)
-        || (recorded_provider.eq_ignore_ascii_case("kimi-for-coding")
-            && model_prefix.eq_ignore_ascii_case("kimi-coding"));
-    let is_legacy_openai_route =
-        recorded_provider.eq_ignore_ascii_case("openai") && route_provider(model_prefix) == target;
-    if prefix_matches_recorded_provider || is_legacy_openai_route {
-        model_tail.to_string()
-    } else {
-        model.to_string()
-    }
+    RowPricing::resolve(entry, custom).cost(entry, snapshot)
 }
 
 fn usage_path() -> Option<PathBuf> {
@@ -534,468 +684,4 @@ fn add_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::super::CustomRates;
-    use super::cache::{load_entries_with_cache, read_cache};
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn aggregate_deduplicates_requests_and_applies_history_window() {
-        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let make = |request_id: &str, timestamp: &str, input: u64| OpenCodexEntry {
-            request_id: request_id.into(),
-            timestamp: DateTime::parse_from_rfc3339(timestamp)
-                .unwrap()
-                .with_timezone(&Utc),
-            provider: "openai".into(),
-            model: "gpt-5".into(),
-            usage_status: "reported".into(),
-            conversation_id: Some(request_id.into()),
-            input_tokens: Some(input),
-            output_tokens: Some(1),
-            cache_read_tokens: Some(0),
-            cache_creation_tokens: None,
-            reasoning_tokens: None,
-            total_tokens: Some(input + 1),
-        };
-        let source = aggregate(
-            vec![
-                make("same", "2026-08-18T10:00:00Z", 10),
-                make("same", "2026-08-18T11:00:00Z", 20),
-                make("old", "2026-08-01T10:00:00Z", 30),
-            ],
-            now,
-            7,
-            &CustomPricing::default(),
-        )
-        .expect("source");
-        assert_eq!(source.request_count, 1);
-        assert_eq!(source.conversation_count, 1);
-        assert_eq!(source.token_mix.input_tokens, Some(20));
-        assert_eq!(source.coverage.priced, 1);
-        assert!(source.known_cost_usd.is_some());
-        assert_eq!(source.provenance, CostProvenance::VendorMetered);
-    }
-
-    #[test]
-    fn aggregate_preserves_list_and_mixed_provenance() {
-        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let mut estimated = entry("openai", "gpt-5");
-        estimated.request_id = "estimated".to_string();
-        estimated.usage_status = "estimated".to_string();
-        let list_only = aggregate(vec![estimated.clone()], now, 30, &CustomPricing::default())
-            .expect("list-price source");
-        assert_eq!(list_only.provenance, CostProvenance::ListPriceEstimate);
-
-        let mut reported = entry("openai", "gpt-5");
-        reported.request_id = "reported".to_string();
-        let mixed = aggregate(
-            vec![reported, estimated],
-            now,
-            30,
-            &CustomPricing::default(),
-        )
-        .expect("mixed source");
-        assert_eq!(mixed.provenance, CostProvenance::Mixed);
-    }
-
-    #[test]
-    fn aggregate_preserves_zero_cost_authoritative_provenance() {
-        let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let custom = CustomPricing {
-            entries: std::collections::HashMap::from([(
-                "openai/gpt-5".to_string(),
-                CustomRates {
-                    input: Some(0.0),
-                    output: Some(0.0),
-                    cache_read: Some(0.0),
-                    cache_write: Some(0.0),
-                },
-            )]),
-        };
-
-        let reported = aggregate(vec![entry("openai", "gpt-5")], now, 30, &custom)
-            .expect("zero-cost vendor source");
-        assert_eq!(reported.known_cost_usd, Some(0.0));
-        assert_eq!(reported.provenance, CostProvenance::VendorMetered);
-
-        let mut estimated_entry = entry("openai", "gpt-5");
-        estimated_entry.usage_status = "estimated".to_string();
-        let estimated =
-            aggregate(vec![estimated_entry], now, 30, &custom).expect("zero-cost list source");
-        assert_eq!(estimated.known_cost_usd, Some(0.0));
-        assert_eq!(estimated.provenance, CostProvenance::ListPriceEstimate);
-    }
-
-    fn entry(provider: &str, model: &str) -> OpenCodexEntry {
-        OpenCodexEntry {
-            request_id: format!("{provider}:{model}"),
-            timestamp: DateTime::parse_from_rfc3339("2026-07-29T12:00:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            provider: provider.to_string(),
-            model: model.to_string(),
-            usage_status: "reported".to_string(),
-            conversation_id: None,
-            input_tokens: Some(100),
-            output_tokens: Some(5),
-            cache_read_tokens: Some(10),
-            cache_creation_tokens: None,
-            reasoning_tokens: None,
-            total_tokens: Some(105),
-        }
-    }
-
-    #[test]
-    fn routes_opencodex_entries_into_subscription_rows() {
-        assert_eq!(
-            route_entry(&entry("openai", "gpt-5.6-sol")),
-            RouteTarget::Subscription("codex")
-        );
-        assert_eq!(
-            route_entry(&entry("opencode-go", "gpt-5.6-sol")),
-            RouteTarget::Subscription("opencodego")
-        );
-        assert_eq!(
-            route_entry(&entry("kimi-coding", "k2p5")),
-            RouteTarget::Subscription("kimi")
-        );
-        assert_eq!(
-            route_entry(&entry("deepseek", "deepseek-chat")),
-            RouteTarget::Subscription("deepseek")
-        );
-        assert_eq!(
-            route_entry(&entry("opencode-free", "free-model")),
-            RouteTarget::TokenOnly
-        );
-    }
-
-    #[test]
-    fn recorded_provider_wins_over_mismatched_model_namespace() {
-        assert_eq!(
-            route_entry(&entry("opencode-go", "openai/gpt-5.6-sol")),
-            RouteTarget::Subscription("opencodego")
-        );
-        assert_eq!(
-            route_entry(&entry("deepseek", "openai/gpt-5.6-sol")),
-            RouteTarget::Subscription("deepseek")
-        );
-    }
-
-    #[test]
-    fn legacy_openai_transport_still_uses_explicit_route() {
-        assert_eq!(
-            route_entry(&entry("openai", "opencode-go/deepseek-v4-flash")),
-            RouteTarget::Subscription("opencodego")
-        );
-        assert_eq!(
-            pricing_model(&entry("openai", "opencode-go/gpt-5")),
-            Some("opencode/gpt-5".to_string())
-        );
-    }
-
-    #[test]
-    fn pricing_model_uses_routed_vendor_catalog() {
-        assert_eq!(
-            pricing_model(&entry("opencode-go", "gpt-5")).as_deref(),
-            Some("opencode/gpt-5")
-        );
-        assert_eq!(
-            pricing_model(&entry("kimi-coding", "k2p5")).as_deref(),
-            Some("kimi/k2p5")
-        );
-        assert_eq!(
-            pricing_model(&entry("deepseek", "deepseek-chat")).as_deref(),
-            Some("deepseek/deepseek-chat")
-        );
-        assert_eq!(
-            pricing_model(&entry("opencode-go", "openai/gpt-5")),
-            Some("opencode/openai/gpt-5".to_string())
-        );
-    }
-
-    #[test]
-    fn unknown_provider_or_namespace_fails_closed_for_routing_and_pricing() {
-        assert_eq!(
-            route_entry(&entry("private-proxy", "openai/gpt-5")),
-            RouteTarget::Unknown
-        );
-        assert_eq!(pricing_model(&entry("private-proxy", "openai/gpt-5")), None);
-        assert_eq!(
-            route_entry(&entry("openai", "/gpt-5")),
-            RouteTarget::Subscription("codex")
-        );
-        assert_eq!(
-            pricing_model(&entry("openai", "/gpt-5")),
-            Some("/gpt-5".to_string())
-        );
-    }
-
-    #[test]
-    fn opencodex_uses_request_day_for_historical_gpt56_pricing() {
-        let entry = entry("openai", "gpt-5.6-terra");
-        let pricing_snapshot = crate::core::pricing_snapshot();
-        let cost = entry_cost(&entry, &CustomPricing::default(), &pricing_snapshot).unwrap();
-        let expected = 90.0 * 2.5e-6 + 10.0 * 2.5e-7 + 5.0 * 1.5e-5;
-        assert!((cost - expected).abs() < 1e-12);
-    }
-
-    #[test]
-    fn parser_keeps_reported_token_classes() {
-        let value = serde_json::json!({
-            "requestId": "r1", "timestamp": "2026-08-18T10:00:00Z", "provider": "openai",
-            "model": "gpt-test", "usageStatus": "reported", "conversationId": "c1",
-            "usage": {"inputTokens": 10, "outputTokens": 4, "cachedInputTokens": 3, "reasoningOutputTokens": 2}
-        });
-        let entry = parse_line(&value.to_string()).expect("entry");
-        assert_eq!(entry.model, "gpt-test");
-        assert_eq!(entry.input_tokens, Some(10));
-        assert_eq!(entry.output_tokens, Some(4));
-        assert_eq!(entry.cache_read_tokens, Some(3));
-        assert_eq!(entry.reasoning_tokens, Some(2));
-    }
-
-    #[test]
-    fn parser_normalizes_defaults_and_rejects_malformed_lines() {
-        let minimal = serde_json::json!({
-            "requestId": "  r1  ", "model": "gpt-test", "timestamp": "2026-08-18T10:00:00Z",
-            "usageStatus": "  REPORTED ", "usage": {"cacheCreationInputTokens": 7}
-        });
-        let entry = parse_line(&minimal.to_string()).expect("entry");
-        assert_eq!(entry.request_id, "r1", "ids are trimmed");
-        assert_eq!(
-            entry.provider, "openai",
-            "missing provider defaults to openai"
-        );
-        assert_eq!(
-            entry.usage_status, "reported",
-            "status is lowercased and trimmed"
-        );
-        assert_eq!(entry.conversation_id, None);
-        assert_eq!(entry.cache_creation_tokens, Some(7));
-
-        for malformed in [
-            "{}",
-            r#"{"requestId": "", "model": "m", "timestamp": "2026-08-18T10:00:00Z"}"#,
-            r#"{"requestId": "r1", "model": "   ", "timestamp": "2026-08-18T10:00:00Z"}"#,
-            r#"{"requestId": "r1", "model": "m"}"#,
-            "not json at all",
-        ] {
-            assert!(parse_line(malformed).is_none(), "rejected: {malformed}");
-        }
-    }
-
-    #[test]
-    fn incremental_cache_appends_only_newline_terminated_tail() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("usage.jsonl");
-        let cache = dir.path().join("cache.sqlite");
-        let row = |id: &str, input: u64| {
-            format!(
-                r#"{{"requestId":"{id}","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z","usageStatus":"reported","usage":{{"inputTokens":{input}}}}}"#
-            )
-        };
-
-        fs::write(&log, format!("{}\n{}\n", row("a", 1), row("b", 2))).unwrap();
-        let first = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            first
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"]
-        );
-        let first_cursor = read_cache(&cache).unwrap().cursor;
-
-        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
-        use std::io::Write as _;
-        writeln!(file, "{}", row("c", 3)).unwrap();
-        drop(file);
-
-        let second = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            second
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b", "c"]
-        );
-        let second_cursor = read_cache(&cache).unwrap().cursor;
-        assert!(second_cursor.parsed_offset > first_cursor.parsed_offset);
-    }
-
-    #[test]
-    fn incomplete_trailing_opencodex_record_waits_for_newline() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("usage.jsonl");
-        let cache = dir.path().join("cache.sqlite");
-        let complete = r#"{"requestId":"a","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
-        let pending = r#"{"requestId":"b","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
-        let split = pending.len() / 2;
-        fs::write(&log, format!("{complete}\n{}", &pending[..split])).unwrap();
-
-        let first = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            first
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a"]
-        );
-        let cursor = read_cache(&cache).unwrap().cursor;
-        assert_eq!(
-            cursor.parsed_offset,
-            u64::try_from(complete.len() + 1).unwrap()
-        );
-
-        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
-        use std::io::Write as _;
-        writeln!(file, "{}", &pending[split..]).unwrap();
-        drop(file);
-        let second = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            second
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"]
-        );
-    }
-
-    #[test]
-    fn complete_trailing_opencodex_record_waits_for_newline() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("usage.jsonl");
-        let cache = dir.path().join("cache.sqlite");
-        let first = r#"{"requestId":"a","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
-        let trailing = r#"{"requestId":"b","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
-        fs::write(&log, format!("{first}\n{trailing}")).unwrap();
-
-        let before_newline = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            before_newline
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a"]
-        );
-
-        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
-        use std::io::Write as _;
-        writeln!(file).unwrap();
-        drop(file);
-
-        let after_newline = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            after_newline
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["a", "b"]
-        );
-    }
-
-    #[test]
-    fn later_request_id_replaces_cached_entry_without_full_cache_loss() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("usage.jsonl");
-        let cache = dir.path().join("cache.sqlite");
-        let row = |id: &str, input: u64| {
-            format!(
-                r#"{{"requestId":"{id}","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z","usageStatus":"reported","usage":{{"inputTokens":{input}}}}}"#
-            )
-        };
-        fs::write(&log, format!("{}\n{}\n", row("dup", 1), row("keep", 2))).unwrap();
-        let _ = load_entries_with_cache(&log, &cache).unwrap();
-        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
-        use std::io::Write as _;
-        writeln!(file, "{}", row("dup", 9)).unwrap();
-        drop(file);
-
-        let entries = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(
-            entries
-                .iter()
-                .find(|entry| entry.request_id == "dup")
-                .unwrap()
-                .input_tokens,
-            Some(9)
-        );
-        assert!(entries.iter().any(|entry| entry.request_id == "keep"));
-    }
-
-    #[test]
-    fn truncation_invalidates_opencodex_cursor_and_rebuilds() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("usage.jsonl");
-        let cache = dir.path().join("cache.sqlite");
-        let old = r#"{"requestId":"old","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
-        let replacement =
-            r#"{"requestId":"new","model":"gpt-5","timestamp":"2026-08-18T10:00:00Z"}"#;
-        fs::write(&log, format!("{old}\n{old}\n")).unwrap();
-        let _ = load_entries_with_cache(&log, &cache).unwrap();
-        fs::write(&log, format!("{replacement}\n")).unwrap();
-
-        let rebuilt = load_entries_with_cache(&log, &cache).unwrap();
-        assert_eq!(
-            rebuilt
-                .iter()
-                .map(|entry| entry.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["new"]
-        );
-    }
-
-    #[test]
-    fn timestamps_parse_rfc3339_epoch_seconds_and_millis() {
-        let expected = Utc.with_ymd_and_hms(2026, 8, 18, 10, 0, 0).unwrap();
-        let rfc3339 = serde_json::json!("2026-08-18T10:00:00Z");
-        assert_eq!(parse_timestamp(&rfc3339), Some(expected));
-        let epoch_seconds = serde_json::json!(1_787_047_200i64);
-        assert_eq!(parse_timestamp(&epoch_seconds), Some(expected));
-        let epoch_millis = serde_json::json!(1_787_047_200_000f64);
-        assert_eq!(parse_timestamp(&epoch_millis), Some(expected));
-        let numeric_string = serde_json::json!("1787047200.0");
-        assert_eq!(parse_timestamp(&numeric_string), Some(expected));
-        for invalid in [
-            serde_json::json!("not a date"),
-            serde_json::json!(0),
-            serde_json::json!(-5.0),
-            serde_json::Value::Null,
-            serde_json::json!(true),
-        ] {
-            assert!(parse_timestamp(&invalid).is_none(), "rejected: {invalid}");
-        }
-    }
-
-    #[test]
-    fn nonnegative_u64_accepts_json_numbers_and_bounded_floats() {
-        assert_eq!(nonnegative_u64(Some(&serde_json::json!(42))), Some(42));
-        assert_eq!(
-            nonnegative_u64(Some(&serde_json::json!(u64::MAX))),
-            Some(u64::MAX)
-        );
-        assert_eq!(nonnegative_u64(Some(&serde_json::json!(12.0))), Some(12));
-        // Fractional floats are accepted via `as u64` truncation.
-        assert_eq!(nonnegative_u64(Some(&serde_json::json!(1.5))), Some(1));
-        // `u64::MAX as f64` is the unrepresentable 2^64 boundary.
-        assert_eq!(
-            nonnegative_u64(Some(&serde_json::json!(u64::MAX as f64))),
-            None
-        );
-        assert_eq!(
-            nonnegative_u64(Some(&serde_json::json!(u64::MAX as f64 + 4096.0))),
-            None
-        );
-        assert_eq!(nonnegative_u64(Some(&serde_json::json!(-1))), None);
-        assert_eq!(nonnegative_u64(None), None);
-    }
-}
+mod tests;

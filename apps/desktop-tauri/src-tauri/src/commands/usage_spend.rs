@@ -135,6 +135,13 @@ impl UsageSpendCoordinator {
         self.current = None;
         true
     }
+
+    /// The cached summary for `key`, unless the caller forces a rebuild.
+    fn reusable(&self, key: &str, force_refresh: bool) -> Option<&CachedUsageSpendSummary> {
+        self.cache
+            .as_ref()
+            .filter(|existing| !force_refresh && existing.key == key)
+    }
 }
 
 static USAGE_SPEND_COORDINATOR: OnceLock<Mutex<UsageSpendCoordinator>> = OnceLock::new();
@@ -200,6 +207,7 @@ pub async fn get_usage_spend_summary(
 
     let selected_days = history_days.unwrap_or(30);
     let force_refresh = force_refresh.unwrap_or(false);
+    refresh_opencodex_pricing_before_build(&cached, selected_days, force_refresh).await;
     let built = tauri::async_runtime::spawn_blocking(move || {
         build_usage_spend_summary_cached(&cached, selected_days, force_refresh)
     })
@@ -223,6 +231,27 @@ pub async fn get_usage_spend_summary(
         return Ok(summary);
     }
     Ok(built.summary)
+}
+
+/// Refreshes models.dev prices for the OpenCodex ledger when this request
+/// will rebuild the summary (upstream 0.60.4 fresh-load refresh). A cached
+/// summary read never starts network work.
+async fn refresh_opencodex_pricing_before_build(
+    cached: &[ProviderUsageSnapshot],
+    selected_days: u32,
+    force_refresh: bool,
+) {
+    let settings = codexbar::settings::Settings::load();
+    if !settings.open_codex_usage_logs_enabled {
+        return;
+    }
+    let key = usage_spend_cache_key(cached, selected_days, &settings);
+    let rebuilds = usage_spend_coordinator()
+        .lock()
+        .is_ok_and(|coordinator| coordinator.reusable(&key, force_refresh).is_none());
+    if rebuilds {
+        codexbar::spend_contract::refresh_opencodex_pricing_if_needed().await;
+    }
 }
 
 #[tauri::command]
@@ -249,10 +278,7 @@ fn build_usage_spend_summary_cached(
         let guard = usage_spend_coordinator()
             .lock()
             .map_err(|error| error.to_string())?;
-        if !force_refresh
-            && let Some(existing) = guard.cache.as_ref()
-            && existing.key == key
-        {
+        if let Some(existing) = guard.reusable(&key, force_refresh) {
             return Ok(BuiltUsageSpendSummary {
                 key: existing.key.clone(),
                 summary: existing.summary.clone(),
@@ -882,6 +908,49 @@ mod cache_key_tests {
             coordinator.current.as_ref().map(|(_, phase)| *phase),
             Some(UsageSpendRefreshPhase::Paused)
         );
+    }
+
+    fn empty_summary() -> UsageSpendSummary {
+        UsageSpendSummary {
+            rows: Vec::new(),
+            contract: SpendContract {
+                provider_id: "codex".to_string(),
+                history_days: 30,
+                known_cost_usd: None,
+                known_zero: false,
+                provenance: codexbar::spend_contract::CostProvenance::Unknown,
+                price_coverage: Default::default(),
+                price_coverage_ratio: None,
+                history_coverage_established: false,
+                token_mix: Default::default(),
+                conversation_count: 0,
+                models: Vec::new(),
+                projects: Vec::new(),
+                conversations: Vec::new(),
+                daily: Vec::new(),
+                hourly_activity: Vec::new(),
+                project_source_status: None,
+                custom_pricing_active: false,
+                imports: Vec::new(),
+            },
+            reporting_day: "2026-10-01".to_string(),
+            dashboard_timezone: "UTC".to_string(),
+        }
+    }
+
+    #[test]
+    fn only_a_summary_rebuild_may_refresh_opencodex_pricing() {
+        let mut coordinator = UsageSpendCoordinator::default();
+        assert!(coordinator.reusable("day|30", false).is_none());
+        coordinator.cache = Some(CachedUsageSpendSummary {
+            key: "day|30".to_string(),
+            summary: empty_summary(),
+            refresh_owner: None,
+        });
+        // A cached read starts no network work; a forced or new key rebuilds.
+        assert!(coordinator.reusable("day|30", false).is_some());
+        assert!(coordinator.reusable("day|30", true).is_none());
+        assert!(coordinator.reusable("day|7", false).is_none());
     }
 
     #[test]
