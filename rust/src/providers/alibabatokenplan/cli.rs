@@ -160,7 +160,7 @@ fn reset_date(value: Option<&Value>) -> Option<chrono::DateTime<Utc>> {
         return None;
     }
     let rounded = milliseconds.round();
-    if rounded < 1.0 || rounded >= 9_223_372_036_854_775_808.0 {
+    if !(1.0..9_223_372_036_854_775_808.0).contains(&rounded) {
         return None;
     }
     let millis = format!("{rounded:.0}").parse::<i64>().ok()?;
