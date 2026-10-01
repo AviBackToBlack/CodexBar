@@ -721,7 +721,10 @@ pub struct SettingsSnapshot {
 
 #[tauri::command]
 pub fn get_bootstrap_state() -> BootstrapState {
-    let settings = Settings::load();
+    bootstrap_state_for(Settings::load())
+}
+
+pub(crate) fn bootstrap_state_for(settings: Settings) -> BootstrapState {
     BootstrapState {
         contract_version: "v1",
         providers: provider_catalog_for(&settings),
