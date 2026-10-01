@@ -45,6 +45,20 @@ Settings → **Providers** → provider detail → choose browser → Import.
 Manual cookie header paste is the fallback (required under WSL for Chromium DPAPI).  
 Details: [COOKIES.md](./COOKIES.md).
 
+### Venice web session
+
+Venice normally uses an API key (USD / DIEM balance). The optional web mode
+reads the signed-in `venice.ai` Clerk session instead and reports the
+bundled-credit quota from the session token.
+
+- Web (automatic) mode needs a signed-in `venice.ai` tab in a supported
+  browser, because the session token comes from the `__session` cookie.
+- Clerk sessions last only about 60 seconds, so Web mode does not refresh
+  unattended. When the session has expired, open `venice.ai` in the browser
+  again and refresh.
+- Manual mode needs a freshly pasted Cookie header from a signed-in
+  `venice.ai` request; an old header fails with the expired-session message.
+
 ### Replicate billing
 
 Replicate uses the signed-in `replicate.com` session cookie for its billing
