@@ -50,6 +50,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
+use crate::process_environment::ProcessEnvironment;
+
 /// Maximum number of terminal cursor-position replies sent to one child.
 const MAX_CURSOR_REPLIES: usize = 32;
 
@@ -69,8 +71,8 @@ pub struct ManagedProcessConfig {
     pub program: PathBuf,
     /// Arguments passed to the executable.
     pub args: Vec<OsString>,
-    /// Additional environment variables for the child.
-    pub env: Vec<(OsString, OsString)>,
+    /// Additional environment variables for the child (`Debug` renders only the entry count).
+    pub env: ProcessEnvironment<Vec<(OsString, OsString)>>,
     /// Working directory, when the provider wants to pin one.
     pub cwd: Option<PathBuf>,
     /// PTY geometry.
@@ -846,7 +848,7 @@ mod tests {
                 OsString::from("-Command"),
                 OsString::from("Start-Sleep -Seconds 30"),
             ],
-            env: Vec::new(),
+            env: ProcessEnvironment::default(),
             cwd: None,
             pty_rows: 30,
             pty_cols: 120,
@@ -1087,7 +1089,7 @@ mod tests {
                 OsString::from("-Command"),
                 OsString::from(script),
             ],
-            env: Vec::new(),
+            env: ProcessEnvironment::default(),
             cwd: None,
             pty_rows: 30,
             pty_cols: 120,

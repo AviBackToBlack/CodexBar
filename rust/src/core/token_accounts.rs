@@ -4,6 +4,7 @@
 //! Supports parallel fetching and account switching.
 
 use crate::core::ProviderId;
+use crate::process_environment::ProcessEnvironment;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -751,8 +752,8 @@ pub struct TokenAccountOverride {
     pub provider: ProviderId,
     /// The account being used
     pub account: TokenAccount,
-    /// Environment variables to set
-    pub env_override: Option<HashMap<String, String>>,
+    /// Environment variables to set (`Debug` renders only the entry count)
+    pub env_override: ProcessEnvironment<Option<HashMap<String, String>>>,
     /// Cookie header to use
     pub cookie_header: Option<String>,
 }
@@ -773,7 +774,7 @@ impl TokenAccountOverride {
         Self {
             provider,
             account,
-            env_override,
+            env_override: env_override.into(),
             cookie_header,
         }
     }

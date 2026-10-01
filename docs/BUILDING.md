@@ -150,3 +150,27 @@ cd apps/desktop-tauri && pnpm exec tsc --noEmit
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 ```
+
+## Stored process environments
+
+A process environment carries API keys, tokens and cookies. Every struct, union or enum-variant
+field that stores one uses `codexbar::process_environment::ProcessEnvironment`, including
+optional maps and `(OsString, OsString)` pair lists. Its `Debug` output is
+`ProcessEnvironment(N entries; redacted)`, so `{:?}`, `dbg!`, `tracing` field captures and
+`assert_eq!` failures never print variable names or values. Wrapping an `Option` keeps `None`
+distinct from an empty map, and equality still compares the original contents.
+
+Deref, iteration, `get` and `insert` still return the original values for the child process,
+so never log what they return. Function parameters and locals are transient and stay unwrapped.
+
+The `process_environment::storage_guard` test scans `rust/src` and
+`apps/desktop-tauri/src-tauri/src` for environment-named fields whose type is a string map or a
+string pair list, through `Option`, `Box`, `Arc`, references, slices and local `type` aliases,
+and fails on any that is not wrapped. Each entry in its `REVIEWED_EXCEPTIONS` list must match
+exactly one declaration, so stale or duplicate exceptions fail too. The guard is a lexical
+tripwire, not a type checker: generic parameters, differently named fields and explicit logging
+of an unwrapped map still need code review.
+
+```bash
+cargo test -p codexbar process_environment
+```

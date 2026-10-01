@@ -8,6 +8,7 @@
     reason = "TTY runner types reserved for future interactive session management"
 )]
 
+use crate::process_environment::ProcessEnvironment;
 use regex_lite::Regex;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -69,8 +70,8 @@ pub struct TtyCommandOptions {
     pub stop_on_substrings: Vec<String>,
     /// Settle time after stopping (default: 0.25s)
     pub settle_after_stop_secs: f64,
-    /// Environment variables to set
-    pub env: HashMap<String, String>,
+    /// Environment variables to set (`Debug` renders only the entry count)
+    pub env: ProcessEnvironment<HashMap<String, String>>,
 }
 
 impl Default for TtyCommandOptions {
@@ -90,7 +91,7 @@ impl Default for TtyCommandOptions {
             stop_on_url: false,
             stop_on_substrings: Vec::new(),
             settle_after_stop_secs: 0.25,
-            env: HashMap::new(),
+            env: ProcessEnvironment::default(),
         }
     }
 }

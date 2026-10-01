@@ -535,7 +535,8 @@ impl AntigravityProvider {
             env: vec![
                 (OsString::from("TERM"), OsString::from("xterm-256color")),
                 (OsString::from("COLORTERM"), OsString::from("truecolor")),
-            ],
+            ]
+            .into(),
             cwd: dirs::home_dir().filter(|path| path.is_dir()),
             pty_rows: 30,
             pty_cols: 120,
