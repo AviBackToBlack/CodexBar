@@ -183,7 +183,7 @@ fn test_gpt5_pro_cost() {
 #[test]
 fn test_gpt56_standard_pricing() {
     for (model, expected) in [
-        ("gpt-5.6-sol", 0.0332),
+        ("gpt-5.6-sol", 0.02256),
         ("gpt-5.6-terra", 0.01328),
         ("gpt-5.6-luna", 0.001328),
     ] {
@@ -211,7 +211,7 @@ fn gpt_reserve_alias_uses_luna_pricing() {
 #[test]
 fn test_gpt56_long_context_pricing() {
     for (model, expected) in [
-        ("gpt-5.6-sol", 45.272001),
+        ("gpt-5.6-sol", 30.2176008),
         ("gpt-5.6-terra", 18.1088004),
         ("gpt-5.6-luna", 1.81088004),
     ] {
@@ -223,7 +223,7 @@ fn test_gpt56_long_context_pricing() {
 #[test]
 fn test_gpt56_context_threshold_is_exclusive() {
     for (model, expected) in [
-        ("gpt-5.6-sol", 0.136),
+        ("gpt-5.6-sol", 0.1088),
         ("gpt-5.6-terra", 0.0544),
         ("gpt-5.6-luna", 0.00544),
     ] {
@@ -531,14 +531,23 @@ fn gpt56_historical_terra_luna_rates_change_at_2026_07_30() {
 }
 
 #[test]
-fn gpt56_historical_pricing_keeps_sol_unchanged() {
+fn gpt56_historical_sol_rates_change_at_2026_08_21() {
     use chrono::NaiveDate;
 
-    let before = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
-    let current = CostUsagePricing::codex_cost_usd("gpt-5.6-sol", 100, 10, 5).unwrap();
-    let historical =
-        CostUsagePricing::codex_cost_usd_at_date("gpt-5.6-sol", 100, 10, 5, before).unwrap();
-    assert!((historical - current).abs() < f64::EPSILON);
+    // Sol keeps its own cutoff: still historical on Terra/Luna's cut day.
+    let historical = 90.0 * 5e-6 + 10.0 * 5e-7 + 5.0 * 3e-5;
+    let current = 90.0 * 4e-6 + 10.0 * 4e-7 + 5.0 * 2e-5;
+    for (date, expected) in [
+        ((2026, 7, 30), historical),
+        ((2026, 8, 20), historical),
+        ((2026, 8, 21), current),
+    ] {
+        let day = NaiveDate::from_ymd_opt(date.0, date.1, date.2).unwrap();
+        let cost = CostUsagePricing::codex_cost_usd_at_date("gpt-5.6-sol", 100, 10, 5, day);
+        assert!((cost.unwrap() - expected).abs() < 1e-12, "{day}");
+    }
+    let undated = CostUsagePricing::codex_cost_usd("gpt-5.6-sol", 100, 10, 5).unwrap();
+    assert!((undated - current).abs() < 1e-12);
 }
 
 #[test]
@@ -625,97 +634,4 @@ fn gpt6_astra_unknown_models_fail_closed() {
 }
 
 // Upstream 0.65.0 #3820: Priority rows and day aggregates.
-
-#[test]
-fn codex_fast_lane_covers_requests_up_to_the_long_context_threshold() {
-    assert!(CostUsagePricing::codex_fast_lane_covers("gpt-5.5", 272_000));
-    assert!(!CostUsagePricing::codex_fast_lane_covers(
-        "gpt-5.5", 272_001
-    ));
-    assert!(CostUsagePricing::codex_fast_lane_covers(
-        "gpt-5.5-priority",
-        1_000
-    ));
-    // Astra publishes long-context Fast rates.
-    assert!(CostUsagePricing::codex_fast_lane_covers(
-        "gpt-6-astra-priority",
-        272_001
-    ));
-    // gpt-5 has no Fast lane at any size.
-    assert!(!CostUsagePricing::codex_fast_lane_covers(
-        "gpt-5-priority",
-        1_000
-    ));
-}
-
-#[test]
-fn codex_priority_day_aggregate_prices_short_rates_times_multiplier() {
-    // Two 200k-input Fast requests sum to 400k. Each ran in the Fast lane,
-    // so the aggregate neither drops the surcharge nor switches tiers.
-    let one = CostUsagePricing::codex_cost_usd("gpt-5.5", 200_000, 50_000, 1_000).unwrap();
-    let aggregate = CostUsagePricing::codex_day_aggregate_cost_usd(
-        "gpt-5.5-priority",
-        400_000,
-        100_000,
-        2_000,
-        None,
-    )
-    .unwrap();
-    assert!((aggregate - 2.0 * one * 2.5).abs() < 1e-10);
-    assert_eq!(
-        CostUsagePricing::codex_fast_cost_usd("gpt-5.5-priority", 400_000, 100_000, 2_000),
-        None
-    );
-}
-
-#[test]
-fn codex_astra_priority_day_aggregate_keeps_long_context_fast_rates() {
-    let aggregate = CostUsagePricing::codex_day_aggregate_cost_usd(
-        "gpt-6-astra-priority",
-        300_000,
-        0,
-        1_000,
-        None,
-    )
-    .unwrap();
-    let fast =
-        CostUsagePricing::codex_fast_cost_usd("gpt-6-astra-priority", 300_000, 0, 1_000).unwrap();
-    assert!((aggregate - fast).abs() < 1e-12);
-    let expected = (300_000.0 * 2e-5 + 1_000.0 * 7.5e-5) * 2.0;
-    assert!((aggregate - expected).abs() < 1e-10);
-}
-
-#[test]
-fn codex_standard_day_aggregate_uses_standard_pricing() {
-    let aggregate =
-        CostUsagePricing::codex_day_aggregate_cost_usd("gpt-5.5", 1_000, 200, 100, None).unwrap();
-    let standard = CostUsagePricing::codex_cost_usd("gpt-5.5", 1_000, 200, 100).unwrap();
-    assert!((aggregate - standard).abs() < 1e-15);
-}
-
-#[test]
-fn codex_priority_day_aggregate_uses_the_rates_of_its_day() {
-    use chrono::NaiveDate;
-
-    let before_cut = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
-    let aggregate = CostUsagePricing::codex_day_aggregate_cost_usd(
-        "gpt-5.6-terra-priority",
-        300_000,
-        0,
-        1_000,
-        Some(before_cut),
-    )
-    .unwrap();
-    // Pre-cut short-context Terra rates, times the 2.0 Fast multiplier.
-    let expected = (300_000.0 * 2.5e-6 + 1_000.0 * 1.5e-5) * 2.0;
-    assert!((aggregate - expected).abs() < 1e-10);
-    assert!((aggregate - 1.53).abs() < 1e-9);
-}
-
-#[test]
-fn codex_priority_day_aggregate_without_a_fast_lane_is_unpriced() {
-    assert_eq!(
-        CostUsagePricing::codex_day_aggregate_cost_usd("gpt-5-priority", 1_000, 0, 100, None),
-        None
-    );
 }

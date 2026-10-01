@@ -83,6 +83,12 @@ The shared refresh interval controls automatic provider polling. `0` / Manual di
 
 Custom pricing overlays are exact-match overrides used only where the local spend contract has matching provider/model token evidence. Explicit zero rates mean free; omitted rate fields stay unknown. The Usage & Spend surface keeps provenance/coverage visible, preserves cost-only model rows when token coverage is partial, and can Copy JSON or save the same JSON contract through the native file picker.
 
+### Codex model pricing
+
+Codex usage is priced from the bundled OpenAI rate table first and the models.dev catalog second. OpenAI's [Daybreak aliases](https://developers.openai.com/api/docs/pricing) resolve like the unsuffixed `gpt-5.6` alias: `gpt-daybreak-blue-latest` prices as `gpt-5.6-sol` and `gpt-daybreak-red-latest` as `gpt-5.6-cyber`. Recorded model names stay unchanged. `gpt-5.6-cyber` and `gpt-5.5-cyber` use the published Cyber rates of $12.50 input, $1.25 cached input and $75 output per 1M tokens. GPT-5.4, GPT-5.5 and GPT-5.6 bill the whole request at their long-context rates once input passes 272K tokens.
+
+Dated Codex usage keeps the prior GPT-5.6 Sol rates ($5 input, $30 output per 1M tokens) before **2026-08-21**, the repricing date in the [OpenAI changelog](https://developers.openai.com/api/docs/changelog). Current and undated usage use the current $4/$20 rates. Terra and Luna keep their separate 2026-07-30 cutoff. Windows compares calendar days rather than event instants: the Codex cost scanners and the workspace index use their local day keys, and Pi session rows use the UTC date of their timestamp. Custom pricing overlays keep precedence.
+
 ### OpenCode, Codex quota, and local cost boundaries
 
 OpenCode-held OpenAI/Codex OAuth can be reused for **remote Codex account quota** only when the Codex provider's `External OAuth sources` setting is explicitly enabled. Native Codex credentials still take precedence, an explicit `CODEX_HOME` stays isolated, and external credentials remain read-only. This does **not** import ordinary OpenCode sessions into Codex token or spend totals. OpenCode Go's local SQLite reader remains scoped to its own `opencode-go` assistant records; OpenAI API-platform usage is a separate provider.
