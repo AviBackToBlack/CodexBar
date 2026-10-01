@@ -61,7 +61,8 @@
 }
 
 :is(.menu-surface--tray, .menu-surface--popout) .menu-metric__pct,
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__reset {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__reset,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__detail {
   font-size: 11px;
   line-height: 1.4;
 }

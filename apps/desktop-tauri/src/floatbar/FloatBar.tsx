@@ -20,6 +20,7 @@ import {
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { describeProviderState } from "../lib/providerState";
+import { resetDescriptionFallback } from "../lib/usageWindows";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
@@ -221,7 +222,7 @@ function ProviderPill({
   const label = state.isProblem ? stateLabel : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
-    rateWindow.resetDescription,
+    resetDescriptionFallback(rateWindow),
     resetRelative,
   );
   const resetSuffix = resetText ? `\n${resetText}` : "";

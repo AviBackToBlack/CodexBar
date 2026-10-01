@@ -1320,6 +1320,7 @@ mod reset_backfill_tests {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            description_is_detail: false,
         }
     }
 

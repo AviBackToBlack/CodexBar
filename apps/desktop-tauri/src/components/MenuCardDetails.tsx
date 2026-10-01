@@ -24,6 +24,7 @@ import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
+import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
@@ -337,9 +338,10 @@ function MetricRow({
   const barDisplayPct = showAsUsed ? barPct : Math.max(0, Math.min(100, remain));
   const displayLabel = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
   const level = levelOf(remain, snap.isExhausted);
+  const detailText = windowDetailText(snap);
   const resetText = useFormattedResetTime(
     snap.resetsAt,
-    isInformational ? null : snap.resetDescription,
+    isInformational ? null : resetDescriptionFallback(snap),
     resetTimeRelative,
     resetFormatMode ?? "reset",
   );
@@ -380,6 +382,9 @@ function MetricRow({
           <span className="menu-metric__reset">{resetText}</span>
         )}
       </div>
+      {!compactOverview && detailText && (
+        <div className="menu-metric__detail">{detailText}</div>
+      )}
       {!compactOverview && !isInformational && snap.isExhausted && (
         <div className="menu-metric__exhausted">{exhaustedLabel}</div>
       )}

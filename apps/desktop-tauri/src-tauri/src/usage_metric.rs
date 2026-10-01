@@ -63,6 +63,7 @@ fn same_window(left: &RateWindowSnapshot, right: &RateWindowSnapshot) -> bool {
         && left.window_minutes == right.window_minutes
         && left.resets_at == right.resets_at
         && left.reset_description == right.reset_description
+        && left.description_is_detail == right.description_is_detail
         && left.is_informational == right.is_informational
 }
 
@@ -267,6 +268,7 @@ fn derived_window(used_percent: f64, resets_at: Option<String>) -> RateWindowSna
         reserve_description: None,
         reserve_will_last_to_reset: false,
         reserve_eta_seconds: None,
+        description_is_detail: false,
     }
 }
 

@@ -1034,6 +1034,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                description_is_detail: false,
             },
             primary_label: None,
             secondary: secondary_percent.map(|pct| crate::commands::RateWindowSnapshot {
@@ -1048,6 +1049,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                description_is_detail: false,
             }),
             secondary_label: None,
             model_specific: None,
@@ -1063,6 +1065,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                description_is_detail: false,
             }),
             tertiary_label: None,
             extra_rate_windows: Vec::new(),
@@ -1127,6 +1130,7 @@ mod tests {
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
+                description_is_detail: false,
             },
         }
     }
@@ -1537,6 +1541,7 @@ mod tests {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            description_is_detail: false,
         });
 
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
@@ -1581,6 +1586,7 @@ mod tests {
             reserve_description: None,
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
+            description_is_detail: false,
         });
         snapshot.extra_rate_windows.push(fake_extra_window(90.0));
 
