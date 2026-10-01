@@ -271,42 +271,49 @@ impl CostUsagePricing {
             Some(snapshot) => snapshot.lookup(provider_id, lookup_model),
             None => models_dev_pricing::lookup(provider_id, lookup_model),
         }?;
-        let use_tier = pricing
+        Some(Self::models_dev_cost_usd(
+            &pricing,
+            input_tokens,
+            cached_input_tokens,
+            cache_write_input_tokens,
+            output_tokens,
+        ))
+    }
+
+    /// Upstream `codexCostUSD(pricing:)` for one models.dev entry.
+    /// `input_tokens` is the inclusive prompt size (cache reads and writes are
+    /// subsets of it) and also selects the long-context tier. A cache lane
+    /// without its own rate falls back to the tier's input rate.
+    pub(crate) fn models_dev_cost_usd(
+        pricing: &models_dev_pricing::DynamicModelPricing,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        cache_write_input_tokens: u64,
+        output_tokens: u64,
+    ) -> f64 {
+        let long = pricing
             .threshold_tokens
             .is_some_and(|threshold| input_tokens > threshold);
-        let input_rate = if use_tier {
-            pricing
-                .input_cost_per_token_above_threshold
-                .unwrap_or(pricing.input_cost_per_token)
-        } else {
-            pricing.input_cost_per_token
-        };
-        let cache_read_rate = if use_tier {
-            pricing
-                .cache_read_input_cost_per_token_above_threshold
-                .or(pricing.cache_read_input_cost_per_token)
-                .unwrap_or(pricing.input_cost_per_token)
-        } else {
-            pricing
-                .cache_read_input_cost_per_token
-                .unwrap_or(pricing.input_cost_per_token)
-        };
-        let output_rate = if use_tier {
-            pricing
-                .output_cost_per_token_above_threshold
-                .unwrap_or(pricing.output_cost_per_token)
-        } else {
-            pricing.output_cost_per_token
-        };
-        Some(codex_cost_from_rates_with_cache_write(
+        let above = |rate: Option<f64>| rate.filter(|_| long);
+        let input_rate = above(pricing.input_cost_per_token_above_threshold)
+            .unwrap_or(pricing.input_cost_per_token);
+        let output_rate = above(pricing.output_cost_per_token_above_threshold)
+            .unwrap_or(pricing.output_cost_per_token);
+        let cache_read_rate = above(pricing.cache_read_input_cost_per_token_above_threshold)
+            .or(pricing.cache_read_input_cost_per_token)
+            .unwrap_or(input_rate);
+        let cache_write_rate = above(pricing.cache_write_input_cost_per_token_above_threshold)
+            .or(pricing.cache_write_input_cost_per_token)
+            .unwrap_or(input_rate);
+        codex_cost_from_rates_with_cache_write(
             input_tokens,
             cached_input_tokens,
             cache_write_input_tokens,
             output_tokens,
             input_rate,
             cache_read_rate,
-            input_rate,
+            cache_write_rate,
             output_rate,
-        ))
+        )
     }
 }

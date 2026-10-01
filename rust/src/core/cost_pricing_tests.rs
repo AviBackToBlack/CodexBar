@@ -373,6 +373,76 @@ fn codex_routed_provider_returns_none_for_unknown_and_unrouted() {
 }
 
 #[test]
+fn native_codex_nous_prefix_stays_unpriced() {
+    // Upstream `codexModelsDevProviderIDs` has no `nous`: only OpenCodex
+    // ledger rows reach the Nous catalog.
+    let snapshot = crate::core::ModelsDevPricingSnapshot::from_catalog_json_for_tests(
+        r#"{"nous":{"models":{"z-ai/glm-5":{"id":"z-ai/glm-5","cost":{"input":2,"output":8}}}}}"#,
+    )
+    .expect("catalog");
+    assert!(codex_routed_pricing::codex_routed_provider("nous/z-ai/glm-5").is_none());
+    assert!(
+        CostUsagePricing::codex_cost_usd_with_pricing_snapshot(
+            "nous/z-ai/glm-5",
+            1_000,
+            0,
+            500,
+            Some(&snapshot)
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn models_dev_rates_follow_upstream_codex_cost_semantics() {
+    let snapshot = crate::core::ModelsDevPricingSnapshot::from_catalog_json_for_tests(
+        r#"{"deepseek":{"models":{
+            "full":{"id":"full","cost":{"input":2,"output":8,"cache_read":0.5,"cache_write":3,
+                "context_over_200k":{"input":4,"output":16,"cache_read":1,"cache_write":6}}},
+            "bare":{"id":"bare","cost":{"input":2,"output":8,
+                "context_over_200k":{"input":4,"output":16}}}}}}"#,
+    )
+    .expect("catalog");
+    let full = snapshot.lookup_exact("deepseek", "full").expect("full");
+    let bare = snapshot.lookup_exact("deepseek", "bare").expect("bare");
+    let close = |actual: f64, expected: f64| {
+        assert!((actual - expected).abs() < 1e-12, "{actual} vs {expected}");
+    };
+
+    // Short context: each cache lane uses its own catalog rate.
+    close(
+        CostUsagePricing::models_dev_cost_usd(&full, 1_000, 200, 300, 100),
+        500.0 * 2e-6 + 200.0 * 0.5e-6 + 300.0 * 3e-6 + 100.0 * 8e-6,
+    );
+    // Inclusive input above 200k selects the long-context rate of every lane.
+    close(
+        CostUsagePricing::models_dev_cost_usd(&full, 200_001, 100_000, 50_000, 1_000),
+        50_001.0 * 4e-6 + 100_000.0 * 1e-6 + 50_000.0 * 6e-6 + 1_000.0 * 16e-6,
+    );
+    // A lane without a catalog rate falls back to the tier's input rate.
+    close(
+        CostUsagePricing::models_dev_cost_usd(&bare, 1_000, 200, 300, 100),
+        1_000.0 * 2e-6 + 100.0 * 8e-6,
+    );
+    close(
+        CostUsagePricing::models_dev_cost_usd(&bare, 200_001, 100_000, 50_000, 1_000),
+        200_001.0 * 4e-6 + 1_000.0 * 16e-6,
+    );
+    // Routed Codex rows share these rates.
+    close(
+        CostUsagePricing::codex_cost_usd_with_pricing_snapshot(
+            "deepseek/bare",
+            200_001,
+            100_000,
+            1_000,
+            Some(&snapshot),
+        )
+        .expect("routed"),
+        200_001.0 * 4e-6 + 1_000.0 * 16e-6,
+    );
+}
+
+#[test]
 fn codex_routed_model_with_unknown_prefix_stays_unpriced() {
     // An unknown provider/ prefix must NOT fall back to the OpenAI catalog
     // (upstream 0.50.1 #2946: unknown prefixes are left unpriced, not guessed).
