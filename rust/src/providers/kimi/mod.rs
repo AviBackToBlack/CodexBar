@@ -406,6 +406,13 @@ impl Provider for KimiProvider {
     fn supports_oauth(&self) -> bool {
         true
     }
+
+    /// A Code API response may report only the monthly `Total usage` pool
+    /// (upstream 0.60.5 #3694). Automatic then reads that lane instead of the
+    /// informational weekly placeholder.
+    fn automatic_metric_missing_core_is_terminal(&self) -> bool {
+        false
+    }
 }
 
 fn kimi_window_minutes(window: &KimiWindow) -> Option<u32> {
@@ -433,7 +440,14 @@ fn apply_subscription_windows(
     // Upstream 0.49.0 #2741: the membership pool is the official "Total usage"
     // lane — the shared subscription pool (`amountUsedRatio`), not the
     // Code-only ratio. Feature-scoped or non-subscription balances are skipped.
-    if let Some(balance) = subscription.subscription_balance.as_ref()
+    // Upstream 0.60.5 #3694: a monthly pool reported by the Code API stays
+    // authoritative; web enrichment only fills in a missing one.
+    let has_monthly_pool = usage
+        .extra_rate_windows
+        .iter()
+        .any(|extra| extra.id == MONTHLY_WINDOW_ID);
+    if !has_monthly_pool
+        && let Some(balance) = subscription.subscription_balance.as_ref()
         && matches!(balance.feature.as_deref(), None | Some("FEATURE_OMNI"))
         && matches!(balance.balance_type.as_deref(), None | Some("SUBSCRIPTION"))
         && let Some(ratio) =
@@ -476,9 +490,10 @@ fn apply_subscription_windows(
 /// Upstream `isEquivalentToWeeklyWindow` (#2741): suppress the Code 7-day row
 /// only on positive evidence — the weekly counter must be reliable (window
 /// minutes present), the percentages must agree within 1 point, and both lanes
-/// need reset timestamps within 5 minutes of each other.
+/// need reset timestamps within 5 minutes of each other. An absent weekly
+/// quota (informational primary) is never equivalent.
 fn is_equivalent_to_weekly_window(window: &RateWindow, weekly: &RateWindow) -> bool {
-    if weekly.window_minutes.is_none() {
+    if weekly.is_informational || weekly.window_minutes.is_none() {
         return false;
     }
     if (window.used_percent - weekly.used_percent).abs() > 1.0 {

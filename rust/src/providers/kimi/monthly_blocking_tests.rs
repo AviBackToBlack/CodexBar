@@ -1,12 +1,17 @@
 //! Upstream 0.69.0 `KimiMonthlyBlockingTests` (#4091) through the Kimi web
 //! parser: a known, exhausted monthly membership pool blocks the shorter Code
 //! windows without rewriting their raw usage. The card-level checks (status
-//! text, no reset or pace) live with the menu card and settings tests.
+//! text, no reset or pace) live with the menu card and settings tests. The
+//! Code API monthly pool (upstream 0.60.5 #3694) is the same `Total usage`
+//! lane, so it blocks the same way without web auth.
 
 use chrono::{DateTime, Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
-use super::{KimiSubscriptionStatsResponse, KimiWebUsageResponse, MONTHLY_WINDOW_ID, web};
+use super::{
+    KimiCodeApiUsageResponse, KimiSubscriptionStatsResponse, KimiWebUsageResponse,
+    MONTHLY_WINDOW_ID, code_api, web,
+};
 use crate::core::{BlockedWindows, ProviderId, UsageSnapshot};
 
 fn now() -> DateTime<Utc> {
@@ -94,4 +99,39 @@ fn membership_block_ends_at_the_pool_reset() {
         BlockedWindows::evaluate(ProviderId::Kimi, &usage, at_reset - Duration::seconds(1)).primary
     );
     assert!(!BlockedWindows::evaluate(ProviderId::Kimi, &usage, at_reset).any());
+}
+
+fn code_api_snapshot(pools: serde_json::Value) -> UsageSnapshot {
+    let response: KimiCodeApiUsageResponse =
+        serde_json::from_value(json!({ "usages": pools })).unwrap();
+    code_api::snapshot_from_code_api_response(response).unwrap()
+}
+
+#[test]
+fn exhausted_code_api_monthly_pool_blocks_code_windows() {
+    let usage = code_api_snapshot(json!({
+        "limit_5h": { "used_ratio": 0, "reset_time": iso(Duration::hours(1)) },
+        "limit_7d": { "used_ratio": 0, "reset_time": iso(Duration::days(4)) },
+        "limit_month_total": { "used_ratio": 1.0, "reset_time": iso(Duration::days(30)) }
+    }));
+    let blocked = BlockedWindows::evaluate(ProviderId::Kimi, &usage, now());
+
+    assert!(blocked.primary && blocked.secondary);
+    assert!(!extra_flag(&blocked, &usage, MONTHLY_WINDOW_ID));
+    assert_eq!(blocked.resets_at, Some(now() + Duration::days(30)));
+    assert_eq!(usage.primary.used_percent, 0.0);
+    assert_eq!(usage.secondary.as_ref().unwrap().used_percent, 0.0);
+}
+
+#[test]
+fn monthly_only_code_api_response_has_no_code_window_to_block() {
+    let usage = code_api_snapshot(json!({
+        "limit_month_total": { "used_ratio": 1.05, "reset_time": iso(Duration::days(30)) }
+    }));
+    let blocked = BlockedWindows::evaluate(ProviderId::Kimi, &usage, now());
+
+    // The informational weekly placeholder is never blocked, and the pool
+    // does not block itself.
+    assert!(usage.primary.is_informational);
+    assert!(!blocked.any());
 }

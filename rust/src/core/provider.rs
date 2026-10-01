@@ -889,8 +889,9 @@ pub trait Provider: Send + Sync {
 
     /// Whether Automatic metric selection is a dead end when the primary lane
     /// is informational and no secondary lane exists. Providers with
-    /// Automatic-only fallback lanes (seat credits) override this to `false`
-    /// so the fallback lane can still fill in.
+    /// Automatic-only fallback lanes (seat credits) or a named extra lane that
+    /// can be the only reported quota (Kimi's monthly pool) override this to
+    /// `false` so that lane can still fill in.
     fn automatic_metric_missing_core_is_terminal(&self) -> bool {
         true
     }

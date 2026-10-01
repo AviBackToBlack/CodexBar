@@ -93,6 +93,12 @@ z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shorte
 
 Upstream's independent **WidgetKit** provider-widget configuration has no Windows analogue in this repository. Win-CodexBar has no WidgetKit extension; provider cards and tray entries are already independent Windows/Tauri surfaces.
 
+### Kimi Code quotas
+
+Kimi Code API responses can carry the older count-based fields, the newer `usages` ratio pools, or both. Ratio pools take precedence for the 5-hour, weekly, and monthly Total usage windows they provide; an invalid ratio falls back to that lane's legacy counts instead of hiding them. Missing windows stay absent: an unreported weekly quota shows as an informational "No weekly quota reported" row rather than 0%, and percentages keep the API's precision without implying request counts. The monthly Total usage pool comes straight from the Code API, without browser authentication, and optional web enrichment only fills it in when the API did not report one. A response without any supported window is a parse error, so Auto mode moves on to the Kimi Code CLI credential and web auth.
+
+Weekly is the primary lane and the 5-hour rate limit the secondary on every Kimi source. When the monthly pool is the only reported quota, Automatic and the Session or Weekly preferences use it for the tray icon and float bar. An exhausted monthly pool blocks the shorter Code windows until its reset.
+
 ## Upstream doc warning
 
 Upstream `docs/providers.md` is a large auto-strategy matrix (60+ providers) for the macOS app. Use it as **inspiration** when porting a provider. For runtime truth on Windows:
