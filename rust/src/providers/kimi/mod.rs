@@ -11,9 +11,12 @@
 //!   from a signed-in Kimi Desktop session (#2622).
 //! - [`desktop_token`]: read-only, WAL-safe reader for the Kimi Desktop
 //!   (Electron) Chromium cookie store.
+//! - [`ratio_pool`]: zero-ratio placeholder reconciliation against matching
+//!   legacy counters (upstream 0.63.0).
 
 mod code_api;
 pub mod desktop_token;
+mod ratio_pool;
 mod region;
 mod web;
 
