@@ -387,3 +387,167 @@ fn parsed_key_wire_fields_decode() {
     assert_eq!(parsed.data.limit_remaining, Some(12.5));
     assert_eq!(parsed.data.limit_reset.as_deref(), Some("monthly"));
 }
+
+// ── 0.61.0 (#3272, #3733): optional-request diagnostics and detail rows ──
+
+use super::activity::ActivitySummary;
+use super::diagnostics::{
+    ACTIVITY_KEY_REQUIRED, ACTIVITY_NOT_CONFIGURED, Observations, build_display_details,
+};
+
+type DetailRow = (String, String, Option<String>);
+
+fn detail_rows(
+    credits: Result<CreditsData, String>,
+    key: Result<KeyData, String>,
+    activity: Result<ActivitySummary, String>,
+) -> Vec<DetailRow> {
+    build_display_details(&Observations {
+        credits: &credits,
+        key: &key,
+        activity: &activity,
+    })
+    .iter()
+    .map(|row| {
+        (
+            row.title().to_string(),
+            row.value().to_string(),
+            row.secondary_value().map(str::to_string),
+        )
+    })
+    .collect()
+}
+
+fn row_of<'a>(rows: &'a [DetailRow], title: &str) -> &'a DetailRow {
+    rows.iter()
+        .find(|row| row.0 == title)
+        .unwrap_or_else(|| panic!("missing row {title}: {rows:?}"))
+}
+
+#[test]
+fn optional_request_deadline_is_four_seconds() {
+    assert_eq!(
+        OPENROUTER_REQUEST_TIMEOUT,
+        std::time::Duration::from_secs(4)
+    );
+}
+
+#[test]
+fn successful_sources_render_credits_key_and_activity_rows() {
+    let rows = detail_rows(
+        Ok(CreditsData {
+            total_credits: 5.0,
+            total_usage: 3.1,
+        }),
+        Ok(key_data(
+            Some(30.0),
+            Some(30.0),
+            Some(" monthly "),
+            Some(0.0),
+            None,
+            None,
+            None,
+        )),
+        Ok(ActivitySummary {
+            tokens: 22,
+            requests: 2,
+            models: 2,
+        }),
+    );
+
+    assert_eq!(row_of(&rows, "Credits remaining").1, "$1.90");
+    assert_eq!(row_of(&rows, "Credits used").1, "$3.10");
+    assert_eq!(row_of(&rows, "Credits total added").1, "$5.00");
+    let limit = row_of(&rows, "API key limit");
+    assert_eq!(limit.1, "$30.00");
+    assert_eq!(limit.2.as_deref(), Some("Spending cap, not balance"));
+    assert_eq!(row_of(&rows, "API key remaining").1, "$30.00");
+    assert_eq!(row_of(&rows, "API key used").1, "$0.00");
+    assert_eq!(row_of(&rows, "Reset window").1, "monthly");
+    assert_eq!(row_of(&rows, "Activity tokens").1, "22");
+    assert_eq!(row_of(&rows, "Activity requests").1, "2");
+    assert_eq!(row_of(&rows, "Activity models").1, "2");
+    assert!(
+        rows.iter()
+            .all(|row| row.0 != "Spend history (last 30 days)")
+    );
+}
+
+#[test]
+fn uncapped_key_reports_no_limit_and_omits_remaining() {
+    let rows = detail_rows(
+        Err("Request failed".into()),
+        Ok(key_data(None, None, None, Some(1.0), None, None, None)),
+        Err(ACTIVITY_NOT_CONFIGURED.into()),
+    );
+
+    assert_eq!(row_of(&rows, "API key limit").1, "No limit configured");
+    assert!(rows.iter().all(|row| row.0 != "API key remaining"));
+    assert!(rows.iter().all(|row| row.0 != "Reset window"));
+}
+
+#[test]
+fn degraded_sources_keep_safe_reasons_beside_the_unavailable_marker() {
+    let rows = detail_rows(
+        Err("Request returned HTTP 503".into()),
+        Err("Request timed out".into()),
+        Err(ACTIVITY_KEY_REQUIRED.into()),
+    );
+
+    for (title, reason) in [
+        ("Credits balance", "Request returned HTTP 503"),
+        ("API key limit", "Request timed out"),
+        ("Spend history (last 30 days)", ACTIVITY_KEY_REQUIRED),
+    ] {
+        let row = row_of(&rows, title);
+        assert_eq!(row.1, "Unavailable right now");
+        assert_eq!(row.2.as_deref(), Some(reason));
+    }
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn http_failures_keep_their_status_and_auth_typing() {
+    use reqwest::StatusCode;
+
+    let rejected = Degraded::http("key", StatusCode::FORBIDDEN, AUTH_REJECTED);
+    assert!(matches!(rejected.error, ProviderError::AuthRequired));
+    assert_eq!(rejected.reason, "Request returned HTTP 403");
+
+    // Credits only treats 401 as a rejected credential.
+    let unavailable = Degraded::http(
+        "credits",
+        StatusCode::SERVICE_UNAVAILABLE,
+        &[StatusCode::UNAUTHORIZED],
+    );
+    assert!(matches!(unavailable.error, ProviderError::Other(_)));
+    assert_eq!(unavailable.reason, "Request returned HTTP 503");
+
+    let activity = Degraded::http("Activity", StatusCode::FORBIDDEN, AUTH_REJECTED)
+        .with_reason(ACTIVITY_KEY_REQUIRED);
+    assert!(matches!(activity.error, ProviderError::AuthRequired));
+    assert_eq!(activity.reason, "Management API key required");
+}
+
+#[test]
+fn invalid_bodies_are_labelled_without_leaking_the_payload() {
+    let degraded = Degraded::invalid(ProviderError::Parse("secret-body".into()));
+    assert_eq!(degraded.reason, "Response was invalid");
+}
+
+#[tokio::test]
+async fn slow_response_reports_a_timeout_and_other_transport_errors_a_failure() {
+    // A bound listener that never accepts or replies: the request stalls.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(100))
+        .build()
+        .unwrap();
+    let stalled = Degraded::from(client.get(&url).send().await.unwrap_err());
+    assert_eq!(stalled.reason, "Request timed out");
+
+    // A non-timeout transport error (unsupported scheme) is a plain failure.
+    let failed = Degraded::from(client.get("ftp://127.0.0.1/").send().await.unwrap_err());
+    assert_eq!(failed.reason, "Request failed");
+}
