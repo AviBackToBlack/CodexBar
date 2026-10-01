@@ -1,6 +1,7 @@
 use super::*;
 use crate::codex_costs::codex_period_start;
 use crate::core::{CodexSessionLineage, CostUsagePricing};
+use chrono::Local;
 use std::io::Write;
 
 #[test]

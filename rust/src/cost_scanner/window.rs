@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 use super::CostScanner;
-use crate::cost_reporting_period::{CostReportingPeriod, CostTimeZone, clamp_window_days};
+use crate::cost_reporting_period::{CostReportingPeriod, clamp_window_days, cost_bucket_zone};
 
 /// Inclusive local-day window plus the instant transcript scanners cut off at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub(super) struct ScanWindow {
 }
 
 impl CostScanner {
-    /// The window in the local zone, resolved from the calendar.
+    /// The window in the pinned bucket zone, resolved from the calendar.
     ///
     /// `earliest` is the first day with source data; it only matters for
     /// [`CostReportingPeriod::AllAvailable`]. Rolling(N) covers N days
@@ -29,7 +29,7 @@ impl CostScanner {
         now: DateTime<Utc>,
         earliest: Option<NaiveDate>,
     ) -> ScanWindow {
-        let tz = CostTimeZone::Local;
+        let tz = cost_bucket_zone();
         let bounds = self.period.bounds(now, tz, earliest);
         ScanWindow {
             start: bounds.start,

@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::pin::Pin;
 use std::time::Duration;
 
-use chrono::{Local, Utc};
+use chrono::Utc;
 
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
 use crate::cost_scanner::{self, CostScanner};
@@ -218,7 +218,10 @@ async fn collect_costs(pi_selected: bool) -> HashMap<String, RawCostPayload> {
         let pi = scanner.scan_pi_with_cancel(None);
         let pi_contract =
             build_local_spend_contract_from_summary("pi", 30, false, false, false, pi);
-        let today = Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let today = crate::cost_reporting_period::cost_bucket_zone()
+            .date(Utc::now())
+            .format("%Y-%m-%d")
+            .to_string();
         let today_of = |provider: &str| {
             cost_scanner::get_daily_cost_history(provider, 30)
                 .into_iter()
