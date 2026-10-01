@@ -964,7 +964,6 @@ fn cached_spend(
 }
 
 #[cfg(test)]
-<<<<<<< HEAD
 mod cache_key_tests {
     use super::*;
 
@@ -1136,6 +1135,3 @@ mod cache_key_tests {
         assert!(spend.source.contains("API list-price estimate"));
     }
 }
-=======
-mod tests;
->>>>>>> origin/port/micro-0.67.0-cost-period-desktop
