@@ -11,6 +11,13 @@ import {
   refreshProvidersIfStale,
 } from "../lib/tauri";
 
+/**
+ * Longest delay `setTimeout` can hold: browsers, WebView2 included, store it
+ * as a signed 32-bit integer. A longer delay wraps around and fires early:
+ * a reset 24.9 to 49.7 days away would refresh at once.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export interface UseProvidersOptions {
   /**
    * Delay the automatic stale-aware refresh on mount. Tray/menu surfaces use
@@ -276,11 +283,20 @@ export function useProviders(options: UseProvidersOptions = {}): UseProvidersRes
 
     if (nextReset === undefined) return;
 
-    const delay = Math.max(5_000, nextReset - now + 1_000);
-    resetRefreshTimerRef.current = window.setTimeout(() => {
-      resetRefreshTimerRef.current = undefined;
-      refresh();
-    }, delay);
+    const resetAt = nextReset;
+    const armResetRefresh = () => {
+      const remaining = resetAt - Date.now() + 1_000;
+      if (remaining > MAX_TIMER_DELAY_MS) {
+        // Too far away for one timer: wait the longest delay, then re-check.
+        resetRefreshTimerRef.current = window.setTimeout(armResetRefresh, MAX_TIMER_DELAY_MS);
+        return;
+      }
+      resetRefreshTimerRef.current = window.setTimeout(() => {
+        resetRefreshTimerRef.current = undefined;
+        refresh();
+      }, Math.max(5_000, remaining));
+    };
+    armResetRefresh();
 
     return () => {
       if (resetRefreshTimerRef.current !== undefined) {
