@@ -653,12 +653,21 @@ mod tests {
 
     #[test]
     fn test_codex_pricing_uses_gpt55_standard_short_context_rates() {
-        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+        let cost = codex_cost_usd("gpt-5.5", 200_000, 80_000, 100_000);
 
         // GPT-5.5 standard short-context pricing:
-        // 600k non-cached input at $5/M, 400k cached input at $0.50/M,
-        // and 1M output at $30/M.
-        assert!((cost - 33.20).abs() < 0.01);
+        // 120k non-cached input at $5/M, 80k cached input at $0.50/M,
+        // and 100k output at $30/M.
+        assert!((cost - 3.64).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_codex_pricing_bills_whole_gpt55_request_at_long_context_rates() {
+        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+
+        // Above 272K input the whole request bills at $10/M input,
+        // $1/M cached input and $45/M output.
+        assert!((cost - 51.40).abs() < 1e-9);
     }
 
     #[test]

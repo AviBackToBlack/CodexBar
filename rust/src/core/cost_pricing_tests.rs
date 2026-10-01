@@ -725,3 +725,40 @@ fn gpt56_bundled_rates_price_cache_writes_at_125_percent() {
         );
     }
 }
+
+#[test]
+fn gpt54_and_gpt55_bill_the_whole_request_at_long_context_rates_above_272k() {
+    let cost = |model: &str, input: u64| {
+        CostUsagePricing::codex_cost_usd(model, input, 1_000, 100).unwrap()
+    };
+    for (model, standard, long) in [
+        ("gpt-5.4", (2.5e-6, 2.5e-7, 1.5e-5), (5e-6, 5e-7, 2.25e-5)),
+        (
+            "gpt-5.4-codex",
+            (2.5e-6, 2.5e-7, 1.5e-5),
+            (5e-6, 5e-7, 2.25e-5),
+        ),
+        ("gpt-5.5", (5e-6, 5e-7, 3e-5), (1e-5, 1e-6, 4.5e-5)),
+        (
+            "openai/gpt-5.5-2026-04-23",
+            (5e-6, 5e-7, 3e-5),
+            (1e-5, 1e-6, 4.5e-5),
+        ),
+    ] {
+        let price = |(input_rate, cached_rate, output_rate): (f64, f64, f64), input: u64| {
+            (input - 1_000) as f64 * input_rate + 1_000.0 * cached_rate + 100.0 * output_rate
+        };
+        // The 272K boundary itself still bills standard rates.
+        assert!(
+            (cost(model, 272_000) - price(standard, 272_000)).abs() < 1e-12,
+            "{model}"
+        );
+        assert!(
+            (cost(model, 272_001) - price(long, 272_001)).abs() < 1e-12,
+            "{model}"
+        );
+    }
+    // Fast mode keeps its 272K cutoff for these models.
+    assert!(CostUsagePricing::codex_fast_cost_usd("gpt-5.5-priority", 272_001, 0, 1).is_none());
+    assert!(CostUsagePricing::codex_fast_cost_usd("gpt-5.4-fast", 272_000, 0, 1).is_some());
+}

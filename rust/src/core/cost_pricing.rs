@@ -220,7 +220,8 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
         },
     );
 
-    // GPT-5.4 pricing (updated to match upstream 0.22)
+    // GPT-5.4 pricing (updated to match upstream 0.22). Like upstream, the
+    // whole request bills 2x input / 1.5x output above 272K input tokens.
     m.insert(
         "gpt-5.4",
         CodexPricing {
@@ -229,7 +230,12 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             cache_read_input_cost_per_token: 2.5e-7,
             cache_write_input_cost_per_token: None,
             display_label: None,
-            long_context: None,
+            long_context: Some(CodexLongContextRates {
+                input_cost_per_token: 5e-6,
+                output_cost_per_token: 2.25e-5,
+                cache_read_input_cost_per_token: 5e-7,
+                cache_write_input_cost_per_token: None,
+            }),
         },
     );
     m.insert(
@@ -240,7 +246,12 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             cache_read_input_cost_per_token: 2.5e-7,
             cache_write_input_cost_per_token: None,
             display_label: None,
-            long_context: None,
+            long_context: Some(CodexLongContextRates {
+                input_cost_per_token: 5e-6,
+                output_cost_per_token: 2.25e-5,
+                cache_read_input_cost_per_token: 5e-7,
+                cache_write_input_cost_per_token: None,
+            }),
         },
     );
 
@@ -312,7 +323,12 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             cache_read_input_cost_per_token: 5e-7,
             cache_write_input_cost_per_token: None,
             display_label: None,
-            long_context: None,
+            long_context: Some(CodexLongContextRates {
+                input_cost_per_token: 1e-5,
+                output_cost_per_token: 4.5e-5,
+                cache_read_input_cost_per_token: 1e-6,
+                cache_write_input_cost_per_token: None,
+            }),
         },
     );
     m.insert(
