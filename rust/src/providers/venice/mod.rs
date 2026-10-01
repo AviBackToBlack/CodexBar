@@ -43,9 +43,31 @@ struct VeniceBalances {
     usd: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct VeniceSessionResponse {
-    token: String,
+/// Why a `/api/auth/session` reply carried no usable session token.
+#[derive(Debug, PartialEq, Eq)]
+enum SessionTokenError {
+    /// The reply parsed but has a missing, null, non-string or blank `token`.
+    /// Upstream treats this as invalid credentials (an expired Clerk session).
+    Invalid,
+    /// The body is not a JSON object.
+    Malformed(String),
+}
+
+/// Extracts the session token from a `/api/auth/session` body the way upstream
+/// `VeniceWebUsageFetcher.snapshot(fromSessionData:)` does: a JSON object whose
+/// `token` is a non-blank string.
+fn session_token_from_body(body: &[u8]) -> Result<String, SessionTokenError> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|error| SessionTokenError::Malformed(error.to_string()))?;
+    let Some(object) = value.as_object() else {
+        return Err(SessionTokenError::Malformed(
+            "expected a JSON object".to_string(),
+        ));
+    };
+    match object.get("token").and_then(Value::as_str) {
+        Some(token) if !token.trim().is_empty() => Ok(token.to_string()),
+        _ => Err(SessionTokenError::Invalid),
+    }
 }
 
 pub struct VeniceProvider {
@@ -186,22 +208,35 @@ impl VeniceProvider {
             ))));
         }
 
-        let session: VeniceSessionResponse = response.json().await.map_err(|e| {
-            VeniceWebFailure::Other(ProviderError::Parse(format!(
-                "Failed to parse Venice web session: {e}"
-            )))
-        })?;
-        if session.token.trim().is_empty() {
-            return Err(VeniceWebFailure::InvalidSession);
-        }
-        let token = session.token.as_str();
-        let claims = crate::codex_accounts::api::jwt_payload(token).ok_or_else(|| {
-            VeniceWebFailure::Other(ProviderError::Parse(
-                "Venice session token is not a JWT".into(),
-            ))
-        })?;
-        snapshot_from_web_claims(&claims, Utc::now())
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| VeniceWebFailure::Other(error.into()))?;
+        snapshot_from_session_body(&body, Utc::now())
     }
+}
+
+/// Turns a `/api/auth/session` body into a snapshot. A missing or blank token
+/// is an invalid session, so the caller can try the next browser session.
+fn snapshot_from_session_body(
+    body: &[u8],
+    now: DateTime<Utc>,
+) -> Result<ProviderFetchResult, VeniceWebFailure> {
+    let token = match session_token_from_body(body) {
+        Ok(token) => token,
+        Err(SessionTokenError::Invalid) => return Err(VeniceWebFailure::InvalidSession),
+        Err(SessionTokenError::Malformed(detail)) => {
+            return Err(VeniceWebFailure::Other(ProviderError::Parse(format!(
+                "Failed to parse Venice web session: {detail}"
+            ))));
+        }
+    };
+    let claims = crate::codex_accounts::api::jwt_payload(&token).ok_or_else(|| {
+        VeniceWebFailure::Other(ProviderError::Parse(
+            "Venice session token is not a JWT".into(),
+        ))
+    })?;
+    snapshot_from_web_claims(&claims, now)
 }
 
 fn snapshot_from_balance(balance: &VeniceBalanceResponse) -> UsageSnapshot {
@@ -622,12 +657,21 @@ fn epoch_value_to_datetime(value: Option<&Value>) -> Option<DateTime<Utc>> {
     DateTime::<Utc>::from_timestamp(seconds, 0)
 }
 
-/// Venice documents `userType: "anonymous"` for logged-out sessions; the
-/// claim is compared case-insensitively because the API treats the enum as a
-/// free-form string. Other spellings are not guessed here: an unknown value
-/// is treated as an authenticated user type.
+/// User types that mean a logged-out web session. Upstream
+/// `VeniceWebUsageFetcher.anonymousUserTypes` lists these spellings and
+/// matches them case-insensitively; any other value is an authenticated user.
+const ANONYMOUS_USER_TYPES: [&str; 5] = [
+    "anonymous",
+    "anon",
+    "guest",
+    "unauthenticated",
+    "logged_out",
+];
+
 fn is_anonymous_user_type(value: &str) -> bool {
-    value.eq_ignore_ascii_case("anonymous")
+    ANONYMOUS_USER_TYPES
+        .iter()
+        .any(|candidate| value.eq_ignore_ascii_case(candidate))
 }
 
 fn format_credits(value: f64) -> String {

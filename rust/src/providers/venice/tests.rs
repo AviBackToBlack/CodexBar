@@ -513,3 +513,169 @@ async fn browser_candidates_without_session_credentials_are_skipped_in_order() {
         matches!(result, Err(ProviderError::Other(message)) if message == VENICE_MISSING_CREDENTIALS_MESSAGE)
     );
 }
+
+#[test]
+fn session_body_without_a_usable_token_is_invalid_credentials() {
+    for body in [
+        r#"{}"#,
+        r#"{"token":null}"#,
+        r#"{"token":""}"#,
+        r#"{"token":"   "}"#,
+        r#"{"token":42}"#,
+        r#"{"token":{"jwt":"x"}}"#,
+    ] {
+        assert_eq!(
+            session_token_from_body(body.as_bytes()),
+            Err(SessionTokenError::Invalid),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn session_body_that_is_not_an_object_is_malformed() {
+    for body in ["", "not json", "[]", "\"token\"", "null"] {
+        assert!(
+            matches!(
+                session_token_from_body(body.as_bytes()),
+                Err(SessionTokenError::Malformed(_))
+            ),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn session_body_with_a_token_returns_it() {
+    assert_eq!(
+        session_token_from_body(br#"{"token":"a.b.c","extra":1}"#),
+        Ok("a.b.c".to_string())
+    );
+}
+
+fn session_body_for(claims: &serde_json::Map<String, Value>) -> Vec<u8> {
+    use base64::Engine as _;
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(claims).unwrap());
+    serde_json::to_vec(&serde_json::json!({ "token": format!("eyJhbGciOiJub25lIn0.{payload}.") }))
+        .unwrap()
+}
+
+fn session_now() -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap()
+}
+
+#[test]
+fn session_body_without_a_token_is_an_invalid_session_not_a_parse_error() {
+    for body in [br#"{}"#.as_slice(), br#"{"token":null}"#, br#"{"token":7}"#] {
+        let error = snapshot_from_session_body(body, session_now()).unwrap_err();
+        assert!(matches!(error, VeniceWebFailure::InvalidSession));
+        assert!(matches!(
+            error.into_provider_error(),
+            ProviderError::Other(message) if message == VENICE_INVALID_SESSION_MESSAGE
+        ));
+    }
+    let malformed = snapshot_from_session_body(b"[]", session_now()).unwrap_err();
+    assert!(matches!(
+        malformed,
+        VeniceWebFailure::Other(ProviderError::Parse(_))
+    ));
+    let not_jwt = snapshot_from_session_body(br#"{"token":"opaque"}"#, session_now()).unwrap_err();
+    assert!(matches!(
+        not_jwt,
+        VeniceWebFailure::Other(ProviderError::Parse(_))
+    ));
+}
+
+#[tokio::test]
+async fn empty_session_reply_falls_through_to_the_next_browser() {
+    use std::cell::RefCell;
+
+    let live = session_body_for(&web_claims());
+    for stale in [br#"{}"#.to_vec(), br#"{"token":null}"#.to_vec()] {
+        let calls = RefCell::new(Vec::new());
+        let result = fetch_web_sessions(test_candidates(), |credential| {
+            let value = credential_value(&credential).to_string();
+            calls.borrow_mut().push(value.clone());
+            let body = if value == "first" {
+                stale.clone()
+            } else {
+                live.clone()
+            };
+            async move { snapshot_from_session_body(&body, session_now()) }
+        })
+        .await;
+
+        assert_eq!(*calls.borrow(), ["first", "second"]);
+        assert!(result.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn empty_session_reply_on_the_last_browser_reports_an_expired_session() {
+    let result = fetch_web_sessions(test_candidates(), |_| async {
+        snapshot_from_session_body(br#"{"token":null}"#, session_now())
+    })
+    .await;
+    assert!(matches!(
+        result,
+        Err(ProviderError::Other(message)) if message == VENICE_INVALID_SESSION_MESSAGE
+    ));
+}
+
+#[test]
+fn anonymous_user_types_match_upstream_case_insensitively() {
+    for value in [
+        "anonymous",
+        "ANON",
+        "Guest",
+        "unauthenticated",
+        "Logged_Out",
+    ] {
+        assert!(is_anonymous_user_type(value), "{value}");
+    }
+    for value in ["paid", "free", "user", "", "anonymous2"] {
+        assert!(!is_anonymous_user_type(value), "{value}");
+    }
+
+    for value in ["guest", "anon", "unauthenticated", "logged_out"] {
+        let mut claims = web_claims();
+        claims.insert("userType".into(), Value::from(value));
+        let error = snapshot_from_web_claims(&claims, session_now()).unwrap_err();
+        assert!(matches!(error, VeniceWebFailure::Anonymous), "{value}");
+        assert!(matches!(
+            error.into_provider_error(),
+            ProviderError::AuthRequired
+        ));
+    }
+}
+
+#[tokio::test]
+async fn guest_session_with_quota_claims_falls_through_to_the_next_browser() {
+    use std::cell::RefCell;
+
+    let mut guest_claims = web_claims();
+    guest_claims.insert("userType".into(), Value::from("guest"));
+    let guest = session_body_for(&guest_claims);
+    let live = session_body_for(&web_claims());
+    let calls = RefCell::new(Vec::new());
+    let result = fetch_web_sessions(test_candidates(), |credential| {
+        let value = credential_value(&credential).to_string();
+        calls.borrow_mut().push(value.clone());
+        let body = if value == "first" {
+            guest.clone()
+        } else {
+            live.clone()
+        };
+        async move { snapshot_from_session_body(&body, session_now()) }
+    })
+    .await;
+    assert_eq!(*calls.borrow(), ["first", "second"]);
+    assert!(result.is_ok());
+
+    let only_guest = fetch_web_sessions(test_candidates(), |_| async {
+        snapshot_from_session_body(&guest, session_now())
+    })
+    .await;
+    assert!(matches!(only_guest, Err(ProviderError::AuthRequired)));
+}

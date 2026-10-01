@@ -111,7 +111,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Command Code | Cookies | Monthly Credits, Purchased Credits |
 | Crof | API Key | Credits, Request Quota |
 | StepFun | Oasis Token | 5h, Weekly, Token refresh |
-| Venice | API Key | USD / DIEM Balance |
+| Venice | API Key / Web session | USD / DIEM Balance, Bundled credits (web session expires in about 60 s) |
 | OpenAI | Admin API / API Key | Usage, Requests, Project-scoped cost, Credit Balance |
 | Grok | Cookies / auth.json | Billing |
 | Helmcode (also NaN Builders) | Browser cookies / manual Cookie header | Per-model token quotas, reset windows, Helmcode prepaid balance |
