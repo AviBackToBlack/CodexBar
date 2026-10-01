@@ -684,3 +684,94 @@ fn f5_headline_returns_primary_when_all_informational() {
     // Falls back to primary (the placeholder) when all are informational.
     assert!(headline.is_informational);
 }
+
+#[test]
+fn tray_pace_color_is_opt_in_and_follows_canonical_stage() {
+    let pace = |stage: &str, delta_percent: f64| crate::commands::PaceSnapshot {
+        stage: stage.to_string(),
+        delta_percent,
+        will_last_to_reset: true,
+        eta_seconds: None,
+        expected_used_percent: 40.0,
+        actual_used_percent: 32.0,
+    };
+    let with_pace = |pace: Option<crate::commands::PaceSnapshot>| {
+        let mut snapshot = fake_snapshot("codex", "Codex", 50.0);
+        snapshot.pace = pace;
+        vec![snapshot]
+    };
+    let default_settings = Settings::default();
+    let colored_settings = Settings {
+        menu_bar_color_pace: true,
+        ..Settings::default()
+    };
+    let colored_percent_settings = Settings {
+        menu_bar_color_pace: true,
+        menu_bar_shows_percent: true,
+        ..Settings::default()
+    };
+    let render = |settings: &Settings, snapshots: &[ProviderUsageSnapshot]| {
+        TrayPresentationPlan::resolve(settings, snapshots).render_icon()
+    };
+
+    let unpaced = with_pace(None);
+    let behind_snapshots = with_pace(Some(pace("behind", -8.0)));
+    let ahead_snapshots = with_pace(Some(pace("ahead", 8.0)));
+    let on_track_snapshots = with_pace(Some(pace("on_track", 1.0)));
+
+    let normal = render(&default_settings, &unpaced);
+    let disabled = render(&default_settings, &behind_snapshots);
+    let behind = render(&colored_settings, &behind_snapshots);
+    let ahead = render(&colored_settings, &ahead_snapshots);
+    let on_track = render(&colored_settings, &on_track_snapshots);
+
+    assert_eq!(normal, disabled);
+    assert_eq!(normal, on_track);
+    assert_ne!(normal, behind);
+    assert_ne!(behind, ahead);
+
+    let percent_normal = render(
+        &Settings {
+            menu_bar_shows_percent: true,
+            ..Settings::default()
+        },
+        &unpaced,
+    );
+    let percent_behind = render(&colored_percent_settings, &behind_snapshots);
+    assert_ne!(percent_normal, percent_behind);
+}
+
+#[test]
+fn stacked_tray_icon_keeps_usage_colours_when_pace_tint_is_enabled() {
+    let mut codex = fake_snapshot("codex", "Codex", 50.0);
+    codex.pace = Some(crate::commands::PaceSnapshot {
+        stage: "far_ahead".to_string(),
+        delta_percent: 20.0,
+        will_last_to_reset: false,
+        eta_seconds: None,
+        expected_used_percent: 30.0,
+        actual_used_percent: 50.0,
+    });
+    let claude = fake_snapshot("claude", "Claude", 20.0);
+    let snapshots = vec![codex.clone(), claude.clone()];
+    let unpaced = vec![
+        ProviderUsageSnapshot {
+            pace: None,
+            ..codex
+        },
+        claude,
+    ];
+    let stacked = |color_pace: bool| Settings {
+        tray_icon_mode: TrayIconMode::Stacked,
+        menu_bar_color_pace: color_pace,
+        ..Settings::default()
+    };
+
+    let plan = TrayPresentationPlan::resolve(&stacked(true), &snapshots);
+    assert!(matches!(plan.icon, TrayIconPlan::Stacked { .. }));
+    assert_eq!(plan.icon_pace, None);
+    assert_eq!(
+        plan.render_icon(),
+        TrayPresentationPlan::resolve(&stacked(false), &unpaced).render_icon()
+    );
+}

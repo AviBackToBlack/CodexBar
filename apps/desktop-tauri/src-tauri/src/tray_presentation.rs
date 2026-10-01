@@ -3,7 +3,8 @@
 use crate::commands::{ProviderUsageSnapshot, RateWindowSnapshot};
 use codexbar::settings::{Language, MetricPreference, Settings, TrayIconMode};
 use codexbar::tray::{
-    render_bar_icon_rgba, render_percent_icon_rgba, render_stacked_bar_icon_rgba,
+    TrayPaceColor, render_bar_icon_rgba_with_pace, render_percent_icon_rgba_with_pace,
+    render_stacked_bar_icon_rgba,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +44,9 @@ struct TrayStatusRow<'a> {
 pub(crate) struct TrayPresentationPlan<'a> {
     settings: &'a Settings,
     icon: TrayIconPlan,
+    /// Optional pace tint for the single-provider bar and percent icons
+    /// (upstream 0.59.0 pace colors). Stacked icons keep usage-level colours.
+    icon_pace: Option<TrayPaceColor>,
     status_rows: Vec<TrayStatusRow<'a>>,
 }
 
@@ -57,6 +61,7 @@ impl<'a> TrayPresentationPlan<'a> {
         let prefer_highest =
             settings.menu_bar_shows_highest_usage || settings.menu_bar_display_mode == "minimal";
         let selected = pick_tray_provider(&healthy, prefer_highest);
+        let icon_pace = tray_pace_color(settings, selected);
 
         let (icon, status_rows) = match settings.tray_icon_mode {
             TrayIconMode::Stacked => {
@@ -133,9 +138,15 @@ impl<'a> TrayPresentationPlan<'a> {
             }
         };
 
+        let icon_pace = match icon {
+            TrayIconPlan::Stacked { .. } => None,
+            TrayIconPlan::Bars { .. } | TrayIconPlan::Percent { .. } => icon_pace,
+        };
+
         Self {
             settings,
             icon,
+            icon_pace,
             status_rows,
         }
     }
@@ -146,9 +157,14 @@ impl<'a> TrayPresentationPlan<'a> {
                 primary_percent,
                 secondary_percent,
                 has_error,
-            } => render_bar_icon_rgba(primary_percent, secondary_percent, has_error),
+            } => render_bar_icon_rgba_with_pace(
+                primary_percent,
+                secondary_percent,
+                has_error,
+                self.icon_pace,
+            ),
             TrayIconPlan::Percent { percent, has_error } => {
-                render_percent_icon_rgba(percent, has_error)
+                render_percent_icon_rgba_with_pace(percent, has_error, self.icon_pace)
             }
             TrayIconPlan::Stacked {
                 top_percent,
@@ -191,6 +207,22 @@ fn resolve_single_provider_icon_plan(
             has_error,
         }
     }
+}
+
+/// Pace tint for the provider that drives a single-provider tray icon.
+///
+/// Opt-in through `menu_bar_color_pace`; on-track and unknown stages keep the
+/// normal usage-level colour.
+fn tray_pace_color(
+    settings: &Settings,
+    selected: Option<&ProviderUsageSnapshot>,
+) -> Option<TrayPaceColor> {
+    if !settings.menu_bar_color_pace {
+        return None;
+    }
+    selected
+        .and_then(|snapshot| snapshot.pace.as_ref())
+        .and_then(|pace| TrayPaceColor::from_stage(&pace.stage))
 }
 
 fn fallback_percents(
