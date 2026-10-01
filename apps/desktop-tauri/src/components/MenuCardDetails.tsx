@@ -23,6 +23,7 @@ import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
+import QuotaBurndownChart from "./QuotaBurndownChart";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
 import PaceDetailsChart from "./PaceDetailsChart";
 
@@ -777,6 +778,9 @@ export default function MenuCardDetails({
                 )}
                 {hasQuotaWindowHistory && (
                   <QuotaWindowHistory history={chartData!.quotaWindowHistory} t={t} />
+                )}
+                {provider.quotaBurndown && (
+                  <QuotaBurndownChart burndown={provider.quotaBurndown} t={t} />
                 )}
               </section>
             )}

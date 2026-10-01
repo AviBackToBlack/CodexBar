@@ -914,6 +914,10 @@ export const ALL_LOCALE_KEYS = [
   "ProviderAutoResumeTitle",
   "ProviderAutoResumeAfterQuotaReset",
   "ProviderAutoResumeAfterQuotaResetHelper",
+
+  // Recorded remaining-quota burndown (upstream 0.70.0 #4085)
+  "BurndownChartTitle",
+  "BurndownChartAriaLabel",
 ] as const;
 
 export type LocaleKey = (typeof ALL_LOCALE_KEYS)[number];

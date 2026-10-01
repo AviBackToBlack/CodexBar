@@ -19,6 +19,7 @@ mod openai_dashboard;
 mod provider;
 mod provider_factory;
 mod provider_state;
+mod quota_burndown;
 mod rate_window;
 mod redactor;
 mod session_equivalent_forecast;
@@ -47,6 +48,10 @@ pub use openai_dashboard::*;
 pub use provider::*;
 pub use provider_factory::instantiate as instantiate_provider;
 pub use provider_state::*;
+pub use quota_burndown::{
+    MAX_SERIES_SAMPLES, PersistedPlanEntry, PersistedPlanSeries, QuotaBurndownModel,
+    QuotaBurndownSample, RESET_EQUIVALENCE_TOLERANCE_SECS,
+};
 pub use rate_window::*;
 pub use redactor::*;
 pub use session_equivalent_forecast::*;

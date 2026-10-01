@@ -881,3 +881,6 @@ ClaudeSwapHistoricalUsage = Last known usage
 ClaudeSwapHistoricalCapturedAt = captured
 ClaudeSwapSpend = Spend
 ClaudeSwapDisabled = Disabled in claude-swap
+
+BurndownChartTitle = Usage remaining
+BurndownChartAriaLabel = Recorded remaining quota burndown
