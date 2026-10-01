@@ -309,6 +309,12 @@ fn session_credential_from_header(raw: &str) -> Option<VeniceSessionCredential> 
     if raw.len() > MAX_VENICE_COOKIE_HEADER_LEN {
         return None;
     }
+    // A header pasted from DevTools often keeps its "Cookie:" prefix.
+    let raw = raw.trim();
+    let raw = match raw.get(.."cookie:".len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("cookie:") => raw["cookie:".len()..].trim(),
+        _ => raw,
+    };
     session_credential(raw.split(';').filter_map(|part| part.split_once('=')))
 }
 
@@ -608,6 +614,14 @@ mod tests {
         assert_eq!(
             session_credential_from_header("__venice-auth.session-token.not-a-chunk=value"),
             None
+        );
+        assert_eq!(
+            session_credential_from_header("Cookie: __session=pasted; other=x"),
+            clerk("pasted")
+        );
+        assert_eq!(
+            session_credential_from_header("cookie: __venice-auth.session-token=legacy"),
+            legacy("legacy")
         );
         let oversized = format!(
             "__venice-auth.session-token={}",
