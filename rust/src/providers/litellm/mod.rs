@@ -16,8 +16,8 @@ mod tests;
 use endpoint::management_url;
 pub(crate) use endpoint::validated_base_url;
 use info::{
-    KeyInfoResponse, TeamInfoResponse, UserInfoResponse, bind_key, parse_error, result_from_team,
-    result_from_user,
+    KeyInfoResponse, MISSING_KEY_IDS, TeamInfoResponse, UserInfoResponse, bind_key, parse_error,
+    result_from_team, result_from_user,
 };
 
 const CREDENTIAL_TARGET: &str = "codexbar-litellm";
@@ -125,9 +125,7 @@ impl Provider for LiteLLMProvider {
                     let response: TeamInfoResponse = self.get_json(url, &key).await?;
                     result_from_team(&binding, team_id, response)
                 } else {
-                    Err(parse_error(
-                        "LiteLLM key info did not include a user_id or team_id.",
-                    ))
+                    Err(parse_error(MISSING_KEY_IDS))
                 }
             }
             SourceMode::Web | SourceMode::Cli => {

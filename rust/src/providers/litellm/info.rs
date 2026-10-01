@@ -144,18 +144,20 @@ const TEAM_BUDGET: &str = "Team budget";
 /// Informational lane text for a key without a personal or team budget.
 const NO_BUDGET: &str = "No budget set";
 
+/// Upstream fails with `LiteLLM parse error: <message>`. `ProviderError::Parse`
+/// already displays as "Parse error: …", so only the provider name is added.
 pub(super) fn parse_error(message: impl std::fmt::Display) -> ProviderError {
-    ProviderError::Parse(format!("LiteLLM parse error: {message}"))
+    ProviderError::Parse(format!("LiteLLM {message}"))
 }
+
+pub(super) const MISSING_KEY_IDS: &str = "key info did not include a user_id or team_id.";
 
 pub(super) fn bind_key(response: KeyInfoResponse) -> Result<KeyBinding, ProviderError> {
     let info = response.info;
     let user_id = nonempty(info.user_id);
     let team_id = nonempty(info.team_id);
     if user_id.is_none() && team_id.is_none() {
-        return Err(parse_error(
-            "LiteLLM key info did not include a user_id or team_id.",
-        ));
+        return Err(parse_error(MISSING_KEY_IDS));
     }
     Ok(KeyBinding {
         user_id,

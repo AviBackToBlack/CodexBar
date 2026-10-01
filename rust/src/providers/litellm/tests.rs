@@ -74,9 +74,9 @@ fn key_info_without_user_or_team_id_fails() {
     let response: KeyInfoResponse =
         serde_json::from_value(json!({"info": {"user_id": " ", "spend": 1.0}})).unwrap();
     match bind_key(response) {
-        Err(ProviderError::Parse(message)) => assert!(
-            message.contains("LiteLLM key info did not include a user_id or team_id."),
-            "unexpected message: {message}"
+        Err(error @ ProviderError::Parse(_)) => assert_eq!(
+            error.to_string(),
+            "Parse error: LiteLLM key info did not include a user_id or team_id."
         ),
         _ => panic!("expected parse error"),
     }
@@ -334,6 +334,14 @@ fn mismatched_user_id_is_rejected() {
     assert_parse_error(
         user_result(&key, json!({"user_id": "user-2", "user_info": {}})),
         "user_id did not match /key/info",
+    );
+    // The card shows the error's Display text, so "parse error" appears once.
+    let Err(error) = user_result(&key, json!({"user_info": {"user_id": "user-2"}})) else {
+        panic!("expected parse error");
+    };
+    assert_eq!(
+        error.to_string(),
+        "Parse error: LiteLLM user_id did not match /key/info"
     );
 }
 
