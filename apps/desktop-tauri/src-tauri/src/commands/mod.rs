@@ -78,6 +78,9 @@ pub(crate) use usage_items::*;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod token_account_source_tests;
+
 pub use chart::*;
 pub use spend_contract::*;
 pub use tokens::*;

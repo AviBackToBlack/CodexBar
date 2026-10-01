@@ -863,6 +863,17 @@ pub trait Provider: Send + Sync {
         false
     }
 
+    /// Whether a selected token account leaves an `Auto` usage source as `Auto`.
+    ///
+    /// The shell normally maps a token account with an environment override to
+    /// the OAuth (API-only) lane. A provider whose `Auto` source adds an
+    /// optional extra on top of the API credential, such as the Hugging Face
+    /// prepaid wallet, opts in so the account token does not silently drop it.
+    /// An explicitly chosen non-Auto usage source still maps to OAuth.
+    fn token_account_preserves_auto_source(&self) -> bool {
+        false
+    }
+
     /// How the shell treats a manual cookie source with no cookie present.
     ///
     /// `Fallback` lets the shell remap to its generic browser-cookie attempt.
