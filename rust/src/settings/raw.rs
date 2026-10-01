@@ -609,7 +609,3 @@ impl From<RawSettings> for Settings {
         }
     }
 }
-
-fn default_preferred_currency_code() -> String {
-    "AUTO".to_string()
-}

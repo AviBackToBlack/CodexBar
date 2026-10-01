@@ -125,21 +125,15 @@ fn default_cost_period() -> String {
 /// Format a cost amount using the snapshot's currency symbol when available,
 /// otherwise falling back to the currency-code prefix. Used by tray surfaces
 /// that render a spend amount without a rate-window percent (MonthlyPlan).
-pub(crate) fn format_cost_amount(cost: &CostSnapshotBridge) -> String {
+pub(crate) fn format_cost_amount(
+    cost: &CostSnapshotBridge,
+    rates_cache: Option<&CurrencyRateCache>,
+) -> String {
     if let Some((amount, currency)) =
-        crate::commands::convert_preferred_amount(cost.used, &cost.currency_code)
+        crate::commands::convert_preferred_amount(rates_cache, cost.used, &cost.currency_code)
     {
-        let symbol = match currency.as_str() {
-            "USD" => Some("$"),
-            "EUR" => Some("€"),
-            "GBP" => Some("£"),
-            "TRY" => Some("₺"),
-            _ => None,
-        };
-        return symbol.map_or_else(
-            || format!("{amount:.2} {currency}"),
-            |symbol| format!("{symbol}{amount:.2}"),
-        );
+        // The canonical core symbol table (shared with CLI/tray formatting).
+        return codexbar::core::format_currency(amount, &currency);
     }
     if !cost.formatted_used.is_empty() {
         return cost.formatted_used.clone();

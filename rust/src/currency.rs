@@ -27,6 +27,45 @@ pub const FALLBACK_RATES: &[(&str, f64)] = &[
     ("TRY", 48.5),
 ];
 
+/// The normalized display-currency preference. `AUTO` keeps every surface in
+/// its source units; `Code` converts through the USD pivot. Serialized as the
+/// same `AUTO` / ISO-code strings the settings file has always used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreferredCurrency {
+    Auto,
+    Code(&'static str),
+}
+
+impl PreferredCurrency {
+    /// Normalize raw input: `AUTO` (any case) or a supported ISO code wins,
+    /// anything else reads as `AUTO` (mirrors `normalize_preferred_currency`).
+    pub fn parse(value: &str) -> Self {
+        let code = normalize_preferred_currency(value);
+        if code == "AUTO" {
+            return Self::Auto;
+        }
+        Self::Code(
+            SUPPORTED_CURRENCY_CODES
+                .iter()
+                .copied()
+                .find(|supported| *supported == code)
+                .unwrap_or("USD"),
+        )
+    }
+
+    /// The persisted form: `"AUTO"` or the ISO code.
+    pub fn raw(&self) -> String {
+        match self {
+            Self::Auto => "AUTO".to_string(),
+            Self::Code(code) => (*code).to_string(),
+        }
+    }
+
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+}
+
 pub fn normalize_preferred_currency(value: &str) -> String {
     let code = value.trim().to_ascii_uppercase();
     if code == "AUTO" || SUPPORTED_CURRENCY_CODES.contains(&code.as_str()) {
@@ -34,6 +73,28 @@ pub fn normalize_preferred_currency(value: &str) -> String {
     } else {
         "AUTO".to_string()
     }
+}
+
+/// Keep only finite positive rates for supported codes, with USD pinned to
+/// 1.0 (the conversion pivot). Empty when USD is absent or off — a rate table
+/// without a correct USD pivot is unusable for conversion.
+pub fn sanitize_rates(rates: &HashMap<String, f64>) -> HashMap<String, f64> {
+    let mut clean = HashMap::new();
+    for code in SUPPORTED_CURRENCY_CODES {
+        if let Some(rate) = rates.get(*code).copied()
+            && rate.is_finite()
+            && rate > 0.0
+        {
+            clean.insert((*code).to_string(), rate);
+        }
+    }
+    if clean
+        .get("USD")
+        .is_none_or(|rate| (*rate - 1.0).abs() > f64::EPSILON)
+    {
+        return HashMap::new();
+    }
+    clean
 }
 
 pub fn fallback_rates() -> HashMap<String, f64> {
@@ -164,6 +225,36 @@ mod tests {
             parse_exchange_rates(br#"{"result":"success","base_code":"EUR","rates":{"USD":1}}"#)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn typed_preference_round_trips_and_never_represents_invalid_codes() {
+        assert_eq!(PreferredCurrency::parse(""), PreferredCurrency::Auto);
+        assert_eq!(PreferredCurrency::parse(" auto "), PreferredCurrency::Auto);
+        assert_eq!(
+            PreferredCurrency::parse("try"),
+            PreferredCurrency::Code("TRY")
+        );
+        assert_eq!(PreferredCurrency::parse("BTC"), PreferredCurrency::Auto);
+        assert_eq!(PreferredCurrency::Code("TRY").raw(), "TRY");
+        assert!(PreferredCurrency::Auto.is_auto());
+        assert!(!PreferredCurrency::Code("TRY").is_auto());
+    }
+
+    #[test]
+    fn sanitize_rates_pins_usd_and_drops_unsupported_or_invalid_entries() {
+        let mut rates = fallback_rates();
+        rates.insert("BTC".into(), 65000.0);
+        rates.insert("TRY".into(), f64::NAN);
+        rates.insert("USD".into(), 1.0);
+        let clean = sanitize_rates(&rates);
+        assert_eq!(clean.get("USD"), Some(&1.0));
+        assert!(!clean.contains_key("BTC"));
+        assert!(!clean.contains_key("TRY"));
+
+        let mut broken = fallback_rates();
+        broken.insert("USD".into(), 1.5);
+        assert!(sanitize_rates(&broken).is_empty());
     }
 
     #[test]

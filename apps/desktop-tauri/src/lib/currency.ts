@@ -1,51 +1,16 @@
-export const SUPPORTED_CURRENCIES = [
-  "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD",
-  "INR", "CHF", "AED", "TRY",
-] as const;
+/**
+ * Preferred display-currency formatting for the web UI.
+ *
+ * Rust owns the currency model (supported codes, fallback rates, conversion,
+ * rate sanitizing — see `codexbar::currency`); `get_currency_rates` returns
+ * the merged, sanitized table plus the normalized preference, so this module
+ * only renders strings through `Intl`.
+ */
 
-export const FALLBACK_CURRENCY_RATES: Record<string, number> = {
-  USD: 1,
-  GBP: 0.79,
-  EUR: 0.92,
-  CZK: 21,
-  CNY: 7.27,
-  JPY: 154,
-  KRW: 1428.9,
-  CAD: 1.38,
-  AUD: 1.55,
-  HKD: 7.8,
-  TWD: 32.3,
-  SGD: 1.34,
-  INR: 84.5,
-  CHF: 0.8,
-  AED: 3.6725,
-  TRY: 48.5,
-};
-
-export function normalizePreferredCurrency(value: string | null | undefined): string {
-  const code = value?.trim().toUpperCase() || "AUTO";
-  return code === "AUTO" || SUPPORTED_CURRENCIES.includes(code as (typeof SUPPORTED_CURRENCIES)[number])
-    ? code
-    : "AUTO";
-}
-
-export function convertCurrencyAmount(
-  amount: number,
-  sourceCode: string,
-  targetCode: string,
-  rates: Record<string, number>,
-): number | null {
-  if (!Number.isFinite(amount)) return null;
-  const source = sourceCode.trim().toUpperCase();
-  const target = targetCode.trim().toUpperCase();
-  if (!SUPPORTED_CURRENCIES.includes(source as (typeof SUPPORTED_CURRENCIES)[number]) ||
-      !SUPPORTED_CURRENCIES.includes(target as (typeof SUPPORTED_CURRENCIES)[number])) return null;
-  if (source === target) return amount;
-  const sourceRate = source === "USD" ? 1 : rates[source];
-  const targetRate = target === "USD" ? 1 : rates[target];
-  if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) return null;
-  const result = (amount / sourceRate) * targetRate;
-  return Number.isFinite(result) ? result : null;
+export interface CurrencyRatesSnapshot {
+  rates: Record<string, number>;
+  supportedCodes: readonly string[];
+  preferredCode: string;
 }
 
 function formatOriginal(amount: number, code: string, symbol?: string | null): string {
@@ -69,10 +34,18 @@ export function formatDisplayCurrency(
   const trimmedSource = sourceCode.trim();
   const source = trimmedSource.toUpperCase();
   const sourceLabel = /^[A-Za-z]{3}$/.test(trimmedSource) ? source : trimmedSource;
-  const preferred = normalizePreferredCurrency(preferredCode);
+  const preferred = preferredCode.trim().toUpperCase() || "AUTO";
   if (preferred === "AUTO") return formatOriginal(amount, sourceLabel, sourceSymbol);
-  const converted = convertCurrencyAmount(amount, source, preferred, rates);
-  if (converted == null) return formatOriginal(amount, sourceLabel, sourceSymbol);
+  if (preferred === source) return formatOriginal(amount, sourceLabel, sourceSymbol);
+  const sourceRate = source === "USD" ? 1 : rates[source];
+  const targetRate = preferred === "USD" ? 1 : rates[preferred];
+  const usable =
+    Number.isFinite(amount) &&
+    Number.isFinite(sourceRate) && sourceRate! > 0 &&
+    Number.isFinite(targetRate) && targetRate! > 0;
+  if (!usable) return formatOriginal(amount, sourceLabel, sourceSymbol);
+  const converted = (amount / sourceRate!) * targetRate!;
+  if (!Number.isFinite(converted)) return formatOriginal(amount, sourceLabel, sourceSymbol);
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
@@ -84,23 +57,12 @@ export function formatDisplayCurrency(
   }
 }
 
-export function mergeValidCurrencyRates(input: Record<string, number>): Record<string, number> {
-  const rates = { ...FALLBACK_CURRENCY_RATES };
-  for (const code of SUPPORTED_CURRENCIES) {
-    const value = input[code];
-    if (Number.isFinite(value) && value > 0 && (code !== "USD" || Math.abs(value - 1) <= Number.EPSILON)) {
-      rates[code] = value;
-    }
-  }
-  return rates;
-}
-
 export function sumDisplayCurrencyAmounts(
   rows: Array<{ amount: number | null | undefined; currency: string }>,
   preferredCode: string,
   rates: Record<string, number>,
 ): { total: number | null; included: number; considered: number } {
-  const target = normalizePreferredCurrency(preferredCode);
+  const target = preferredCode.trim().toUpperCase() || "AUTO";
   let total = 0;
   let included = 0;
   for (const row of rows) {
@@ -109,7 +71,14 @@ export function sumDisplayCurrencyAmounts(
     if (target === "AUTO") {
       amount = row.currency.trim().toUpperCase() === "USD" ? row.amount : null;
     } else {
-      amount = convertCurrencyAmount(row.amount, row.currency || "USD", target, rates);
+      const source = row.currency.trim().toUpperCase() || "USD";
+      const sourceRate = source === "USD" ? 1 : rates[source];
+      const targetRate = target === "USD" ? 1 : rates[target];
+      const usable =
+        Number.isFinite(sourceRate) && sourceRate! > 0 &&
+        Number.isFinite(targetRate) && targetRate! > 0;
+      amount = usable ? (row.amount / sourceRate!) * targetRate! : null;
+      if (amount != null && !Number.isFinite(amount)) amount = null;
     }
     if (amount == null) continue;
     total += amount;

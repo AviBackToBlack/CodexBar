@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
 import type { LocaleKey } from "../i18n/keys";
 import { useCurrency } from "../hooks/CurrencyProvider";
-import { normalizePreferredCurrency, sumDisplayCurrencyAmounts } from "../lib/currency";
+import { sumDisplayCurrencyAmounts } from "../lib/currency";
 import {
   beginFlyoutGesture,
   getUsageSpendSummary,
@@ -367,7 +367,7 @@ function OverviewSpendSummary({ providerIds, t }: { providerIds: string[]; t: (k
   };
 
   const rows = overviewSummary.rows;
-  const target = normalizePreferredCurrency(preferredCode);
+  const target = preferredCode.trim().toUpperCase() || "AUTO";
   const aggregate = sumDisplayCurrencyAmounts(
     rows.map((row) => ({ amount: row.thirtyDay, currency: row.currency || "USD" })),
     target,

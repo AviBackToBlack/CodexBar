@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use codexbar::currency::{
-    SUPPORTED_CURRENCY_CODES, convert_amount, fallback_rates, fetch_exchange_rates,
-    normalize_preferred_currency,
+    PreferredCurrency, SUPPORTED_CURRENCY_CODES, convert_amount, fetch_exchange_rates,
+    sanitize_rates,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -17,12 +17,23 @@ struct PersistedRates {
     rates: HashMap<String, f64>,
 }
 
+/// Everything the web UI needs to display preferred currencies. Rust owns the
+/// model (supported codes, fallback rates, sanitizing, USD-pivot conversion);
+/// the frontend formats with `Intl` only.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurrencyRatesSnapshot {
+    /// Merged offline-fallback + persisted/fetched rates, sanitized.
     pub rates: HashMap<String, f64>,
+    /// Codes `format_display_currency` accepts for `preferredCode`.
+    pub supported_codes: Vec<&'static str>,
+    /// Normalized preference the snapshot was built for ("AUTO" or a code).
+    pub preferred_code: String,
 }
 
+/// Shared cache behind the settings command and the tray's cost formatting.
+/// Owns the merged rate table and the preference so both paths agree between
+/// a fetch and the next read (no second source of truth on disk).
 #[derive(Default)]
 pub struct CurrencyRateCache {
     inner: Mutex<CacheState>,
@@ -32,6 +43,10 @@ pub struct CurrencyRateCache {
 struct CacheState {
     loaded: bool,
     persisted: Option<PersistedRates>,
+    /// Merged, sanitized rates (fallback + persisted), cached alongside.
+    rates: HashMap<String, f64>,
+    /// Normalized preference the cached table was built for.
+    preferred_code: String,
 }
 
 #[tauri::command]
@@ -40,14 +55,15 @@ pub async fn get_currency_rates(
     cache: State<'_, CurrencyRateCache>,
     preferred_currency_code: String,
 ) -> Result<CurrencyRatesSnapshot, String> {
-    let preferred = normalize_preferred_currency(&preferred_currency_code);
+    let preferred = PreferredCurrency::parse(&preferred_currency_code);
     let mut state = cache.inner.lock().await;
     if !state.loaded {
         state.persisted = read_persisted_rates();
+        state.rates = merged_rates(state.persisted.as_ref());
         state.loaded = true;
     }
 
-    if preferred != "AUTO" {
+    if !preferred.is_auto() {
         let now = unix_now();
         let fresh = state.persisted.as_ref().is_some_and(|cached| {
             let age = now.saturating_sub(cached.fetched_at_unix);
@@ -62,6 +78,7 @@ pub async fn get_currency_rates(
                     };
                     persist_rates(&entry);
                     state.persisted = Some(entry);
+                    state.rates = merged_rates(state.persisted.as_ref());
                     crate::tray_bridge::refresh_tray_presentation(&app);
                 }
                 Err(error) => {
@@ -70,21 +87,51 @@ pub async fn get_currency_rates(
             }
         }
     }
+    state.preferred_code = preferred.raw();
 
     Ok(CurrencyRatesSnapshot {
-        rates: merged_rates(state.persisted.as_ref()),
+        rates: state.rates.clone(),
+        supported_codes: SUPPORTED_CURRENCY_CODES.to_vec(),
+        preferred_code: preferred.raw(),
     })
 }
 
-pub(crate) fn convert_preferred_amount(amount: f64, source_code: &str) -> Option<(f64, String)> {
-    let preferred =
-        normalize_preferred_currency(&codexbar::settings::Settings::load().preferred_currency_code);
-    if preferred == "AUTO" {
+/// Read the shared cache for the tray path (blocking on the async mutex; the
+/// tray runs off the async runtime). Returns merged rates plus the last
+/// command-observed preference, or `None` when the cache was never loaded —
+/// the caller then falls back to offline fallback rates via `merged_rates`.
+pub(crate) fn cached_rates_and_preference(
+    cache: &CurrencyRateCache,
+) -> Option<(HashMap<String, f64>, String)> {
+    let state = cache.inner.blocking_lock();
+    (!state.rates.is_empty() || state.loaded)
+        .then(|| (state.rates.clone(), state.preferred_code.clone()))
+        .filter(|_| state.loaded)
+}
+
+/// Convert `amount` from `source_code` to the saved preferred currency for
+/// the tray. Reads the shared cache (synced by `get_currency_rates`); falls
+/// back to persisted disk rates when the cache was never touched so a tray
+/// render before the first settings load still converts consistently.
+pub(crate) fn convert_preferred_amount(
+    cache: Option<&CurrencyRateCache>,
+    amount: f64,
+    source_code: &str,
+) -> Option<(f64, String)> {
+    let PreferredCurrency::Code(target) =
+        PreferredCurrency::parse(&codexbar::settings::Settings::load().preferred_currency_code)
+    else {
         return None;
-    }
-    let cached = read_persisted_rates();
-    let rates = merged_rates(cached.as_ref());
-    convert_amount(amount, source_code, &preferred, &rates).map(|converted| (converted, preferred))
+    };
+    let rates = match cache {
+        Some(cache) => match cached_rates_and_preference(cache) {
+            Some((rates, _)) if !rates.is_empty() => rates,
+            _ => merged_rates(read_persisted_rates().as_ref()),
+        },
+        None => merged_rates(read_persisted_rates().as_ref()),
+    };
+    convert_amount(amount, source_code, target, &rates)
+        .map(|converted| (converted, (*target).to_string()))
 }
 
 fn unix_now() -> i64 {
@@ -100,37 +147,20 @@ fn cache_path() -> Option<PathBuf> {
         .map(|parent| parent.join("currency-rates.json"))
 }
 
-fn clean_rates(rates: HashMap<String, f64>) -> HashMap<String, f64> {
-    let mut clean = HashMap::new();
-    for code in SUPPORTED_CURRENCY_CODES {
-        if let Some(rate) = rates.get(*code).copied()
-            && rate.is_finite()
-            && rate > 0.0
-        {
-            clean.insert((*code).to_string(), rate);
-        }
-    }
-    if clean
-        .get("USD")
-        .is_none_or(|rate| (*rate - 1.0).abs() > f64::EPSILON)
-    {
-        return HashMap::new();
-    }
-    clean
-}
-
 fn read_persisted_rates() -> Option<PersistedRates> {
     let path = cache_path()?;
     let bytes = std::fs::read(path).ok()?;
     let mut cached: PersistedRates = serde_json::from_slice(&bytes).ok()?;
-    cached.rates = clean_rates(cached.rates);
+    // Sanitizing is core-owned (single model, see the thermo review): the
+    // shell only delegates.
+    cached.rates = sanitize_rates(&cached.rates);
     (!cached.rates.is_empty()).then_some(cached)
 }
 
 fn merged_rates(cached: Option<&PersistedRates>) -> HashMap<String, f64> {
-    let mut rates = fallback_rates();
+    let mut rates = codexbar::currency::fallback_rates();
     if let Some(cached) = cached {
-        for (code, rate) in clean_rates(cached.rates.clone()) {
+        for (code, rate) in sanitize_rates(&cached.rates) {
             rates.insert(code, rate);
         }
     }
@@ -158,7 +188,7 @@ mod tests {
 
     #[test]
     fn fallback_table_covers_every_preferred_currency() {
-        let rates = fallback_rates();
+        let rates = codexbar::currency::fallback_rates();
         assert_eq!(rates.len(), FALLBACK_RATES.len());
         for code in SUPPORTED_CURRENCY_CODES {
             assert!(
@@ -177,9 +207,27 @@ mod tests {
             ("EUR".to_string(), f64::NAN),
             ("BTC".to_string(), 100.0),
         ]);
-        let clean = clean_rates(rates);
+        let clean = sanitize_rates(&rates);
         assert_eq!(clean.get("TRY"), Some(&48.0));
         assert!(!clean.contains_key("EUR"));
         assert!(!clean.contains_key("BTC"));
+    }
+
+    #[test]
+    fn merged_rates_prefer_cached_values_over_fallback() {
+        let cached = PersistedRates {
+            fetched_at_unix: unix_now(),
+            rates: HashMap::from([("USD".to_string(), 1.0), ("TRY".to_string(), 40.0)]),
+        };
+        let rates = merged_rates(Some(&cached));
+        assert_eq!(rates.get("TRY"), Some(&40.0));
+        // Unsupported codes in the cache never widen the table.
+        assert_eq!(rates.len(), FALLBACK_RATES.len());
+    }
+
+    #[test]
+    fn cache_reads_return_loaded_state_and_skip_when_empty() {
+        let cache = CurrencyRateCache::default();
+        assert!(cached_rates_and_preference(&cache).is_none());
     }
 }
