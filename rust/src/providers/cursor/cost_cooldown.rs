@@ -51,7 +51,8 @@ impl CostCooldown {
     pub(super) fn record_forbidden(&self, credential: &str, now: Instant) {
         let mut entries = self.lock();
         entries.retain(|_, retry_after| now < *retry_after);
-        if entries.len() >= MAX_TRACKED_CREDENTIALS
+        if !entries.contains_key(credential)
+            && entries.len() >= MAX_TRACKED_CREDENTIALS
             && let Some(oldest) = entries
                 .iter()
                 .min_by_key(|(_, retry_after)| **retry_after)
@@ -116,6 +117,27 @@ mod tests {
         cooldown.clear("a");
 
         assert!(!cooldown.is_cooling_down("a", start));
+    }
+
+    #[test]
+    fn refreshing_an_existing_cooldown_does_not_evict_another_credential() {
+        let cooldown = CostCooldown::default();
+        let start = Instant::now();
+        cooldown.record_forbidden("oldest", start);
+        for index in 0..(MAX_TRACKED_CREDENTIALS - 1) {
+            cooldown.record_forbidden(
+                &format!("credential-{index}"),
+                start + Duration::from_secs(index as u64 + 1),
+            );
+        }
+
+        // A concurrent fetch for this credential may have passed the initial
+        // cooldown check before another request recorded its 403.
+        let retry = start + Duration::from_secs(MAX_TRACKED_CREDENTIALS as u64);
+        cooldown.record_forbidden("credential-0", retry);
+
+        assert_eq!(cooldown.lock().len(), MAX_TRACKED_CREDENTIALS);
+        assert!(cooldown.is_cooling_down("oldest", retry));
     }
 
     #[test]
