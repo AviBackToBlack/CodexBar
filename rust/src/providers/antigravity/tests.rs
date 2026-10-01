@@ -622,9 +622,9 @@ async fn local_probe_success_wins_over_an_invalid_cli_override() {
             Ok(Some(local)),
             move || async move {
                 marker.store(true, Ordering::SeqCst);
-                Err(ProviderError::NotInstalled(
+                Err(LiveFailure::from(ProviderError::NotInstalled(
                     "ANTIGRAVITY_CLI_PATH is set but unusable".to_string(),
-                ))
+                )))
             },
             Some(offline_result()),
         )
@@ -714,11 +714,11 @@ async fn cli_fallback_error_prefers_offline_history() {
 async fn unusable_cli_override_prefers_offline_history() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
-                Err(ProviderError::NotInstalled(
+                Err(LiveFailure::from(ProviderError::NotInstalled(
                     "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
-                ))
+                )))
             },
             Some(offline_result()),
         )
@@ -733,11 +733,11 @@ async fn unusable_cli_override_prefers_offline_history() {
 async fn unusable_cli_override_without_history_reports_the_override() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::Other("local API unavailable".to_string())),
+            Err(ProviderError::Other("local API unavailable".to_string()).into()),
             || async {
-                Err(ProviderError::NotInstalled(
+                Err(LiveFailure::from(ProviderError::NotInstalled(
                     "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
-                ))
+                )))
             },
             None,
         )
