@@ -244,10 +244,25 @@ fn status_page_url_for_provider(provider_id: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn open_provider_dashboard(provider_id: String) -> Result<(), String> {
+pub fn open_provider_dashboard(
+    state: tauri::State<'_, Mutex<AppState>>,
+    provider_id: String,
+) -> Result<(), String> {
     let provider_id = canonical_provider_arg(&provider_id)?;
-    let url = dashboard_url_for_provider(&provider_id)
-        .ok_or_else(|| format!("No dashboard URL registered for provider '{provider_id}'"))?;
+    let url = if provider_id == ProviderId::Helmcode.cli_name() {
+        let organization = state.lock().ok().and_then(|guard| {
+            guard
+                .provider_cache
+                .iter()
+                .find(|snapshot| snapshot.provider_id == provider_id)
+                .and_then(|snapshot| snapshot.account_organization.clone())
+        });
+        codexbar::providers::helmcode::dashboard_url_for_organization(organization.as_deref())
+            .to_string()
+    } else {
+        dashboard_url_for_provider(&provider_id)
+            .ok_or_else(|| format!("No dashboard URL registered for provider '{provider_id}'"))?
+    };
     open_url_in_browser(&url)
 }
 

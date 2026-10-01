@@ -154,6 +154,14 @@ pub fn get_provider_detail(
         detail.email = snapshot.account_email.clone();
         detail.plan = snapshot.plan_name.clone();
         detail.organization = snapshot.account_organization.clone();
+        if parsed_provider_id == ProviderId::Helmcode {
+            detail.dashboard_url = Some(
+                codexbar::providers::helmcode::dashboard_url_for_organization(
+                    snapshot.account_organization.as_deref(),
+                )
+                .to_string(),
+            );
+        }
         detail.source_label = if snapshot.source_label.is_empty() {
             None
         } else {

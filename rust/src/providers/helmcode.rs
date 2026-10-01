@@ -1,7 +1,7 @@
 //! Helmcode Cloud and NaN Builders dashboard quota provider.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Datelike, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 use std::time::Duration;
@@ -13,6 +13,7 @@ use crate::core::{
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tenant {
@@ -54,6 +55,8 @@ struct ModelQuota {
 pub struct HelmcodeProvider {
     metadata: ProviderMetadata,
     client: Client,
+    #[cfg(test)]
+    api_base_override: Option<String>,
 }
 
 impl HelmcodeProvider {
@@ -74,9 +77,20 @@ impl HelmcodeProvider {
             },
             client: crate::core::credentialed_http_client_builder()
                 .timeout(Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_else(|_| Client::new()),
+            #[cfg(test)]
+            api_base_override: None,
         }
+    }
+
+    fn api_base(&self, tenant: Tenant) -> String {
+        #[cfg(test)]
+        if let Some(api_base) = &self.api_base_override {
+            return api_base.trim_end_matches('/').to_string();
+        }
+        tenant.api()
     }
 
     async fn fetch_web(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
@@ -164,22 +178,8 @@ impl HelmcodeProvider {
             );
         }
         let mut result = ProviderFetchResult::new(usage, "web");
-        if let Some(credits) = credits
-            && let Some(balance_micros) = credits
-                .get("balanceMicros")
-                .and_then(nonnegative_balance_micros)
-        {
-            let currency = credits
-                .get("currency")
-                .and_then(Value::as_str)
-                .unwrap_or("EUR")
-                .to_ascii_uppercase();
-            if currency.len() == 3 && currency.chars().all(|ch| ch.is_ascii_uppercase()) {
-                result = result.with_cost(
-                    CostSnapshot::new(0.0, currency, "Prepaid balance")
-                        .with_balance((balance_micros as f64) / 1_000_000.0),
-                );
-            }
+        if let Some(cost) = credits.as_ref().and_then(credits_cost) {
+            result = result.with_cost(cost);
         }
         Ok(result)
     }
@@ -191,23 +191,30 @@ impl HelmcodeProvider {
         path: &str,
         optional: bool,
     ) -> Result<Option<Value>, ProviderError> {
-        let response = self
+        let request_timeout = Duration::from_secs(if optional { 2 } else { 8 });
+        let response = match self
             .client
-            .get(format!("{}{path}", tenant.api()))
+            .get(format!("{}{path}", self.api_base(tenant)))
             .header("Cookie", cookie)
             .header("Origin", tenant.origin())
             .header("Referer", format!("{}/dashboard", tenant.origin()))
+            .timeout(request_timeout)
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(_) if optional => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
         let status = response.status();
+        if optional && status != StatusCode::OK {
+            return Ok(None);
+        }
         if status == StatusCode::UNAUTHORIZED
             || status == StatusCode::FORBIDDEN
             || status.is_redirection()
         {
             return Err(ProviderError::AuthRequired);
-        }
-        if optional && !status.is_success() {
-            return Ok(None);
         }
         if status == StatusCode::TOO_MANY_REQUESTS {
             return Err(ProviderError::Other("Helmcode rate limit reached.".into()));
@@ -222,13 +229,24 @@ impl HelmcodeProvider {
                 "Helmcode dashboard returned HTTP {status}."
             )));
         }
-        let body = read_bounded_response(response, MAX_RESPONSE_BYTES)
-            .await
-            .map_err(|error| match error {
-                BoundedBodyError::TooLarge => parse_failure("response too large"),
-                BoundedBodyError::Read(_) => parse_failure("invalid JSON"),
-            })?;
-        let value = serde_json::from_slice(&body).map_err(|_| parse_failure("invalid JSON"))?;
+        let body = match read_bounded_response(response, MAX_RESPONSE_BYTES).await {
+            Ok(body) => body,
+            Err(_) if optional => return Ok(None),
+            Err(error) => {
+                return Err(parse_failure(match error {
+                    BoundedBodyError::TooLarge => "response too large",
+                    BoundedBodyError::Read(_) => "invalid JSON",
+                }));
+            }
+        };
+        let value: Value = match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(_) if optional => return Ok(None),
+            Err(_) => return Err(parse_failure("invalid JSON")),
+        };
+        if optional && !value.is_object() {
+            return Ok(None);
+        }
         Ok(Some(value))
     }
 }
@@ -274,13 +292,7 @@ fn parse_models(quota: &Value, premium: bool) -> Result<Vec<ModelQuota>, Provide
         .get("periodStart")
         .and_then(Value::as_str)
         .ok_or_else(|| parse_failure("periodStart"))?;
-    let fallback = DateTime::parse_from_rfc3339(period_start)
-        .ok()
-        .and_then(|date| {
-            let date = date.with_timezone(&Utc);
-            Utc.with_ymd_and_hms(date.year(), date.month(), 1, 0, 0, 0)
-                .single()
-        });
+    let fallback = monthly_reset_fallback(period_start);
     let models = object
         .get("models")
         .and_then(Value::as_array)
@@ -359,8 +371,8 @@ fn model_window(model: &ModelQuota) -> RateWindow {
 
 fn nonnegative(value: Option<&Value>, field: &str) -> Result<f64, ProviderError> {
     value
-        .and_then(Value::as_f64)
-        .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
+        .and_then(safe_integer_number)
+        .filter(|value| *value >= 0.0)
         .ok_or_else(|| parse_failure(field))
 }
 fn optional_nonnegative(value: Option<&Value>, field: &str) -> Result<Option<f64>, ProviderError> {
@@ -369,8 +381,68 @@ fn optional_nonnegative(value: Option<&Value>, field: &str) -> Result<Option<f64
         Some(value) => nonnegative(Some(value), field).map(Some),
     }
 }
-fn nonnegative_balance_micros(value: &Value) -> Option<i64> {
-    value.as_i64().filter(|amount| *amount >= 0)
+fn safe_integer_number(value: &Value) -> Option<f64> {
+    value.as_f64().filter(|number| {
+        number.is_finite() && number.fract() == 0.0 && number.abs() <= MAX_SAFE_INTEGER
+    })
+}
+
+fn credits_cost(credits: &Value) -> Option<CostSnapshot> {
+    let balance_micros = safe_integer_number(credits.get("balanceMicros")?)?;
+    let currency = match credits.get("currency") {
+        None | Some(Value::Null) => "EUR".to_string(),
+        Some(Value::String(currency)) => currency.to_ascii_uppercase(),
+        Some(_) => return None,
+    };
+    if currency.len() != 3 || !currency.chars().all(|ch| ch.is_ascii_uppercase()) {
+        return None;
+    }
+    Some(
+        CostSnapshot::new(0.0, currency, "Prepaid balance")
+            .with_balance(balance_micros.max(0.0) / 1_000_000.0),
+    )
+}
+
+fn monthly_reset_fallback(period_start: &str) -> Option<DateTime<Utc>> {
+    let bytes = period_start.as_bytes();
+    if bytes.len() < 10
+        || (bytes.len() > 10 && bytes[10] != b'T')
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+    {
+        return None;
+    }
+    let year = parse_ascii_digits(&bytes[..4])?;
+    let month = parse_ascii_digits(&bytes[5..7])?;
+    let day = parse_ascii_digits(&bytes[8..10])?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let (year, month) = if month == 12 {
+        (year.checked_add(1)?, 1)
+    } else {
+        (year, month + 1)
+    };
+    Utc.with_ymd_and_hms(year, month as u32, 1, 0, 0, 0)
+        .single()
+}
+
+fn parse_ascii_digits(bytes: &[u8]) -> Option<i32> {
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    bytes.iter().try_fold(0_i32, |value, digit| {
+        value.checked_mul(10)?.checked_add(i32::from(*digit - b'0'))
+    })
+}
+
+/// Return the tenant dashboard for a Helmcode account organization.
+pub fn dashboard_url_for_organization(organization: Option<&str>) -> &'static str {
+    if organization == Some("NaN Builders") {
+        "https://cloud.nan.builders/dashboard"
+    } else {
+        "https://cloud.helmcode.com/dashboard"
+    }
 }
 fn parse_failure(field: impl AsRef<str>) -> ProviderError {
     ProviderError::Parse(format!(
@@ -384,40 +456,482 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn parses_models_filters_nonpremium_rolling_windows_and_orders_are_external() {
-        let value = json!({"periodStart":"2030-02-12T00:00:00Z","models":[
-            {"model":"monthly","cap":1000,"tokensUsed":250,"creditTokens":50,"periodEnd":null},
-            {"model":"rolling","cap":100,"tokensUsed":90,"windowHours":5}
-        ]});
-        let free = parse_models(&value, false).unwrap();
-        assert_eq!(free.len(), 1);
-        assert_eq!(free[0].name, "monthly");
-        assert_eq!(free[0].resets_at.unwrap().day(), 1);
-        assert_eq!(parse_models(&value, true).unwrap().len(), 2);
+    const QUOTA_GOLDEN: &str = r#"{"periodStart":"2026-09-01","models":[
+        {"model":"helm-monthly","cap":2000000000,"tokensUsed":73854494,"remaining":1926145506,"periodEnd":"2026-10-01T00:00:00Z","updatedAt":"2026-09-05T01:30:34Z"},
+        {"model":"helm-rolling-a","cap":3000000000,"tokensUsed":0,"remaining":3000000000,"periodEnd":"2026-10-04T19:25:48Z","windowHours":4,"fullWindowTokens":400000000},
+        {"model":"helm-rolling-b","cap":3000000000,"tokensUsed":0,"remaining":3000000000,"periodEnd":"2026-10-04T19:25:48Z","windowHours":4,"fullWindowTokens":400000000},
+        {"model":"helm-monthly-b","cap":3000000000,"tokensUsed":0,"remaining":3000000000,"periodEnd":"2026-10-01T00:00:00Z"},
+        {"model":"helm-monthly-c","cap":500000000,"tokensUsed":0,"remaining":500000000,"periodEnd":"2026-10-01T00:00:00Z"},
+        {"model":"helm-monthly-d","cap":1000000000,"tokensUsed":0,"remaining":1000000000,"periodEnd":"2026-10-01T00:00:00Z"}
+    ]}"#;
+    const BILLING_FREE: &str = r#"{"subscription":{"status":"active","premium":false,"currency":"eur","currentPeriodStart":1788549948,"currentPeriodEnd":1791141948,"cancelAtPeriodEnd":false,"cancelAt":null,"id":"sub_redacted"},"paymentMethod":null,"address":{}}"#;
+    const BILLING_PREMIUM: &str = r#"{"subscription":{"status":"active","premium":true,"currency":"eur","currentPeriodStart":1788549948,"currentPeriodEnd":1791141948,"cancelAtPeriodEnd":false,"cancelAt":null,"id":"sub_redacted"},"paymentMethod":null,"address":{}}"#;
+    const CREDITS: &str = r#"{"balanceMicros":12500000,"currency":"eur"}"#;
+
+    fn provider_at(api_base: &str) -> HelmcodeProvider {
+        let mut provider = HelmcodeProvider::new();
+        provider.api_base_override = Some(api_base.to_string());
+        provider.client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test client builds");
+        provider
     }
 
-    #[test]
-    fn rejects_fractional_or_negative_quota_counts() {
-        assert!(parse_models(&json!({"periodStart":"2030-01-01T00:00:00Z","models":[{"model":"x","cap":1.5,"tokensUsed":0}]}), true).is_err());
-        assert!(parse_models(&json!({"periodStart":"2030-01-01T00:00:00Z","models":[{"model":"x","cap":1,"tokensUsed":-1}]}), true).is_err());
-        assert!(
-            parse_models(
-                &json!({"periodStart":"2030-01-01T00:00:00Z","models":[{"model":"x","cap":1,"tokensUsed":0,"windowHours":4_294_967_296_u64}]}),
-                true,
+    fn fetch_context(workspace_id: Option<&str>) -> FetchContext {
+        FetchContext {
+            source_mode: SourceMode::Web,
+            manual_cookie_header: Some("session=test-cookie".to_string()),
+            workspace_id: workspace_id.map(str::to_string),
+            ..FetchContext::default()
+        }
+    }
+
+    async fn mock_fetch(
+        billing_status: usize,
+        billing_body: &str,
+        credits_status: usize,
+        credits_body: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let mut server = mockito::Server::new_async().await;
+        let quota = server
+            .mock("GET", "/api/usage/quota")
+            .with_status(200)
+            .with_body(QUOTA_GOLDEN)
+            .create_async()
+            .await;
+        let billing = server
+            .mock("GET", "/api/billing")
+            .with_status(billing_status)
+            .with_body(billing_body)
+            .create_async()
+            .await;
+        let credits = server
+            .mock("GET", "/api/billing/credits")
+            .with_status(credits_status)
+            .with_body(credits_body)
+            .expect(
+                if workspace_id.is_some_and(|id| id.eq_ignore_ascii_case("nanBuilders")) {
+                    0
+                } else {
+                    1
+                },
             )
-            .is_err()
+            .create_async()
+            .await;
+
+        let result = provider_at(&server.url())
+            .fetch_usage(&fetch_context(workspace_id))
+            .await;
+        quota.assert_async().await;
+        billing.assert_async().await;
+        credits.assert_async().await;
+        result
+    }
+
+    #[test]
+    fn dashboard_url_uses_the_account_tenant() {
+        assert_eq!(
+            dashboard_url_for_organization(Some("NaN Builders")),
+            "https://cloud.nan.builders/dashboard"
+        );
+        assert_eq!(
+            dashboard_url_for_organization(None),
+            "https://cloud.helmcode.com/dashboard"
+        );
+        assert_eq!(
+            dashboard_url_for_organization(Some("Other")),
+            "https://cloud.helmcode.com/dashboard"
         );
     }
 
     #[test]
-    fn accepts_nonnegative_balance_micros_and_rejects_negative_values() {
-        assert_eq!(nonnegative_balance_micros(&json!(0)), Some(0));
+    fn parses_cloud_golden_as_free_quota_with_prepaid_balance() {
+        let quota: Value = serde_json::from_str(QUOTA_GOLDEN).unwrap();
+        let models = parse_models(&quota, false).unwrap();
+        let mut models = models;
+        models.sort_by(|a, b| {
+            (b.used / b.cap)
+                .partial_cmp(&(a.used / a.cap))
+                .unwrap()
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        let usage =
+            UsageSnapshot::new(model_window(&models[0])).with_organization("Helmcode Cloud");
+        let primary = &usage.primary;
+        assert!((primary.used_percent - 73_854_494.0 / 2_000_000_000.0 * 100.0).abs() < 1e-10);
         assert_eq!(
-            nonnegative_balance_micros(&json!(1_250_000)),
-            Some(1_250_000)
+            primary.resets_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+                    .unwrap()
+                    .into()
+            )
         );
-        assert_eq!(nonnegative_balance_micros(&json!(-1)), None);
-        assert_eq!(nonnegative_balance_micros(&json!(1.5)), None);
+        assert_eq!(
+            usage.account_organization.as_deref(),
+            Some("Helmcode Cloud")
+        );
+        assert_eq!(
+            models
+                .iter()
+                .skip(1)
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["helm-monthly-b", "helm-monthly-c", "helm-monthly-d"]
+        );
+        let cost = credits_cost(&serde_json::from_str(CREDITS).unwrap()).unwrap();
+        assert_eq!(cost.balance, Some(12.5));
+        assert_eq!(cost.currency_code, "EUR");
+        assert_eq!(cost.period, "Prepaid balance");
+    }
+
+    #[test]
+    fn premium_billing_reveals_rolling_windows_and_requires_boolean_true() {
+        let quota: Value = serde_json::from_str(QUOTA_GOLDEN).unwrap();
+        let premium = parse_models(&quota, true).unwrap();
+        assert_eq!(premium.len(), 6);
+        let rolling = premium
+            .iter()
+            .find(|model| model.name == "helm-rolling-a")
+            .unwrap();
+        assert_eq!(rolling.window_hours, Some(4));
+        assert_eq!(rolling.window_hours.map(|hours| hours * 60), Some(240));
+        assert_eq!(
+            rolling.resets_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-04T19:25:48Z")
+                    .unwrap()
+                    .into()
+            )
+        );
+        assert_eq!(premium[0].window_hours, None);
+
+        for billing in [
+            json!({}),
+            json!({"subscription":{"premium":"true"}}),
+            json!({"subscription":{"premium":1}}),
+        ] {
+            let premium = billing
+                .get("subscription")
+                .and_then(|value| value.get("premium"))
+                .and_then(Value::as_bool)
+                == Some(true);
+            assert_eq!(parse_models(&quota, premium).unwrap().len(), 4);
+        }
+    }
+
+    #[test]
+    fn monthly_fallback_is_first_day_of_the_next_month_and_clamps_usage() {
+        let quota = json!({"periodStart":"2026-12-15","models":[
+            {"model":"helm-unlimited","cap":0,"tokensUsed":100},
+            {"model":"helm-a","cap":1000,"tokensUsed":2000,"creditTokens":20}
+        ]});
+        let models = parse_models(&quota, false).unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "helm-a");
+        assert_eq!(model_window(&models[0]).used_percent, 100.0);
+        assert_eq!(
+            models[0].resets_at,
+            Some(
+                DateTime::parse_from_rfc3339("2027-01-01T00:00:00Z")
+                    .unwrap()
+                    .into()
+            )
+        );
+        assert!(
+            model_window(&models[0])
+                .reset_description
+                .unwrap()
+                .contains("20 credit-funded")
+        );
+
+        assert_eq!(
+            monthly_reset_fallback("2026-09-15T08:00:00Z"),
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+                    .unwrap()
+                    .into()
+            )
+        );
+
+        let malformed_end = json!({"periodStart":"2026-09-01","models":[
+            {"model":"helm-a","cap":1000,"tokensUsed":2000,"periodEnd":"not a date"}
+        ]});
+        assert_eq!(
+            parse_models(&malformed_end, false).unwrap()[0].resets_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+                    .unwrap()
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn period_start_fallback_matches_upstream_date_prefix_rules() {
+        for invalid in [
+            "2026-13-01",
+            "2026-00-01",
+            "2026-09-00",
+            "2026-09-32",
+            "garbage",
+            "2026-09-01x",
+        ] {
+            assert_eq!(monthly_reset_fallback(invalid), None, "{invalid}");
+        }
+        assert!(monthly_reset_fallback("2026-02-31").is_some());
+    }
+
+    #[test]
+    fn malformed_quota_schema_and_unsafe_integer_values_are_rejected() {
+        let drifted = json!({"periodStart":"2026-09-01T00:00:00Z","models":[{"model":"helm-model-a","limit":1000000,"consumed":250000}]});
+        assert!(matches!(
+            parse_models(&drifted, false),
+            Err(ProviderError::Parse(_))
+        ));
+        for cap in [json!(1.5), json!(-1), json!(9_007_199_254_740_992_u64)] {
+            let quota = json!({"periodStart":"2026-09-01","models":[{"model":"x","cap":cap,"tokensUsed":0}]});
+            assert!(parse_models(&quota, true).is_err());
+        }
+        let too_many_hours = json!({"periodStart":"2026-09-01","models":[{"model":"x","cap":1,"tokensUsed":0,"windowHours":8761}]});
+        assert!(parse_models(&too_many_hours, true).is_err());
+    }
+
+    #[test]
+    fn credits_require_safe_integer_balance_and_valid_currency() {
+        let cost = credits_cost(&json!({"balanceMicros":-1,"currency":"eur"})).unwrap();
+        assert_eq!(cost.balance, Some(0.0));
+        assert_eq!(cost.currency_code, "EUR");
+        assert_eq!(
+            credits_cost(&json!({"balanceMicros":12_500_000}))
+                .unwrap()
+                .currency_code,
+            "EUR"
+        );
+        for malformed in [
+            json!({"balanceMicros":12_500_000,"currency":12}),
+            json!({"balanceMicros":"12500000"}),
+            json!({"balanceMicros":12_500_000.5,"currency":"EUR"}),
+            json!({"balanceMicros":9_007_199_254_740_992_u64,"currency":"EUR"}),
+            json!({"balanceMicros":12_500_000,"currency":"EURO"}),
+        ] {
+            assert!(credits_cost(&malformed).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_http_fetch_preserves_quota_and_enriches_premium_cost() {
+        let result = mock_fetch(200, BILLING_FREE, 200, CREDITS, None)
+            .await
+            .unwrap();
+        assert!(
+            (result.usage.primary.used_percent - 73_854_494.0 / 2_000_000_000.0 * 100.0).abs()
+                < 1e-10
+        );
+        assert_eq!(result.usage.primary.window_minutes, None);
+        assert_eq!(result.usage.extra_rate_windows.len(), 3);
+        assert_eq!(
+            result.usage.account_organization.as_deref(),
+            Some("Helmcode Cloud")
+        );
+        assert_eq!(
+            result.cost.as_ref().and_then(|cost| cost.balance),
+            Some(12.5)
+        );
+    }
+
+    #[tokio::test]
+    async fn nan_tenant_uses_its_identity_and_skips_credits_request() {
+        let result = mock_fetch(200, BILLING_FREE, 200, CREDITS, Some("nanBuilders"))
+            .await
+            .unwrap();
+        assert_eq!(
+            result.usage.account_organization.as_deref(),
+            Some("NaN Builders")
+        );
+        assert!(result.cost.is_none());
+        assert_eq!(
+            dashboard_url_for_organization(result.usage.account_organization.as_deref()),
+            "https://cloud.nan.builders/dashboard"
+        );
+    }
+
+    #[tokio::test]
+    async fn premium_http_billing_exposes_rolling_windows() {
+        let result = mock_fetch(200, BILLING_PREMIUM, 200, CREDITS, None)
+            .await
+            .unwrap();
+        assert_eq!(result.usage.extra_rate_windows.len(), 5);
+        let rolling = result
+            .usage
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.title == "helm-rolling-a")
+            .unwrap();
+        assert_eq!(rolling.window.window_minutes, Some(240));
+        assert_eq!(result.usage.primary.window_minutes, None);
+    }
+
+    #[tokio::test]
+    async fn monthly_fallback_http_snapshot_drops_zero_cap_and_has_no_extra_windows() {
+        let quota_body = r#"{"periodStart":"2026-12-15","models":[
+            {"model":"helm-unlimited","cap":0,"tokensUsed":100},
+            {"model":"helm-a","cap":1000,"tokensUsed":2000,"creditTokens":20}
+        ]}"#;
+        let mut server = mockito::Server::new_async().await;
+        let quota = server
+            .mock("GET", "/api/usage/quota")
+            .with_status(200)
+            .with_body(quota_body)
+            .create_async()
+            .await;
+        let billing = server
+            .mock("GET", "/api/billing")
+            .with_status(200)
+            .with_body("{}")
+            .create_async()
+            .await;
+        let credits = server
+            .mock("GET", "/api/billing/credits")
+            .with_status(200)
+            .with_body("{}")
+            .create_async()
+            .await;
+        let result = provider_at(&server.url())
+            .fetch_tenant(Tenant::Helmcode, "session=test-cookie")
+            .await
+            .unwrap();
+        assert_eq!(result.usage.primary.used_percent, 100.0);
+        assert_eq!(
+            result.usage.primary.resets_at,
+            Some(
+                DateTime::parse_from_rfc3339("2027-01-01T00:00:00Z")
+                    .unwrap()
+                    .into()
+            )
+        );
+        assert!(
+            result
+                .usage
+                .primary
+                .reset_description
+                .as_deref()
+                .unwrap()
+                .contains("20 credit-funded")
+        );
+        assert!(result.usage.extra_rate_windows.is_empty());
+        quota.assert_async().await;
+        billing.assert_async().await;
+        credits.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn optional_http_failures_never_discard_quota_or_become_auth_errors() {
+        for status in [401, 403, 302, 429, 503] {
+            let billing_failed = mock_fetch(status, "{}", 200, CREDITS, None)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("billing HTTP {status} failed quota fetch: {error}")
+                });
+            assert_eq!(billing_failed.usage.extra_rate_windows.len(), 3);
+            assert!(billing_failed.cost.is_some());
+
+            let credits_failed = mock_fetch(200, BILLING_FREE, status, "{}", None)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("credits HTTP {status} failed quota fetch: {error}")
+                });
+            assert_eq!(credits_failed.usage.extra_rate_windows.len(), 3);
+            assert!(credits_failed.cost.is_none());
+        }
+
+        let unavailable = mock_fetch(503, "bad JSON", 503, "bad JSON", None)
+            .await
+            .expect("503 optional endpoints leave quota available");
+        assert_eq!(unavailable.usage.extra_rate_windows.len(), 3);
+        assert!(unavailable.cost.is_none());
+    }
+
+    #[tokio::test]
+    async fn malformed_or_oversized_optional_bodies_are_absent() {
+        let oversized = " ".repeat(MAX_RESPONSE_BYTES + 1);
+        for body in ["not json", "[]", oversized.as_str()] {
+            let result = mock_fetch(200, body, 200, CREDITS, None).await.unwrap();
+            assert_eq!(result.usage.extra_rate_windows.len(), 3);
+            assert_eq!(
+                result.cost.as_ref().and_then(|cost| cost.balance),
+                Some(12.5)
+            );
+        }
+        let result = mock_fetch(200, BILLING_FREE, 200, "not json", None)
+            .await
+            .unwrap();
+        assert_eq!(result.usage.extra_rate_windows.len(), 3);
+        assert!(result.cost.is_none());
+
+        let malformed_credits = mock_fetch(
+            200,
+            BILLING_FREE,
+            200,
+            r#"{"balanceMicros":12500000,"currency":12}"#,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(malformed_credits.usage.extra_rate_windows.len(), 3);
+        assert!(malformed_credits.cost.is_none());
+    }
+
+    #[tokio::test]
+    async fn quota_auth_responses_still_require_authentication() {
+        for status in [401, 403, 302] {
+            let mut server = mockito::Server::new_async().await;
+            let quota = server
+                .mock("GET", "/api/usage/quota")
+                .with_status(status)
+                .create_async()
+                .await;
+            let billing = server
+                .mock("GET", "/api/billing")
+                .with_status(200)
+                .with_body(BILLING_FREE)
+                .create_async()
+                .await;
+            let result = provider_at(&server.url())
+                .fetch_usage(&fetch_context(None))
+                .await;
+            assert!(
+                matches!(result, Err(ProviderError::AuthRequired)),
+                "HTTP {status}"
+            );
+            quota.assert_async().await;
+            billing.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn quota_schema_drift_remains_a_parse_error_when_optional_billing_fails() {
+        let mut server = mockito::Server::new_async().await;
+        let quota = server
+            .mock("GET", "/api/usage/quota")
+            .with_status(200)
+            .with_body(r#"{"periodStart":"2026-09-01T00:00:00Z","models":[{"model":"helm-model-a","limit":1000000,"consumed":250000}]}"#)
+            .create_async()
+            .await;
+        let billing = server
+            .mock("GET", "/api/billing")
+            .with_status(503)
+            .with_body("bad JSON")
+            .create_async()
+            .await;
+        let result = provider_at(&server.url())
+            .fetch_usage(&fetch_context(None))
+            .await;
+        assert!(matches!(result, Err(ProviderError::Parse(_))));
+        quota.assert_async().await;
+        billing.assert_async().await;
     }
 }
