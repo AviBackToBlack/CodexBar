@@ -93,7 +93,11 @@ impl GitKrakenProvider {
         let response = request.send().await?;
         let status = response.status();
         if status != StatusCode::OK {
-            return Err(status_error(status));
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok());
+            return Err(status_error(status, retry_after));
         }
 
         let body = read_bounded_response(response, MAX_RESPONSE_BYTES)
@@ -183,20 +187,39 @@ fn resolve_organization(configured: Option<&str>) -> Result<Option<String>, Prov
     Ok(Some(organization.to_string()))
 }
 
-fn status_error(status: StatusCode) -> ProviderError {
+fn status_error(status: StatusCode, retry_after: Option<&str>) -> ProviderError {
     match status {
         StatusCode::UNAUTHORIZED => ProviderError::AuthRequired,
         StatusCode::FORBIDDEN => {
             ProviderError::Other("GitKraken denied access to this account or organization.".into())
         }
-        StatusCode::TOO_MANY_REQUESTS => {
-            ProviderError::Other("GitKraken rate limited usage requests.".into())
-        }
+        StatusCode::TOO_MANY_REQUESTS => ProviderError::Other(format!(
+            "GitKraken rate limited usage requests; retry after {:.3}s.",
+            retry_after_seconds(retry_after)
+        )),
         status if status.is_server_error() => {
             ProviderError::Other("GitKraken usage is temporarily unavailable.".into())
         }
         _ => ProviderError::Other(format!("GitKraken returned HTTP {status}.")),
     }
+}
+
+/// Upstream `Number(headers["retry-after"] ?? 1)`: a missing header or a
+/// non-numeric value means 1 s, an empty value means 0 s, and anything above
+/// 10 s is capped.
+fn retry_after_seconds(value: Option<&str>) -> f64 {
+    let Some(value) = value else {
+        return 1.0;
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return 0.0;
+    }
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+        .map_or(1.0, |seconds| seconds.min(10.0))
 }
 
 fn parse_usage(body: &Value) -> Result<GitKrakenUsage, ProviderError> {
@@ -586,24 +609,65 @@ mod tests {
     #[test]
     fn response_statuses_match_upstream_error_classes_without_reading_private_bodies() {
         assert!(matches!(
-            status_error(StatusCode::UNAUTHORIZED),
+            status_error(StatusCode::UNAUTHORIZED, None),
             ProviderError::AuthRequired
         ));
         assert!(matches!(
-            status_error(StatusCode::FORBIDDEN),
+            status_error(StatusCode::FORBIDDEN, None),
             ProviderError::Other(_)
         ));
         assert!(matches!(
-            status_error(StatusCode::TOO_MANY_REQUESTS),
+            status_error(StatusCode::SERVICE_UNAVAILABLE, None),
             ProviderError::Other(_)
         ));
         assert!(matches!(
-            status_error(StatusCode::SERVICE_UNAVAILABLE),
+            status_error(StatusCode::NOT_FOUND, None),
             ProviderError::Other(_)
         ));
+    }
+
+    #[test]
+    fn rate_limit_message_carries_the_bounded_retry_after() {
+        let message =
+            |header: Option<&str>| match status_error(StatusCode::TOO_MANY_REQUESTS, header) {
+                ProviderError::Other(message) => message,
+                other => panic!("expected a rate limit message, got {other:?}"),
+            };
+        assert_eq!(
+            message(Some("1")),
+            "GitKraken rate limited usage requests; retry after 1.000s."
+        );
+        assert!(message(Some("2.5")).ends_with("retry after 2.500s."));
+        assert!(message(Some("99")).ends_with("retry after 10.000s."));
+        assert!(message(Some("-3")).ends_with("retry after 1.000s."));
+        assert!(message(Some("soon")).ends_with("retry after 1.000s."));
+        assert!(message(Some("inf")).ends_with("retry after 1.000s."));
+        assert!(message(Some("")).ends_with("retry after 0.000s."));
+        assert!(message(None).ends_with("retry after 1.000s."));
+    }
+
+    #[tokio::test]
+    async fn http_429_honors_the_retry_after_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/usage")
+            .with_status(429)
+            .with_header("Retry-After", "7")
+            .create_async()
+            .await;
+        let ctx = FetchContext {
+            api_key: Some("fixture-token".into()),
+            ..FetchContext::default()
+        };
+        let error = GitKrakenProvider::new()
+            .fetch_from(&ctx, &format!("{}/usage", server.url()))
+            .await
+            .expect_err("429 is an error");
+        mock.assert_async().await;
         assert!(matches!(
-            status_error(StatusCode::NOT_FOUND),
-            ProviderError::Other(_)
+            error,
+            ProviderError::Other(message)
+                if message == "GitKraken rate limited usage requests; retry after 7.000s."
         ));
     }
 
