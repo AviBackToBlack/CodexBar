@@ -13,6 +13,7 @@ menu-bar layout.
 - Grok: Settings and tray **Add account** flow matching Codex/Claude — isolated `grok login --oauth`, save current CLI login, switch, and remove without logging out the active session.
 - Replicate: cookie-authenticated monthly spend and optional prepaid credit balance from the billing page, with user and organization account isolation.
 - DeepSeek: show reported per-model spend in the provider details while preserving the billing currency, reporting period, zero values, and incomplete-total safeguards.
+- CLI: show provider-supplied history in usage text with its source period, known zero, and cost provenance (reported, estimated, or includes estimates), plus input-plus-output token totals for OpenRouter Activity.
 
 ### Fixed
 - Antigravity: a set but unusable `ANTIGRAVITY_CLI_PATH` (empty, missing, or not a file) now turns off automatic `agy` discovery instead of falling back to another CLI that could start an interactive login during a background refresh; a running desktop app still answers first, offline history is still shown, and unsetting the variable restores discovery.

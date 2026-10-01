@@ -324,3 +324,95 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
             .contains("coupon-token-secret")
     );
 }
+
+fn history_output(cost: CostSnapshot) -> String {
+    let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(cost);
+    render_text_with_status(ProviderId::OpenRouter, &result, None, false)
+}
+
+#[test]
+fn history_line_shows_provenance_and_token_total() {
+    use crate::spend_contract::CostProvenance;
+
+    let cases = [
+        (CostProvenance::VendorMetered, "$1.25 (reported)"),
+        (CostProvenance::ListPriceEstimate, "$1.25 (estimated)"),
+        (CostProvenance::Mixed, "$1.25 (includes estimates)"),
+        (CostProvenance::Unknown, "$1.25"),
+    ];
+    for (provenance, spend) in cases {
+        let output = history_output(
+            CostSnapshot::new(1.25, "USD", "Last 30 days (UTC)")
+                .with_history_tokens(15)
+                .with_provenance(provenance)
+                .always_visible(),
+        );
+        let expected = format!("  Last 30 days (UTC): {spend} · 15 tokens");
+        assert_eq!(output.matches(&expected).count(), 1, "{output}");
+    }
+}
+
+#[test]
+fn history_line_preserves_known_zero_singular_token_and_currency() {
+    use crate::spend_contract::CostProvenance;
+
+    let zero = history_output(
+        CostSnapshot::new(0.0, "USD", "Last 30 days (UTC)")
+            .with_history_tokens(0)
+            .with_provenance(CostProvenance::VendorMetered)
+            .always_visible(),
+    );
+    assert!(zero.contains("Last 30 days (UTC): $0.00 (reported) · 0 tokens"));
+
+    let one = history_output(
+        CostSnapshot::new(0.0, "USD", "Last 1 day")
+            .with_history_tokens(1)
+            .always_visible(),
+    );
+    assert!(one.ends_with("Last 1 day: $0.00 · 1 token"), "{one}");
+
+    let euro = history_output(CostSnapshot::new(2.5, "EUR", "Billing period").always_visible());
+    assert!(euro.contains("Billing period: €2.50"));
+    assert!(!euro.contains("token"));
+}
+
+#[test]
+fn history_line_compacts_large_token_totals() {
+    let cases = [
+        (999, "999 tokens"),
+        (1_000, "1K tokens"),
+        (1_250, "1.2K tokens"),
+        (15_400, "15K tokens"),
+        (999_499, "999K tokens"),
+        (999_500, "1M tokens"),
+        (2_500_000, "2.5M tokens"),
+        (999_500_000, "1B tokens"),
+    ];
+    for (tokens, expected) in cases {
+        let output = history_output(
+            CostSnapshot::new(1.0, "USD", "Last 30 days (UTC)")
+                .with_history_tokens(tokens)
+                .always_visible(),
+        );
+        assert!(
+            output.contains(&format!("$1.00 · {expected}")),
+            "{tokens}: {output}"
+        );
+    }
+}
+
+#[test]
+fn history_fields_do_not_change_the_cost_json_contract() {
+    use crate::spend_contract::CostProvenance;
+
+    let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(
+        CostSnapshot::new(1.25, "USD", "Last 30 days (UTC)")
+            .with_history_tokens(15)
+            .with_provenance(CostProvenance::VendorMetered)
+            .always_visible(),
+    );
+    let json = render_json_result(ProviderId::OpenRouter, result, None);
+    let cost = json.get("cost").and_then(|cost| cost.as_object()).unwrap();
+    assert!(!cost.contains_key("historyTokens") && !cost.contains_key("history_tokens"));
+    assert!(!cost.contains_key("provenance"));
+}
