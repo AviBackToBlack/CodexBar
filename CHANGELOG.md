@@ -15,7 +15,7 @@ menu-bar layout.
 - DeepSeek: show reported per-model spend in the provider details while preserving the billing currency, reporting period, zero values, and incomplete-total safeguards.
 
 ### Fixed
-- Kimi: when the Kimi Code CLI credential is stale or rejected and no web session can take over, direct the user to run `kimi` or add a Kimi Code API key in Settings, keeping the web fallback and leaving CLI-owned credentials read-only.
+- Kimi: when the Kimi Code CLI credential is stale or rejected and web auth has no token to try, direct the user to run `kimi` or add a Kimi Code API key in Settings, keeping the web fallback and leaving CLI-owned credentials read-only. A rejected web token still reports the web error, and a Kimi Code API 403 reports a permission or quota denial instead of a sign-in problem.
 - Claude: when Hide Personal Info is enabled, keep saved account rows distinguishable with stable localized `Account N` labels and matching redacted tooltips.
 
 ---
