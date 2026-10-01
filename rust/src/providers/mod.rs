@@ -232,6 +232,19 @@ pub(crate) fn browser_cookie_headers_for_domain(
         .map_err(map_browser_cookie_error)
 }
 
+pub(crate) fn browser_cookie_candidates_for_domain(
+    domain: &str,
+) -> Result<
+    Vec<(
+        crate::browser::detection::BrowserType,
+        Vec<crate::browser::cookies::Cookie>,
+    )>,
+    crate::core::ProviderError,
+> {
+    crate::browser::cookies::get_cookies_by_browser_for_domain(domain)
+        .map_err(map_browser_cookie_error)
+}
+
 /// All non-empty values for one cookie name in a `Cookie:` header, in order.
 /// Returns every value so callers can reject duplicates instead of silently
 /// picking the first.

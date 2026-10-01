@@ -770,6 +770,22 @@ pub fn get_cookie_headers_for_domain(
     Ok(headers)
 }
 
+/// Get cookie candidates from every detected browser that has readable cookies
+/// for a domain, preserving browser order and cookie metadata for provider-side
+/// host filtering. Reports App-Bound Encryption when it is the only blocker.
+pub fn get_cookies_by_browser_for_domain(
+    domain: &str,
+) -> Result<Vec<(BrowserType, Vec<Cookie>)>, CookieError> {
+    let scan = extract_domain_candidates(domain)?;
+    if scan.candidates.is_empty() && scan.abe_error_seen {
+        return Err(CookieError::AppBoundEncryption);
+    }
+    if scan.candidates.is_empty() {
+        return Err(CookieError::NotFound(domain.to_string()));
+    }
+    Ok(scan.candidates)
+}
+
 /// Get a cookie header string for a domain
 pub fn get_cookie_header(domain: &str) -> Result<String, CookieError> {
     let cookies = get_cookies_for_domain(domain)?;
