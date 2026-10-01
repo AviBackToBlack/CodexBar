@@ -46,7 +46,6 @@
   --bar-height: 6px;
   --bar-radius: 3px;
   --menu-width: 280px;
-  --popout-width: 340px;
   --sidebar-width: 200px;
   --icon-menu: 16px;
   --icon-sidebar: 20px;
@@ -1598,54 +1597,6 @@ body:has(.tray-panel-reveal) {
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* ── Pop-out Panel ────────────────────────────────────────────────── */
-
-.shell--popout {
-  max-width: 100%;
-  padding: 16px 20px 24px;
-  animation: surfaceFadeIn 80ms ease-out;
-}
-
-.popout-body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.popout-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.popout-detail {
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-}
-
-/* Side-by-side layout when window is wide enough */
-@media (min-width: 640px) {
-  .popout-body--split {
-    flex-direction: row;
-    min-height: 0;
-  }
-
-  .popout-body--split .popout-list {
-    flex: 0 0 220px;
-    overflow-y: auto;
-    max-height: calc(100vh - 160px);
-  }
-
-  .popout-body--split .popout-detail {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-    max-height: calc(100vh - 160px);
-  }
-}
-
 /* ── Provider detail: org label ─────────────────────────────────────── */
 
 .tray-detail__org {
@@ -1735,7 +1686,7 @@ body:has(.tray-panel-reveal) {
   color: var(--pace-burning-fg);
 }
 
-/* ── Pop-out / tray card: pace badge pill ──────────────────────────── */
+/* ── Tray card: pace badge pill ──────────────────────────── */
 
 .tray-pace-badge {
   display: inline-flex;
@@ -3117,7 +3068,7 @@ body:has(.tray-panel-reveal) {
 
 
 /* ──────────────────────────────────────────────────────────────────────
-   Menu-bar popover surfaces (Tray + Pop-out)
+   Menu-bar popover surface (tray panel)
 
    Structural parity with upstream SwiftUI `MenuContent` /
    `UsageMenuCardView` (CodexBar/Sources/CodexBar/MenuCardView.swift).
@@ -3152,90 +3103,6 @@ body:has(.tray-panel-reveal) {
   -webkit-font-smoothing: antialiased;
 }
 
-.popout-scale-shell {
-  --window-scale: 1;
-  width: 100%;
-  height: 100vh;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.popout-scale-shell .menu-surface--popout {
-  height: 100%;
-  max-height: 100%;
-}
-
-/* Draggable title bar for the PopOut window mode (borderless window has no
-   native caption). Bleeds past the surface's 6px/10px padding so it sits
-   flush to the window edges, mirroring `.settings-titlebar`. */
-.popout-titlebar {
-  display: flex;
-  align-items: center;
-  height: 30px;
-  margin: -6px -10px 0;
-  padding: 0 4px 0 12px;
-  background: #1e1e1e;
-  -webkit-app-region: drag;
-  user-select: none;
-  flex-shrink: 0;
-}
-.popout-titlebar__title {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  letter-spacing: 0.02em;
-}
-.popout-titlebar__controls {
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-self: stretch;
-  margin-right: -4px;
-}
-.popout-titlebar__control {
-  -webkit-app-region: no-drag;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  min-width: 44px;
-  height: 30px;
-  border: none;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.82);
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-.popout-titlebar__control svg {
-  width: 12px;
-  height: 12px;
-  display: block;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-}
-.popout-titlebar__control--minimize::before {
-  content: "";
-  display: block;
-  width: 10px;
-  height: 1px;
-  background: currentColor;
-  border-radius: 1px;
-}
-.popout-titlebar__control:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-.popout-titlebar__control:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-.popout-titlebar__control--close:hover {
-  background: #e81123;
-  color: #fff;
-}
-
 .settings-field input[type="range"] {
   width: 150px;
   accent-color: var(--accent);
@@ -3244,14 +3111,6 @@ body:has(.tray-panel-reveal) {
 .settings-field input[type="range"]:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.menu-surface--popout {
-  width: 100%;
-  padding: 6px 10px;
-  height: 100vh;
-  max-height: 100vh;
-  min-height: 0;
 }
 
 /* Header bar — small CodexBar wordmark + iconified actions
@@ -3334,111 +3193,6 @@ body:has(.tray-panel-reveal) {
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-}
-
-.menu-surface--popout .menu-surface__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(142, 142, 147, 0.45) transparent;
-}
-
-.menu-surface--popout .menu-surface__body::-webkit-scrollbar {
-  width: 6px;
-}
-
-.menu-surface--popout .menu-surface__body::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.menu-surface--popout .menu-surface__body::-webkit-scrollbar-thumb {
-  min-height: 36px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: rgba(142, 142, 147, 0.45);
-  background-clip: padding-box;
-}
-
-.menu-surface--popout .provider-grid {
-  grid-template-columns: repeat(10, minmax(0, 1fr));
-  gap: 9px 4px;
-  padding: 8px 8px 7px;
-}
-
-.menu-surface--popout .provider-grid--sparse {
-  grid-template-columns: repeat(auto-fit, 42px);
-  justify-content: start;
-  gap: 8px 7px;
-}
-
-.menu-surface--popout .provider-grid--sparse .provider-grid__item {
-  width: 42px;
-}
-
-.menu-surface--popout .provider-grid--sparse .provider-grid__label {
-  max-width: 42px;
-}
-
-.menu-surface--popout .provider-grid__divider {
-  height: 1px;
-  margin: 2px 0 6px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.menu-surface--popout .menu-stack {
-  flex: 0 0 auto;
-  max-height: none;
-  overflow: visible;
-  /* Window mode is wide, so lay the provider cards side by side instead of in
-     one tall scrolling column. The base `.menu-stack` is `flex-direction:
-     column`, so we MUST switch to `row` here; `flex: 1 1 0` on each card then
-     makes them grow to an EQUAL share of the row and fill the full width (no
-     leftover blank on the right). The row wraps to a single column when the
-     window is too narrow to fit two ~300px cards. */
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 12px 16px;
-  align-items: flex-start;
-  /* The stack is a flex item of a column flex parent; without an explicit
-     width it shrink-wraps to the cards' content instead of filling the body,
-     leaving blank space on the right. Force it to the full body width. */
-  width: 100%;
-}
-
-.menu-surface--popout .menu-stack__item {
-  flex: 1 1 0;
-  min-width: min(300px, 100%);
-}
-
-/* Window mode must fill the resizable window. The tray widget relies on
-   shrink-to-fit (content-width) sizing all the way up the html → #root → shell
-   chain so its window can auto-size to content; the PopOut is a normal
-   resizable window, so every level must instead stretch to full width — without
-   this the side-by-side provider cards sit at content width and leave a large
-   blank area on the right of a wide window. */
-body:has(.menu-surface--popout) #root,
-body:has(.menu-surface--popout) .popout-scale-shell,
-.menu-surface--popout,
-.menu-surface--popout .menu-surface__body,
-.menu-surface--popout .menu-stack {
-  width: 100% !important;
-}
-
-/* The horizontal rules between stacked cards make no sense side by side. */
-.menu-surface--popout .menu-stack__sep {
-  display: none;
-}
-
-.menu-surface--popout .menu-stack__item,
-.menu-surface--popout .menu-card {
-  background: transparent;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
 }
 
 .menu-surface__empty {
@@ -4588,15 +4342,6 @@ html:has(.menu-surface--tray) {
      horizontal scrollbar in the 328px tray window. The window's own 300px
      minimum already covers the floor — let the zoomed surface wrap instead. */
   min-width: 0;
-}
-.menu-surface--popout {
-  width: 100%;
-  border-radius: 0;
-  border: none;
-  box-shadow: none;
-  height: 100vh;
-  max-height: 100vh;
-  min-height: 0;
 }
 .menu-surface--tray {
   border: 1px solid rgba(255, 255, 255, 0.10);
@@ -5756,19 +5501,8 @@ html:has(.menu-surface--tray) {
   gap: 8px 6px;
 }
 
-.menu-surface--popout .provider-grid {
-  grid-template-columns: repeat(8, 38px);
-  gap: 8px 6px;
-}
-
 .menu-surface--tray .provider-grid--sparse {
   grid-template-columns: repeat(auto-fit, 26px);
-  justify-content: start;
-  gap: 8px 7px;
-}
-
-.menu-surface--popout .provider-grid--sparse {
-  grid-template-columns: repeat(auto-fit, 42px);
   justify-content: start;
   gap: 8px 7px;
 }
@@ -5799,11 +5533,6 @@ html:has(.menu-surface--tray) {
   gap: 7px 4px;
   padding-top: 7px;
   padding-bottom: 5px;
-}
-
-.menu-surface--popout .provider-grid--compact {
-  grid-template-columns: repeat(8, 38px);
-  gap: 8px 6px;
 }
 
 .provider-grid--compact .provider-grid__item {
@@ -5929,37 +5658,14 @@ html:has(.menu-surface--tray) {
 }
 
 @media (max-height: 620px) {
-  .menu-surface--popout .provider-grid,
   .menu-surface--tray .provider-grid {
     gap: 6px 5px;
     padding-top: 6px;
     padding-bottom: 5px;
   }
 
-  .menu-surface--popout .provider-grid__item,
   .menu-surface--tray .provider-grid__item {
     min-height: 36px;
-  }
-
-  .menu-surface--popout .menu-card__content {
-    gap: 8px;
-  }
-
-  .menu-surface--popout .menu-metric {
-    gap: 4px;
-  }
-
-  .menu-surface--popout .menu-card__local-grid {
-    gap: 7px 20px;
-  }
-
-  .menu-surface--popout .menu-card__local-chart {
-    height: 46px;
-  }
-
-  .menu-surface--popout .menu-surface__footer-row {
-    padding-top: 3px;
-    padding-bottom: 3px;
   }
 }
 .agent-sessions {
@@ -6033,31 +5739,6 @@ html:has(.menu-surface--tray) {
   font-size: 13px;
   background: var(--surface-elevated);
   color: inherit;
-}
-
-.accent-color-swatch-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 12px;
-}
-
-.accent-color-swatch {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-}
-
-.accent-color-swatch-label {
-  color: var(--text-secondary);
-}
-
-.accent-color-swatch-value {
-  font-family: var(--font-mono, monospace);
-  color: var(--text-secondary);
 }
 
 /* ── Mistral monthly spend row (#2821, #2947) ──────────────────── */

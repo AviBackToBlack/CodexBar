@@ -53,6 +53,19 @@ fn validate_surface_target_rejects_hidden_mode() {
 }
 
 #[test]
+fn validate_surface_target_rejects_retired_popout_mode() {
+    for target in [
+        SurfaceTarget::Dashboard,
+        SurfaceTarget::Provider {
+            provider_id: "codex".into(),
+        },
+    ] {
+        let error = validate_surface_target(SurfaceMode::PopOut, target).unwrap_err();
+        assert!(error.contains("popOut surface is retired"));
+    }
+}
+
+#[test]
 fn external_url_validation_allows_only_http_urls() {
     assert_eq!(
         validate_external_url(" https://github.com/Finesssee/Win-CodexBar ").unwrap(),
@@ -261,6 +274,20 @@ fn minimax_region_lookup_normalizes_legacy_china_value() {
     let mut s = Settings::default();
     super::provider_region_set(&mut s, "minimax", "china".to_string()).unwrap();
     assert_eq!(provider_region_lookup(&s, "minimax").as_deref(), Some("cn"));
+}
+
+#[test]
+fn kimi_region_lookup_defaults_to_china_and_roundtrips_international() {
+    let mut settings = Settings::default();
+    assert_eq!(
+        provider_region_lookup(&settings, "kimi").as_deref(),
+        Some("china")
+    );
+    super::provider_region_set(&mut settings, "kimi", "international".to_string()).unwrap();
+    assert_eq!(
+        provider_region_lookup(&settings, "kimi").as_deref(),
+        Some("international")
+    );
 }
 
 #[test]
@@ -688,6 +715,40 @@ fn fetch_context_includes_minimax_region() {
     );
 
     assert_eq!(ctx.api_region.as_deref(), Some("cn"));
+}
+
+#[test]
+fn provider_dashboard_url_uses_selected_regional_console() {
+    let mut settings = Settings::default();
+    settings.set_api_region(ProviderId::MiniMax, "cn");
+    settings.set_api_region(ProviderId::Kimi, "international");
+
+    assert_eq!(
+        super::provider_dashboard_url(ProviderId::MiniMax, &settings).as_deref(),
+        Some("https://platform.minimaxi.com/user-center/payment/coding-plan?cycle_type=3")
+    );
+    assert_eq!(
+        super::provider_dashboard_url(ProviderId::Kimi, &settings).as_deref(),
+        Some("https://www.kimi.ai/code/console")
+    );
+}
+
+/// Provider metadata is the only source of the provider dashboard link; the
+/// API-key catalog URL is the key-management link shown next to the key field.
+/// A provider that only has a catalog URL must get a metadata URL instead of
+/// silently borrowing the key page.
+#[test]
+fn api_key_catalog_providers_have_metadata_dashboard_urls() {
+    let settings = Settings::default();
+    for provider in codexbar::settings::get_api_key_providers() {
+        if provider.dashboard_url.is_some() {
+            assert!(
+                super::provider_dashboard_url(provider.id, &settings).is_some(),
+                "{:?} has an API-key page but no metadata dashboard URL",
+                provider.id
+            );
+        }
+    }
 }
 
 #[test]
@@ -1822,6 +1883,13 @@ fn minimax_region_options_match_upstream_hosts() {
             "China mainland (platform.minimaxi.com)"
         ]
     );
+}
+
+#[test]
+fn kimi_region_options_match_regional_hosts() {
+    let opts = super::region_options_for("kimi");
+    let values: Vec<_> = opts.iter().map(|option| option.value.as_str()).collect();
+    assert_eq!(values, vec!["china", "international"]);
 }
 
 #[test]

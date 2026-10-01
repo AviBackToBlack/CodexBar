@@ -143,6 +143,8 @@ pub struct AppState {
     pub installer_path: Option<PathBuf>,
     /// Proof-harness configuration (set when `CODEXBAR_PROOF_MODE` is active).
     pub proof_config: Option<ProofConfig>,
+    /// True only after a validated proof seed was installed at startup.
+    pub provider_cache_seeded: bool,
     /// Persistent notification manager — tracks which alerts have fired to prevent spam.
     pub notification_manager: codexbar::notifications::NotificationManager,
     /// Instant when the tray panel was last shown — used to suppress
@@ -204,6 +206,7 @@ impl AppState {
             last_update_check_ms: None,
             installer_path: None,
             proof_config: None,
+            provider_cache_seeded: false,
             notification_manager: codexbar::notifications::NotificationManager::new(),
             last_shown_at: None,
             last_blur_dismissed_at: None,
