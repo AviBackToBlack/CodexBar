@@ -34,6 +34,7 @@ fn row(
         output,
         reasoning: None,
         source_end_offset: 1,
+        turn_id: None,
         pricing: CodexSourcePricingEvidence {
             pricing_model: pricing_model.map(str::to_string),
             pricing_mode: None,

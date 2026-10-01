@@ -241,6 +241,7 @@ fn codex_token_pipeline_preserves_counts_above_i32_max() {
                 cached: 1_400_000_000,
                 output: 100,
                 reasoning: None,
+                turn_id: None,
             },
         );
     }
@@ -322,6 +323,7 @@ fn legacy_packed_rows_remain_three_slots_and_report_reasoning_is_unknown() {
         cached: 1,
         output: 3,
         reasoning: Some(2),
+        turn_id: None,
     };
     let mut packed = vec![10, 2, 4];
     JsonlScanner::merge_codex_record_into_packed(&mut packed, &record);

@@ -7,9 +7,11 @@
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::core::{
-    CodexSourceRowCache, CodexSourceUsageRow, CostUsageCache, CostUsagePricing, RateWindow,
+    CodexPriorityOverlay, CodexSourceRowCache, CodexSourceUsageRow, CostUsageCache,
+    CostUsagePricing, RateWindow, row_priced_model,
 };
 
 const NOMINAL_WEEK_MINUTES: i64 = 7 * 24 * 60;
@@ -341,7 +343,9 @@ fn cache_slices(cache: &CostUsageCache) -> Vec<Slice> {
     });
     let mut identities = HashSet::new();
     let mut slices = Vec::new();
+    let cursor = cache.codex_priority_turns_cursor.as_ref();
     for (path, source) in sources {
+        let overlay = cursor.and_then(|cursor| cursor.overlay_for_file(Path::new(path)));
         let identity = if source.file_identity.is_empty() {
             path.as_str()
         } else {
@@ -351,14 +355,14 @@ fn cache_slices(cache: &CostUsageCache) -> Vec<Slice> {
             continue;
         }
         for row in &source.rows {
-            slices.push(slice_from_row(row));
+            slices.push(slice_from_row(row, overlay.as_ref()));
         }
     }
     slices.sort_by_key(|slice| (slice.start, slice.end));
     slices
 }
 
-fn slice_from_row(row: &CodexSourceUsageRow) -> Slice {
+fn slice_from_row(row: &CodexSourceUsageRow, overlay: Option<&CodexPriorityOverlay<'_>>) -> Slice {
     let timestamp = row.timestamp.or_else(|| local_day_start(&row.day_key));
     let end = row.timestamp.map(|_| None).unwrap_or_else(|| {
         local_day_start(&row.day_key).and_then(|start| start.checked_add_signed(Duration::days(1)))
@@ -366,22 +370,14 @@ fn slice_from_row(row: &CodexSourceUsageRow) -> Slice {
     let input = u64::try_from(row.input.max(0)).unwrap_or(0);
     let output = u64::try_from(row.output.max(0)).unwrap_or(0);
     let tokens = Some(input.saturating_add(output));
-    let cost_usd = row.pricing.pricing_model.as_deref().and_then(|model| {
-        let model = if row.pricing.pricing_mode.as_deref() == Some("priority")
-            && !model.ends_with("-priority")
-        {
-            format!("{model}-priority")
-        } else {
-            model.to_string()
-        };
+    let cost_usd = row_priced_model(row, overlay).and_then(|model| {
         let date = timestamp.map(|value| value.with_timezone(&Local).date_naive())?;
-        CostUsagePricing::codex_cost_usd_at_date(
-            &model,
-            input,
-            u64::try_from(row.cached.max(0)).unwrap_or(0).min(input),
-            output,
-            date,
-        )
+        let cached = u64::try_from(row.cached.max(0)).unwrap_or(0).min(input);
+        if model.ends_with("-priority") {
+            CostUsagePricing::codex_fast_cost_usd_at_date(&model, input, cached, output, date)
+        } else {
+            CostUsagePricing::codex_cost_usd_at_date(&model, input, cached, output, date)
+        }
     });
     Slice {
         start: timestamp.unwrap_or(DateTime::<Utc>::UNIX_EPOCH),
@@ -418,14 +414,16 @@ fn legacy_day_slices(cache: &CostUsageCache) -> Vec<Slice> {
             let cached = u64::try_from(packed.get(1).copied().unwrap_or(0).max(0))
                 .unwrap_or(0)
                 .min(input);
-            let cost_usd = CostUsagePricing::codex_cost_usd_at_date(
+            let cost_usd = CostUsagePricing::codex_day_aggregate_cost_usd(
                 model,
                 input,
                 cached,
                 output,
-                NaiveDate::parse_from_str(day, "%Y-%m-%d")
-                    .ok()
-                    .unwrap_or_else(|| start.with_timezone(&Local).date_naive()),
+                Some(
+                    NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                        .ok()
+                        .unwrap_or_else(|| start.with_timezone(&Local).date_naive()),
+                ),
             );
             slices.push(Slice {
                 start,

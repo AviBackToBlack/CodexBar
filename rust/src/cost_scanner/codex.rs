@@ -5,6 +5,7 @@ mod cache_days;
 mod fork_resume;
 mod logical_target;
 mod pending_range;
+mod priority_trace;
 mod reconciliation;
 mod scan;
 use cache_days::rebuild_cache_days;
@@ -98,6 +99,25 @@ fn codex_fork_uses_local_inference(usage: &CostUsageFileUsage) -> bool {
         .is_some_and(|state| state.locally_resolved)
 }
 
+/// `<CODEX_HOME>/logs_2.sqlite`, else `~/.codex/logs_2.sqlite`.
+///
+/// Deliberate Windows deviation: upstream pins the trace database to
+/// `~/.codex` and ignores `CODEX_HOME`. Here the scanned session roots come
+/// from `CODEX_HOME`, and the Priority overlay only prices session files under
+/// the database's own home, so both must resolve the same home or a
+/// `CODEX_HOME` user would never see Priority pricing.
+fn ambient_codex_trace_database_path(
+    codex_home: Option<String>,
+    home_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let home = codex_home
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir.map(|home| home.join(".codex")))?;
+    Some(home.join(priority_trace::CODEX_TRACE_DATABASE_FILE))
+}
+
 fn is_codex_path_in_scan_window(
     path: &Path,
     sessions_dirs: &[PathBuf],
@@ -181,6 +201,21 @@ impl CostScanner {
             &settings.codex_custom_sessions_dirs,
             &default_wsl_roots(),
         )
+    }
+
+    /// The Codex trace database that supplies Priority evidence.
+    ///
+    /// An explicit fixture is authoritative. Like upstream's test isolation,
+    /// unit tests and injected sessions roots never fall back to the ambient
+    /// user database, so no test reads (or caches a cursor for) real traces.
+    pub(super) fn codex_trace_database_path(&self) -> Option<PathBuf> {
+        if let Some(path) = &self.codex_trace_database_override {
+            return Some(path.clone());
+        }
+        if self.sessions_dirs_override.is_some() || cfg!(test) {
+            return None;
+        }
+        ambient_codex_trace_database_path(std::env::var("CODEX_HOME").ok(), dirs::home_dir())
     }
 
     fn collect_codex_candidates(
@@ -507,6 +542,9 @@ impl CostScanner {
         );
 
         if accounting_mode.is_unresolved() {
+            // Priority evidence lives in `codex_fork_rows`; a fork that could
+            // not resolve its parent baseline must not keep stale rows.
+            cache.codex_fork_rows.remove(&path_key);
             cache.files.insert(
                 path_key,
                 CostUsageFileUsage {
@@ -596,6 +634,15 @@ impl CostScanner {
                     .saturating_add(parse_result.token_timestamp_comparisons);
                 let mut days = entry.days.clone();
                 merge_codex_records_into_days(&mut days, &parse_result.records);
+                if codex_forked_from_id.is_some() {
+                    // Only extend rows that already cover the parsed prefix;
+                    // a partial row set could never match the day totals.
+                    if let Some(rows) = cache.codex_fork_rows.get_mut(&path_key) {
+                        rows.extend(codex_fork_rows_from_records(&parse_result.records));
+                    }
+                } else {
+                    cache.codex_fork_rows.remove(&path_key);
+                }
                 let (session_cost, has_tokens) =
                     add_codex_days_map_to_summary(summary, &days, range);
                 if has_tokens {
@@ -725,6 +772,9 @@ impl CostScanner {
             || (accounting_mode.infers_subagent_baseline()
                 && !parse_result.fork_baseline_locally_resolved)
         {
+            // Priority evidence lives in `codex_fork_rows`; an ambiguous fork
+            // baseline must not keep stale rows.
+            cache.codex_fork_rows.remove(&path_key);
             cache.files.insert(
                 path_key,
                 CostUsageFileUsage {
@@ -759,6 +809,17 @@ impl CostScanner {
             _ => HashMap::new(),
         };
         merge_codex_records_into_days(&mut days, &parse_result.records);
+        if is_fork || codex_forked_from_id.is_some() {
+            // Priority evidence for fork-shaped files is tracked separately
+            // (source-row evidence skips them), so rebuild the row set from
+            // the same parsed records that fed the day totals.
+            cache.codex_fork_rows.insert(
+                path_key.clone(),
+                codex_fork_rows_from_records(&parse_result.records),
+            );
+        } else {
+            cache.codex_fork_rows.remove(&path_key);
+        }
         let (session_cost, has_tokens) = if resumed {
             add_codex_days_map_to_summary(summary, &days, range)
         } else {
@@ -818,6 +879,17 @@ impl CostScanner {
         }
         outcome
     }
+}
+
+/// Request rows for a fork-shaped file, keeping exactly the records that
+/// [`merge_codex_records_into_days`] folds into its day totals.
+fn codex_fork_rows_from_records(
+    records: &[(crate::core::CodexUsageRecord, i64)],
+) -> Vec<crate::core::CodexSourceUsageRow> {
+    crate::core::rows_from_records(records)
+        .into_iter()
+        .filter(|row| crate::core::CostUsagePricing::counts_toward_codex_subscription(&row.model))
+        .collect()
 }
 
 #[cfg(test)]

@@ -275,6 +275,22 @@ pub struct CostUsageCache {
         serialize_with = "save_skip::sorted_map"
     )]
     pub codex_source_rows: HashMap<String, CodexSourceRowCache>,
+    /// Request rows of fork-shaped Codex files (a `forked_from_id` or a
+    /// parent-baseline lineage), built from the same parsed records as the
+    /// file's day totals. Source-row evidence skips these files, so this map
+    /// is what lets Priority trace evidence reach forked sessions.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub codex_fork_rows: HashMap<String, Vec<CodexSourceUsageRow>>,
+    /// Priority (Fast) turn evidence read from the Codex trace database.
+    /// Applied as a pricing overlay whenever day totals are rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_priority_turns_cursor: Option<CodexPriorityTurnsCursor>,
+    /// Trace-database path and presence seen by the last full scan
+    /// (`sqlite:<path>` or `missing:<path>`, upstream
+    /// `codexPriorityMetadataKey`). A database that appears later bypasses
+    /// the scan debounce once so its evidence is applied promptly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_priority_metadata_key: Option<String>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
@@ -313,6 +329,10 @@ pub struct CodexSourceUsageRow {
     pub source_end_offset: i64,
     #[serde(default)]
     pub pricing: CodexSourcePricingEvidence,
+    /// Codex turn (`task_started`) the request belongs to; matches Priority
+    /// trace evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 /// Source identity and rows retained for a cached Codex file.
@@ -546,6 +566,7 @@ pub struct CodexUsageRecord {
     pub cached: i64,
     pub output: i64,
     pub reasoning: Option<i64>,
+    pub turn_id: Option<String>,
 }
 
 /// Day range for scanning
@@ -586,9 +607,15 @@ impl CostUsageDayRange {
 pub struct JsonlScanner;
 pub(crate) mod codex;
 pub(crate) use codex::CodexForkParseResume;
+pub(crate) use codex::priority::CodexPriorityOverlay;
+pub use codex::priority::{
+    CODEX_PRIORITY_COMPLETED_MODEL_RETENTION_LIMIT, CodexPriorityCursorAnchor,
+    CodexPriorityTurnMetadata, CodexPriorityTurnsCursor,
+};
 mod save_skip;
 pub(crate) use codex::source_rows::{
     read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
+    row_priced_model, rows_from_records,
 };
 
 impl JsonlScanner {
@@ -752,24 +779,13 @@ impl JsonlScanner {
                 if !CostUsagePricing::counts_toward_codex_subscription(model) {
                     continue;
                 }
-                let priced = pricing_day
-                    .and_then(|day| {
-                        CostUsagePricing::codex_cost_usd_at_date(
-                            model,
-                            u64::try_from(input).unwrap_or(0),
-                            u64::try_from(cached).unwrap_or(0),
-                            u64::try_from(output).unwrap_or(0),
-                            day,
-                        )
-                    })
-                    .or_else(|| {
-                        CostUsagePricing::codex_cost_usd(
-                            model,
-                            u64::try_from(input).unwrap_or(0),
-                            u64::try_from(cached).unwrap_or(0),
-                            u64::try_from(output).unwrap_or(0),
-                        )
-                    });
+                let priced = CostUsagePricing::codex_day_aggregate_cost_usd(
+                    model,
+                    u64::try_from(input).unwrap_or(0),
+                    u64::try_from(cached).unwrap_or(0),
+                    u64::try_from(output).unwrap_or(0),
+                    pricing_day,
+                );
                 if let Some(cost) = priced {
                     total_cost_usd += cost;
                 } else {

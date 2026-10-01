@@ -83,6 +83,85 @@ fn key_path(key: &str) -> PathBuf {
     PathBuf::from(key)
 }
 
+/// Persist the Codex cache. Budget pruning subtracts each dropped file's
+/// plain day totals from `days`, which cannot undo a Priority overlay and
+/// would leave stale `-priority` totals beside negative base totals. When
+/// pruning dropped a file, rebuild the aggregate from the retained files and
+/// persist that instead.
+pub(super) fn save_codex_cache(cache: &mut CostUsageCache, cache_root: Option<&Path>) {
+    let files_before = cache.files.len();
+    JsonlScanner::save_cache(ProviderId::Codex, cache, cache_root);
+    if cache.files.len() != files_before {
+        rebuild_cache_days(cache);
+        JsonlScanner::save_cache(ProviderId::Codex, cache, cache_root);
+    }
+}
+
+/// Path and presence of the configured trace database (upstream
+/// `codexPriorityMetadataKey`); `None` when no database is configured.
+fn codex_priority_metadata_key(scanner: &CostScanner) -> Option<String> {
+    let path = scanner.codex_trace_database_path()?;
+    let state = if path.exists() { "sqlite" } else { "missing" };
+    Some(format!("{state}:{}", path.to_string_lossy()))
+}
+
+/// True when the persisted metadata key says `database_path` existed on the
+/// last validated scan (upstream `previouslyObservedDatabase`).
+fn codex_priority_database_previously_observed(
+    persisted_key: Option<&str>,
+    database_path: &Path,
+) -> bool {
+    persisted_key
+        .and_then(|key| key.strip_prefix("sqlite:"))
+        .is_some_and(|path| path == database_path.to_string_lossy())
+}
+
+/// True when a trace database appeared (or moved) since the last full scan.
+/// Its evidence must reprice history even inside the debounce window, while
+/// a database that went missing keeps the cached evidence (upstream
+/// `codexPriorityMetadataChanged`).
+pub(super) fn codex_priority_metadata_appeared(old: Option<&str>, new: Option<&str>) -> bool {
+    matches!((old, new), (Some(old), Some(new)) if old != new && new.starts_with("sqlite:"))
+}
+
+/// Refresh the durable Priority-trace cursor before day totals are rebuilt.
+/// A missing or unreadable trace database keeps the previous evidence, so a
+/// transient failure never reprices history. Returns true when validation is
+/// pending; the caller then keeps the persisted metadata key so the next scan
+/// retries (upstream persists nothing for a pending pass).
+fn resolve_codex_priority_evidence(
+    scanner: &CostScanner,
+    cache: &mut CostUsageCache,
+    start_date: NaiveDate,
+    cancel: Option<&AtomicBool>,
+) -> bool {
+    let Some(database_path) = scanner.codex_trace_database_path() else {
+        return false;
+    };
+    // One day of slack covers the local/UTC offset at the window edge.
+    let coverage_since_epoch = start_date
+        .and_hms_opt(0, 0, 0)
+        .and_then(|midnight| midnight.and_local_timezone(Local).earliest())
+        .map_or(0, |start| start.timestamp() - 86_400)
+        .max(0);
+    let previously_observed = codex_priority_database_previously_observed(
+        cache.codex_priority_metadata_key.as_deref(),
+        &database_path,
+    );
+    let resolution = super::priority_trace::resolve_priority_turns(
+        &database_path,
+        cache.codex_priority_turns_cursor.take(),
+        coverage_since_epoch,
+        previously_observed,
+        cancel,
+    );
+    cache.codex_priority_turns_cursor = resolution.cursor;
+    if resolution.validation_pending {
+        tracing::debug!("Codex priority trace validation is pending; retrying next scan");
+    }
+    resolution.validation_pending
+}
+
 pub(super) fn scan_codex_detailed_with_cache(
     scanner: &CostScanner,
     cancel: Option<&AtomicBool>,
@@ -100,6 +179,7 @@ pub(super) fn scan_codex_detailed_with_cache(
     let cache_root = scanner.cache_root.as_deref();
     let mut cache = JsonlScanner::load_cache(ProviderId::Codex, cache_root);
     let sessions_dirs = scanner.get_codex_sessions_dirs();
+    let priority_metadata_key = codex_priority_metadata_key(scanner);
     let pending_scan = CodexPendingScanContext::new(
         &cache,
         &range,
@@ -132,6 +212,10 @@ pub(super) fn scan_codex_detailed_with_cache(
         && !cache.codex_scan_incomplete
         && JsonlScanner::cache_covers_range(&cache, &range)
         && (!cache.days.is_empty() || !cache.files.is_empty())
+        && !codex_priority_metadata_appeared(
+            cache.codex_priority_metadata_key.as_deref(),
+            priority_metadata_key.as_deref(),
+        )
     {
         stats.used_cache_debounce = true;
         // A16 (upstream 0.48.0): cache hit within debounce = coverage established
@@ -385,6 +469,11 @@ pub(super) fn scan_codex_detailed_with_cache(
         !pruned_paths_pending.is_empty(),
         bytes_read_this_refresh,
     );
+    let priority_validation_pending =
+        resolve_codex_priority_evidence(scanner, &mut cache, start_date, cancel);
+    if !is_cancelled(cancel) && !priority_validation_pending {
+        cache.codex_priority_metadata_key = priority_metadata_key;
+    }
     rebuild_cache_days(&mut cache);
     cache.last_scan_unix_ms = now_ms;
     if cache.codex_scan_incomplete {
@@ -420,7 +509,7 @@ pub(super) fn scan_codex_detailed_with_cache(
         cache.previous_report = None;
         cache.codex_scan_pause_reason = None;
     }
-    JsonlScanner::save_cache(ProviderId::Codex, &mut cache, cache_root);
+    save_codex_cache(&mut cache, cache_root);
 
     // Build the current native summary from the complete decoded cache view,
     // including prior cached files that were not reread in this bounded pass.

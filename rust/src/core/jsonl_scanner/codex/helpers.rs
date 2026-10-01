@@ -28,6 +28,10 @@ pub(super) struct CodexFastPayload<'a> {
     pub(super) model: Option<&'a str>,
     #[serde(default, borrow)]
     pub(super) model_name: Option<&'a str>,
+    #[serde(default, borrow, alias = "turnId")]
+    pub(super) turn_id: Option<&'a str>,
+    #[serde(default, borrow)]
+    pub(super) id: Option<&'a str>,
     #[serde(default, borrow)]
     pub(super) info: Option<CodexFastInfo<'a>>,
     #[serde(default)]
@@ -48,6 +52,8 @@ pub(super) struct CodexFastInfo<'a> {
     pub(super) model: Option<&'a str>,
     #[serde(default, borrow)]
     pub(super) model_name: Option<&'a str>,
+    #[serde(default, borrow, alias = "turnId")]
+    pub(super) turn_id: Option<&'a str>,
     #[serde(default)]
     pub(super) total_token_usage: Option<CodexFastTotals>,
     #[serde(default)]
@@ -79,6 +85,10 @@ pub(super) enum CodexFastEvent<'a> {
     TokenCount {
         timestamp: &'a str,
         payload: CodexFastPayload<'a>,
+    },
+    /// A `task_started` event opens a turn; later token rows belong to it.
+    TaskStarted {
+        turn_id: Option<&'a str>,
     },
 }
 
@@ -311,10 +321,16 @@ pub(super) fn parse_codex_fast_event(line: &str) -> Option<CodexFastEvent<'_>> {
         }
         "event_msg" => {
             let payload = parsed.payload.or(parsed.event_msg)?;
-            (payload.payload_type == Some("token_count")).then_some(CodexFastEvent::TokenCount {
-                timestamp: parsed.timestamp?,
-                payload,
-            })
+            match payload.payload_type {
+                Some("token_count") => Some(CodexFastEvent::TokenCount {
+                    timestamp: parsed.timestamp?,
+                    payload,
+                }),
+                Some("task_started") => Some(CodexFastEvent::TaskStarted {
+                    turn_id: payload.turn_id.or(payload.id).and_then(model_evidence),
+                }),
+                _ => None,
+            }
         }
         _ => None,
     }
@@ -329,7 +345,29 @@ pub(super) fn is_candidate_codex_line(line: &str) -> bool {
         return false;
     }
 
-    !line.contains("\"type\":\"event_msg\"") || line.contains("\"token_count\"")
+    !line.contains("\"type\":\"event_msg\"")
+        || line.contains("\"token_count\"")
+        || line.contains("\"task_started\"")
+}
+
+/// Turn id carried by a `task_started` or `token_count` payload.
+pub(super) fn codex_turn_id(payload: &Value) -> Option<&str> {
+    fn direct(value: &Value) -> Option<&str> {
+        value
+            .get("turn_id")
+            .or_else(|| value.get("turnId"))
+            .and_then(Value::as_str)
+            .and_then(model_evidence)
+    }
+    direct(payload).or_else(|| payload.get("info").and_then(direct))
+}
+
+/// The `event_msg` payload type of a parsed line, when it has one.
+pub(super) fn event_payload_type(obj: &Value) -> Option<&str> {
+    obj.get("payload")
+        .or_else(|| obj.get("event_msg"))
+        .and_then(|payload| payload.get("type"))
+        .and_then(Value::as_str)
 }
 
 pub(super) fn codex_timestamp_day_key(timestamp: &str) -> Option<String> {

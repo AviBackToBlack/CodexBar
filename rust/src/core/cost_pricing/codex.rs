@@ -1,3 +1,5 @@
+use chrono::NaiveDate;
+
 use super::super::{codex_routed_pricing, models_dev_pricing};
 use super::{CODEX_PRICING, CostUsagePricing};
 
@@ -60,6 +62,107 @@ pub(super) fn codex_fast_allows_long_context(model: &str) -> bool {
 }
 
 impl CostUsagePricing {
+    /// Whether one request of `input_tokens` can run in the Fast lane of
+    /// `model`. Older models offer no Fast lane above the long-context
+    /// threshold, so upstream charges such a Priority request the Standard
+    /// cost; Astra publishes long-context Fast rates.
+    pub fn codex_fast_lane_covers(model: &str, input_tokens: u64) -> bool {
+        Self::codex_api_fast_multiplier(model).is_some()
+            && (input_tokens <= CODEX_LONG_CONTEXT_THRESHOLD
+                || codex_fast_allows_long_context(model))
+    }
+
+    /// Fast cost in USD of a day aggregate under a Fast key (`-priority` or
+    /// `-fast`), or `None` when `model` names no Fast lane.
+    ///
+    /// Upstream prices every request on its own. A day aggregate sums
+    /// requests that each ran in the Fast lane, so the summed input must
+    /// neither refuse the surcharge nor switch to long-context rates: older
+    /// models price at the base model's short-context rates times the
+    /// multiplier. Astra's Fast lane has long-context rates, so its
+    /// aggregate keeps the whole-aggregate rule that Standard aggregates use.
+    pub fn codex_fast_aggregate_cost_usd(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: Option<NaiveDate>,
+    ) -> Option<f64> {
+        let base = Self::codex_fast_base_model(model);
+        if base == Self::normalize_codex_model(model) {
+            return None;
+        }
+        if codex_fast_allows_long_context(model) {
+            return pricing_date
+                .and_then(|date| {
+                    Self::codex_fast_cost_usd_at_date(
+                        model,
+                        input_tokens,
+                        cached_input_tokens,
+                        output_tokens,
+                        date,
+                    )
+                })
+                .or_else(|| {
+                    Self::codex_fast_cost_usd(
+                        model,
+                        input_tokens,
+                        cached_input_tokens,
+                        output_tokens,
+                    )
+                });
+        }
+        let multiplier = Self::codex_api_fast_multiplier(model)?;
+        let (input_rate, cache_read_rate, output_rate) =
+            Self::codex_short_context_rates(&base, pricing_date)?;
+        Some(
+            codex_cost_from_rates(
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                input_rate,
+                cache_read_rate,
+                output_rate,
+            ) * multiplier,
+        )
+    }
+
+    /// Known cost in USD of one Codex day aggregate: a Fast key prices
+    /// through its base model's Fast lane
+    /// ([`Self::codex_fast_aggregate_cost_usd`]), any other model at the
+    /// rates in effect on `pricing_date`. `None` means no rate is known.
+    pub fn codex_day_aggregate_cost_usd(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: Option<NaiveDate>,
+    ) -> Option<f64> {
+        let (input, cached, output) = (input_tokens, cached_input_tokens, output_tokens);
+        Self::codex_fast_aggregate_cost_usd(model, input, cached, output, pricing_date)
+            .or_else(|| {
+                pricing_date.and_then(|date| {
+                    Self::codex_cost_usd_at_date(model, input, cached, output, date)
+                })
+            })
+            .or_else(|| Self::codex_cost_usd(model, input, cached, output))
+    }
+
+    /// Short-context `(input, cache read, output)` rates of `model` on
+    /// `pricing_date`. Short-context pricing is linear per token, so
+    /// one-token probes read the exact dated rates back.
+    fn codex_short_context_rates(
+        model: &str,
+        pricing_date: Option<NaiveDate>,
+    ) -> Option<(f64, f64, f64)> {
+        let cost = |input, cached, output| {
+            pricing_date
+                .and_then(|date| Self::codex_cost_usd_at_date(model, input, cached, output, date))
+                .or_else(|| Self::codex_cost_usd(model, input, cached, output))
+        };
+        Some((cost(1, 0, 0)?, cost(1, 1, 0)?, cost(0, 0, 1)?))
+    }
+
     /// Calculate Codex cost in USD when input includes cache-write tokens.
     pub fn codex_cost_usd_with_cache_write(
         model: &str,

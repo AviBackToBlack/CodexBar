@@ -2,6 +2,7 @@ use super::*;
 
 mod helpers;
 mod parser;
+pub(crate) mod priority;
 pub(crate) mod source_rows;
 
 use helpers::{
@@ -34,8 +35,10 @@ pub(crate) struct CodexForkParseResume {
 /// persisted paginated-fork accounting state. Version 4 reparses copied-prefix
 /// subagents with locally inferred component baselines. Version 5 records a
 /// fork's first token timestamp so direct-fork chains resolve through parents
-/// with no token snapshot at the descendant's fork time. Rebuild older artifacts.
-pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 5;
+/// with no token snapshot at the descendant's fork time. Version 6 records the
+/// Codex turn id on source rows so Priority trace evidence can be matched.
+/// Rebuild older artifacts.
+pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 6;
 
 /// Whether a persisted Codex cache artifact matches the current schema.
 /// A mismatched artifact (e.g. a pre-64-bit cache from an older release) is
