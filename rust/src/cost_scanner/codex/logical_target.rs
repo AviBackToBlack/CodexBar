@@ -21,6 +21,9 @@ pub(super) enum CodexLineageDecision {
     Unsafe,
 }
 
+/// Longest ancestor chain a parent baseline is resolved through.
+const CODEX_MAX_LINEAGE_DEPTH: usize = 64;
+
 struct CodexLineageNode {
     path: String,
     session_id: Option<String>,
@@ -446,6 +449,22 @@ impl CodexLineagePlanner {
         node_index: usize,
         child_fork_timestamp: Option<&str>,
     ) -> Option<crate::core::CodexTotals> {
+        self.parent_owner_baseline_at_depth(cache, node_index, child_fork_timestamp, 0)
+    }
+
+    /// Cumulative counters of one parent at a descendant's fork time. Ancestors
+    /// are revalidated on the way up, and a chain deeper than
+    /// [`CODEX_MAX_LINEAGE_DEPTH`] stays unresolved.
+    fn parent_owner_baseline_at_depth(
+        &self,
+        cache: &CostUsageCache,
+        node_index: usize,
+        child_fork_timestamp: Option<&str>,
+        depth: usize,
+    ) -> Option<crate::core::CodexTotals> {
+        if depth >= CODEX_MAX_LINEAGE_DEPTH {
+            return None;
+        }
         let graph = self.graph()?;
         let node = graph.nodes.get(node_index)?;
         if graph.gates[node_index] == CodexLineageGate::Unsafe || !node.may_author_parent {
@@ -459,22 +478,23 @@ impl CodexLineagePlanner {
             return None;
         }
 
-        if super::codex_usage_uses_parent(usage) {
-            let inherited = usage
-                .codex_fork_accounting_state
-                .as_ref()?
-                .inherited_totals
-                .as_ref()?;
+        let fork_origin = if super::codex_usage_uses_parent(usage) {
+            let state = usage.codex_fork_accounting_state.as_ref()?;
+            let inherited = state.inherited_totals.as_ref()?;
             let parent_index = graph.parent_indices[node_index]?;
-            let baseline = self.parent_owner_baseline(
+            let baseline = self.parent_owner_baseline_at_depth(
                 cache,
                 parent_index,
                 usage.codex_fork_timestamp.as_deref(),
+                depth + 1,
             )?;
             if &baseline != inherited {
                 return None;
             }
-        }
+            Some((state, inherited))
+        } else {
+            None
+        };
 
         let metadata = fs::metadata(&node.path).ok()?;
         let expected_identity = usage.codex_file_identity.as_ref()?;
@@ -490,11 +510,28 @@ impl CodexLineagePlanner {
         {
             return None;
         }
-        let last_totals = usage.last_totals.clone()?;
-        let last_token_timestamp = usage.codex_last_token_timestamp.as_deref()?;
+
         let child_fork_timestamp = child_fork_timestamp?;
-        JsonlScanner::codex_timestamp_at_or_before(last_token_timestamp, child_fork_timestamp)
-            .then_some(last_totals)
+        if let Some(last_token_timestamp) = usage.codex_last_token_timestamp.as_deref()
+            && JsonlScanner::codex_timestamp_at_or_before(
+                last_token_timestamp,
+                child_fork_timestamp,
+            )
+        {
+            return usage.last_totals.clone();
+        }
+
+        // No token snapshot of this fork exists at the descendant's cutoff, so
+        // its counters are still the origin it inherited when it forked.
+        let (state, inherited) = fork_origin?;
+        let forked_before_cutoff = usage.codex_fork_timestamp.as_deref().is_some_and(|forked| {
+            JsonlScanner::codex_timestamp_at_or_before(forked, child_fork_timestamp)
+        });
+        let first_own_token_after_cutoff = usage.codex_last_token_timestamp.is_none()
+            || state.first_token_timestamp.as_deref().is_some_and(|first| {
+                JsonlScanner::codex_timestamp_before(child_fork_timestamp, first)
+            });
+        (forked_before_cutoff && first_own_token_after_cutoff).then(|| inherited.clone())
     }
 }
 
@@ -512,14 +549,9 @@ impl CodexLineageDecision {
                 let replaces_cached_state = matching_cached_state.is_some_and(|state| {
                     state.locally_resolved || state.inherited_totals.as_ref() != Some(baseline)
                 });
-                let cached_parent_state = matching_cached_state.filter(|state| {
-                    !state.locally_resolved && state.inherited_totals.as_ref() == Some(baseline)
-                });
                 CodexAccountingMode::Baseline {
                     baseline: baseline.clone(),
                     paginated_continuation,
-                    remaining_inherited_totals: cached_parent_state
-                        .and_then(|state| state.remaining_inherited_totals.clone()),
                     provenance: CodexBaselineProvenance::ValidatedParent {
                         replaces_cached_state,
                     },
@@ -532,7 +564,6 @@ impl CodexLineageDecision {
                     return CodexAccountingMode::Baseline {
                         baseline,
                         paginated_continuation,
-                        remaining_inherited_totals: state.remaining_inherited_totals.clone(),
                         provenance: CodexBaselineProvenance::CachedValidatedParent,
                     };
                 }

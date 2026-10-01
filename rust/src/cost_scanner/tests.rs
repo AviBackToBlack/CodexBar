@@ -3394,6 +3394,12 @@ mod claude_swap;
 #[path = "tests/copied_prefix.rs"]
 mod copied_prefix;
 #[cfg(test)]
+#[path = "tests/direct_fork.rs"]
+mod direct_fork;
+#[cfg(test)]
+#[path = "tests/fork_resume.rs"]
+mod fork_resume;
+#[cfg(test)]
 #[path = "tests/lineage_cache.rs"]
 mod lineage_cache;
 #[cfg(test)]

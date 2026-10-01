@@ -10,12 +10,32 @@ use helpers::{
 };
 use parser::{CodexParseMode, CodexParserState};
 
+/// Saved cursor and parser state of an unfinished parent-baseline fork parse.
+/// Restoring all of it accounts the remaining bytes exactly as one
+/// uninterrupted parse would.
+#[derive(Debug, Clone)]
+pub(crate) struct CodexForkParseResume {
+    pub start_offset: i64,
+    pub paginated_continuation: bool,
+    /// Effective inherited baseline, after any paginated-continuation raise.
+    pub inherited_totals: CodexTotals,
+    pub remaining_inherited_totals: Option<CodexTotals>,
+    pub last_model: Option<String>,
+    pub last_totals: CodexTotals,
+    pub last_token_timestamp: Option<String>,
+    pub first_token_timestamp: Option<String>,
+    pub token_timestamps_monotonic: Option<bool>,
+    pub state: CodexForkResumeState,
+}
+
 /// Persisted Codex cache schema version. Version 0 predates 64-bit totals;
 /// version 1 can retain a terminal pause after treating a paginated v2
 /// subagent's independent counters as an inherited fork. Version 3 adds
 /// persisted paginated-fork accounting state. Version 4 reparses copied-prefix
-/// subagents with locally inferred component baselines. Rebuild older artifacts.
-pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 4;
+/// subagents with locally inferred component baselines. Version 5 records a
+/// fork's first token timestamp so direct-fork chains resolve through parents
+/// with no token snapshot at the descendant's fork time. Rebuild older artifacts.
+pub(crate) const CODEX_CACHE_SCHEMA_VERSION: u32 = 5;
 
 /// Whether a persisted Codex cache artifact matches the current schema.
 /// A mismatched artifact (e.g. a pre-64-bit cache from an older release) is
@@ -293,6 +313,18 @@ impl JsonlScanner {
         }
     }
 
+    /// Strict counterpart of [`Self::codex_timestamp_at_or_before`]: `earlier`
+    /// is before `later`. Malformed timestamps fail closed.
+    pub(crate) fn codex_timestamp_before(earlier: &str, later: &str) -> bool {
+        match (
+            parse_rfc3339_timestamp(earlier),
+            parse_rfc3339_timestamp(later),
+        ) {
+            (Some(earlier), Some(later)) => earlier < later,
+            _ => false,
+        }
+    }
+
     /// Parse a Codex JSONL file
     pub fn parse_codex_file(
         file_path: &Path,
@@ -514,6 +546,26 @@ impl JsonlScanner {
         )
     }
 
+    /// Continue an unfinished fork parse at its saved cursor. Upstream 0.67.0
+    /// resumes a resolved fork the same way instead of rereading its prefix.
+    pub(crate) fn parse_codex_fork_resume(
+        file_path: &Path,
+        range: &CostUsageDayRange,
+        resume: CodexForkParseResume,
+        cancel: Option<&AtomicBool>,
+        scan_target_size: Option<i64>,
+        max_bytes_to_read: Option<i64>,
+    ) -> std::io::Result<CodexParseResult> {
+        Self::parse_codex_file_with_state_bounded_internal(
+            file_path,
+            range,
+            cancel,
+            scan_target_size,
+            max_bytes_to_read,
+            CodexParseMode::ResumeParentBaseline(resume),
+        )
+    }
+
     fn parse_codex_file_with_state_bounded_internal(
         file_path: &Path,
         range: &CostUsageDayRange,
@@ -631,6 +683,11 @@ impl JsonlScanner {
         let is_complete = !cancelled && !budget_exhausted && parsed_bytes >= effective_target_size;
         let bytes_read = parsed_bytes.saturating_sub(safe_start_offset).max(0);
         let fork_baseline_locally_resolved = parser.fork_baseline_locally_resolved();
+        let fork_resume_state = if is_complete {
+            None
+        } else {
+            parser.fork_resume_state()
+        };
         Ok(CodexParseResult {
             records: parser.records,
             parsed_bytes,
@@ -643,6 +700,7 @@ impl JsonlScanner {
             last_totals: parser.previous_totals,
             token_timestamps_monotonic: parser.token_timestamps_monotonic,
             last_token_timestamp: parser.previous_token_timestamp,
+            first_token_timestamp: parser.first_token_timestamp,
             token_timestamp_comparisons: parser.token_timestamp_comparisons,
             bytes_read,
             is_complete,
@@ -650,6 +708,7 @@ impl JsonlScanner {
             fork_baseline: parser.fork_baseline,
             remaining_inherited_totals: parser.remaining_inherited_totals,
             fork_baseline_locally_resolved,
+            fork_resume_state,
         })
     }
 

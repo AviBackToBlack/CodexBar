@@ -396,12 +396,35 @@ pub struct CodexForkAccountingState {
     pub history_base_thread_id: Option<String>,
     pub fork_timestamp: Option<String>,
     pub inherited_totals: Option<CodexTotals>,
+    /// Timestamp of the first token event in this fork's log. A descendant
+    /// forked before it uses this fork's inherited counter origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_timestamp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_inherited_totals: Option<CodexTotals>,
     /// True when the child log itself supplied enough copied-prefix history to
     /// establish the inherited baseline without consulting a parent cache row.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub locally_resolved: bool,
+    /// Parser state of an unfinished bounded parse, so the next pass continues
+    /// at `parsed_bytes` instead of rereading the fork from byte zero. Absent
+    /// once the parse reaches its target, and in caches written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<CodexForkResumeState>,
+}
+
+/// Fork parser state that the per-file cache fields do not already carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexForkResumeState {
+    /// Parent baseline the interrupted parse started from. A validated parent
+    /// that now supplies a different baseline restarts the parse.
+    pub parse_baseline: CodexTotals,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totals_watermark: Option<CodexTotals>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub saw_interleaved_totals: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paginated_baseline_checked: bool,
 }
 
 /// Snapshot of the last validated cost report, persisted so spend surfaces keep
@@ -449,6 +472,10 @@ pub struct CodexParseResult {
     pub token_timestamps_monotonic: Option<bool>,
     /// Last token timestamp observed by the parser.
     pub last_token_timestamp: Option<String>,
+    /// First token timestamp of the parsed history. A resumed fork parse
+    /// carries its saved value forward; resumed standard parses see only their
+    /// suffix, so fork accounting never reads it from them.
+    pub first_token_timestamp: Option<String>,
     /// Number of timestamp comparisons performed while validating this parse.
     pub token_timestamp_comparisons: u64,
     /// Newly consumed bytes in this parse pass.
@@ -463,6 +490,9 @@ pub struct CodexParseResult {
     /// Remaining inherited counters used when a fork emits last-only rows.
     pub remaining_inherited_totals: Option<CodexTotals>,
     pub fork_baseline_locally_resolved: bool,
+    /// State to continue an unfinished parent-baseline fork parse. `None` once
+    /// the parse is complete and for every other parse mode.
+    pub fork_resume_state: Option<CodexForkResumeState>,
 }
 
 /// A billable Codex token-count delta.
@@ -514,6 +544,7 @@ impl CostUsageDayRange {
 /// JSONL Scanner for cost/usage logs
 pub struct JsonlScanner;
 pub(crate) mod codex;
+pub(crate) use codex::CodexForkParseResume;
 pub(crate) use codex::source_rows::{
     read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
 };

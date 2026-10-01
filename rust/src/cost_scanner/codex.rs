@@ -2,11 +2,13 @@ use super::*;
 use crate::core::{CodexForkAccountingState, CodexSessionLineage, CodexSessionMetadata};
 
 mod cache_days;
+mod fork_resume;
 mod logical_target;
 mod pending_range;
 mod reconciliation;
 mod scan;
 use cache_days::rebuild_cache_days;
+use fork_resume::CodexForkResume;
 use logical_target::*;
 use pending_range::{
     CodexPendingScanContext, CodexPendingScanDisposition, codex_cache_has_validated_state,
@@ -19,7 +21,6 @@ enum CodexAccountingMode {
     Baseline {
         baseline: crate::core::CodexTotals,
         paginated_continuation: bool,
-        remaining_inherited_totals: Option<crate::core::CodexTotals>,
         provenance: CodexBaselineProvenance,
     },
     InferSubagent {
@@ -639,6 +640,19 @@ impl CostScanner {
             }
         }
 
+        let fork_resume = cached
+            .as_ref()
+            .filter(|entry| {
+                is_fork
+                    && cache_covers_range
+                    && !cached_identity_changed
+                    && identity_matches_cached(entry)
+            })
+            .zip(matching_cached_fork_state)
+            .and_then(|(entry, state)| {
+                CodexForkResume::for_entry(path, entry, state, &accounting_mode, size, mtime_ms)
+            });
+        let resumed = fork_resume.is_some();
         let parse_target_size = (!accounting_mode.requires_cached_reparse())
             .then(|| {
                 cached
@@ -661,18 +675,32 @@ impl CostScanner {
             CodexAccountingMode::Baseline {
                 baseline,
                 paginated_continuation,
-                remaining_inherited_totals,
                 ..
-            } => JsonlScanner::parse_codex_file_with_state_bounded_fork_target_with_accounting(
-                path,
-                range,
-                baseline.clone(),
-                *paginated_continuation,
-                remaining_inherited_totals.clone(),
-                cancel,
-                parse_target_size,
-                max_bytes_to_read,
-            ),
+            } => match fork_resume {
+                Some(resume) => JsonlScanner::parse_codex_fork_resume(
+                    path,
+                    range,
+                    resume.parse,
+                    cancel,
+                    Some(resume.target_size),
+                    max_bytes_to_read,
+                ),
+                None => {
+                    JsonlScanner::parse_codex_file_with_state_bounded_fork_target_with_accounting(
+                        path,
+                        range,
+                        baseline.clone(),
+                        *paginated_continuation,
+                        // A parse from byte zero replays the inherited counters
+                        // itself. Only a resumed parse carries their used-up
+                        // remainder, as upstream restores fork state only then.
+                        None,
+                        cancel,
+                        parse_target_size,
+                        max_bytes_to_read,
+                    )
+                }
+            },
             CodexAccountingMode::InferSubagent { start_ordinal } => {
                 JsonlScanner::parse_codex_file_with_inferred_fork_baseline(
                     path,
@@ -724,10 +752,18 @@ impl CostScanner {
                 is_complete: false,
             };
         }
-        let mut days = HashMap::new();
+        // A resumed parse returns only the suffix; its prefix is the cached day
+        // map, which is billed as the non-fork resume path bills it.
+        let mut days = match (resumed, cached.as_ref()) {
+            (true, Some(entry)) => entry.days.clone(),
+            _ => HashMap::new(),
+        };
         merge_codex_records_into_days(&mut days, &parse_result.records);
-        let (session_cost, has_tokens) =
-            add_codex_records_to_summary(summary, &parse_result.records, range);
+        let (session_cost, has_tokens) = if resumed {
+            add_codex_days_map_to_summary(summary, &days, range)
+        } else {
+            add_codex_records_to_summary(summary, &parse_result.records, range)
+        };
         if has_tokens {
             summary.total_cost_usd += session_cost;
             summary.sessions_count += 1;
@@ -746,8 +782,10 @@ impl CostScanner {
                 history_base_thread_id: history_base_thread_id.clone(),
                 fork_timestamp: codex_fork_timestamp.clone(),
                 inherited_totals: parse_result.fork_baseline.clone(),
+                first_token_timestamp: parse_result.first_token_timestamp.clone(),
                 remaining_inherited_totals: parse_result.remaining_inherited_totals.clone(),
                 locally_resolved,
+                resume: parse_result.fork_resume_state.clone(),
             })
         } else {
             None
@@ -773,7 +811,11 @@ impl CostScanner {
                 codex_unresolved_fork_parent: false,
             },
         );
-        stats.files_parsed = stats.files_parsed.saturating_add(1);
+        if resumed {
+            stats.files_resumed = stats.files_resumed.saturating_add(1);
+        } else {
+            stats.files_parsed = stats.files_parsed.saturating_add(1);
+        }
         outcome
     }
 }

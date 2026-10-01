@@ -17,6 +17,8 @@ menu-bar layout.
 ### Fixed
 - Antigravity: a set but unusable `ANTIGRAVITY_CLI_PATH` (empty, missing, or not a file) now turns off automatic `agy` discovery instead of falling back to another CLI that could start an interactive login during a background refresh; a running desktop app still answers first, offline history is still shown, and unsetting the variable restores discovery.
 - Claude: when Hide Personal Info is enabled, keep saved account rows distinguishable with stable localized `Account N` labels and matching redacted tooltips.
+- Codex: a fork of a fork whose parent has no token snapshot before the child forked now inherits the whole chain's cumulative counter origin instead of staying unresolved; ancestor chains deeper than 64 stay unresolved, and the Codex cost cache is rebuilt once (cache schema 5).
+- Codex: a fork larger than the per-refresh scan budget continues where the last refresh stopped instead of restarting from the top and never finishing, and a finished fork that grows is no longer billed for usage it inherited from its parent.
 
 ---
 
