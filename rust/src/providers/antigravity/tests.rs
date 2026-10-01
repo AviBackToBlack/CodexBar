@@ -695,8 +695,8 @@ async fn cli_fallback_error_prefers_offline_history() {
         .resolve_runtime_fallback_with_offline(
             Err(ProviderError::AuthRequired),
             || async {
-                Err(ProviderError::NotInstalled(
-                    "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
+                Err(ProviderError::Parse(
+                    "Antigravity CLI usage report: malformed JSON".to_string(),
                 ))
             },
             Some(offline_result()),
@@ -706,6 +706,47 @@ async fn cli_fallback_error_prefers_offline_history() {
 
     assert_eq!(result.source_label, "offline");
     assert_eq!(result.usage.login_method.as_deref(), Some("offline"));
+}
+
+#[tokio::test]
+async fn unusable_cli_override_prefers_offline_history() {
+    let result = AntigravityProvider::new()
+        .resolve_runtime_fallback_with_offline(
+            Err(ProviderError::AuthRequired),
+            || async {
+                Err(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
+                ))
+            },
+            Some(offline_result()),
+        )
+        .await
+        .expect("offline history should survive an unusable CLI override");
+
+    assert_eq!(result.source_label, "offline");
+    assert_eq!(result.usage.login_method.as_deref(), Some("offline"));
+}
+
+#[tokio::test]
+async fn unusable_cli_override_without_history_reports_the_override() {
+    let result = AntigravityProvider::new()
+        .resolve_runtime_fallback_with_offline(
+            Err(ProviderError::Other("local API unavailable".to_string())),
+            || async {
+                Err(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
+                ))
+            },
+            None,
+        )
+        .await;
+
+    match result {
+        Err(ProviderError::NotInstalled(message)) => {
+            assert!(message.contains("ANTIGRAVITY_CLI_PATH"), "{message}");
+        }
+        other => panic!("expected the actionable override error, got {other:?}"),
+    }
 }
 
 #[test]

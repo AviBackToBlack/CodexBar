@@ -15,6 +15,7 @@ menu-bar layout.
 - DeepSeek: show reported per-model spend in the provider details while preserving the billing currency, reporting period, zero values, and incomplete-total safeguards.
 
 ### Fixed
+- Antigravity: a set but unusable `ANTIGRAVITY_CLI_PATH` (empty, missing, or not a file) now turns off automatic `agy` discovery instead of falling back to another CLI that could start an interactive login during a background refresh; a running desktop app still answers first, offline history is still shown, and unsetting the variable restores discovery.
 - Claude: when Hide Personal Info is enabled, keep saved account rows distinguishable with stable localized `Account N` labels and matching redacted tooltips.
 
 ---

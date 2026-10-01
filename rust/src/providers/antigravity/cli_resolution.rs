@@ -1,3 +1,10 @@
+//! `agy` executable resolution (upstream `BinaryLocator.resolveAntigravityBinary`).
+//!
+//! A set `ANTIGRAVITY_CLI_PATH` is authoritative: background refreshes must not
+//! discover and launch another `agy` (which could start an interactive login)
+//! when the explicit override is empty, missing or not a file. Only an unset
+//! variable enables discovery through PATH and the known install directories.
+
 use std::path::PathBuf;
 
 use crate::core::ProviderError;
@@ -109,19 +116,38 @@ mod tests {
         assert_eq!(resolved, Some(override_path));
     }
 
+    /// Upstream `unusable env override fails without ambient fallback`
+    /// (arguments: a missing path, `""`, `"   "` and the bare name `agy`), plus
+    /// a directory as the Windows form of "not executable". Discovery (PATH and
+    /// install directories) must never run, so it panics here.
     #[test]
     fn unusable_override_fails_without_automatic_discovery() {
         let temp = tempfile::tempdir().expect("temporary directory");
-        let missing_override = temp.path().join("missing-agy.exe");
+        let overrides = [
+            temp.path().join("missing-agy.exe"),
+            PathBuf::from(""),
+            PathBuf::from("   "),
+            PathBuf::from("agy"),
+            temp.path().to_path_buf(),
+        ];
 
-        let error = resolve_agy_binary(Some(missing_override), || {
-            panic!("an invalid configured override must block automatic discovery")
-        })
-        .expect_err("invalid override should fail closed");
+        for value in overrides {
+            let error = resolve_agy_binary(Some(value.clone()), || {
+                panic!("an unusable configured override must block automatic discovery")
+            })
+            .expect_err("unusable override should fail closed");
 
-        let message = error.to_string();
-        assert!(message.contains("ANTIGRAVITY_CLI_PATH is set"));
-        assert!(message.contains("automatic CLI discovery is disabled"));
+            assert!(
+                matches!(error, ProviderError::NotInstalled(_)),
+                "{value:?}: {error:?}"
+            );
+            let message = error.to_string();
+            assert!(message.contains("ANTIGRAVITY_CLI_PATH is set"), "{value:?}");
+            assert!(
+                message.contains("automatic CLI discovery is disabled"),
+                "{value:?}"
+            );
+        }
     }
 
     #[test]
@@ -139,5 +165,23 @@ mod tests {
         .expect("automatic discovery should resolve");
 
         assert_eq!(resolved, Some(discovered_path));
+    }
+
+    /// Upstream `minimal fallback preserves a hit or no executable`: the last
+    /// candidate still resolves (above); with no installed CLI the source is
+    /// simply missing, which is not an error.
+    #[test]
+    fn unset_override_without_an_installed_cli_resolves_to_none() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+
+        let resolved = resolve_agy_binary(None, || {
+            vec![
+                temp.path().join("missing-first.exe"),
+                temp.path().join("missing-last.exe"),
+            ]
+        })
+        .expect("discovery without a hit is not an error");
+
+        assert_eq!(resolved, None);
     }
 }
