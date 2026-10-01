@@ -312,9 +312,9 @@ fn endpoint_for_profile_arn(profile_arn: &str) -> Option<&'static str> {
         || fields[0] != "arn"
         || fields[1] != "aws"
         || fields[2] != "codewhisperer"
-        || !fields[5]
+        || fields[5]
             .strip_prefix("profile/")
-            .is_some_and(|name| !name.is_empty())
+            .is_none_or(|name| name.is_empty())
     {
         return None;
     }
