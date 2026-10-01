@@ -16,6 +16,7 @@ menu-bar layout.
 
 ### Fixed
 - Kimi: when the Kimi Code CLI credential is stale or rejected and web auth has no token to try, direct the user to run `kimi` or add a Kimi Code API key in Settings, keeping the web fallback and leaving CLI-owned credentials read-only. A rejected web token still reports the web error, and a Kimi Code API 403 reports a permission or quota denial instead of a sign-in problem.
+- Kimi Code: while the monthly membership pool is exhausted, show the shorter Code windows as “Blocked by monthly limit” without their own usage bar, reset, or pace forecast, keeping the raw usage in the CLI, tray icon, and float bar; the block lifts at the pool's reset even before the next refresh.
 - Claude: when Hide Personal Info is enabled, keep saved account rows distinguishable with stable localized `Account N` labels and matching redacted tooltips.
 
 ---
