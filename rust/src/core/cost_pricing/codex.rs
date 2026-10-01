@@ -2,7 +2,6 @@ use chrono::NaiveDate;
 
 use super::super::{codex_routed_pricing, models_dev_pricing};
 use super::{CODEX_PRICING, CodexLongContextRates, CodexPricing, CostUsagePricing};
-use chrono::NaiveDate;
 
 pub(super) const CODEX_LONG_CONTEXT_THRESHOLD: u64 = 272_000;
 

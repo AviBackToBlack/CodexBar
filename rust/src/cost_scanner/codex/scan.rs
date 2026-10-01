@@ -4,6 +4,7 @@ use crate::core::{
     CodexSourceRowCache, CodexSourceUsageRow, read_source_rows, recover_rows, row_cache,
     row_cache_matches, row_cache_needs_recovery,
 };
+use chrono::Local;
 
 /// A complete, non-forked file whose source rows may be (re)priced this pass.
 struct CodexSourceRowPlan {

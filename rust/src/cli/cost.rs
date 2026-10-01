@@ -197,7 +197,7 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
                     supported: true,
                     token_history: Some(
                         crate::providers::antigravity::local_sessions::summarize_with_pricing_refresh(
-                            args.days,
+                            days,
                             args.refresh,
                         )
                         .await,
@@ -329,7 +329,7 @@ fn print_text_output(
             println!("{title}");
         }
 
-        if let Some(history) = result.token_history {
+        if let Some(history) = result.token_history.as_ref() {
             print_local_token_history(history);
         } else if group_by == CostGroupBy::Session && result.provider == "codex" {
             print_codex_session_output(result, period);
@@ -415,7 +415,7 @@ fn print_text_output(
     }
 }
 
-fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySummary) {
+fn print_local_token_history(history: &crate::spend_contract::LocalTokenHistorySummary) {
     use crate::spend_contract::LocalHistoryCoverage;
     match history.coverage {
         LocalHistoryCoverage::Partial if history.lower_bound => {
@@ -528,7 +528,7 @@ fn build_json_payloads(
     results
         .iter()
         .map(|r| {
-            if let Some(history) = r.token_history {
+            if let Some(history) = r.token_history.as_ref() {
                 let mut payload =
                     crate::spend_contract::local_token_history_json(&r.provider, history, days);
                 stamp_period(&mut payload, period);
@@ -911,6 +911,7 @@ mod tests {
                 total_tokens: 3,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Complete,
+                ..Default::default()
             }),
         }];
         let settings = Settings::default();

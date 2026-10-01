@@ -4,7 +4,7 @@
 //! window describes the account now; these rows describe local historical
 //! evidence for a future display/transport surface.
 
-use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -439,6 +439,18 @@ fn legacy_day_slices(cache: &CostUsageCache) -> Vec<Slice> {
         }
     }
     slices
+}
+
+/// The instant a `YYYY-MM-DD` day key begins in the machine's local zone.
+fn local_day_start(day: &str) -> Option<DateTime<Utc>> {
+    let date = NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?;
+    let naive = date.and_hms_opt(0, 0, 0)?;
+    Local
+        .from_local_datetime(&naive)
+        .single()
+        .or_else(|| Local.from_local_datetime(&naive).earliest())
+        .or_else(|| Local.from_local_datetime(&naive).latest())
+        .map(|value| value.with_timezone(&Utc))
 }
 
 /// The instant a `YYYY-MM-DD` day key begins in the pinned bucket zone.

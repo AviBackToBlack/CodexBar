@@ -91,8 +91,9 @@ pub async fn cost_response(provider: Option<&str>) -> String {
         }
         if provider_id == ProviderId::Muse {
             let report = crate::providers::muse::local_usage::scan(days, None);
+            let history: crate::spend_contract::LocalTokenHistorySummary = report.into();
             let mut payload =
-                crate::spend_contract::local_token_history_json("muse", report.into(), days);
+                crate::spend_contract::local_token_history_json("muse", &history, days);
             stamp_period(&mut payload, period);
             results.push(payload);
             continue;
