@@ -14,6 +14,7 @@ import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
 import { useMonthlyLimitBlockNow } from "../../../../hooks/useMonthlyLimitBlockNow";
 import { isMonthlyLimitBlockActive } from "../../../../lib/monthlyLimitBlock";
 import { isUsageItemVisible } from "../../../../lib/usageItemVisibility";
+import { resetDescriptionFallback, windowDetailText } from "../../../../lib/usageWindows";
 
 interface Props {
   provider: ProviderDetail;
@@ -147,9 +148,10 @@ function UsageBar({
   const usedPct = Number.isFinite(rate.usedPercent) ? Math.max(0, rate.usedPercent) : 0;
   const pct = Math.min(100, usedPct);
   const isInformational = rate.isInformational === true;
+  const detailText = windowDetailText(rate);
   const formattedReset = useFormattedResetTime(
     blocked ? null : rate.resetsAt,
-    blocked ? null : rate.resetDescription,
+    blocked ? null : resetDescriptionFallback(rate),
     resetTimeRelative,
   );
   if (blocked) {
@@ -198,6 +200,7 @@ function UsageBar({
       {!isInformational && resetHint && (
         <span className="provider-usage-bar__reset">{resetHint}</span>
       )}
+      {detailText && <span className="provider-usage-bar__detail">{detailText}</span>}
     </div>
   );
 }

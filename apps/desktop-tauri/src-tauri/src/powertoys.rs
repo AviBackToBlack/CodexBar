@@ -182,6 +182,7 @@ mod tests {
             reserve_description: None,
             reserve_eta_seconds: None,
             monthly_limit_block: None,
+            description_is_detail: false,
             reserve_will_last_to_reset: false,
         }
     }

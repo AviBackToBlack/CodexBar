@@ -390,7 +390,9 @@ impl MistralProvider {
             "No usage this month".to_string()
         };
 
-        let primary = RateWindow::with_details(0.0, None, reset_date, Some(cost_description));
+        // The description carries spend amounts, not reset wording.
+        let primary = RateWindow::with_details(0.0, None, reset_date, Some(cost_description))
+            .with_description_as_detail();
         let mut usage = UsageSnapshot::new(primary);
         if summary.model_count > 0 {
             usage = usage.with_login_method(format!("{} model(s)", summary.model_count));
@@ -443,6 +445,7 @@ impl MistralProvider {
             budget.resets_at,
             Some(description),
         )
+        .with_description_as_detail()
     }
 
     fn build_price_index(prices: Vec<MistralPrice>) -> HashMap<String, f64> {
@@ -662,6 +665,19 @@ mod tests {
             "mistral-monthly-plan"
         );
         assert_eq!(result.cost.as_ref().map(|cost| cost.used), Some(12.5));
+        assert!(result.usage.primary.description_is_detail);
+        assert!(
+            result.usage.extra_rate_windows[0]
+                .window
+                .description_is_detail
+        );
+        assert_eq!(
+            result.usage.extra_rate_windows[0]
+                .window
+                .reset_description
+                .as_deref(),
+            Some("10.00 EUR / 20.00 EUR · 10.00 EUR remaining")
+        );
     }
 
     #[test]

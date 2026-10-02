@@ -43,6 +43,7 @@ mod tests {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             monthly_limit_block: None,
+            description_is_detail: false,
         }
     }
 

@@ -688,6 +688,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
                 monthly_limit_block: None,
+                description_is_detail: false,
             },
             primary_label: None,
             secondary: secondary_percent.map(|pct| crate::commands::RateWindowSnapshot {
@@ -703,6 +704,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
                 monthly_limit_block: None,
+                description_is_detail: false,
             }),
             secondary_label: None,
             model_specific: None,
@@ -719,6 +721,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
                 monthly_limit_block: None,
+                description_is_detail: false,
             }),
             tertiary_label: None,
             extra_rate_windows: Vec::new(),
@@ -767,6 +770,117 @@ mod tests {
         fake_snapshot_with(id, display, used_percent, None, None, None)
     }
 
+    fn fake_extra_window(percent: f64) -> crate::commands::NamedRateWindowSnapshot {
+        crate::commands::NamedRateWindowSnapshot {
+            id: "additional_budget".to_string(),
+            title: "Additional Budget".to_string(),
+            fallback_lane: false,
+            window: crate::commands::RateWindowSnapshot {
+                used_percent: percent,
+                remaining_percent: 100.0 - percent,
+                window_minutes: None,
+                resets_at: None,
+                reset_description: None,
+                is_exhausted: false,
+                is_informational: false,
+                reserve_percent: None,
+                reserve_description: None,
+                reserve_will_last_to_reset: false,
+                reserve_eta_seconds: None,
+                description_is_detail: false,
+            },
+        }
+    }
+    #[test]
+    fn pick_tray_provider_highest_picks_max_primary() {
+        let a = fake_snapshot("codex", "Codex", 30.0);
+        let b = fake_snapshot("claude", "Claude", 72.5);
+        let c = fake_snapshot("gemini", "Gemini", 50.0);
+        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&a, &b, &c];
+        let picked = pick_tray_provider(&refs, /* prefer_highest = */ true)
+            .expect("highest mode should pick a provider");
+        assert_eq!(picked.provider_id, "claude");
+    }
+    #[test]
+    fn pick_tray_provider_first_preserves_catalog_order() {
+        let a = fake_snapshot("codex", "Codex", 30.0);
+        let b = fake_snapshot("claude", "Claude", 72.5);
+        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&a, &b];
+        let picked = pick_tray_provider(&refs, /* prefer_highest = */ false)
+            .expect("non-highest mode should still pick the first entry");
+        assert_eq!(picked.provider_id, "codex");
+    }
+    #[test]
+    fn pick_tray_provider_none_when_empty() {
+        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![];
+        assert!(pick_tray_provider(&refs, true).is_none());
+        assert!(pick_tray_provider(&refs, false).is_none());
+    }
+    #[test]
+    fn status_labels_per_provider_mode_lists_each_healthy_provider() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::PerProvider,
+            provider_order: codexbar::settings::normalize_provider_order(&[
+                "claude".to_string(),
+                "codex".to_string(),
+            ]),
+            ..Settings::default()
+        };
+        let snapshots = vec![
+            fake_snapshot("codex", "Codex", 30.0),
+            fake_snapshot("claude", "Claude", 72.0),
+        ];
+        let labels = status_labels_for_settings(
+            &settings,
+            &snapshots,
+            codexbar::settings::Language::English,
+        );
+        assert_eq!(
+            labels,
+            vec![
+                ("claude".to_string(), "Claude 72%".to_string()),
+                ("codex".to_string(), "Codex 30%".to_string()),
+            ]
+        );
+    }
+    #[test]
+    fn status_labels_single_mode_collapses_to_selected_provider() {
+        let settings = Settings {
+            tray_icon_mode: TrayIconMode::Single,
+            menu_bar_shows_highest_usage: true,
+            ..Settings::default()
+        };
+        let snapshots = vec![
+            fake_snapshot("codex", "Codex", 30.0),
+            fake_snapshot("claude", "Claude", 72.0),
+        ];
+        let labels = status_labels_for_settings(
+            &settings,
+            &snapshots,
+            codexbar::settings::Language::English,
+        );
+        assert_eq!(
+            labels,
+            vec![("status_summary".to_string(), "Claude 72%".to_string())]
+        );
+    }
+    #[test]
+    fn tray_icon_renderer_uses_percent_mode_when_enabled() {
+        let bar_settings = Settings {
+            menu_bar_shows_percent: false,
+            ..Settings::default()
+        };
+        let percent_settings = Settings {
+            menu_bar_shows_percent: true,
+            ..Settings::default()
+        };
+        let (bar, bar_w, bar_h) =
+            render_tray_icon_for_settings(&bar_settings, 72.0, Some(40.0), false);
+        let (percent, pct_w, pct_h) =
+            render_tray_icon_for_settings(&percent_settings, 72.0, Some(40.0), false);
+        assert_eq!((bar_w, bar_h), (pct_w, pct_h));
+        assert_ne!(bar, percent);
+    }
     #[test]
     fn tooltip_uses_compact_status_labels() {
         let mut claude = fake_snapshot("claude", "Claude", 13.0);
@@ -855,5 +969,267 @@ mod tests {
             .clone();
         assert!(english_label.contains("Resets in"), "{english_label}");
         assert!(japanese_label.contains("リセットまで"), "{japanese_label}");
+    }
+    #[test]
+    fn selected_tray_percent_uses_cursor_extra_usage_cost() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
+        let snapshot = fake_snapshot_with(
+            "cursor",
+            "Cursor",
+            10.0,
+            Some(20.0),
+            Some(72.0),
+            Some((15.0, 100.0)),
+        );
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 15.0);
+        assert_eq!(secondary, Some(20.0));
+    }
+    #[test]
+    fn selected_tray_percent_tracks_extra_rate_window() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Copilot, MetricPreference::ExtraUsage);
+        let mut snapshot = fake_snapshot("copilot", "Copilot", 20.0);
+        snapshot.extra_rate_windows.push(fake_extra_window(42.0));
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, None);
+    }
+    #[test]
+    fn copilot_automatic_tracks_highest_extra_rate_window() {
+        let settings = Settings::default();
+        let mut snapshot = fake_snapshot("copilot", "Copilot", 20.0);
+        snapshot.extra_rate_windows.push(fake_extra_window(42.0));
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 42.0);
+    }
+    #[test]
+    fn selected_tray_percent_respects_remaining_display_mode() {
+        let mut settings = Settings {
+            show_as_used: false,
+            ..Settings::default()
+        };
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
+        let snapshot = fake_snapshot_with(
+            "cursor",
+            "Cursor",
+            10.0,
+            Some(20.0),
+            Some(72.0),
+            Some((15.0, 100.0)),
+        );
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 85.0);
+        assert_eq!(secondary, Some(80.0));
+    }
+    #[test]
+    fn exhausted_automatic_window_never_renders_as_remaining_progress() {
+        let mut settings = Settings {
+            show_as_used: false,
+            ..Settings::default()
+        };
+        let mut snapshot = fake_snapshot_with(
+            "opencodego",
+            "OpenCode Go",
+            20.0,
+            Some(60.0),
+            Some(40.0),
+            None,
+        );
+        snapshot
+            .tertiary
+            .as_mut()
+            .expect("monthly quota")
+            .is_exhausted = true;
+        let (remaining, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(remaining, 0.0);
+        settings.show_as_used = true;
+        let (used, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(used, 100.0);
+    }
+    #[test]
+    fn full_automatic_window_without_exhausted_flag_has_zero_remaining_progress() {
+        let mut settings = Settings {
+            show_as_used: false,
+            ..Settings::default()
+        };
+        let mut snapshot = fake_snapshot_with(
+            "opencodego",
+            "OpenCode Go",
+            20.0,
+            Some(60.0),
+            Some(100.0),
+            None,
+        );
+        snapshot
+            .tertiary
+            .as_mut()
+            .expect("monthly quota")
+            .is_exhausted = false;
+        let (remaining, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(remaining, 0.0);
+        settings.show_as_used = true;
+        let (used, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(used, 100.0);
+    }
+    #[test]
+    fn missing_automatic_window_does_not_look_like_available_remaining_progress() {
+        let settings = Settings {
+            show_as_used: false,
+            ..Settings::default()
+        };
+        let mut snapshot = fake_snapshot_with("opencodego", "OpenCode Go", 0.0, None, None, None);
+        snapshot.primary.is_informational = true;
+        let (remaining, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(remaining, 0.0);
+    }
+    #[test]
+    fn selected_tray_percent_falls_back_when_extra_usage_missing() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
+        let snapshot = fake_snapshot_with("cursor", "Cursor", 10.0, Some(72.0), None, None);
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 72.0);
+    }
+    #[test]
+    fn single_meaningful_secondary_quota_uses_full_single_meter() {
+        let settings = Settings::default();
+        let mut snapshot = fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), None, None);
+        snapshot.primary.is_informational = true;
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, None);
+    }
+    #[test]
+    fn selected_secondary_quota_is_not_duplicated_when_tertiary_is_meaningful() {
+        let settings = Settings::default();
+        let mut snapshot =
+            fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), Some(30.0), None);
+        snapshot.primary.is_informational = true;
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 42.0);
+        assert_eq!(secondary, Some(30.0));
+    }
+    #[test]
+    fn two_meaningful_quotas_keep_two_meter_layout() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::Session);
+        let snapshot = fake_snapshot_with("cursor", "Cursor", 15.0, Some(40.0), None, None);
+        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 15.0);
+        assert_eq!(secondary, Some(40.0));
+    }
+    #[test]
+    fn informational_primary_skips_session_and_automatic_phantom_zero() {
+        let mut settings = Settings::default();
+        settings.set_provider_metric(ProviderId::Claude, MetricPreference::Session);
+        let mut snapshot = fake_snapshot_with("claude", "Claude", 0.0, Some(42.0), None, None);
+        snapshot.primary.is_informational = true;
+        // Session preference must not paint the synthetic 0% primary;
+        // it falls through to Automatic which prefers weekly (42%).
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 42.0);
+        assert_ne!(primary, 0.0);
+        // Automatic also prefers weekly over informational primary.
+        settings.set_provider_metric(ProviderId::Claude, MetricPreference::Automatic);
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 42.0);
+    }
+    #[test]
+    fn claude_automatic_prefers_weekly_when_model_exhausted() {
+        let settings = Settings::default();
+        let mut snapshot = fake_snapshot_with("claude", "Claude", 40.0, Some(22.0), None, None);
+        snapshot.model_specific = Some(crate::commands::RateWindowSnapshot {
+            used_percent: 100.0,
+            remaining_percent: 0.0,
+            window_minutes: Some(10080),
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: true,
+            is_informational: false,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+            description_is_detail: false,
+        });
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 22.0);
+        // Explicit model override is untouched.
+        let mut overridden = settings.clone();
+        overridden.set_provider_metric(ProviderId::Claude, MetricPreference::Model);
+        let (primary, _) = selected_tray_percents(&snapshot, &overridden);
+        assert_eq!(primary, 100.0);
+    }
+    #[test]
+    fn automatic_prefers_exhausted_weekly_over_low_session() {
+        let settings = Settings::default();
+        let snapshot = fake_snapshot_with("codex", "Codex", 20.0, Some(100.0), None, None);
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 100.0);
+        // Explicit session override still wins.
+        let mut overridden = settings.clone();
+        overridden.set_provider_metric(ProviderId::Codex, MetricPreference::Session);
+        let (primary, _) = selected_tray_percents(&snapshot, &overridden);
+        assert_eq!(primary, 20.0);
+    }
+    #[test]
+    fn automatic_picks_highest_among_model_and_extra_windows() {
+        let settings = Settings::default();
+        let mut snapshot =
+            fake_snapshot_with("gemini", "Gemini", 10.0, Some(30.0), Some(40.0), None);
+        snapshot.model_specific = Some(crate::commands::RateWindowSnapshot {
+            used_percent: 55.0,
+            remaining_percent: 45.0,
+            window_minutes: None,
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: false,
+            is_informational: false,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+            description_is_detail: false,
+        });
+        snapshot.extra_rate_windows.push(fake_extra_window(90.0));
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 90.0);
+    }
+    #[test]
+    fn f5_headline_prefers_non_informational_primary() {
+        let snapshot = fake_snapshot_with("codex", "Codex", 50.0, Some(20.0), Some(30.0), None);
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 50.0).abs() < f64::EPSILON);
+    }
+    #[test]
+    fn f5_headline_falls_back_to_secondary_when_primary_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(25.0), Some(30.0), None);
+        snapshot.primary.is_informational = true;
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 25.0).abs() < f64::EPSILON);
+    }
+    #[test]
+    fn f5_headline_falls_back_to_tertiary_when_primary_and_secondary_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(0.0), Some(35.0), None);
+        snapshot.primary.is_informational = true;
+        snapshot.secondary.as_mut().unwrap().is_informational = true;
+        let headline = codex_lane_headline_window(&snapshot);
+        assert!((headline.used_percent - 35.0).abs() < f64::EPSILON);
+    }
+    #[test]
+    fn f5_headline_returns_primary_when_all_informational() {
+        let mut snapshot = fake_snapshot_with("codex", "Codex", 0.0, Some(0.0), Some(0.0), None);
+        snapshot.primary.is_informational = true;
+        if let Some(sec) = &mut snapshot.secondary {
+            sec.is_informational = true;
+        }
+        if let Some(ter) = &mut snapshot.tertiary {
+            ter.is_informational = true;
+        }
+        let headline = codex_lane_headline_window(&snapshot);
+        // Falls back to primary (the placeholder) when all are informational.
+        assert!(headline.is_informational);
     }
 }

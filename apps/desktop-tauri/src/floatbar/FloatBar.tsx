@@ -22,6 +22,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
+import { resetDescriptionFallback } from "../lib/usageWindows";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
@@ -236,6 +237,7 @@ function ProviderPill({
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
     informational ? null : rateWindow.resetDescription,
+    resetDescriptionFallback(rateWindow),
     resetRelative,
   );
   const resetSuffix = resetText ? `\n${resetText}` : "";

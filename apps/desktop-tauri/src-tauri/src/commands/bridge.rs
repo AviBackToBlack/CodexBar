@@ -26,6 +26,9 @@ pub struct RateWindowSnapshot {
     pub is_exhausted: bool,
     #[serde(default)]
     pub is_informational: bool,
+    /// `reset_description` is a detail line (for example spend amounts), not reset wording.
+    #[serde(default)]
+    pub description_is_detail: bool,
     #[serde(default)]
     pub reserve_percent: Option<f64>,
     #[serde(default)]
@@ -61,6 +64,7 @@ impl RateWindowSnapshot {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             monthly_limit_block: None,
+            description_is_detail: rw.description_is_detail,
         }
     }
 
@@ -584,6 +588,7 @@ impl ProviderUsageSnapshot {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
                 monthly_limit_block: None,
+                description_is_detail: false,
             },
             primary_label: Some(metadata.session_label.to_string()),
             secondary: None,
@@ -1132,6 +1137,7 @@ mod tests {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             monthly_limit_block: None,
+            description_is_detail: false,
         }
     }
 

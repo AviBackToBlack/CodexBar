@@ -47,6 +47,7 @@ type RateWindowOptions = {
   informational?: boolean;
   resetsAt?: string | null;
   resetDescription?: string | null;
+  descriptionIsDetail?: boolean;
 };
 
 function rateWindow(
@@ -61,6 +62,7 @@ function rateWindow(
     resetDescription: opts.resetDescription ?? null,
     isExhausted: opts.exhausted ?? false,
     isInformational: opts.informational,
+    descriptionIsDetail: opts.descriptionIsDetail,
     reservePercent: null,
     reserveDescription: null,
   };
@@ -76,6 +78,7 @@ function snapshot(
     errorState?: ProviderUsageSnapshot["errorState"];
     resetsAt?: string | null;
     resetDescription?: string | null;
+    descriptionIsDetail?: boolean;
     informational?: boolean;
     secondary?: {
       used: number;
@@ -324,6 +327,25 @@ describe("FloatBar", () => {
       expect(pill?.getAttribute("title")).toContain("Claude: 80% used\nResets in 2 hours");
       expect(pill?.classList.contains("floatbar__pill--warn")).toBe(true);
       expect(container.querySelector(".floatbar__reset")?.textContent).toContain("2 hours");
+    });
+  });
+
+  it("never shows a detail-backed description as reset text", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 13, {
+        resetDescription: "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+        descriptionIsDetail: true,
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowResetInline: true }),
+    );
+
+    const { container } = renderFloatBar(bootstrap({ floatBarShowResetInline: true }));
+    await waitFor(() => {
+      const pill = container.querySelector(".floatbar__pill");
+      expect(pill?.getAttribute("title")).toBe("Claude: 13% used");
+      expect(container.querySelector(".floatbar__reset")).toBeNull();
     });
   });
 

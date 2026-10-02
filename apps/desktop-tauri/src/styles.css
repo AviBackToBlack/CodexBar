@@ -2055,7 +2055,8 @@ body:has(.tray-panel-reveal) {
   transition: width 0.3s;
 }
 
-.provider-usage-bar__reset {
+.provider-usage-bar__reset,
+.provider-usage-bar__detail {
   font-size: 0.68rem;
   color: var(--text-muted);
 }
@@ -3538,7 +3539,11 @@ html:has(.menu-surface--tray) {
 }
 .menu-surface--tray .menu-metric__pct,
 .menu-surface--tray .menu-metric__reset,
+<<<<<<< HEAD
 .menu-surface--tray .menu-metric__status {
+=======
+.menu-surface--tray .menu-metric__detail {
+>>>>>>> 9170b79e
   font-size: 10px;
 }
 .menu-surface--tray .menu-metric__reserve {
@@ -4062,6 +4067,15 @@ html:has(.menu-surface--tray) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Detail-backed window description (for example spend amounts): its own
+   secondary line under the metric row, never reset wording. */
+.menu-metric__detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .menu-metric__reset {
@@ -4860,7 +4874,11 @@ html:has(.menu-surface--tray) {
 
 .menu-metric__pct,
 .menu-metric__reset,
+<<<<<<< HEAD
 .menu-metric__status {
+=======
+.menu-metric__detail {
+>>>>>>> 9170b79e
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,

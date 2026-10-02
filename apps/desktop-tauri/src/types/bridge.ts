@@ -601,6 +601,8 @@ export interface RateWindowSnapshot {
   resetDescription: string | null;
   isExhausted: boolean;
   isInformational?: boolean;
+  /** `resetDescription` is a detail line (for example spend amounts), not reset wording. */
+  descriptionIsDetail?: boolean;
   reservePercent: number | null;
   reserveDescription: string | null;
   reserveWillLastToReset?: boolean;

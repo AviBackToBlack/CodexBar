@@ -86,6 +86,51 @@ describe("UsageSection", () => {
     expect(screen.getByText("42%")).toBeInTheDocument();
   });
 
+  it.each([false, true])(
+    "renders detail-backed amounts as a detail line, not reset text (resetsAt: %s)",
+    async (hasReset) => {
+      const detail = provider();
+      const resetsAt = hasReset
+        ? new Date(Date.now() + 3 * 60 * 60 * 1000 + 30_000).toISOString()
+        : null;
+      detail.session = {
+        ...rateWindow(75),
+        resetsAt,
+        resetDescription: "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+        descriptionIsDetail: true,
+      };
+      detail.extraRateWindows = [
+        {
+          id: "mistral-monthly-plan",
+          title: "Monthly Plan",
+          window: {
+            ...rateWindow(13),
+            resetsAt,
+            resetDescription: "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+            descriptionIsDetail: true,
+          },
+        },
+      ];
+
+      const { container } = render(
+        <LocaleProvider>
+          <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+        </LocaleProvider>,
+      );
+
+      const detailLines = await screen.findAllByText(/EUR remaining/);
+      expect(detailLines.map((line) => line.textContent)).toEqual([
+        "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+        "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+      ]);
+      detailLines.forEach((line) => expect(line).toHaveClass("provider-usage-bar__detail"));
+      expect(screen.queryByText(/Resets .*EUR/)).not.toBeInTheDocument();
+      expect(container.querySelectorAll(".provider-usage-bar__reset")).toHaveLength(
+        hasReset ? 2 : 0,
+      );
+    },
+  );
+
   it("filters only hidden metric and extra rows", async () => {
     const detail = provider();
     detail.weekly = rateWindow(30);

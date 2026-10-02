@@ -55,7 +55,7 @@ function rateWindow(
 function provider(
   error: string | null,
   usedPercent = 0,
-  opts: { exhausted?: boolean; resetDescription?: string | null } = {},
+  opts: { exhausted?: boolean; resetDescription?: string | null; resetsAt?: string | null } = {},
 ): ProviderUsageSnapshot {
   return {
     providerId: "claude",
@@ -365,6 +365,46 @@ describe("MenuCard", () => {
     renderCard(otherProvider);
     expect(await screen.findByText("Fable only")).toBeInTheDocument();
   });
+
+  it.each([false, true])(
+    "shows detail-backed amounts as their own line, never as reset text (resetsAt: %s)",
+    async (hasReset) => {
+      const resetsAt = hasReset
+        ? new Date(Date.now() + 3 * 60 * 60 * 1000 + 30_000).toISOString()
+        : null;
+      const snapshot = provider(null, 75, {
+        resetDescription: "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+        resetsAt,
+      });
+      snapshot.providerId = "mistral";
+      snapshot.primary.descriptionIsDetail = true;
+      snapshot.selectedMetric.descriptionIsDetail = true;
+      snapshot.extraRateWindows = [
+        {
+          id: "mistral-monthly-plan",
+          title: "Monthly Plan",
+          window: {
+            ...rateWindow(13, {
+              resetDescription: "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+              resetsAt,
+            }),
+            descriptionIsDetail: true,
+          },
+        },
+      ];
+
+      renderCard(snapshot);
+
+      const primaryDetail = await screen.findByText(
+        "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+      );
+      const planDetail = screen.getByText("34.07 EUR / 255.00 EUR · 220.93 EUR remaining");
+      expect(primaryDetail).toHaveClass("menu-metric__detail");
+      expect(planDetail).toHaveClass("menu-metric__detail");
+      expect(screen.queryByText(/Resets .*EUR/)).not.toBeInTheDocument();
+      expect(document.querySelectorAll(".menu-metric__reset")).toHaveLength(hasReset ? 2 : 0);
+    },
+  );
 
   it("renders informational metrics without quota percentages", async () => {
     const snapshot = provider(null, 20);
