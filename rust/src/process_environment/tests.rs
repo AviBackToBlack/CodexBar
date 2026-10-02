@@ -7,7 +7,7 @@ use std::panic::{self, AssertUnwindSafe};
 
 use super::ProcessEnvironment;
 use crate::cli::tty_runner::TtyCommandOptions;
-use crate::core::{ProviderId, TokenAccount, TokenAccountOverride};
+use crate::core::{ProviderId, TokenAccount, TokenAccountKind, TokenAccountOverride};
 
 const SENTINEL: &str = "sentinel-environment-value-must-not-be-rendered";
 const SENTINEL_KEY: &str = "CODEXBAR_TEST_SENTINEL_SECRET";
@@ -67,6 +67,7 @@ fn structs_storing_an_environment_render_only_its_entry_count() {
         account: TokenAccount::new("synthetic", "synthetic-token"),
         env_override: Some(synthetic_environment()).into(),
         cookie_header: None,
+        kind: TokenAccountKind::ApiKey,
     };
     assert_debug_shows_only_two_entries(&token_override);
 }

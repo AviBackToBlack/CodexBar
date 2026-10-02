@@ -170,8 +170,25 @@ pub(super) async fn fetch_web_session_isolated(
     // its own session cookie and never fall back to another ambient credential
     // or browser account (upstream per-provider token account routing).
     if account_isolated {
-        let token = selected_account_auth_token(cookie_header)?;
-        return fetch_via_web_token(&client()?, &token, region)
+        let token = match selected_account_auth_token(cookie_header) {
+            Ok(token) => token,
+            Err(error) => {
+                return Err(WebFetchFailure {
+                    error,
+                    had_token: false,
+                });
+            }
+        };
+        let http = match client() {
+            Ok(http) => http,
+            Err(error) => {
+                return Err(WebFetchFailure {
+                    error,
+                    had_token: false,
+                });
+            }
+        };
+        return fetch_via_web_token(&http, &token, region)
             .await
             .map_err(WebFetchFailure::after_token);
     }
