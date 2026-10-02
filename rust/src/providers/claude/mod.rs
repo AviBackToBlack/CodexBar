@@ -7,6 +7,7 @@ mod cli_reset;
 mod cli_screen;
 mod oauth;
 pub mod quota_history;
+mod reset_credits;
 pub mod reset_observations;
 mod scoped_weekly;
 mod web_api;
