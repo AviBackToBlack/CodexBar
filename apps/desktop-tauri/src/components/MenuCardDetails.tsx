@@ -4,6 +4,7 @@ import type {
   DailyCostPoint,
   PaceSnapshot,
   ProviderInventoryItem,
+  OpenAiApiUsageSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
@@ -25,6 +26,7 @@ import {
   groupProviderDisplayDetails,
   ProviderDisplayRow,
 } from "./ProviderDisplayRow";
+import { OpenAIApiUsageChart } from "./OpenAIApiUsageChart";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import QuotaBurndownChart from "./QuotaBurndownChart";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
@@ -493,6 +495,8 @@ export interface MenuCardPresence {
   hasBurndown: boolean;
   localUsage: ProviderChartData["localUsage"] | null;
   wayfinderUsage: ProviderUsageSnapshot["wayfinderUsage"] | null;
+  /** Per-day OpenAI Admin API history; `openaiapi` only, and only with data. */
+  openAiApiUsage: OpenAiApiUsageSnapshot | null;
   hasDetails: boolean;
 }
 
@@ -533,6 +537,12 @@ export function describeCard(
   const isWayfinder = provider.providerId === "wayfinder";
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
+  const openAiApiUsage =
+    provider.providerId === "openaiapi" &&
+    !provider.error &&
+    (provider.openAiApiUsage?.daily.length ?? 0) > 0
+      ? (provider.openAiApiUsage ?? null)
+      : null;
   const hasMetrics = visibleMetrics.length > 0;
   const hasInventory = !provider.error && (provider.inventory?.length ?? 0) > 0;
   const hasDisplayDetails = !provider.error && (provider.displayDetails?.length ?? 0) > 0;
@@ -553,7 +563,8 @@ export function describeCard(
       hasPace ||
       hasCharts ||
       !!localUsage ||
-      !!wayfinderUsage) &&
+      !!wayfinderUsage ||
+      !!openAiApiUsage) &&
     // Compact Overview suppresses supplemental sections entirely; a card
     // whose only content would be suppressed renders header-only so no empty
     // divider or details container appears.
@@ -572,6 +583,7 @@ export function describeCard(
     hasBurndown,
     localUsage,
     wayfinderUsage,
+    openAiApiUsage,
     hasDetails,
   };
 }
@@ -623,6 +635,7 @@ export default function MenuCardDetails({
     hasBurndown,
     localUsage,
     wayfinderUsage,
+    openAiApiUsage,
   } = presence;
 
   return (
@@ -764,6 +777,21 @@ export default function MenuCardDetails({
             </div>
           )}
         </section>
+      )}
+
+      {!compactOverview && openAiApiUsage && (
+        <details className="menu-card__more menu-card__daily-usage" onToggle={onLayoutChange}>
+          <summary>{t("OpenAIChartTitle")}</summary>
+          <div className="menu-card__more-content">
+            {/* Tray cards open often; skip the bar entrance animation there. */}
+            <OpenAIApiUsageChart
+              usage={openAiApiUsage}
+              animations={false}
+              t={t}
+              onLayoutChange={onLayoutChange}
+            />
+          </div>
+        </details>
       )}
 
       {!compactOverview && (localUsage || hasPace || hasCharts) && (

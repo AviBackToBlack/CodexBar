@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
  */
 export const TOTAL_ANIMATION_MS = 600;
 export const STAGGER_PER_BAR_MS = 20;
+const MAX_STAGGERED_ITEMS = 30;
 
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -42,6 +43,9 @@ export function useChartAnimation(
   const rafRef = useRef<number | null>(null);
   const prefersReduced = usePrefersReducedMotion();
   const skip = !enabled || prefersReduced || count === 0;
+  // Keep long daily histories animated without making the entrance delay grow
+  // linearly with every bucket. Items after the first 30 start together.
+  const staggeredCount = Math.min(count, MAX_STAGGERED_ITEMS);
 
   useEffect(() => {
     if (skip) {
@@ -52,7 +56,7 @@ export function useChartAnimation(
     startRef.current = null;
     setElapsed(0);
 
-    const totalMs = TOTAL_ANIMATION_MS + count * STAGGER_PER_BAR_MS;
+    const totalMs = TOTAL_ANIMATION_MS + staggeredCount * STAGGER_PER_BAR_MS;
 
     const tick = (now: number) => {
       if (startRef.current == null) startRef.current = now;
@@ -74,10 +78,11 @@ export function useChartAnimation(
   const progress = skip ? 1 : clamp01(elapsed / TOTAL_ANIMATION_MS);
   const barProgress = (i: number) => {
     if (skip) return 1;
-    const barElapsed = Math.max(0, elapsed - i * STAGGER_PER_BAR_MS);
+    const stagger = Math.min(i, MAX_STAGGERED_ITEMS) * STAGGER_PER_BAR_MS;
+    const barElapsed = Math.max(0, elapsed - stagger);
     return easeOut(clamp01(barElapsed / TOTAL_ANIMATION_MS));
   };
-  const totalMs = TOTAL_ANIMATION_MS + count * STAGGER_PER_BAR_MS;
+  const totalMs = TOTAL_ANIMATION_MS + staggeredCount * STAGGER_PER_BAR_MS;
   const running = !skip && elapsed < totalMs;
 
   return { progress: easeOut(progress), barProgress, running };

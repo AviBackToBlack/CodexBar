@@ -1179,6 +1179,23 @@ fn provider_detail_roundtrips_through_serde() {
 }
 
 #[test]
+fn provider_detail_carries_openai_daily_usage_only_when_present() {
+    let (mut detail, _settings, _id) =
+        super::build_provider_detail("openaiapi").expect("known provider");
+    assert!(detail.open_ai_api_usage.is_none());
+    let json = serde_json::to_string(&detail).expect("serialize");
+    assert!(!json.contains("openAiApiUsage"));
+
+    detail.open_ai_api_usage = Some(super::OpenAiApiUsageSnapshot {
+        history_days: 30,
+        project_id: None,
+        daily: Vec::new(),
+    });
+    let json = serde_json::to_string(&detail).expect("serialize");
+    assert!(json.contains("\"openAiApiUsage\":{\"historyDays\":30"));
+}
+
+#[test]
 fn usage_item_descriptors_keep_raw_ids_and_redact_titles() {
     let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
     let result = ProviderFetchResult {
