@@ -76,6 +76,8 @@ pub use system::*;
 pub(crate) use usage_items::*;
 
 #[cfg(test)]
+mod session_cookie_scope_tests;
+#[cfg(test)]
 mod tests;
 
 pub use chart::*;
@@ -116,25 +118,11 @@ fn provider_dashboard_url(id: ProviderId, settings: &Settings) -> Option<String>
                 .console_url()
                 .to_string(),
         ),
-        ProviderId::OpenRouter => instantiate_provider(id)
+        _ => instantiate_provider(id)
             .metadata()
             .dashboard_url
             .map(str::to_string),
-        _ => provider_dashboard_url_from_sources(
-            instantiate_provider(id).metadata().dashboard_url,
-            codexbar::settings::get_api_key_providers()
-                .into_iter()
-                .find(|provider| provider.id == id)
-                .and_then(|provider| provider.dashboard_url),
-        ),
     }
-}
-
-fn provider_dashboard_url_from_sources(
-    metadata_url: Option<&'static str>,
-    api_key_catalog_url: Option<&'static str>,
-) -> Option<String> {
-    metadata_url.or(api_key_catalog_url).map(str::to_string)
 }
 
 fn validate_single_line_secret(value: &str, field: &str, max_len: usize) -> Result<(), String> {

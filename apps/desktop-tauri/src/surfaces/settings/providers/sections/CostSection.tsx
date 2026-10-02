@@ -13,6 +13,13 @@ interface Props {
 export function CostSection({ cost, t }: Props) {
   if (!cost) return null;
 
+  const balanceOnly =
+    cost.balance != null &&
+    cost.limit == null &&
+    cost.used === 0 &&
+    (cost.daily?.length ?? 0) === 0;
+  if (balanceOnly) return null;
+
   const rows: { label: string; value: string | null }[] = [
     { label: t("DetailCostUsed"), value: cost.formattedUsed },
     { label: t("DetailCostLimit"), value: cost.formattedLimit },

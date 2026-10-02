@@ -6,6 +6,7 @@ import abacus from "./icons/ProviderIcon-abacus.svg?raw";
 import alibaba from "./icons/ProviderIcon-alibaba.svg?raw";
 import amp from "./icons/ProviderIcon-amp.svg?raw";
 import antigravity from "./icons/ProviderIcon-antigravity.svg?raw";
+import atlascloud from "./icons/ProviderIcon-atlascloud.svg?raw";
 import augment from "./icons/ProviderIcon-augment.svg?raw";
 import bedrock from "./icons/ProviderIcon-bedrock.svg?raw";
 import claude from "./icons/ProviderIcon-claude.svg?raw";
@@ -93,6 +94,7 @@ const RAW: Record<string, string> = {
   alibaba: tint(alibaba),
   amp: tint(amp),
   antigravity: tint(antigravity),
+  atlascloud: tint(atlascloud),
   augment: tint(augment),
   bedrock: tint(bedrock),
   claude: tint(claude),
@@ -185,10 +187,10 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   gemini:      { id: "gemini",      brandColor: "#ab87ea", fallbackLetter: "✦", svgPath: RAW.gemini },
   grok:        { id: "grok",        brandColor: "#111827", fallbackLetter: "G", svgPath: RAW.grok },
   groq:        { id: "groq",        brandColor: "#f55036", fallbackLetter: "G", svgPath: RAW.groq },
-  bifrost:     { id: "bifrost",     brandColor: "#5b7cfa", fallbackLetter: "B" },
+  bifrost:     { id: "bifrost",     brandColor: "#33c09e", fallbackLetter: "B" },
   gitkraken:   { id: "gitkraken",   brandColor: "#179287", fallbackLetter: "G" },
   huggingface: { id: "huggingface", brandColor: "#ffd21e", fallbackLetter: "H", svgPath: RAW.huggingface },
-  hyper:       { id: "hyper",       brandColor: "#7c3aed", fallbackLetter: "H" },
+  hyper:       { id: "hyper",       brandColor: "#ff60ff", fallbackLetter: "H" },
   helmcode:    { id: "helmcode",    brandColor: "#4f46e5", fallbackLetter: "H" },
   v0:          { id: "v0",          brandColor: "#111827", fallbackLetter: "V" },
   typesafe:    { id: "typesafe",    brandColor: "#2563eb", fallbackLetter: "T" },
@@ -218,7 +220,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   nanogpt:     { id: "nanogpt",     brandColor: "#687fa1", fallbackLetter: "N" },
   infini:      { id: "infini",      brandColor: "#687fa1", fallbackLetter: "I" },
   abacus:      { id: "abacus",      brandColor: "#7c3aed", fallbackLetter: "A", svgPath: RAW.abacus },
-  atlascloud:  { id: "atlascloud",  brandColor: "#5975F5", fallbackLetter: "A" },
+  atlascloud:  { id: "atlascloud",  brandColor: "#5975F5", fallbackLetter: "A", svgPath: RAW.atlascloud },
   manus:       { id: "manus",       brandColor: "#34322d", fallbackLetter: "M", svgPath: RAW.manus },
   mimo:        { id: "mimo",        brandColor: "#ff6900", fallbackLetter: "M", svgPath: RAW.mimo },
   doubao:      { id: "doubao",      brandColor: "#2563eb", fallbackLetter: "D", svgPath: RAW.doubao },

@@ -80,6 +80,8 @@ fn test_japanese_menu_card_locale_values_are_translated() {
         (LocaleKey::DetailCostLimit, "上限"),
         (LocaleKey::DetailCostRemaining, "残り"),
         (LocaleKey::DetailCostBalance, "残高"),
+        (LocaleKey::AtlasCloudAvailableBalance, "利用可能残高"),
+        (LocaleKey::AtlasCloudBalance, "Atlas Cloud の残高"),
         (LocaleKey::DetailCostResets, "リセット"),
         (LocaleKey::DetailChartCost, "コスト（30日間）"),
         (LocaleKey::DetailChartCredits, "使用クレジット（30日間）"),
@@ -444,6 +446,10 @@ fn test_fluent_preserves_literal_placeholders_and_status_spacing() {
     assert_eq!(
         get_text(Language::English, LocaleKey::RemainingAmount),
         "{:.2} remaining"
+    );
+    assert_eq!(
+        get_text(Language::English, LocaleKey::UsageSpendKnownSubtotal),
+        "≥{} known"
     );
 }
 

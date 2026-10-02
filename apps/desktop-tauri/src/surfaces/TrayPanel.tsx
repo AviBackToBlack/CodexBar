@@ -57,7 +57,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     settings,
     isRefreshing,
     refreshingProviderIds,
-    refresh,
     hasCachedData,
     trayScaleDraft,
     trayScale,
@@ -73,7 +72,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     wideColumns,
     useWideColumns,
     requestLayout,
-    headerActions,
     footerRows,
     updateState,
     checkNow,
@@ -159,10 +157,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return (
       <div className={revealClassName}>
         <MenuSurface
-          variant="tray"
-          onRefresh={refresh}
-          isRefreshing={isRefreshing}
-          actions={headerActions}
           banner={banner}
           footerLead={zoomRow}
           footerRows={footerRows}
@@ -182,10 +176,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   return (
     <div className={revealClassName}>
       <MenuSurface
-        variant="tray"
-        onRefresh={refresh}
-        isRefreshing={isRefreshing}
-        actions={headerActions}
         banner={banner}
         footerLead={zoomRow}
         footerRows={footerRows}
