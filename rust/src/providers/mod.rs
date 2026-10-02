@@ -38,6 +38,7 @@ pub mod doubao;
 pub mod elevenlabs;
 pub mod factory;
 pub mod fireworks;
+pub(crate) mod format;
 pub mod gemini;
 pub mod gitkraken;
 pub mod grok;

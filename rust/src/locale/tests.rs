@@ -447,6 +447,10 @@ fn test_fluent_preserves_literal_placeholders_and_status_spacing() {
         get_text(Language::English, LocaleKey::RemainingAmount),
         "{:.2} remaining"
     );
+    assert_eq!(
+        get_text(Language::English, LocaleKey::UsageSpendKnownSubtotal),
+        "≥{} known"
+    );
 }
 
 fn resource_key_names(resource: &str) -> HashSet<&str> {

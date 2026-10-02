@@ -53,6 +53,19 @@ fn validate_surface_target_rejects_hidden_mode() {
 }
 
 #[test]
+fn validate_surface_target_rejects_retired_popout_mode() {
+    for target in [
+        SurfaceTarget::Dashboard,
+        SurfaceTarget::Provider {
+            provider_id: "codex".into(),
+        },
+    ] {
+        let error = validate_surface_target(SurfaceMode::PopOut, target).unwrap_err();
+        assert!(error.contains("popOut surface is retired"));
+    }
+}
+
+#[test]
 fn external_url_validation_allows_only_http_urls() {
     assert_eq!(
         validate_external_url(" https://github.com/Finesssee/Win-CodexBar ").unwrap(),
@@ -853,22 +866,22 @@ fn provider_dashboard_url_uses_selected_regional_console() {
     );
 }
 
+/// Provider metadata is the only source of the provider dashboard link; the
+/// API-key catalog URL is the key-management link shown next to the key field.
+/// A provider that only has a catalog URL must get a metadata URL instead of
+/// silently borrowing the key page.
 #[test]
-fn provider_dashboard_url_falls_back_to_api_key_catalog() {
-    assert_eq!(
-        super::provider_dashboard_url_from_sources(None, Some("https://catalog.example/dashboard"))
-            .as_deref(),
-        Some("https://catalog.example/dashboard")
-    );
-    assert_eq!(
-        super::provider_dashboard_url_from_sources(
-            Some("https://metadata.example/dashboard"),
-            Some("https://catalog.example/dashboard"),
-        )
-        .as_deref(),
-        Some("https://metadata.example/dashboard")
-    );
-    assert_eq!(super::provider_dashboard_url_from_sources(None, None), None);
+fn api_key_catalog_providers_have_metadata_dashboard_urls() {
+    let settings = Settings::default();
+    for provider in codexbar::settings::get_api_key_providers() {
+        if provider.dashboard_url.is_some() {
+            assert!(
+                super::provider_dashboard_url(provider.id, &settings).is_some(),
+                "{:?} has an API-key page but no metadata dashboard URL",
+                provider.id
+            );
+        }
+    }
 }
 
 #[test]
