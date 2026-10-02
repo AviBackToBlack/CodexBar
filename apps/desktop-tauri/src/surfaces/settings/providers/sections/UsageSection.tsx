@@ -105,6 +105,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
         <ProviderDisplayRow
           key={detail.id}
           detail={detail}
+          t={t}
           lineClassName="provider-usage-inventory"
           trackClassName="provider-usage-bar__track"
           fillClassName="provider-usage-bar__fill"

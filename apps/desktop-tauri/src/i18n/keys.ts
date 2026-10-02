@@ -76,6 +76,8 @@ export const ALL_LOCALE_KEYS = [
   "ProviderDisabled",
   "ProviderInfo",
   "ProviderUsage",
+  "AtlasCloudAvailableBalance",
+  "AtlasCloudBalance",
   "PanelUsageDetails",
   "AuthType",
   "DataSource",
