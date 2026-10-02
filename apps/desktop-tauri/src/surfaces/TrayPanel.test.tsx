@@ -599,7 +599,7 @@ describe("TrayPanel provider grid", () => {
     ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
   });
 
-  it("keeps compact Overview limited to two quota rows when explicitly selected", async () => {
+  it("shows all quota rows in compact Overview when explicitly selected (0.62.0 #2616)", async () => {
     const { container } = renderTrayPanel(
       [providerWithThreeQuotaWindows("codex", "Codex")],
       { overviewLayout: "compact" },
@@ -609,7 +609,7 @@ describe("TrayPanel provider grid", () => {
       expect(container.querySelector(".menu-stack__item")).not.toBeNull();
     });
 
-    expect(container.querySelectorAll(".menu-metric")).toHaveLength(2);
+    expect(container.querySelectorAll(".menu-metric")).toHaveLength(3);
   });
 
   it("uses independent columns for a wide user-sized overview", async () => {

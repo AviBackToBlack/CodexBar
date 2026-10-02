@@ -238,9 +238,9 @@ export default function MenuCard({
       resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });
   }
-  const visibleMetrics = metrics
-    .filter((metric) => isUsageItemVisible(provider.hiddenUsageItemIds, metric.id))
-    .slice(0, compactOverview ? 2 : metrics.length);
+  const visibleMetrics = metrics.filter((metric) =>
+    isUsageItemVisible(provider.hiddenUsageItemIds, metric.id),
+  );
 
   const presence = describeCard(
     provider,
