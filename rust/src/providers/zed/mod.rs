@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    ProviderStateKind, SourceMode,
+    FetchContext, ManualEmptyCookiePolicy, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, ProviderStateKind, SourceMode,
 };
 use crate::providers::{BoundedBodyError, read_bounded_response};
 
@@ -126,6 +126,10 @@ impl Provider for ZedProvider {
 
     fn web_is_opt_in(&self) -> bool {
         true
+    }
+
+    fn manual_empty_cookie_policy(&self) -> ManualEmptyCookiePolicy {
+        ManualEmptyCookiePolicy::FailClosedWeb
     }
 
     fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
