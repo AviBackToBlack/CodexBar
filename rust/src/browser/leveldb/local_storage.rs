@@ -32,7 +32,20 @@ pub fn read_local_storage_entries(
     dir: &Path,
     origin: &str,
 ) -> Result<Vec<LocalStorageEntry>, LevelDbError> {
-    Ok(decode_origin_entries(&read_entries(dir)?, origin))
+    read_local_storage_entries_for_origins(dir, &[origin])
+}
+
+/// Read `localStorage` items for any of `origins` with one LevelDB scan, sorted by key within
+/// each origin. A trailing slash on an origin is ignored.
+pub fn read_local_storage_entries_for_origins(
+    dir: &Path,
+    origins: &[&str],
+) -> Result<Vec<LocalStorageEntry>, LevelDbError> {
+    let entries = read_entries(dir)?;
+    Ok(origins
+        .iter()
+        .flat_map(|origin| decode_origin_entries(&entries, origin))
+        .collect())
 }
 
 pub(super) fn decode_origin_entries(entries: &[Entry], origin: &str) -> Vec<LocalStorageEntry> {

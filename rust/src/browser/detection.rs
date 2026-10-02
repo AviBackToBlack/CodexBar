@@ -206,36 +206,26 @@ impl BrowserDetector {
     }
 
     /// Detect Chromium-based browser profiles
-    fn detect_chromium_profiles(user_data_dir: &PathBuf) -> Vec<BrowserProfile> {
-        let mut profiles = Vec::new();
+    pub(super) fn detect_chromium_profiles(user_data_dir: &Path) -> Vec<BrowserProfile> {
+        let Ok(entries) = std::fs::read_dir(user_data_dir) else {
+            return Vec::new();
+        };
 
-        // Default profile
-        let default_path = user_data_dir.join("Default");
-        if default_path.exists() {
-            profiles.push(BrowserProfile {
-                name: "Default".to_string(),
-                path: default_path,
-                is_default: true,
-            });
-        }
-
-        // Additional profiles (Profile 1, Profile 2, etc.)
-        if let Ok(entries) = std::fs::read_dir(user_data_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("Profile ") {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        profiles.push(BrowserProfile {
-                            name,
-                            path,
-                            is_default: false,
-                        });
-                    }
-                }
-            }
-        }
-
+        let mut profiles: Vec<_> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let path = entry.path();
+                let is_profile =
+                    name == "Default" || name.starts_with("Profile ") || name.starts_with("user-");
+                (is_profile && path.is_dir()).then(|| BrowserProfile {
+                    is_default: name == "Default",
+                    name,
+                    path,
+                })
+            })
+            .collect();
+        profiles.sort_by(|left, right| left.name.cmp(&right.name));
         profiles
     }
 
