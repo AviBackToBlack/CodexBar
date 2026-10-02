@@ -3,6 +3,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
 import type { LocaleKey } from "../i18n/keys";
 import { costPeriodLabel, costPeriodShortLabel } from "../lib/costPeriod";
+import { useCurrency } from "../hooks/CurrencyProvider";
+import { sumDisplayCurrencyAmounts } from "../lib/currency";
 import {
   beginFlyoutGesture,
   getUsageSpendSummary,
@@ -341,6 +343,7 @@ function OverviewSpendSummary({
   period?: string;
   t: (key: LocaleKey) => string;
 }) {
+  const { preferredCode, rates, format } = useCurrency();
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
 
@@ -373,12 +376,16 @@ function OverviewSpendSummary({
   };
 
   const rows = overviewSummary.rows;
-  const summable = rows.filter((row) => (row.currency || "USD") === "USD");
-  const known = summable.filter((row) => row.periodCost != null && Number.isFinite(row.periodCost));
-  if (known.length === 0) return null;
-  const total = known.reduce((sum, row) => sum + (row.periodCost ?? 0), 0);
-  const partial = known.length < rows.length;
-  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  const target = preferredCode.trim().toUpperCase() || "AUTO";
+  const aggregate = sumDisplayCurrencyAmounts(
+    rows.map((row) => ({ amount: row.periodCost, currency: row.currency || "USD" })),
+    target,
+    rates,
+  );
+  if (aggregate.total == null && aggregate.considered === 0) return null;
+  const partial = aggregate.included < aggregate.considered;
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: target === "AUTO" ? "USD" : target, maximumFractionDigits: 2 });
+  const total = aggregate.total;
 
   return (
     <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
@@ -387,7 +394,7 @@ function OverviewSpendSummary({
         <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
       </div>
       <div className="settings-section__caption" style={{ marginTop: 4 }}>
-        {known.length} of {rows.length} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
+        {aggregate.included} of {aggregate.considered} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
       </div>
       <button
         type="button"

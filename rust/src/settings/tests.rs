@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn test_settings_default() {
     let settings = Settings::default();
+    assert_eq!(settings.preferred_currency_code, "AUTO");
     assert!(settings.enabled_providers.contains("claude"));
     assert!(settings.enabled_providers.contains("codex"));
     assert_eq!(settings.refresh_interval_secs, 300);
@@ -45,6 +46,22 @@ fn hyper_cookie_source_defaults_to_automatic_session_import() {
     assert_eq!(settings.cookie_source(ProviderId::Hyper), "auto");
     settings.set_cookie_source(ProviderId::Hyper, "off");
     assert_eq!(settings.cookie_source(ProviderId::Hyper), "off");
+fn preferred_currency_defaults_validates_and_round_trips() {
+    let legacy: Settings = serde_json::from_str(r#"{"enabled_providers": []}"#)
+        .expect("legacy settings without a preferred currency remain valid");
+    assert_eq!(legacy.preferred_currency_code, "AUTO");
+
+    let selected: Settings =
+        serde_json::from_str(r#"{"enabled_providers": [], "preferred_currency_code": "try"}"#)
+            .expect("supported currency loads");
+    assert_eq!(selected.preferred_currency_code, "TRY");
+    let encoded = serde_json::to_string(&selected).expect("serialize selected currency");
+    assert!(encoded.contains(r#""preferred_currency_code":"TRY""#));
+
+    let invalid: Settings =
+        serde_json::from_str(r#"{"enabled_providers": [], "preferred_currency_code": "BTC"}"#)
+            .expect("unknown currency is normalized safely");
+    assert_eq!(invalid.preferred_currency_code, "AUTO");
 }
 
 #[test]

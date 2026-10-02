@@ -30,6 +30,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 const settings: SettingsSnapshot = {
   enabledProviders: [],
+  preferredCurrencyCode: "AUTO",
   refreshIntervalSecs: 300,
     adaptiveRefresh: false,
   refreshAllProvidersOnMenuOpen: false,
@@ -305,6 +306,27 @@ describe("GeneralTab language picker", () => {
     fireEvent.change(saved, { target: { value: "" } });
     fireEvent.blur(saved);
     expect(set).toHaveBeenLastCalledWith({ providerUsageThresholds: {} });
+  });
+});
+
+describe("GeneralTab preferred currency picker", () => {
+  it("offers AUTO then every catalog currency as CODE (symbol) in catalog order", () => {
+    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+    const select = screen.getByLabelText("PreferredCurrencyLabel");
+    const options = Array.from(select.querySelectorAll("option"), (option) => option.textContent);
+    expect(options).toEqual([
+      "AUTO", "USD ($)", "GBP (£)", "EUR (€)", "CZK (Kč)", "CNY (¥)", "JPY (¥)", "KRW (₩)",
+      "CAD ($)", "AUD ($)", "HKD ($)", "TWD (NT$)", "SGD ($)", "INR (₹)", "CHF (Fr.)",
+      "AED (د.إ)", "TRY (₺)", "NZD ($)", "SEK (kr)", "NOK (kr)", "DKK (kr)", "PLN (zł)",
+      "BRL (R$)", "MXN ($)", "ZAR (R)", "THB (฿)", "IDR (Rp)", "VND (₫)", "UAH (₴)",
+    ]);
+  });
+
+  it("persists an explicitly selected preferred currency", () => {
+    const set = vi.fn();
+    render(<GeneralTab settings={settings} set={set} saving={false} />);
+    fireEvent.change(screen.getByLabelText("PreferredCurrencyLabel"), { target: { value: "TRY" } });
+    expect(set).toHaveBeenCalledWith({ preferredCurrencyCode: "TRY" });
   });
 });
 

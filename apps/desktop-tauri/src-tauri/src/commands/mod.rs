@@ -24,6 +24,7 @@ use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 
 mod chart;
+mod currency;
 mod spend_contract;
 mod tokens;
 mod updater;
@@ -85,6 +86,7 @@ mod tests;
 mod token_account_source_tests;
 
 pub use chart::*;
+pub use currency::*;
 pub use spend_contract::*;
 pub use tokens::*;
 pub use updater::*;

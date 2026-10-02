@@ -16,6 +16,7 @@ import { LocaleProvider } from "./i18n/LocaleProvider";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
 import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useDeepSeekPricingStatus } from "./hooks/useDeepSeekPricingStatus";
+import { CurrencyProvider } from "./hooks/CurrencyProvider";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
 const FloatBar = lazy(() => import("./floatbar/FloatBar"));
@@ -48,7 +49,9 @@ function initialSettingsTab(): string {
 export default function App() {
   return (
     <LocaleProvider>
-      <AppInner />
+      <CurrencyProvider>
+        <AppInner />
+      </CurrencyProvider>
     </LocaleProvider>
   );
 }

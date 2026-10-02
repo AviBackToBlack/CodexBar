@@ -614,12 +614,17 @@ impl CostSnapshot {
 }
 
 /// Format a value as currency
-fn format_currency(value: f64, currency_code: &str) -> String {
+///
+/// The single symbol table for native code paths: tray, CLI, and any Rust
+/// renderer. The web UI formats through `Intl` instead, so the two agree on
+/// codes both know (USD/EUR/GBP/TRY) and stay readable elsewhere.
+pub fn format_currency(value: f64, currency_code: &str) -> String {
     let value = finite_amount(value).unwrap_or(0.0);
     match currency_code.to_uppercase().as_str() {
         "USD" => format!("${:.2}", value),
         "EUR" => format!("€{:.2}", value),
         "GBP" => format!("£{:.2}", value),
+        "TRY" => format!("₺{:.2}", value),
         _ => format!("{:.2} {}", value, currency_code),
     }
 }

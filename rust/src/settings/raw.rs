@@ -96,6 +96,8 @@ where
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub(super) struct RawSettings {
+    #[serde(default = "default_preferred_currency_code")]
+    preferred_currency_code: String,
     enabled_providers: HashSet<String>,
     refresh_interval_secs: u64,
     #[serde(default)]
@@ -280,6 +282,7 @@ impl Default for RawSettings {
     fn default() -> Self {
         let s = Settings::default();
         Self {
+            preferred_currency_code: s.preferred_currency_code,
             enabled_providers: s.enabled_providers,
             refresh_interval_secs: s.refresh_interval_secs,
             adaptive_refresh: s.adaptive_refresh,
@@ -611,6 +614,9 @@ impl From<RawSettings> for Settings {
         };
 
         Settings {
+            preferred_currency_code: crate::currency::normalize_preferred_currency(
+                &raw.preferred_currency_code,
+            ),
             enabled_providers: raw
                 .enabled_providers
                 .into_iter()

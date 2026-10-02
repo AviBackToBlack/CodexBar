@@ -13,6 +13,7 @@ pub mod codex_workspaces;
 pub mod core;
 pub mod cost_reporting_period;
 pub mod cost_scanner;
+pub mod currency;
 pub mod host;
 pub mod locale;
 pub mod logging;

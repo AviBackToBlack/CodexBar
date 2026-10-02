@@ -10,6 +10,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import { useCurrency } from "../hooks/CurrencyProvider";
 import { useLocale } from "../hooks/useLocale";
 import { useProviders } from "../hooks/useProviders";
 import {
@@ -113,11 +114,6 @@ function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is Pro
   return summary?.todayCost != null || summary?.periodCost != null;
 }
 
-function formatUsd(value: number | null): string | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return `$${value.toFixed(2)}`;
-}
-
 function CostPill({
   summary,
   scale,
@@ -131,8 +127,9 @@ function CostPill({
   periodLabel: string;
   estimateLabel: string;
 }) {
-  const today = formatUsd(summary.todayCost);
-  const periodCost = formatUsd(summary.periodCost);
+  const { format } = useCurrency();
+  const today = summary.todayCost == null ? null : format(summary.todayCost, "USD");
+  const periodCost = summary.periodCost == null ? null : format(summary.periodCost, "USD");
   const iconSize = Math.round(10 * scale);
   const brand = getProviderIcon(summary.providerId).brandColor;
   const title = [
