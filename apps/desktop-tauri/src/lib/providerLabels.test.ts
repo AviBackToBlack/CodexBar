@@ -12,6 +12,7 @@ describe("provider labels", () => {
   it("localizes Atlas Cloud display labels and preserves other provider titles", () => {
     const atlasBalance: ProviderDisplayDetail = {
       id: "atlascloud-available",
+      sectionTitle: null,
       title: "Available balance",
       value: "$95.50",
       secondaryValue: null,

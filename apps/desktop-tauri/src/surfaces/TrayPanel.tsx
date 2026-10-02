@@ -384,14 +384,16 @@ function OverviewSpendSummary({
   );
   if (aggregate.total == null && aggregate.considered === 0) return null;
   const partial = aggregate.included < aggregate.considered;
-  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: target === "AUTO" ? "USD" : target, maximumFractionDigits: 2 });
-  const total = aggregate.total;
 
   return (
     <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
         <strong>{title}</strong>
-        <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
+        <strong>
+          {aggregate.total == null
+            ? "—"
+            : `${partial ? "~" : ""}${new Intl.NumberFormat(undefined, { style: "currency", currency: target === "AUTO" ? "USD" : target, maximumFractionDigits: 2 }).format(aggregate.total)}`}
+        </strong>
       </div>
       <div className="settings-section__caption" style={{ marginTop: 4 }}>
         {aggregate.included} of {aggregate.considered} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}

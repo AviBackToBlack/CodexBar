@@ -2,6 +2,7 @@ import { useState } from "react";
 import type {
   CostSummaryDisplayStyle,
   DailyCostPoint,
+  DailyTokenPoint,
   PaceSnapshot,
   ProviderInventoryItem,
   OpenAiApiUsageSnapshot,
@@ -327,6 +328,7 @@ type MetricRowDisplay = {
   showAsUsed?: boolean;
   compactOverview?: boolean;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  monthlyLimitBlockNow?: number;
 };
 
 /**

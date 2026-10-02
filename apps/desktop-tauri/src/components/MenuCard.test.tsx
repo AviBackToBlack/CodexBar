@@ -861,6 +861,7 @@ describe("MenuCard", () => {
     snapshot.displayDetails = [
       {
         id: "atlascloud-available",
+        sectionTitle: null,
         title: "Available balance",
         value: "$95.50",
         secondaryValue: null,
