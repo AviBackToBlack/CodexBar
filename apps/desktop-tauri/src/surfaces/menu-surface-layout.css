@@ -60,15 +60,10 @@
   font-weight: 600;
 }
 
-<<<<<<< HEAD
 .menu-surface--tray .menu-metric__pct,
 .menu-surface--tray .menu-metric__reset,
-.menu-surface--tray .menu-metric__status {
-=======
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__pct,
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__reset,
-:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__detail {
->>>>>>> 9170b79e
+.menu-surface--tray .menu-metric__status,
+.menu-surface--tray .menu-metric__detail {
   font-size: 11px;
   line-height: 1.4;
 }

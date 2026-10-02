@@ -3714,11 +3714,8 @@ html:has(.menu-surface--tray) {
 }
 .menu-surface--tray .menu-metric__pct,
 .menu-surface--tray .menu-metric__reset,
-<<<<<<< HEAD
-.menu-surface--tray .menu-metric__status {
-=======
+.menu-surface--tray .menu-metric__status,
 .menu-surface--tray .menu-metric__detail {
->>>>>>> 9170b79e
   font-size: 10px;
 }
 .menu-surface--tray .menu-metric__reserve {
@@ -5049,11 +5046,8 @@ html:has(.menu-surface--tray) {
 
 .menu-metric__pct,
 .menu-metric__reset,
-<<<<<<< HEAD
-.menu-metric__status {
-=======
+.menu-metric__status,
 .menu-metric__detail {
->>>>>>> 9170b79e
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,
