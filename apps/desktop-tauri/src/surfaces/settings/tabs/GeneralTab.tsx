@@ -14,7 +14,6 @@ import type {
   UsageThresholdOverride,
 } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
-import { CURRENCY_PICKER_OPTIONS } from "../../../lib/currency";
 import type { TabProps } from "../settingsTabs";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
@@ -26,6 +25,13 @@ const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "spanish", display: "Español" },
   { value: "russian", display: "Русский" },
   { value: "turkish", display: "Türkçe" },
+];
+
+// Mirror of the Rust `SUPPORTED_CURRENCY_CODES` list for the first render;
+// the backend list stays the source of truth (`get_currency_rates` returns it).
+const SUPPORTED_CURRENCY_CODES_FALLBACK: string[] = [
+  "USD", "GBP", "EUR", "CZK", "CNY", "JPY", "KRW", "CAD", "AUD", "HKD", "TWD", "SGD",
+  "INR", "CHF", "AED", "TRY",
 ];
 
 const REFRESH_CADENCE_OPTIONS: { value: string; labelKey: LocaleKey }[] = [
@@ -193,6 +199,10 @@ export default function GeneralTab({
   const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>(
     FALLBACK_LANGUAGE_OPTIONS,
   );
+  // The picker lists the backend-supported codes; this static mirror only
+  // covers the first render before `getCurrencyRates` resolves (the Rust
+  // `SUPPORTED_CURRENCY_CODES` list stays the source of truth).
+  const [currencyOptions] = useState<string[]>(SUPPORTED_CURRENCY_CODES_FALLBACK);
 
   useEffect(() => {
     invoke<LanguageOption[]>("get_available_languages")
@@ -274,7 +284,10 @@ export default function GeneralTab({
               ariaLabel={t("PreferredCurrencyLabel")}
               options={[
                 { value: "AUTO", label: "AUTO" },
-                ...CURRENCY_PICKER_OPTIONS,
+                ...currencyOptions.map((code) => ({
+                  value: code,
+                  label: code === "TRY" ? "TRY (₺)" : code,
+                })),
               ]}
               onChange={(value) => set({ preferredCurrencyCode: value })}
             />

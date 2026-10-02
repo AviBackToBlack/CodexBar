@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocale } from "../../../hooks/useLocale";
 import { useCurrency } from "../../../hooks/CurrencyProvider";
-import { convertCurrencyAmount, normalizePreferredCurrency } from "../../../lib/currency";
+import type { LocaleKey } from "../../../i18n/keys";
 import {
   getSettingsSnapshot,
   getUsageSpendSummary,
@@ -14,7 +14,6 @@ import {
   shareUsageSpendPng,
 } from "../../../lib/usageSpendSharing";
 import type { CostSummaryDisplayStyle, SettingsSnapshot, SpendContract, UsageSpendSummary } from "../../../types/bridge";
-import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../settingsTabs";
 
 export default function UsageSpendTab(_props: TabProps) {
@@ -303,8 +302,16 @@ function formatSpendDisplayMetric(
 }
 
 function spendDisplayCurrency(source: string, preferred: string, rates: Record<string, number>): string {
-  const target = normalizePreferredCurrency(preferred);
-  if (target !== "AUTO" && convertCurrencyAmount(1, source, target, rates) != null) return target;
+  const target = preferred.trim().toUpperCase() || "AUTO";
+  if (target === "AUTO" || target === source.trim().toUpperCase()) return source;
+  const sourceRate = source.trim().toUpperCase() === "USD" ? 1 : rates[source.trim().toUpperCase()];
+  const targetRate = target === "USD" ? 1 : rates[target];
+  if (
+    Number.isFinite(sourceRate) && sourceRate! > 0 &&
+    Number.isFinite(targetRate) && targetRate! > 0
+  ) {
+    return target;
+  }
   return source;
 }
 

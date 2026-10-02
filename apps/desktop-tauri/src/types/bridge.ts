@@ -282,6 +282,10 @@ export interface SettingsSnapshot {
 
 export interface CurrencyRatesSnapshot {
   rates: Record<string, number>;
+  /** Codes the converter supports (Rust-owned list). */
+  supportedCodes: string[];
+  /** Normalized preference this snapshot was built for ("AUTO" or a code). */
+  preferredCode: string;
 }
 
 /** Partial settings object — only include fields you want to change. */

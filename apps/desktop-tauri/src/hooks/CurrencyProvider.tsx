@@ -1,8 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrencyRates, getSettingsSnapshot } from "../lib/tauri";
-import { FALLBACK_CURRENCY_RATES, formatDisplayCurrency, mergeValidCurrencyRates, normalizePreferredCurrency } from "../lib/currency";
-import type { SettingsSnapshot } from "../types/bridge";
+import { formatDisplayCurrency } from "../lib/currency";
 
 interface CurrencyContextValue {
   preferredCode: string;
@@ -10,53 +9,73 @@ interface CurrencyContextValue {
   format: (amount: number | null | undefined, sourceCode: string, sourceSymbol?: string | null) => string;
 }
 
+const EMPTY_RATES: Record<string, number> = {};
+
 const CurrencyContext = createContext<CurrencyContextValue>({
   preferredCode: "AUTO",
-  rates: FALLBACK_CURRENCY_RATES,
-  format: (amount, sourceCode, sourceSymbol) => formatDisplayCurrency(amount, sourceCode, "AUTO", FALLBACK_CURRENCY_RATES, sourceSymbol),
+  rates: EMPTY_RATES,
+  format: (amount, sourceCode, sourceSymbol) =>
+    formatDisplayCurrency(amount, sourceCode, "AUTO", EMPTY_RATES, sourceSymbol),
 });
 
 export function CurrencyProvider({ children }: { children: ReactNode }) {
   const [preferredCode, setPreferredCode] = useState("AUTO");
-  const [rates, setRates] = useState(FALLBACK_CURRENCY_RATES);
+  const [rates, setRates] = useState<Record<string, number>>(EMPTY_RATES);
   const requestId = useRef(0);
 
-  const applySettings = useCallback((settings: SettingsSnapshot) => {
-    const selected = normalizePreferredCurrency(settings.preferredCurrencyCode);
+  // Single subscription path: the backend's `settings-changed` broadcast
+  // (the same event `useSettings` consumes). Re-fetch the settings snapshot
+  // and reload rates only when the preference actually changed.
+  const reloadForPreference = useCallback((preference: string) => {
+    const selected = preference.trim().toUpperCase() || "AUTO";
     setPreferredCode(selected);
     if (selected === "AUTO") {
       requestId.current += 1;
+      setRates(EMPTY_RATES);
       return;
     }
     const id = ++requestId.current;
     void getCurrencyRates(selected)
       .then((snapshot) => {
-        if (requestId.current === id) setRates(mergeValidCurrencyRates(snapshot.rates));
+        if (requestId.current === id) setRates(snapshot.rates);
       })
       .catch(() => {
-        // Keep the offline fallback; exchange-rate availability never blocks app surfaces.
+        // Keep the last known table; exchange-rate availability never blocks
+        // app surfaces. The backend merged fallback rates into the snapshot.
       });
   }, []);
 
   useEffect(() => {
-    let active = true;
-    void getSettingsSnapshot().then((settings) => { if (active) applySettings(settings); }).catch(() => {});
-    const onUpdated = (event: Event) => {
-      const settings = (event as CustomEvent<SettingsSnapshot>).detail;
-      if (settings) applySettings(settings);
-    };
-    window.addEventListener("codexbar:settings-updated", onUpdated);
-    let unlisten: (() => void) | undefined;
-    void listen("settings-changed", () => {
-      void getSettingsSnapshot().then((settings) => { if (active) applySettings(settings); }).catch(() => {});
-    }).then((stop) => { if (active) unlisten = stop; else stop(); }).catch(() => {});
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+
+    void getSettingsSnapshot()
+      .then((settings) => {
+        if (!cancelled) reloadForPreference(settings.preferredCurrencyCode ?? "AUTO");
+      })
+      .catch(() => {});
+
+    listen("settings-changed", () => {
+      void getSettingsSnapshot()
+        .then((settings) => {
+          if (!cancelled) reloadForPreference(settings.preferredCurrencyCode ?? "AUTO");
+        })
+        .catch(() => {});
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(() => {});
+
     return () => {
-      active = false;
-      requestId.current += 1;
-      window.removeEventListener("codexbar:settings-updated", onUpdated);
+      cancelled = true;
       unlisten?.();
     };
-  }, [applySettings]);
+  }, [reloadForPreference]);
 
   const format = useCallback(
     (amount: number | null | undefined, sourceCode: string, sourceSymbol?: string | null) =>
