@@ -153,6 +153,12 @@ z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shorte
 
 Upstream's independent **WidgetKit** provider-widget configuration has no Windows analogue in this repository. Win-CodexBar has no WidgetKit extension; provider cards and tray entries are already independent Windows/Tauri surfaces.
 
+### LiteLLM budgets
+
+LiteLLM reads a virtual key's own budgets from the proxy's management routes. Set the base URL and key in Settings → Providers → LiteLLM, or use `LITELLM_BASE_URL` and `LITELLM_API_KEY`. A trailing `/v1` is dropped. The base URL must use HTTPS unless it names `localhost`, a `.local` host, or a loopback, RFC 1918, link-local or IPv6 unique-local address, and it must not embed credentials, because the key is sent as a bearer token.
+
+The provider calls `GET /key/info`, then `GET /user/info?user_id=…` for a user-bound key or `GET /team/info?team_id=…` for a team-only key, and rejects a response whose user or team ID differs from the key's. The personal budget fills the primary lane and the key's matching team budget fills the secondary lane. When only one budget exists, it takes the primary lane under its own label, and a key without any budget shows "No budget set". Amounts such as `$25.00 / $100.00` are detail lines, shown apart from a real reset date. The Automatic tray and float bar metric shows the team budget unless a budget is exhausted. Spend without a budget stays visible as API spend, and no pace is derived from budget resets.
+
 ## Upstream doc warning
 
 Upstream `docs/providers.md` is a large auto-strategy matrix (60+ providers) for the macOS app. Use it as **inspiration** when porting a provider. For runtime truth on Windows:

@@ -959,6 +959,13 @@ pub trait Provider: Send + Sync {
         true
     }
 
+    /// Whether Automatic metric selection shows the secondary lane whenever
+    /// neither core lane is exhausted, instead of the fuller lane. An
+    /// exhausted primary or secondary lane still wins, primary first.
+    fn automatic_metric_prefers_secondary_window(&self) -> bool {
+        false
+    }
+
     /// Whether browser-cookie discovery/recovery is owned by the provider.
     fn owns_browser_cookie_resolution(&self) -> bool {
         false
