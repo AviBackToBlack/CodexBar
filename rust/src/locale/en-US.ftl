@@ -911,3 +911,5 @@ PanelPeriodTokens = { "{}" } tokens
 OverviewSpendPeriodTitle = Usage & Spend · { "{}" }
 UsageSpendModelsPeriodCaption = Local model history for: { "{}" }.
 UsageSpendProjectsPeriodCaption = Ranked Codex local project spend for: { "{}" }
+BurndownChartTitle = Usage remaining
+BurndownChartAriaLabel = Recorded remaining quota burndown

@@ -1209,6 +1209,10 @@ locale_keys! {
     ProviderAutoResumeAfterQuotaReset,
     ProviderAutoResumeAfterQuotaResetHelper,
 
+    // Recorded remaining-quota burndown (upstream 0.70.0 #4085)
+    BurndownChartTitle,
+    BurndownChartAriaLabel,
+
     // History window for local cost surfaces (upstream 0.67.0 reporting periods)
     CostPeriodHistoryWindow,
     CostPeriodHistoryWindowHelper,

@@ -4781,6 +4781,53 @@ html:has(.menu-surface--tray) {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Recorded quota burndown (upstream 0.70.0 #4085) ─────────────── */
+.quota-burndown-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 2px;
+}
+.quota-burndown-chart svg {
+  width: 100%;
+  height: 76px;
+  overflow: visible;
+}
+.quota-burndown-chart__grid {
+  stroke: var(--usage-bar-track);
+  stroke-width: 1;
+}
+.quota-burndown-chart__ideal {
+  stroke: var(--text-secondary);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.quota-burndown-chart__observed {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.quota-burndown-chart__point {
+  fill: var(--accent);
+  vector-effect: non-scaling-stroke;
+}
+.quota-burndown-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+.quota-burndown-chart__caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-variant-numeric: tabular-nums;
+}
 .menu-metric__bar,
 .menu-card__pace-track {
   height: var(--bar-height);

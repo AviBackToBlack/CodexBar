@@ -184,6 +184,29 @@ pub struct PaceSnapshot {
     pub monthly_limit_block: Option<MonthlyLimitBlockSnapshot>,
 }
 
+/// One burndown chart point (RFC 3339 capture time + remaining percent).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaBurndownPointSnapshot {
+    pub captured_at: String,
+    pub remaining_percent: f64,
+}
+
+/// Recorded remaining-quota burndown for one series (session / weekly),
+/// upstream 0.70.0 #4085. `captured_at` of the last sample drives the
+/// capture-age caption; the chart is empty when there is no current window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaBurndownSnapshot {
+    /// `session` or `weekly`.
+    pub series: String,
+    pub window_minutes: u32,
+    pub start: String,
+    pub reset: String,
+    pub samples: Vec<QuotaBurndownPointSnapshot>,
+    pub ideal: [QuotaBurndownPointSnapshot; 2],
+}
+
 /// Session-equivalent weekly forecast for Claude/Codex menu secondary line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,6 +317,10 @@ pub struct ProviderUsageSnapshot {
     pub wayfinder_usage: Option<codexbar::core::WayfinderUsageSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub session_equivalent_forecast: Option<SessionEquivalentForecastSnapshot>,
+    /// Recorded remaining-quota burndown for the selected window
+    /// (upstream 0.70.0 #4085); Codex and Claude only.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub quota_burndown: Option<QuotaBurndownSnapshot>,
 }
 
 fn default_display_name() -> String {
@@ -400,6 +427,12 @@ impl ProviderUsageSnapshot {
         // managed token-account id.
         let account_key = forecast_account_key(usage, token_account_id);
         let session_equivalent_forecast = session_equivalent_forecast_for(
+            id,
+            account_key.as_deref(),
+            &usage.primary,
+            usage.secondary.as_ref(),
+        );
+        let quota_burndown = quota_burndown_for(
             id,
             account_key.as_deref(),
             &usage.primary,
@@ -524,6 +557,7 @@ impl ProviderUsageSnapshot {
             fetch_duration_ms: None,
             wayfinder_usage: result.wayfinder_usage.clone(),
             session_equivalent_forecast,
+            quota_burndown,
         }
     }
 
@@ -575,6 +609,7 @@ impl ProviderUsageSnapshot {
             fetch_duration_ms: None,
             wayfinder_usage: None,
             session_equivalent_forecast: None,
+            quota_burndown: None,
         }
     }
 }
@@ -645,6 +680,74 @@ fn session_equivalent_forecast_for(
         weekly_resets_at: forecast.weekly_resets_at.to_rfc3339(),
         weekly_used_percent: forecast.weekly_used_percent,
     })
+}
+
+/// Build the recorded burndown for the live window (session or weekly lane)
+/// from the persisted history; `None` when the window is expired or unknown.
+/// Codex and Claude only, mirroring the forecast gate.
+fn quota_burndown_for(
+    id: ProviderId,
+    account_key: Option<&str>,
+    session: &RateWindow,
+    weekly: Option<&RateWindow>,
+) -> Option<QuotaBurndownSnapshot> {
+    if !matches!(id, ProviderId::Claude | ProviderId::Codex) {
+        return None;
+    }
+    let now = chrono::Utc::now();
+    let provider_id = id.cli_name();
+    // Persisted history feeds the chart; loading merges it into the
+    // process-local store once per scope.
+    let histories = codexbar::core::load_persisted_history(provider_id, account_key);
+
+    let live = |series: &str, window: &RateWindow| -> Option<QuotaBurndownSnapshot> {
+        let model = codexbar::core::QuotaBurndownModel::build(
+            &series_entries(&histories, series),
+            window,
+            now,
+        )?;
+        Some(QuotaBurndownSnapshot {
+            series: series.to_string(),
+            window_minutes: window.window_minutes?,
+            start: model.start.to_rfc3339(),
+            reset: model.reset.to_rfc3339(),
+            samples: model
+                .samples
+                .iter()
+                .map(|sample| QuotaBurndownPointSnapshot {
+                    captured_at: sample.captured_at.to_rfc3339(),
+                    remaining_percent: sample.remaining_percent,
+                })
+                .collect(),
+            ideal: [
+                QuotaBurndownPointSnapshot {
+                    captured_at: model.ideal[0].captured_at.to_rfc3339(),
+                    remaining_percent: model.ideal[0].remaining_percent,
+                },
+                QuotaBurndownPointSnapshot {
+                    captured_at: model.ideal[1].captured_at.to_rfc3339(),
+                    remaining_percent: model.ideal[1].remaining_percent,
+                },
+            ],
+        })
+    };
+
+    // Upstream prefers the shortest current window (session over weekly).
+    live("session", session).or_else(|| weekly.and_then(|w| live("weekly", w)))
+}
+
+fn series_entries(
+    histories: &[codexbar::core::PlanUtilizationSeriesHistory],
+    series: &str,
+) -> Vec<codexbar::core::PlanUtilizationHistoryEntry> {
+    histories
+        .iter()
+        .find(|history| match series {
+            "session" => history.name == codexbar::core::PlanUtilizationSeriesName::Session,
+            _ => history.name == codexbar::core::PlanUtilizationSeriesName::Weekly,
+        })
+        .map(|history| history.entries.clone())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize)]

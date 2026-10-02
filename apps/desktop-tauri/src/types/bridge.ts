@@ -647,6 +647,22 @@ export interface PaceSnapshot {
   monthlyLimitBlock?: MonthlyLimitBlock | null;
 }
 
+/** One burndown chart point (RFC 3339 capture time + remaining percent). */
+export interface QuotaBurndownPoint {
+  capturedAt: string;
+  remainingPercent: number;
+}
+
+/** Recorded remaining-quota burndown for one series (upstream 0.70.0 #4085). */
+export interface QuotaBurndownSnapshot {
+  series: "session" | "weekly";
+  windowMinutes: number;
+  start: string;
+  reset: string;
+  samples: QuotaBurndownPoint[];
+  ideal: [QuotaBurndownPoint, QuotaBurndownPoint];
+}
+
 export interface SessionEquivalentForecastSnapshot {
   estimatedWindowsToExhaustWeekly: number;
   windowsUntilReset: number;
@@ -740,6 +756,8 @@ export interface ProviderUsageSnapshot {
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
   sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
+  /** Recorded remaining-quota burndown; Codex and Claude only. */
+  quotaBurndown?: QuotaBurndownSnapshot | null;
 }
 
 export interface WayfinderRouteSummary {
