@@ -24,6 +24,7 @@ import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
+import { isDetailSectionVisible } from "../lib/usageItemVisibility";
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
@@ -597,17 +598,13 @@ export default function MenuCardDetails({
       )}
       {!provider.error && hasDisplayDetails && !compactOverview && (
         <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
-        </section>
-      )}
-
-      {!provider.error && hasDisplayDetails && (
-        <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
+          {provider.displayDetails
+            ?.filter((detail) =>
+              isDetailSectionVisible(provider.hiddenUsageItemIds, detail.title),
+            )
+            .map((detail, index) => (
+              <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
+            ))}
         </section>
       )}
 

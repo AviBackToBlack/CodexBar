@@ -989,6 +989,60 @@ fn usage_item_descriptors_keep_raw_ids_and_redact_titles() {
 }
 
 #[test]
+fn usage_item_descriptors_include_detail_sections() {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(10.0)),
+        cost: None,
+        wayfinder_usage: None,
+        inventory: Vec::new(),
+        display_details: vec![
+            codexbar::core::ProviderDisplayDetail::new("d1", "Rate limits", "5")
+                .expect("valid detail"),
+            codexbar::core::ProviderDisplayDetail::new("d2", "Rate limits", "6")
+                .expect("valid detail"),
+            codexbar::core::ProviderDisplayDetail::new("d3", "owner@example.com quota", "1")
+                .expect("valid detail"),
+        ],
+        source_label: "OAuth".to_string(),
+        has_successful_claude_cli_quota: false,
+        pace_authoritative: true,
+        account_identity: None,
+    };
+    let snapshot =
+        ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
+
+    let mut settings = Settings {
+        hide_personal_info: true,
+        ..Settings::default()
+    };
+    settings.set_hidden_usage_item_ids(
+        ProviderId::Codex,
+        vec!["detailSection:owner@example.com quota".to_string()],
+    );
+
+    let items = super::usage_item_descriptors(Some(&snapshot), &settings, ProviderId::Codex);
+
+    // First three items are the distinct detail sections, redacted titles.
+    assert_eq!(items[0].id, "detailSection:Rate limits");
+    assert_eq!(items[0].title, "Rate limits");
+    assert!(items[0].available);
+    // Duplicate title is deduped to one descriptor; the email title is redacted.
+    assert!(
+        !items[1..]
+            .iter()
+            .any(|item| item.title.contains("owner@example.com"))
+    );
+    // The hidden detail section is a placeholder, redacted in the stored ID.
+    let hidden = items
+        .iter()
+        .find(|item| item.id.starts_with("detailSection:") && !item.available)
+        .expect("hidden detail placeholder");
+    assert!(hidden.id.contains("owner@example.com quota"));
+    assert_eq!(hidden.title, "Hidden quota");
+}
+
+#[test]
 fn pace_stage_serializes_to_snake_case_string() {
     use codexbar::core::PaceStage;
     assert_eq!(
