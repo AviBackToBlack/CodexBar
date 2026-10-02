@@ -1257,6 +1257,8 @@ fn usage_item_descriptors_include_detail_sections() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        open_ai_api_usage: None,
+        last_good_owner: None,
     };
     let snapshot =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
