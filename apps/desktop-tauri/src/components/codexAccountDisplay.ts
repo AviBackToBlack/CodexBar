@@ -39,10 +39,10 @@ export function buildCodexAccountDisplayNames(
 /**
  * Project the labels rendered by account rows in the tray and Settings.
  * The redaction rule mirrors `CodexAccount::privacy_safe_display_name` in the
- * Rust model: privacy mode redacts only the ambient/System account; managed
- * account labels keep the canonical display-name projection. Client-side
- * projection keeps the relabel reactive when the setting toggles without a
- * refetch.
+ * Rust model (upstream 0.60.5 #3702, 141ecf642): privacy mode redacts EVERY
+ * account, not only the ambient/System one — managed accounts get the same
+ * generic label too. Client-side projection keeps the relabel reactive when
+ * the setting toggles without a refetch.
  */
 export function buildCodexAccountSurfaceLabels(
   accounts: readonly CodexAccount[],
@@ -55,7 +55,7 @@ export function buildCodexAccountSurfaceLabels(
 
   return Object.fromEntries(
     accounts.map((account) => {
-      if (hidePersonalInfo && account.source === "ambient") {
+      if (hidePersonalInfo) {
         return [account.id, `${accountWord.trim()} ${accountOrdinals[account.id]}`];
       }
       return [account.id, displayNames[account.id]];
