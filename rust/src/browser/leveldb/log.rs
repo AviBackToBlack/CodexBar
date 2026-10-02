@@ -84,6 +84,7 @@ fn read_batch(batch: &[u8], emit: &mut impl FnMut(Record)) {
         return;
     };
     let mut rest = batch.get(BATCH_HEADER_SIZE..).unwrap_or_default();
+    let mut records = Vec::new();
     for index in 0..u64::from(count) {
         let Some((&op, after_op)) = rest.split_first() else {
             return;
@@ -105,10 +106,17 @@ fn read_batch(batch: &[u8], emit: &mut impl FnMut(Record)) {
             }
             _ => return,
         };
-        emit(Record {
+        let Some(sequence) = sequence.checked_add(index) else {
+            return;
+        };
+        records.push(Record {
             key: key.to_vec(),
-            sequence: sequence.wrapping_add(index),
+            sequence,
             value,
         });
     }
+    if !rest.is_empty() {
+        return;
+    }
+    records.into_iter().for_each(emit);
 }

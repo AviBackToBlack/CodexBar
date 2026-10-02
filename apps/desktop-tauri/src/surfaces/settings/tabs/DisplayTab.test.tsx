@@ -5,7 +5,7 @@ vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key, language: "english" }),
 }));
 // The FloatBar section pulls in its own bridge dependencies; it is irrelevant
-// to the window-scale control under test.
+// to the display controls under test.
 vi.mock("../../../floatbar/SettingsSection", () => ({
   default: () => null,
 }));
@@ -14,7 +14,10 @@ import DisplayTab from "./DisplayTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 
 const baseSettings = {
+  enabledProviders: ["codex", "claude"],
   trayIconMode: "single",
+  stackedTrayTopProvider: null,
+  stackedTrayBottomProvider: null,
   trayPanelAlwaysOnTop: false,
   switcherShowsIcons: false,
   menuBarShowsHighestUsage: false,
@@ -35,27 +38,13 @@ function renderTab(set: (patch: Record<string, unknown>) => void) {
   );
 }
 
-describe("DisplayTab window scale", () => {
-  it("commits the new window scale on blur", () => {
-    const set = vi.fn();
-    renderTab(set);
-    const slider = screen.getByRole("slider", { name: "WindowScaleAriaLabel" });
+describe("DisplayTab menu settings", () => {
+  it("no longer offers the retired PopOut window scale", () => {
+    // Window scale only zoomed the retired PopOut layout. The tray panel
+    // has its own Zoom slider in its footer (trayScalePercent).
+    const { container } = renderTab(vi.fn());
 
-    fireEvent.change(slider, { target: { value: "175" } });
-    fireEvent.blur(slider);
-
-    expect(set).toHaveBeenCalledWith({ windowScalePercent: 175 });
-  });
-
-  it("does not commit when the value is unchanged", () => {
-    const set = vi.fn();
-    renderTab(set);
-    const slider = screen.getByRole("slider", { name: "WindowScaleAriaLabel" });
-
-    fireEvent.change(slider, { target: { value: "100" } });
-    fireEvent.blur(slider);
-
-    expect(set).not.toHaveBeenCalled();
+    expect(container.querySelector('input[type="range"]')).toBeNull();
   });
 
   it("updates the exhausted reset display preference", () => {
@@ -96,5 +85,30 @@ describe("DisplayTab window scale", () => {
     );
 
     expect(set).toHaveBeenCalledWith({ trayPanelAlwaysOnTop: true });
+  });
+});
+
+describe("DisplayTab stacked tray providers", () => {
+  it("persists explicit top and bottom provider choices", () => {
+    const set = vi.fn();
+    render(
+      <DisplayTab
+        mode="menuBar"
+        settings={{ ...baseSettings, trayIconMode: "stacked" } as SettingsSnapshot}
+        providers={[
+          { id: "codex", displayName: "Codex", cookieDomain: null },
+          { id: "claude", displayName: "Claude", cookieDomain: null },
+        ]}
+        set={set}
+        saving={false}
+      />,
+    );
+    const selects = screen.getAllByRole("combobox");
+
+    fireEvent.change(selects[1], { target: { value: "claude" } });
+    fireEvent.change(selects[2], { target: { value: "codex" } });
+
+    expect(set).toHaveBeenCalledWith({ stackedTrayTopProvider: "claude" });
+    expect(set).toHaveBeenCalledWith({ stackedTrayBottomProvider: "codex" });
   });
 });

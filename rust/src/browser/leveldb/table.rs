@@ -31,6 +31,8 @@ pub(super) enum TableError {
     BadFooter,
     #[error("block handle points outside the file")]
     BadHandle,
+    #[error("table block is {0} bytes, over the {1} byte limit")]
+    BlockTooLarge(usize, usize),
     #[error("unsupported block compression type {0}")]
     UnsupportedCompression(u8),
     #[error("block is malformed")]
@@ -73,29 +75,34 @@ pub(super) fn read_table(data: &[u8], emit: &mut impl FnMut(Record)) -> Result<u
     if read_u64_le(footer, FOOTER_SIZE - 8) != Some(TABLE_MAGIC) {
         return Err(TableError::BadFooter);
     }
-    let (_metaindex, used) = BlockHandle::parse(footer).ok_or(TableError::BadFooter)?;
-    let (index, _) = BlockHandle::parse(&footer[used..]).ok_or(TableError::BadFooter)?;
+    let footer_handles = &footer[..FOOTER_SIZE - 8];
+    let (_metaindex, used) = BlockHandle::parse(footer_handles).ok_or(TableError::BadFooter)?;
+    let (index, _) = BlockHandle::parse(&footer_handles[used..]).ok_or(TableError::BadFooter)?;
 
-    let index_block = read_block(data, index)?;
+    let index_block = read_block(data, index, footer_start)?;
+    let index_entries: Vec<_> = BlockEntries::new(&index_block)?.collect::<Result<_, _>>()?;
     let mut skipped_blocks = 0usize;
-    for (_separator, handle_bytes) in BlockEntries::new(&index_block)? {
+    for (_separator, handle_bytes) in index_entries {
         let entry = BlockHandle::parse(handle_bytes)
-            .map(|(handle, _)| handle)
+            .and_then(|(handle, used)| (used == handle_bytes.len()).then_some(handle))
             .ok_or(TableError::BadBlock);
-        let block = entry.and_then(|handle| read_block(data, handle));
+        let block = entry.and_then(|handle| read_block(data, handle, index.offset));
         let Ok(block) = block else {
             skipped_blocks += 1;
             continue;
         };
-        if emit_block_records(&block, emit).is_err() {
-            skipped_blocks += 1;
+        match decode_block_records(&block) {
+            Ok(records) => records.into_iter().for_each(&mut *emit),
+            Err(_) => skipped_blocks += 1,
         }
     }
     Ok(skipped_blocks)
 }
 
-fn emit_block_records(block: &[u8], emit: &mut impl FnMut(Record)) -> Result<(), TableError> {
-    for (internal_key, value) in BlockEntries::new(block)? {
+fn decode_block_records(block: &[u8]) -> Result<Vec<Record>, TableError> {
+    let mut records = Vec::new();
+    for entry in BlockEntries::new(block)? {
+        let (internal_key, value) = entry?;
         let Some(split) = internal_key.len().checked_sub(8) else {
             return Err(TableError::BadBlock);
         };
@@ -104,25 +111,28 @@ fn emit_block_records(block: &[u8], emit: &mut impl FnMut(Record)) -> Result<(),
         let value = match packed & 0xff {
             KIND_VALUE => Some(value.to_vec()),
             KIND_DELETE => None,
-            _ => continue,
+            _ => return Err(TableError::BadBlock),
         };
-        emit(Record {
+        records.push(Record {
             key: user_key.to_vec(),
             sequence: packed >> 8,
             value,
         });
     }
-    Ok(())
+    Ok(records)
 }
 
 /// Return the decompressed contents of the block at `handle` (without its trailer).
-fn read_block(data: &[u8], handle: BlockHandle) -> Result<Vec<u8>, TableError> {
+fn read_block(data: &[u8], handle: BlockHandle, upper_bound: usize) -> Result<Vec<u8>, TableError> {
+    if handle.offset >= upper_bound {
+        return Err(TableError::BadHandle);
+    }
     let end = handle
         .offset
         .checked_add(handle.size)
         .and_then(|end| end.checked_add(BLOCK_TRAILER_SIZE))
         .ok_or(TableError::BadHandle)?;
-    if data.len() < end {
+    if end > upper_bound || data.len() < end {
         return Err(TableError::BadHandle);
     }
     let contents_end = end - BLOCK_TRAILER_SIZE;
@@ -131,7 +141,8 @@ fn read_block(data: &[u8], handle: BlockHandle) -> Result<Vec<u8>, TableError> {
         .ok_or(TableError::BadHandle)?;
     let compression = data[contents_end];
     match compression {
-        COMPRESSION_NONE => Ok(raw.to_vec()),
+        COMPRESSION_NONE if raw.len() <= MAX_BLOCK_BYTES => Ok(raw.to_vec()),
+        COMPRESSION_NONE => Err(TableError::BlockTooLarge(raw.len(), MAX_BLOCK_BYTES)),
         COMPRESSION_SNAPPY => Ok(snappy::decompress(raw, MAX_BLOCK_BYTES)?),
         other => Err(TableError::UnsupportedCompression(other)),
     }
@@ -148,6 +159,9 @@ impl<'a> BlockEntries<'a> {
     fn new(block: &'a [u8]) -> Result<Self, TableError> {
         let restart_count =
             read_u32_le(block, block.len().saturating_sub(4)).ok_or(TableError::BadBlock)? as usize;
+        if restart_count == 0 {
+            return Err(TableError::BadBlock);
+        }
         let restarts_len = restart_count
             .checked_mul(4)
             .and_then(|len| len.checked_add(4))
@@ -156,6 +170,19 @@ impl<'a> BlockEntries<'a> {
             .len()
             .checked_sub(restarts_len)
             .ok_or(TableError::BadBlock)?;
+        let mut previous_restart = None;
+        for index in 0..restart_count {
+            let restart =
+                read_u32_le(block, entries_end + index * 4).ok_or(TableError::BadBlock)? as usize;
+            if (index == 0 && restart != 0)
+                || restart > entries_end
+                || (entries_end > 0 && restart == entries_end)
+                || previous_restart.is_some_and(|previous| restart <= previous)
+            {
+                return Err(TableError::BadBlock);
+            }
+            previous_restart = Some(restart);
+        }
         Ok(Self {
             entries: &block[..entries_end],
             key: Vec::new(),
@@ -165,7 +192,7 @@ impl<'a> BlockEntries<'a> {
 }
 
 impl<'a> Iterator for BlockEntries<'a> {
-    type Item = (Vec<u8>, &'a [u8]);
+    type Item = Result<(Vec<u8>, &'a [u8]), TableError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.failed || self.entries.is_empty() {
@@ -176,11 +203,11 @@ impl<'a> Iterator for BlockEntries<'a> {
             Some((key, value, rest)) => {
                 self.key.clone_from(&key);
                 self.entries = rest;
-                Some((key, value))
+                Some(Ok((key, value)))
             }
             None => {
                 self.failed = true;
-                None
+                Some(Err(TableError::BadBlock))
             }
         }
     }
