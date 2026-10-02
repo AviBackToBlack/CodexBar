@@ -30,7 +30,9 @@ export function MenuBarMetricSection({
   onChange,
 }: Props) {
   const [error, setError] = useState<string | null>(null);
-  const selected = providerMetrics[provider.id] ?? "automatic";
+  const selected = AUTOMATIC_ONLY_PROVIDERS.has(provider.id)
+    ? "automatic"
+    : providerMetrics[provider.id] ?? "automatic";
   const options = metricOptions(provider, selected, t);
 
   const handleChange = (value: MetricPreference) => {
@@ -83,7 +85,7 @@ function metricOptions(
   // Aixy's primary budget depends on which limits currently apply to the key,
   // so a fixed session/weekly lane would be misleading. Offer Automatic only.
   if (AUTOMATIC_ONLY_PROVIDERS.has(provider.id)) {
-    return withSelected(options, selected, t);
+    return options;
   }
 
   options.push({ value: "session", label: t("ProviderSessionLabel") });

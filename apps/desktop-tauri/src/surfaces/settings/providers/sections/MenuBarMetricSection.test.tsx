@@ -132,7 +132,7 @@ describe("MenuBarMetricSection", () => {
     render(
       <MenuBarMetricSection
         provider={aixy}
-        providerMetrics={{}}
+        providerMetrics={{ aixy: "weekly" }}
         disabled={false}
         t={(key) => key}
         onChange={vi.fn()}
@@ -141,5 +141,6 @@ describe("MenuBarMetricSection", () => {
 
     const options = screen.getAllByRole("option").map((option) => option.textContent);
     expect(options).toEqual(["Automatic"]);
+    expect(screen.getByRole("combobox")).toHaveValue("automatic");
   });
 });

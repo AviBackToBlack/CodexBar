@@ -5,7 +5,10 @@ import type {
   RateWindowSnapshot,
 } from "../../../../types/bridge";
 import { InventoryItemRow } from "../../../../components/InventoryRows";
-import { ProviderDisplayRow } from "../../../../components/ProviderDisplayRow";
+import {
+  groupProviderDisplayDetails,
+  ProviderDisplayRow,
+} from "../../../../components/ProviderDisplayRow";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
 import { isUsageItemVisible } from "../../../../lib/usageItemVisibility";
@@ -70,6 +73,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
 
   const inventory = provider.inventory ?? [];
   const displayDetails = provider.displayDetails ?? [];
+  const displayDetailGroups = groupProviderDisplayDetails(displayDetails);
   if (bars.length === 0 && inventory.length === 0 && displayDetails.length === 0) {
     return null;
   }
@@ -94,14 +98,28 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
           lineClassName="provider-usage-inventory"
         />
       ))}
-      {displayDetails.map((detail) => (
-        <ProviderDisplayRow
-          key={detail.id}
-          detail={detail}
-          lineClassName="provider-usage-inventory"
-          trackClassName="provider-usage-bar__track"
-          fillClassName="provider-usage-bar__fill"
-        />
+      {displayDetailGroups.map((group) => (
+        <div key={group.id}>
+          {group.title && (
+            <div
+              className="provider-detail-field__label"
+              role="heading"
+              aria-level={5}
+            >
+              {group.title}
+            </div>
+          )}
+          {group.rows.map((detail) => (
+            <ProviderDisplayRow
+              key={detail.id}
+              detail={detail}
+              lineClassName="provider-usage-inventory"
+              secondaryClassName="provider-detail-field__label"
+              trackClassName="provider-usage-bar__track"
+              fillClassName="provider-usage-bar__fill"
+            />
+          ))}
+        </div>
       ))}
     </section>
   );
