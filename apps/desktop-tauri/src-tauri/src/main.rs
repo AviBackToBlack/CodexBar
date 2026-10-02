@@ -11,14 +11,11 @@ mod floatbar;
 mod geometry_store;
 mod powertoys;
 mod proof_harness;
-mod proof_runtime;
 mod shell;
 mod shortcut_bridge;
 mod state;
 mod surface;
 mod surface_target;
-#[cfg(test)]
-mod test_support;
 mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
@@ -31,7 +28,6 @@ use std::sync::Mutex;
 
 use state::AppState;
 use surface::SurfaceMode;
-use surface_target::SurfaceTarget;
 use tauri::Manager;
 
 const PROOF_ACTIVATION_DELAY: Duration = Duration::from_millis(0);
@@ -50,12 +46,22 @@ fn should_hide_close_request(mode: SurfaceMode) -> bool {
     )
 }
 
-fn primary_window_request() -> shell::ShellTransitionRequest {
-    shell::ShellTransitionRequest {
-        mode: SurfaceMode::PopOut,
-        target: SurfaceTarget::Dashboard,
-        position: None,
-    }
+/// Open the primary window: the tray-panel flyout, the only dashboard
+/// layout. The legacy PopOut layout on `main` is retired, so launches and
+/// relaunches land on the same panel as a tray left-click.
+///
+/// Spawned because building the flyout window synchronously can deadlock on
+/// Windows (see `shell::flyout_window::open_or_focus`).
+fn open_primary_window(app: &tauri::AppHandle, delay: Duration) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if let Err(error) = shell::flyout_window::open_or_focus(&app, None) {
+            tracing::warn!(%error, "failed to open the tray panel window");
+        }
+    });
 }
 
 fn should_open_primary_window_from_args<I, S>(args: I) -> bool
@@ -116,20 +122,6 @@ fn should_suppress_blur_dismiss(launch: LaunchBehavior, proof_mode: bool) -> boo
 }
 
 fn main() {
-    let containment_proof = match proof_runtime::ContainmentProof::from_env() {
-        Ok(proof) => proof,
-        Err(error) => {
-            eprintln!("CodexBar containment proof rejected: {error}");
-            std::process::exit(2);
-        }
-    };
-    if let Some(proof) = containment_proof.as_ref()
-        && let Err(error) = proof.install()
-    {
-        eprintln!("CodexBar containment proof setup failed: {error}");
-        std::process::exit(2);
-    }
-
     // Per-process log file names: the shell writes codexbar-desktop.log so
     // its cached handle never blocks the CLI's rotation on Windows.
     // SAFETY: runs before any thread spawns; no concurrent env access exists.
@@ -137,81 +129,50 @@ fn main() {
     codexbar::logging::install_panic_hook();
     codexbar::logging::init(false, false).expect("failed to initialize logging");
 
-    let containment_active = containment_proof.is_some();
-    let proof_config = if containment_active {
-        Some(proof_harness::ProofConfig {
-            target_surface: "settings".to_string(),
-            settings_tab: Some("usageSpend".to_string()),
-            target_payload: Some("usageSpend".to_string()),
-        })
-    } else {
-        proof_harness::ProofConfig::from_env()
-    };
+    let proof_config = proof_harness::ProofConfig::from_env();
     let is_proof_mode = proof_config.is_some();
-    let force_start_visible =
-        !containment_active && std::env::var_os("CODEXBAR_START_VISIBLE").is_some();
-    let settings = containment_proof
-        .as_ref()
-        .map(proof_runtime::ContainmentProof::proof_settings)
-        .unwrap_or_else(codexbar::settings::Settings::load);
+    let force_start_visible = std::env::var_os("CODEXBAR_START_VISIBLE").is_some();
+    let settings = codexbar::settings::Settings::load();
     let launch = launch_behavior(
         force_start_visible,
         settings.start_minimized,
         std::env::args().skip(1),
     );
 
-    let mut initial_state = containment_proof
-        .as_ref()
-        .map(|proof| AppState::new_for_containment_proof(proof.clone()))
-        .unwrap_or_else(AppState::new);
+    let mut initial_state = AppState::new();
     initial_state.proof_config = proof_config;
-    if !containment_active {
-        // Validate the complete proof seed before installing any snapshots, so an
-        // invalid multi-provider fixture cannot leave a partial cache behind.
-        if let Some(snapshots) =
-            proof_harness::seed_usage_snapshots_from_env(initial_state.proof_config.as_ref())
-        {
-            let seeded_at = std::time::Instant::now();
-            for snapshot in &snapshots {
-                tracing::info!(
-                    "proof-harness: seeded provider snapshot for '{}'",
-                    snapshot.provider_id
-                );
-                if let Some(provider) =
-                    codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id)
-                {
-                    initial_state
-                        .provider_cache_updated_at_by_provider
-                        .insert(provider, seeded_at);
-                }
+    // Validate the complete proof seed before installing any snapshots, so an
+    // invalid multi-provider fixture cannot leave a partial cache behind.
+    if let Some(snapshots) =
+        proof_harness::seed_usage_snapshots_from_env(initial_state.proof_config.as_ref())
+    {
+        let seeded_at = std::time::Instant::now();
+        for snapshot in &snapshots {
+            tracing::info!(
+                "proof-harness: seeded provider snapshot for '{}'",
+                snapshot.provider_id
+            );
+            if let Some(provider) = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id)
+            {
+                initial_state
+                    .provider_cache_updated_at_by_provider
+                    .insert(provider, seeded_at);
             }
-            initial_state.provider_cache.extend(snapshots);
-            initial_state.provider_cache_seeded = true;
-            initial_state.provider_cache_updated_at = Some(seeded_at);
         }
+        initial_state.provider_cache.extend(snapshots);
+        initial_state.provider_cache_seeded = true;
+        initial_state.provider_cache_updated_at = Some(seeded_at);
     }
 
-    let builder = tauri::Builder::default()
+    tauri::Builder::default()
         .manage(Mutex::new(initial_state))
-        .plugin(tauri_plugin_dialog::init());
-    let builder = if containment_active {
-        builder
-    } else {
-        builder
-            .plugin(shortcut_bridge::plugin())
-            .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-                if should_reopen_primary_window_from_instance_args(args.iter().skip(1)) {
-                    let request = primary_window_request();
-                    let _ = shell::reopen_to_target(
-                        app,
-                        request.mode,
-                        request.target,
-                        request.position,
-                    );
-                }
-            }))
-    };
-    builder
+        .plugin(shortcut_bridge::plugin())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if should_reopen_primary_window_from_instance_args(args.iter().skip(1)) {
+                open_primary_window(app, Duration::ZERO);
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             commands::get_bootstrap_state,
             commands::get_provider_catalog,
@@ -303,6 +264,7 @@ fn main() {
             commands::get_provider_region_options,
             commands::set_provider_workspace_id,
             commands::set_provider_gateway_url,
+            commands::get_provider_gateway_url,
             commands::get_provider_workspace_id,
             commands::get_gemini_cli_signed_in,
             commands::get_vertexai_status,
@@ -334,24 +296,19 @@ fn main() {
             floatbar::set_float_bar_orientation,
         ])
         .setup(move |app| {
-            if !containment_active
-                && let Err(error) =
-                    codexbar::providers::claude::accounts::cleanup_abandoned_logins()
-            {
+            if let Err(error) = codexbar::providers::claude::accounts::cleanup_abandoned_logins() {
                 tracing::warn!("failed to clean abandoned Claude sign-in directories: {error}");
             }
             if let Some(window) = app.get_webview_window("main") {
                 shell::dwm::force_dark_caption(&window);
                 window.hide()?;
             }
-            if !containment_active {
-                tray_bridge::setup(app)?;
-                shortcut_bridge::register(app.handle());
-                floatbar::install(app.handle());
-                auto_refresh::install(app.handle().clone());
-                if settings.powertoys_status_pipe_enabled {
-                    powertoys::install(app.handle().clone());
-                }
+            tray_bridge::setup(app)?;
+            shortcut_bridge::register(app.handle());
+            floatbar::install(app.handle());
+            auto_refresh::install(app.handle().clone());
+            if settings.powertoys_status_pipe_enabled {
+                powertoys::install(app.handle().clone());
             }
 
             // Give the WebView/event loop one turn to finish startup before
@@ -361,27 +318,13 @@ fn main() {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(PROOF_ACTIVATION_DELAY).await;
-                    if containment_active {
-                        if let Err(error) = proof_harness::activate_without_focus(&app_handle) {
-                            tracing::error!("containment proof reveal failed: {error}");
-                            app_handle.exit(2);
-                        }
-                    } else {
-                        proof_harness::activate(&app_handle);
-                    }
+                    proof_harness::activate(&app_handle);
                 });
             } else if launch.open_primary_window_at_start {
-                let app = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(VISIBLE_START_ACTIVATION_DELAY).await;
-                    let request = primary_window_request();
-                    let _ = shell::reopen_to_target(
-                        &app,
-                        request.mode,
-                        request.target,
-                        request.position,
-                    );
-                });
+                if launch.suppress_blur_dismiss {
+                    shell::flyout_window::keep_open_on_blur();
+                }
+                open_primary_window(app.handle(), VISIBLE_START_ACTIVATION_DELAY);
             }
 
             Ok(())
@@ -502,14 +445,6 @@ mod tests {
     #[test]
     fn close_request_leaves_hidden_surface_alone() {
         assert!(!should_hide_close_request(SurfaceMode::Hidden));
-    }
-
-    #[test]
-    fn primary_window_request_targets_popout_dashboard() {
-        let request = primary_window_request();
-        assert_eq!(request.mode, SurfaceMode::PopOut);
-        assert_eq!(request.target, SurfaceTarget::Dashboard);
-        assert_eq!(request.position, None);
     }
 
     #[test]

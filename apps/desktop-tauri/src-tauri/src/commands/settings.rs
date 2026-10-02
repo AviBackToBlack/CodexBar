@@ -517,16 +517,8 @@ fn parse_language(s: &str) -> Option<Language> {
 #[tauri::command]
 pub async fn update_settings(
     app: tauri::AppHandle,
-    state: tauri::State<'_, Mutex<AppState>>,
     patch: SettingsUpdate,
 ) -> Result<SettingsSnapshot, String> {
-    if state
-        .lock()
-        .map(|guard| guard.is_containment_proof())
-        .unwrap_or(true)
-    {
-        return Err("settings mutations disabled in containment proof mode".to_string());
-    }
     let mut settings = Settings::load();
     let notify_float_bar = patch.notifies_float_bar();
     let refresh_provider_data = patch.refreshes_provider_data();

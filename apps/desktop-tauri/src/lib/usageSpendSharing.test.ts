@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatUsageSpendReportingDay,
   formatSpendMetric,
+  formatUsd,
   filterUsageSpendSummaryForOverview,
   renderUsageSpendSharePng,
   usageSpendShareFooter,
@@ -13,6 +14,12 @@ import type { SpendContract, UsageSpendRow, UsageSpendSummary } from "../types/b
 describe("usage spend sharing", () => {
   it("labels a mixed-pricing subtotal without presenting it as a total", () => {
     expect(formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125)).toMatch(/^≥.* known/);
+  });
+
+  it("uses the caller's localized subtotal label", () => {
+    const metric = formatSpendMetric(null, 500, "USD", "Token", 6, "{} (teilweise)");
+    expect(metric).toBe(`${formatUsd(6, "USD")} (teilweise) · 500 Token`);
+    expect(metric).not.toContain("known");
   });
 
   it("renders a complete known-zero total instead of a subtotal", () => {

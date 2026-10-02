@@ -92,6 +92,9 @@ pub enum ProviderId {
     Muse,
     Replicate,
     Nous,
+    Hyper,
+    GitKraken,
+    Bifrost,
 }
 
 impl ProviderId {
@@ -177,6 +180,9 @@ impl ProviderId {
             ProviderId::Muse,
             ProviderId::Replicate,
             ProviderId::Nous,
+            ProviderId::Hyper,
+            ProviderId::GitKraken,
+            ProviderId::Bifrost,
         ]
     }
 
@@ -224,6 +230,9 @@ impl ProviderId {
             ProviderId::Meta => "meta",
             ProviderId::Muse => "muse",
             ProviderId::Nous => "nous",
+            ProviderId::Hyper => "hyper",
+            ProviderId::GitKraken => "gitkraken",
+            ProviderId::Bifrost => "bifrost",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -310,6 +319,9 @@ impl ProviderId {
             ProviderId::Meta => "Meta",
             ProviderId::Muse => "Muse Code",
             ProviderId::Nous => "Nous Portal",
+            ProviderId::Hyper => "Charm Hyper",
+            ProviderId::GitKraken => "GitKraken AI",
+            ProviderId::Bifrost => "Bifrost",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -411,6 +423,9 @@ impl ProviderId {
             ProviderId::Meta => None,
             ProviderId::Muse => None,
             ProviderId::Nous => None,
+            ProviderId::Hyper => Some("hyper.charm.land"),
+            ProviderId::GitKraken => None,
+            ProviderId::Bifrost => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -490,6 +505,9 @@ impl ProviderId {
             "fireworks" | "fireworks-ai" | "fw" => Some(ProviderId::Fireworks),
             "muse" | "muse-code" | "muse code" => Some(ProviderId::Muse),
             "nous" | "nous-portal" | "nous portal" | "hermes" => Some(ProviderId::Nous),
+            "hyper" | "charm-hyper" | "charm hyper" => Some(ProviderId::Hyper),
+            "gitkraken" | "gitkraken-ai" | "gitkraken ai" => Some(ProviderId::GitKraken),
+            "bifrost" | "bifrost-gateway" | "bifrost gateway" => Some(ProviderId::Bifrost),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -740,13 +758,22 @@ pub struct FetchContext {
     /// Manual cookie header (for testing)
     pub manual_cookie_header: Option<String>,
 
-    /// The cookie source is manual and no cookie is stored. The provider
-    /// decides what this means; Replicate fails closed instead of importing a
-    /// browser account the user did not select.
+    /// The cookie source is manual and no cookie is stored, or (for providers
+    /// whose cookie source only scopes the session) cookies are off. The
+    /// provider decides what this means; Replicate fails closed instead of
+    /// importing a browser account the user did not select, and Charm Hyper
+    /// skips its session lane.
     pub manual_cookie_missing: bool,
 
     /// API key for providers that require authentication
     pub api_key: Option<String>,
+
+    /// Type of the explicitly selected labeled token account, if any.
+    pub token_account_kind: Option<super::TokenAccountKind>,
+
+    /// A selected account is an identity boundary: providers must not retry
+    /// another ambient credential or account after its credential fails.
+    pub token_account_isolated: bool,
 
     /// Optional provider workspace/project scope from persisted settings.
     pub workspace_id: Option<String>,
@@ -783,6 +810,8 @@ impl Default for FetchContext {
             manual_cookie_header: None,
             manual_cookie_missing: false,
             api_key: None,
+            token_account_kind: None,
+            token_account_isolated: false,
             workspace_id: None,
             seat_credit_entitlement: None,
             api_region: None,
@@ -888,6 +917,19 @@ pub trait Provider: Send + Sync {
 
     /// Whether browser-cookie discovery/recovery is owned by the provider.
     fn owns_browser_cookie_resolution(&self) -> bool {
+        false
+    }
+
+    /// Whether the cookie source only scopes the browser session the
+    /// provider may use, leaving the selected usage source in charge of
+    /// routing.
+    ///
+    /// When true, the shell keeps the usage source for every cookie source:
+    /// `off` and a `manual` source without a stored cookie pass no header and
+    /// set [`FetchContext::manual_cookie_missing`], so the provider skips the
+    /// session and Auto can still use an API key. Otherwise the shell remaps
+    /// the source mode from the cookie source.
+    fn cookie_source_scopes_session_only(&self) -> bool {
         false
     }
 
@@ -1099,6 +1141,9 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Muse => "#0668E1",
         ProviderId::Replicate => "#000000",
         ProviderId::Nous => "#D6A55C",
+        ProviderId::Hyper => "#FF60FF",
+        ProviderId::GitKraken => "#179287",
+        ProviderId::Bifrost => "#33C09E",
     }
 }
 
@@ -1113,7 +1158,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 79);
+        assert_eq!(all.len(), 82);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1173,6 +1218,9 @@ mod tests {
         assert!(all.contains(&ProviderId::Replicate));
         assert!(all.contains(&ProviderId::Muse));
         assert!(all.contains(&ProviderId::Nous));
+        assert!(all.contains(&ProviderId::Hyper));
+        assert!(all.contains(&ProviderId::GitKraken));
+        assert!(all.contains(&ProviderId::Bifrost));
     }
 
     #[test]
