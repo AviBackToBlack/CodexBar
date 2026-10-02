@@ -531,13 +531,13 @@ fn build_native_menu_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{self, CurrencyRateCache};
+
     use crate::surface::SurfaceMode;
     use crate::tray_presentation::{
         codex_lane_headline_window, pick_tray_provider, selected_tray_percents,
     };
     use codexbar::core::ProviderId;
-    use codexbar::settings::{MetricPreference, TrayIconMode};
+    use codexbar::settings::MetricPreference;
 
     fn sample_provider_catalog() -> Vec<ProviderCatalogEntry> {
         vec![

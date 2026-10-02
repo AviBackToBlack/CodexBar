@@ -316,6 +316,7 @@ async fn collect_claude_accounts(
             auto_prefer_web: false,
             requires_optional_usage_completeness: false,
         };
+        populate_api_region_from_settings(ProviderId::Claude, settings, &mut ctx);
         set.spawn(async move {
             let fetch = bounded_fetch(
                 ProviderId::Claude,

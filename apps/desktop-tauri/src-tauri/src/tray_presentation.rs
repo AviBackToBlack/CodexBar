@@ -57,7 +57,6 @@ impl<'a> TrayPresentationPlan<'a> {
         snapshots: &'a [ProviderUsageSnapshot],
         rates_cache: Option<&'a crate::commands::CurrencyRateCache>,
     ) -> Self {
-        let rates_cache = rates_cache;
         let ordered = ordered_snapshot_refs(settings, snapshots);
         let healthy = ordered
             .into_iter()

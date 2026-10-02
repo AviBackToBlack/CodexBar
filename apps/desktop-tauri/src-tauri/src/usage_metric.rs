@@ -110,6 +110,7 @@ fn preferred_window(
 
 /// The provider-declared monthly plan allowance, when the snapshot carries a
 /// known value for it. Providers without a plan window return `None`.
+#[cfg(test)]
 pub(crate) fn monthly_plan_window(
     snapshot: &ProviderUsageSnapshot,
     provider: Option<ProviderId>,
