@@ -688,6 +688,11 @@ impl CostUsagePricing {
             _ => {}
         }
 
+        // Codex uses this alias for the Luna reserve quota bucket (#714).
+        if trimmed.eq_ignore_ascii_case("gpt-reserve") {
+            return "gpt-5.6-luna".to_string();
+        }
+
         // Check if base model (without -codex suffix) exists in pricing
         if let Some(idx) = trimmed.find("-codex") {
             let base = &trimmed[..idx];
