@@ -4,9 +4,10 @@
 //! specifies a target surface and optional settings tab to display on
 //! startup, e.g.:
 //!
-//!   - `trayPanel`          — show the tray panel
-//!   - `popOut`             — show the pop-out dashboard
-//!   - `popOut:provider:codex` — show a provider pop-out
+//!   - `trayPanel`          — show the tray panel on the `main` window
+//!   - `popOut`             — open the tray-panel flyout window, the same
+//!     window tray left-click and "Pop Out Dashboard" open (the legacy
+//!     PopOut layout is retired, so `popOut:<target>` payloads are rejected)
 //!   - `settings`           — show settings (General tab)
 //!   - `settings:menuBar`   — show settings on the Menu Bar tab
 //!   - `settings:usageSpend` — show settings on the Usage & Spend tab
@@ -16,14 +17,17 @@
 //! and suppresses blur-dismiss so the window stays visible for automated
 //! screenshot capture.
 //!
-//! `CODEXBAR_SEED_USAGE_JSON=<abs-path>` additionally seeds one synthetic,
-//! bridge-shaped Codex [`ProviderUsageSnapshot`] into the provider cache at
-//! launch (before the first event/WebView read) and pins it against refresh
-//! eviction for the run. Malformed files log a warning and the shell
-//! continues without seeding — proof runs must never crash on the seed.
+//! `CODEXBAR_SEED_USAGE_JSON=<abs-path>` additionally seeds either the legacy
+//! synthetic Codex [`ProviderUsageSnapshot`] object or, in valid proof mode,
+//! a nonempty array of unique supported provider snapshots. The validated set
+//! is installed before the first event/WebView read and pinned against refresh
+//! eviction. Malformed files log a warning and the shell continues without
+//! seeding — proof runs must never crash on the seed.
 
+use std::collections::HashSet;
 use std::sync::Mutex;
 
+use codexbar::core::ProviderId;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
@@ -31,7 +35,7 @@ use crate::commands::{CostSnapshotBridge, ProviderUsageSnapshot, RateWindowSnaps
 use crate::shell;
 use crate::state::AppState;
 use crate::surface::SurfaceMode;
-use crate::surface_target::{SurfaceTarget, is_supported_provider_id, is_supported_settings_tab};
+use crate::surface_target::{SurfaceTarget, is_supported_settings_tab};
 
 /// Proof configuration parsed from `CODEXBAR_PROOF_MODE`.
 #[derive(Debug, Clone, Serialize)]
@@ -41,8 +45,8 @@ pub struct ProofConfig {
     pub target_surface: String,
     /// Optional settings tab id (e.g. `"menuBar"`, `"usageSpend"`).
     pub settings_tab: Option<String>,
-    /// Optional target payload for richer proof routing, such as
-    /// `"provider:codex"` for pop-out provider views.
+    /// Optional target payload for richer proof routing (currently only the
+    /// settings tab id).
     pub target_payload: Option<String>,
 }
 
@@ -90,12 +94,7 @@ impl ProofConfig {
     pub fn surface_target(&self) -> SurfaceTarget {
         match self.surface_mode() {
             SurfaceMode::Hidden | SurfaceMode::TrayPanel => SurfaceTarget::Summary,
-            SurfaceMode::PopOut => self
-                .target_payload
-                .as_deref()
-                .and_then(SurfaceTarget::parse)
-                .filter(|target| target.mode() == SurfaceMode::PopOut)
-                .unwrap_or(SurfaceTarget::Dashboard),
+            SurfaceMode::PopOut => SurfaceTarget::Dashboard,
             SurfaceMode::Settings => SurfaceTarget::Settings {
                 tab: self
                     .settings_tab
@@ -117,6 +116,14 @@ pub fn activate(app: &AppHandle) {
 
     let Some(config) = config else { return };
     let target = config.surface_mode();
+    if target == SurfaceMode::PopOut {
+        tracing::info!("proof-harness: opening the tray-panel flyout window");
+        // Called from the async setup task, so building the window is safe.
+        if let Err(err) = shell::flyout_window::open_or_focus(app, None) {
+            tracing::error!("proof-harness: flyout open FAILED: {err}");
+        }
+        return;
+    }
     let position = match target {
         // Detached surfaces are larger than tray panels. Let their normal
         // positioning paths center/clamp them instead of reusing tray coords.
@@ -134,6 +141,13 @@ pub fn activate(app: &AppHandle) {
         Ok(mode) => tracing::info!("proof-harness: transition succeeded → {mode:?}"),
         Err(err) => tracing::error!("proof-harness: transition FAILED: {err}"),
     }
+}
+
+/// Seeded snapshots must use an exact bridge provider id, not a CLI alias.
+fn is_seedable_provider_id(provider_id: &str) -> bool {
+    ProviderId::all()
+        .iter()
+        .any(|provider| provider.cli_name() == provider_id)
 }
 
 /// Bottom inset (physical px) kept between the proof panel's bottom edge and
@@ -256,22 +270,17 @@ pub fn is_proof_mode(app: &AppHandle) -> bool {
 // ── Provider-usage seed (CODEXBAR_SEED_USAGE_JSON) ───────────────────
 
 /// Environment variable pointing at a JSON file with one synthetic,
-/// bridge-shaped `ProviderUsageSnapshot` for the codex provider.
+/// bridge-shaped Codex snapshot or a proof-only array of provider snapshots.
 pub const SEED_USAGE_ENV_VAR: &str = "CODEXBAR_SEED_USAGE_JSON";
-
-/// Whether a seed path was configured at launch. While set, the provider
-/// cache is pinned fresh so the synthetic snapshot is never evicted by an
-/// automatic refresh during a proof/capture run.
-pub fn seed_usage_json_active() -> bool {
-    std::env::var_os(SEED_USAGE_ENV_VAR).is_some()
-}
 
 /// Read and validate the seed file referenced by `CODEXBAR_SEED_USAGE_JSON`.
 ///
 /// Returns `None` (with a warn, never a crash) when the variable is unset,
-/// the file is unreadable, the JSON is malformed, or the snapshot is not
-/// for the `codex` provider.
-pub fn seed_usage_snapshot_from_env() -> Option<ProviderUsageSnapshot> {
+/// the file is unreadable, or the seed does not satisfy the selected legacy
+/// object or proof-only array contract.
+pub fn seed_usage_snapshots_from_env(
+    proof_config: Option<&ProofConfig>,
+) -> Option<Vec<ProviderUsageSnapshot>> {
     let path = std::env::var_os(SEED_USAGE_ENV_VAR)?;
     let path = std::path::PathBuf::from(path);
     let raw = match std::fs::read_to_string(&path) {
@@ -284,8 +293,8 @@ pub fn seed_usage_snapshot_from_env() -> Option<ProviderUsageSnapshot> {
             return None;
         }
     };
-    match parse_seed_usage_snapshot(&raw) {
-        Ok(snapshot) => Some(snapshot),
+    match parse_seed_usage_snapshots(&raw, proof_config) {
+        Ok(snapshots) => Some(snapshots),
         Err(msg) => {
             tracing::warn!("{SEED_USAGE_ENV_VAR}: {msg} in {}", path.display());
             None
@@ -315,6 +324,51 @@ pub fn parse_seed_usage_snapshot(json: &str) -> Result<ProviderUsageSnapshot, St
         ));
     }
 
+    normalize_seed_snapshot(&mut snapshot);
+
+    Ok(snapshot)
+}
+
+/// Parse legacy Codex objects unchanged, or a provider array when proof mode
+/// has already been validated. Arrays are all-or-nothing and use canonical
+/// provider IDs emitted by the bridge.
+pub fn parse_seed_usage_snapshots(
+    json: &str,
+    proof_config: Option<&ProofConfig>,
+) -> Result<Vec<ProviderUsageSnapshot>, String> {
+    if !json.trim_start().starts_with('[') {
+        return parse_seed_usage_snapshot(json).map(|snapshot| vec![snapshot]);
+    }
+    if !proof_config.is_some_and(is_valid_proof_config) {
+        return Err("provider snapshot arrays require valid proof mode".into());
+    }
+
+    let mut snapshots: Vec<ProviderUsageSnapshot> =
+        serde_json::from_str(json).map_err(|e| format!("malformed JSON: {e}"))?;
+    if snapshots.is_empty() {
+        return Err("provider snapshot array must not be empty".into());
+    }
+
+    let mut providers = HashSet::with_capacity(snapshots.len());
+    for snapshot in &mut snapshots {
+        if !is_seedable_provider_id(&snapshot.provider_id) {
+            return Err(format!(
+                "unsupported snapshot providerId '{}', ignoring",
+                snapshot.provider_id
+            ));
+        }
+        if !providers.insert(snapshot.provider_id.clone()) {
+            return Err(format!(
+                "duplicate snapshot providerId '{}', ignoring",
+                snapshot.provider_id
+            ));
+        }
+        normalize_seed_snapshot(snapshot);
+    }
+    Ok(snapshots)
+}
+
+fn normalize_seed_snapshot(snapshot: &mut ProviderUsageSnapshot) {
     normalize_rate_window(&mut snapshot.primary);
     snapshot.secondary.as_mut().map(normalize_rate_window);
     snapshot.model_specific.as_mut().map(normalize_rate_window);
@@ -327,8 +381,11 @@ pub fn parse_seed_usage_snapshot(json: &str) -> Result<ProviderUsageSnapshot, St
     if snapshot.updated_at.is_empty() {
         snapshot.updated_at = chrono::Utc::now().to_rfc3339();
     }
+}
 
-    Ok(snapshot)
+fn is_valid_proof_config(config: &ProofConfig) -> bool {
+    SurfaceMode::parse(&config.target_surface)
+        .is_some_and(|mode| proof_payload_is_supported(mode, config.target_payload.as_deref()))
 }
 
 /// Recompute `remaining_percent` from `used_percent` (matching the canonical
@@ -352,17 +409,7 @@ fn proof_payload_is_supported(surface_mode: SurfaceMode, payload: Option<&str>) 
         (SurfaceMode::Settings, None) => true,
         (SurfaceMode::Settings, Some(tab)) => is_supported_settings_tab(tab),
         (SurfaceMode::PopOut, None) => true,
-        (SurfaceMode::PopOut, Some(raw_target)) => {
-            let Some(target) = SurfaceTarget::parse(raw_target) else {
-                return false;
-            };
-
-            match target {
-                SurfaceTarget::Dashboard => true,
-                SurfaceTarget::Provider { provider_id } => is_supported_provider_id(&provider_id),
-                _ => false,
-            }
-        }
+        (SurfaceMode::PopOut, Some(_)) => false,
     }
 }
 
@@ -455,18 +502,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_provider_popout_proof_target() {
-        with_proof_mode_env(Some("popOut:provider:codex"), || {
-            let cfg = ProofConfig::from_env().unwrap();
-            assert_eq!(cfg.target_surface, "popOut");
-            assert_eq!(cfg.target_payload.as_deref(), Some("provider:codex"));
-            assert_eq!(
-                cfg.surface_target(),
-                SurfaceTarget::Provider {
-                    provider_id: "codex".into()
-                }
-            );
-        });
+    fn retired_popout_provider_proof_targets_are_rejected() {
+        // The legacy PopOut layout (with provider deep links) is retired;
+        // `popOut` only opens the tray-panel flyout.
+        for raw in ["popOut:provider:codex", "popOut:dashboard"] {
+            with_proof_mode_env(Some(raw), || {
+                assert!(ProofConfig::from_env().is_none(), "{raw}");
+            });
+        }
     }
 
     #[test]
@@ -593,5 +636,73 @@ mod tests {
         assert_eq!(cost.currency_code, "USD");
         assert_eq!(cost.period, "month");
         assert_eq!(cost.formatted_used, "$12.50");
+    }
+
+    fn valid_proof_config() -> ProofConfig {
+        ProofConfig {
+            target_surface: "trayPanel".into(),
+            settings_tab: None,
+            target_payload: None,
+        }
+    }
+
+    fn seed_snapshot(provider_id: &str, used_percent: f64) -> serde_json::Value {
+        serde_json::json!({
+            "providerId": provider_id,
+            "primary": { "usedPercent": used_percent, "windowMinutes": 300 }
+        })
+    }
+
+    #[test]
+    fn seed_snapshot_arrays_preserve_legacy_codex_object_behavior() {
+        let json = seed_snapshot("codex", 61.0).to_string();
+        let snapshots = parse_seed_usage_snapshots(&json, None).expect("legacy seed parses");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].provider_id, "codex");
+        assert_eq!(snapshots[0].primary.remaining_percent, 39.0);
+    }
+
+    #[test]
+    fn seed_snapshot_array_normalizes_multiple_supported_providers() {
+        let json = serde_json::json!([seed_snapshot("codex", 61.0), seed_snapshot("claude", 24.0)])
+            .to_string();
+        let snapshots = parse_seed_usage_snapshots(&json, Some(&valid_proof_config()))
+            .expect("supported snapshots parse in proof mode");
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].provider_id, "codex");
+        assert_eq!(snapshots[0].primary.remaining_percent, 39.0);
+        assert_eq!(snapshots[1].provider_id, "claude");
+        assert_eq!(snapshots[1].primary.remaining_percent, 76.0);
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| !snapshot.updated_at.is_empty())
+        );
+    }
+
+    #[test]
+    fn seed_snapshot_arrays_reject_empty_unknown_duplicate_and_non_finite_values() {
+        let proof = valid_proof_config();
+        for json in [
+            "[]".to_string(),
+            serde_json::json!([seed_snapshot("unknown-provider", 1.0)]).to_string(),
+            // CLI aliases are not bridge provider ids.
+            serde_json::json!([seed_snapshot("openai", 1.0)]).to_string(),
+            serde_json::json!([seed_snapshot("codex", 1.0), seed_snapshot("codex", 2.0)])
+                .to_string(),
+            r#"[{"providerId":"codex","primary":{"usedPercent":1e400}}]"#.to_string(),
+        ] {
+            assert!(
+                parse_seed_usage_snapshots(&json, Some(&proof)).is_err(),
+                "{json}"
+            );
+        }
+    }
+
+    #[test]
+    fn seed_snapshot_arrays_are_rejected_without_valid_proof_config() {
+        let json = serde_json::json!([seed_snapshot("codex", 10.0)]).to_string();
+        assert!(parse_seed_usage_snapshots(&json, None).is_err());
     }
 }

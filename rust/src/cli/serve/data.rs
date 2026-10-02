@@ -27,6 +27,8 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         manual_cookie_header: None,
         manual_cookie_missing: false,
         api_key: None,
+        token_account_kind: None,
+        token_account_isolated: false,
         workspace_id: None,
         seat_credit_entitlement: None,
         api_region: None,
@@ -71,17 +73,16 @@ pub async fn cost_response(provider: Option<&str>) -> String {
             let history = crate::providers::antigravity::local_sessions::summarize(30);
             results.push(crate::spend_contract::local_token_history_json(
                 "antigravity",
-                history,
+                &history,
                 30,
             ));
             continue;
         }
         if provider_id == ProviderId::Muse {
             let report = crate::providers::muse::local_usage::scan(30, None);
+            let history = report.into();
             results.push(crate::spend_contract::local_token_history_json(
-                "muse",
-                report.into(),
-                30,
+                "muse", &history, 30,
             ));
             continue;
         }
@@ -160,10 +161,11 @@ mod tests {
         use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
         let complete = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 42,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Complete,
+                cost_estimate: Default::default(),
             },
             30,
         );
@@ -173,10 +175,11 @@ mod tests {
 
         let partial = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 42,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
+                cost_estimate: Default::default(),
             },
             30,
         );

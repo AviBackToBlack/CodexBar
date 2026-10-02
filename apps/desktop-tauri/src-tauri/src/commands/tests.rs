@@ -53,6 +53,19 @@ fn validate_surface_target_rejects_hidden_mode() {
 }
 
 #[test]
+fn validate_surface_target_rejects_retired_popout_mode() {
+    for target in [
+        SurfaceTarget::Dashboard,
+        SurfaceTarget::Provider {
+            provider_id: "codex".into(),
+        },
+    ] {
+        let error = validate_surface_target(SurfaceMode::PopOut, target).unwrap_err();
+        assert!(error.contains("popOut surface is retired"));
+    }
+}
+
+#[test]
 fn external_url_validation_allows_only_http_urls() {
     assert_eq!(
         validate_external_url(" https://github.com/Finesssee/Win-CodexBar ").unwrap(),
@@ -264,6 +277,20 @@ fn minimax_region_lookup_normalizes_legacy_china_value() {
 }
 
 #[test]
+fn kimi_region_lookup_defaults_to_china_and_roundtrips_international() {
+    let mut settings = Settings::default();
+    assert_eq!(
+        provider_region_lookup(&settings, "kimi").as_deref(),
+        Some("china")
+    );
+    super::provider_region_set(&mut settings, "kimi", "international".to_string()).unwrap();
+    assert_eq!(
+        provider_region_lookup(&settings, "kimi").as_deref(),
+        Some("international")
+    );
+}
+
+#[test]
 fn minimax_cookie_domain_follows_selected_region() {
     let mut s = Settings::default();
     assert_eq!(
@@ -467,6 +494,139 @@ fn fetch_context_opencode_empty_manual_remaps_to_web() {
     );
 
     assert_eq!(ctx.source_mode, SourceMode::Web);
+}
+
+#[test]
+fn kimi_selected_account_forces_web_and_keeps_saved_region() {
+    let mut settings = Settings::default();
+    settings.set_usage_source(ProviderId::Kimi, "oauth");
+    settings.set_api_region(ProviderId::Kimi, "international");
+    let mut accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Work", "selected-kimi-session"));
+    accounts.insert(ProviderId::Kimi, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Kimi,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("kimi-auth=selected-kimi-session")
+    );
+    assert_eq!(ctx.api_key, None);
+    assert_eq!(ctx.api_region.as_deref(), Some("international"));
+    assert!(ctx.token_account_isolated);
+    assert_eq!(settings.usage_source(ProviderId::Kimi), "oauth");
+    assert_eq!(settings.api_region(ProviderId::Kimi), "international");
+}
+
+#[test]
+fn doubao_selected_account_forces_ark_api_and_ignores_saved_source() {
+    let mut settings = Settings::default();
+    settings.set_usage_source(ProviderId::Doubao, "cli");
+    let mut accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Work", "selected-ark-key"));
+    accounts.insert(ProviderId::Doubao, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Doubao,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::OAuth);
+    assert_eq!(ctx.api_key.as_deref(), Some("selected-ark-key"));
+    assert!(ctx.token_account_isolated);
+}
+
+#[test]
+fn opencodego_selected_api_account_overrides_global_key_without_changing_explicit_source() {
+    let mut settings = Settings::default();
+    settings.set_usage_source(ProviderId::OpenCodeGo, "auto");
+    let mut keys = ApiKeys::default();
+    keys.set("opencodego", "global-key", None);
+    let mut accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Work", "selected-account-key"));
+    accounts.insert(ProviderId::OpenCodeGo, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &ManualCookies::default(),
+        &keys,
+        &accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert_eq!(ctx.api_key.as_deref(), Some("selected-account-key"));
+    assert!(!ctx.auto_prefer_web);
+    assert!(ctx.token_account_isolated);
+
+    for cookie_source in ["off", "manual"] {
+        settings.set_cookie_source(ProviderId::OpenCodeGo, cookie_source);
+        settings.set_usage_source(ProviderId::OpenCodeGo, "auto");
+        let auto_ctx = super::build_fetch_context(
+            ProviderId::OpenCodeGo,
+            &settings,
+            &ManualCookies::default(),
+            &keys,
+            &accounts,
+        );
+        assert_eq!(auto_ctx.source_mode, SourceMode::Auto);
+        assert_eq!(auto_ctx.api_key.as_deref(), Some("selected-account-key"));
+        assert!(auto_ctx.manual_cookie_header.is_none());
+    }
+
+    for (saved_source, expected_source) in [("web", SourceMode::Web), ("cli", SourceMode::Cli)] {
+        settings.set_cookie_source(ProviderId::OpenCodeGo, "off");
+        settings.set_usage_source(ProviderId::OpenCodeGo, saved_source);
+        let explicit_ctx = super::build_fetch_context(
+            ProviderId::OpenCodeGo,
+            &settings,
+            &ManualCookies::default(),
+            &keys,
+            &accounts,
+        );
+        assert_eq!(explicit_ctx.source_mode, expected_source);
+    }
+}
+
+#[test]
+fn opencodego_selected_cookie_account_uses_web_route() {
+    let settings = Settings::default();
+    let mut accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Web", "Cookie: session=selected-session"));
+    accounts.insert(ProviderId::OpenCodeGo, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("Cookie: session=selected-session")
+    );
+    assert_eq!(
+        ctx.token_account_kind,
+        Some(codexbar::core::TokenAccountKind::Cookie)
+    );
+    assert!(ctx.token_account_isolated);
 }
 
 #[test]
@@ -688,6 +848,40 @@ fn fetch_context_includes_minimax_region() {
     );
 
     assert_eq!(ctx.api_region.as_deref(), Some("cn"));
+}
+
+#[test]
+fn provider_dashboard_url_uses_selected_regional_console() {
+    let mut settings = Settings::default();
+    settings.set_api_region(ProviderId::MiniMax, "cn");
+    settings.set_api_region(ProviderId::Kimi, "international");
+
+    assert_eq!(
+        super::provider_dashboard_url(ProviderId::MiniMax, &settings).as_deref(),
+        Some("https://platform.minimaxi.com/user-center/payment/coding-plan?cycle_type=3")
+    );
+    assert_eq!(
+        super::provider_dashboard_url(ProviderId::Kimi, &settings).as_deref(),
+        Some("https://www.kimi.ai/code/console")
+    );
+}
+
+/// Provider metadata is the only source of the provider dashboard link; the
+/// API-key catalog URL is the key-management link shown next to the key field.
+/// A provider that only has a catalog URL must get a metadata URL instead of
+/// silently borrowing the key page.
+#[test]
+fn api_key_catalog_providers_have_metadata_dashboard_urls() {
+    let settings = Settings::default();
+    for provider in codexbar::settings::get_api_key_providers() {
+        if provider.dashboard_url.is_some() {
+            assert!(
+                super::provider_dashboard_url(provider.id, &settings).is_some(),
+                "{:?} has an API-key page but no metadata dashboard URL",
+                provider.id
+            );
+        }
+    }
 }
 
 #[test]
@@ -1822,6 +2016,13 @@ fn minimax_region_options_match_upstream_hosts() {
             "China mainland (platform.minimaxi.com)"
         ]
     );
+}
+
+#[test]
+fn kimi_region_options_match_regional_hosts() {
+    let opts = super::region_options_for("kimi");
+    let values: Vec<_> = opts.iter().map(|option| option.value.as_str()).collect();
+    assert_eq!(values, vec!["china", "international"]);
 }
 
 #[test]

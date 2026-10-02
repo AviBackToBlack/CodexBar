@@ -6,7 +6,6 @@ import {
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
-  setSurfaceMode,
 } from "./lib/tauri";
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useTheme } from "./hooks/useTheme";
@@ -19,7 +18,6 @@ import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useDeepSeekPricingStatus } from "./hooks/useDeepSeekPricingStatus";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
-const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
 const FloatBar = lazy(() => import("./floatbar/FloatBar"));
 
 function SurfaceFallback() {
@@ -100,13 +98,10 @@ function AppInner() {
         .catch(() => {});
     }, 2_000);
 
-    // Listen for user-registered global shortcut events from the
-    // `register_global_shortcut` command. The persistent shortcut (bound via
-    // shortcut_bridge::plugin) already opens the PopOut dashboard natively;
-    // this listener is the fallback for ad-hoc capture-mode registrations.
-    const unlistenPromise = listen<string>("global-shortcut-triggered", () => {
-      void setSurfaceMode("popOut", { kind: "dashboard" }).catch(() => {});
-    });
+    // Global shortcuts (the persisted one and ad-hoc capture registrations)
+    // are handled natively: shortcut_bridge::plugin's handler toggles the
+    // tray-panel flyout for every registered shortcut, so no frontend
+    // listener opens a second window here.
 
     const unlistenSettingsChangePromise = isSettingsWindow()
       ? listen<string>("settings-change-tab", () => {
@@ -137,7 +132,6 @@ function AppInner() {
 
     return () => {
       cancelled = true;
-      void unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
       void unlistenSettingsChangePromise
         .then((unlisten) => unlisten?.())
         .catch(() => {});
@@ -183,6 +177,7 @@ function AppInner() {
   }
 
   // Detached flyout ("Pop Out Dashboard") window — render TrayPanel directly.
+  // This is the only dashboard layout; the legacy PopOut layout is retired.
   // TrayPanel is statically imported (not lazy), so no Suspense boundary is
   // needed here, unlike the other detached-window branches above.
   if (isFlyoutWindow()) {
@@ -202,19 +197,6 @@ function SurfaceRouter({
   switch (surface.mode) {
     case "hidden":
       return null;
-    case "trayPanel":
-      return <TrayPanel state={state} />;
-    case "popOut": {
-      const providerId =
-        surface.target.kind === "provider"
-          ? surface.target.providerId
-          : undefined;
-      return (
-        <Suspense fallback={<SurfaceFallback />}>
-          <PopOutPanel state={state} providerId={providerId} />
-        </Suspense>
-      );
-    }
     case "settings":
       return (
         <Suspense fallback={<SurfaceFallback />}>

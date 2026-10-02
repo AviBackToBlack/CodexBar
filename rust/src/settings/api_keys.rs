@@ -440,15 +440,6 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/usage"),
         },
         ProviderConfigInfo {
-            id: ProviderId::Crof,
-            name: "Crof",
-            requires_api_key: true,
-            api_key_env_var: Some("CROF_API_KEY"),
-            api_key_help: Some("Get your API key from Crof."),
-            config_file_path: None,
-            dashboard_url: Some("https://crof.ai"),
-        },
-        ProviderConfigInfo {
             id: ProviderId::StepFun,
             name: "StepFun",
             requires_api_key: true,
@@ -627,6 +618,39 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             api_key_help: Some("Create key in Meta Model API dashboard"),
             config_file_path: None,
             dashboard_url: Some("https://dev.meta.ai/docs"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Hyper,
+            name: "Charm Hyper",
+            requires_api_key: false,
+            api_key_env_var: Some("HYPER_API_KEY"),
+            api_key_help: Some(
+                "Fallback when no hyper.charm.land session is available. Save an API key here or set HYPER_API_KEY.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://hyper.charm.land"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::GitKraken,
+            name: "GitKraken AI",
+            requires_api_key: true,
+            api_key_env_var: Some("GITKRAKEN_API_TOKEN"),
+            api_key_help: Some(
+                "Save a GitKraken access token. Optional organization ID: provider extras or GITKRAKEN_ORG_ID.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://gitkraken.dev/account#ai-usage"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Bifrost,
+            name: "Bifrost",
+            requires_api_key: true,
+            api_key_env_var: Some("BIFROST_API_KEY"),
+            api_key_help: Some(
+                "Save a Bifrost virtual key and configure the gateway base URL in provider settings. Or set BIFROST_API_KEY and BIFROST_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
         },
     ]
 }

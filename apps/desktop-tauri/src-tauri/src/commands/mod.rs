@@ -76,6 +76,8 @@ pub use system::*;
 pub(crate) use usage_items::*;
 
 #[cfg(test)]
+mod session_cookie_scope_tests;
+#[cfg(test)]
 mod tests;
 
 pub use chart::*;
@@ -102,6 +104,25 @@ fn parse_provider_arg(provider_id: &str) -> Result<ProviderId, String> {
 
 fn canonical_provider_arg(provider_id: &str) -> Result<String, String> {
     Ok(parse_provider_arg(provider_id)?.cli_name().to_string())
+}
+
+fn provider_dashboard_url(id: ProviderId, settings: &Settings) -> Option<String> {
+    match id {
+        ProviderId::MiniMax => Some(
+            codexbar::providers::MiniMaxProvider::dashboard_url_for_region(Some(
+                settings.api_region(id),
+            )),
+        ),
+        ProviderId::Kimi => Some(
+            codexbar::providers::KimiRegion::from_settings(Some(settings.api_region(id)))
+                .console_url()
+                .to_string(),
+        ),
+        _ => instantiate_provider(id)
+            .metadata()
+            .dashboard_url
+            .map(str::to_string),
+    }
 }
 
 fn validate_single_line_secret(value: &str, field: &str, max_len: usize) -> Result<(), String> {

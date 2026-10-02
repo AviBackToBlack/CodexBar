@@ -226,6 +226,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "replicate" => ProviderId::Replicate,
         "helmcode" => ProviderId::Helmcode,
         "typesafe" => ProviderId::TypeSafe,
+        "hyper" => ProviderId::Hyper,
         _ => return None,
     })
 }
@@ -272,6 +273,7 @@ fn region_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "alibabatokenplan" => ProviderId::AlibabaTokenPlan,
         "zai" => ProviderId::Zai,
         "minimax" => ProviderId::MiniMax,
+        "kimi" => ProviderId::Kimi,
         _ => return None,
     })
 }
@@ -284,6 +286,10 @@ pub(crate) fn provider_region_lookup(settings: &Settings, provider_id: &str) -> 
             ))
             .settings_value()
             .to_string()
+        } else if id == codexbar::core::ProviderId::Kimi {
+            codexbar::providers::KimiRegion::from_settings(Some(settings.api_region(id)))
+                .settings_value()
+                .to_string()
         } else {
             settings.api_region(id).to_string()
         }
@@ -329,6 +335,7 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "xai" => ProviderId::Xai,
         "v0" => ProviderId::V0,
         "helmcode" => ProviderId::Helmcode,
+        "gitkraken" => ProviderId::GitKraken,
         _ => return None,
     })
 }
@@ -384,7 +391,7 @@ fn litellm_workspace_change_allowed(
 mod tests {
     use codexbar::core::ProviderId;
 
-    use super::{litellm_workspace_change_allowed, workspace_provider};
+    use super::{gateway_provider, litellm_workspace_change_allowed, workspace_provider};
 
     #[test]
     fn maps_opencode_go_workspace_provider() {
@@ -392,6 +399,18 @@ mod tests {
             workspace_provider("opencodego"),
             Some(ProviderId::OpenCodeGo)
         );
+    }
+
+    #[test]
+    fn maps_gitkraken_organization_provider() {
+        assert_eq!(workspace_provider("gitkraken"), Some(ProviderId::GitKraken));
+    }
+
+    #[test]
+    fn gateway_provider_exposes_wayfinder_and_bifrost_only() {
+        assert_eq!(gateway_provider("wayfinder"), Some(ProviderId::Wayfinder));
+        assert_eq!(gateway_provider("bifrost"), Some(ProviderId::Bifrost));
+        assert_eq!(gateway_provider("codex"), None);
     }
 
     #[test]
@@ -445,7 +464,18 @@ pub fn get_provider_workspace_id(provider_id: String) -> Result<Option<String>, 
 }
 
 fn gateway_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
-    (provider_id == "wayfinder").then_some(codexbar::core::ProviderId::Wayfinder)
+    match provider_id {
+        "wayfinder" => Some(codexbar::core::ProviderId::Wayfinder),
+        "bifrost" => Some(codexbar::core::ProviderId::Bifrost),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub fn get_provider_gateway_url(provider_id: String) -> Result<String, String> {
+    let id = gateway_provider(&provider_id)
+        .ok_or_else(|| format!("Provider '{provider_id}' does not expose a gateway URL"))?;
+    Ok(Settings::load().gateway_url(id).to_string())
 }
 
 #[tauri::command]
@@ -453,8 +483,17 @@ pub fn set_provider_gateway_url(provider_id: String, gateway_url: String) -> Res
     let id = gateway_provider(&provider_id)
         .ok_or_else(|| format!("Provider '{provider_id}' does not expose a gateway URL"))?;
     let gateway_url = gateway_url.trim();
-    codexbar::providers::wayfinder::parse_gateway_url(gateway_url)
-        .map_err(|error| error.to_string())?;
+    match id {
+        codexbar::core::ProviderId::Wayfinder => {
+            codexbar::providers::wayfinder::parse_gateway_url(gateway_url)
+                .map_err(|error| error.to_string())?;
+        }
+        codexbar::core::ProviderId::Bifrost => {
+            codexbar::providers::bifrost::validate_gateway_url(gateway_url)
+                .map_err(|error| error.to_string())?;
+        }
+        _ => unreachable!("gateway_provider only returns gateway providers"),
+    }
 
     let mut settings = Settings::load();
     settings.set_gateway_url(id, gateway_url.to_string());
@@ -781,6 +820,31 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 None,
             ),
         ],
+        // Upstream's Hyper picker; the session can come from any selected
+        // browser here, not only Chrome.
+        "hyper" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Prefer a signed-in Hyper browser session, then fall back to an API key.",
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste a Cookie header from hyper.charm.land.",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some("Use only the configured API key."),
+            ),
+        ],
         _ => Vec::new(),
     }
 }
@@ -820,6 +884,14 @@ pub fn region_options_for(provider_id: &str) -> Vec<RegionOption> {
                     .to_string(),
             },
         ],
+        "kimi" => codexbar::providers::KimiRegion::ALL
+            .iter()
+            .copied()
+            .map(|region| RegionOption {
+                value: region.settings_value().to_string(),
+                label: region.display_name().to_string(),
+            })
+            .collect(),
         "alibabatokenplan" => codexbar::providers::AlibabaTokenPlanRegion::ALL
             .iter()
             .copied()
