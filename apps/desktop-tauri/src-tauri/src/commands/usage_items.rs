@@ -81,6 +81,53 @@ pub(crate) fn usage_item_descriptors(
     let mut seen = std::collections::HashSet::new();
     let mut items = Vec::new();
 
+    // Detail sections (upstream 0.62.0 #3638): one descriptor per distinct
+    // display-detail title, hidden independently of the metric rows. Detail
+    // IDs round-trip as-is (no metric prefix), so they bypass the `push`
+    // helper below.
+    if let Some(snapshot) = snapshot {
+        let mut detail_titles = std::collections::HashSet::new();
+        for detail in &snapshot.display_details {
+            if detail_titles.insert(detail.title.clone()) {
+                let redacted = PersonalInfoRedactor::redact_emails_in_text(
+                    Some(&detail.title),
+                    settings.hide_personal_info,
+                )
+                .unwrap_or_default();
+                let id = format!(
+                    "{}{}",
+                    codexbar::settings::USAGE_ITEM_DETAIL_SECTION_PREFIX,
+                    redacted
+                );
+                if seen.insert(id.clone()) {
+                    items.push(ProviderUsageItemSnapshot {
+                        id,
+                        title: redacted,
+                        available: true,
+                    });
+                }
+            }
+        }
+    }
+    for id in &hidden {
+        if !id.starts_with(codexbar::settings::USAGE_ITEM_DETAIL_SECTION_PREFIX) {
+            continue;
+        }
+        // Placeholder for a hidden detail section the provider no longer
+        // reports: the title is recovered from the stored ID.
+        if seen.insert(id.clone()) {
+            items.push(ProviderUsageItemSnapshot {
+                id: id.clone(),
+                title: redacted_usage_item_title(
+                    id.strip_prefix(codexbar::settings::USAGE_ITEM_DETAIL_SECTION_PREFIX)
+                        .unwrap_or(id.as_str()),
+                    settings,
+                ),
+                available: false,
+            });
+        }
+    }
+
     let mut push = |raw_id: &str, title: &str, available: bool| {
         let id = usage_item_id(raw_id);
         if seen.insert(id.clone()) {
@@ -126,6 +173,9 @@ pub(crate) fn usage_item_descriptors(
     }
 
     for id in hidden {
+        if id.starts_with(codexbar::settings::USAGE_ITEM_DETAIL_SECTION_PREFIX) {
+            continue;
+        }
         let raw_id = id
             .strip_prefix(codexbar::settings::USAGE_ITEM_METRIC_PREFIX)
             .unwrap_or(id.as_str());

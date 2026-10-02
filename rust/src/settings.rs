@@ -20,6 +20,8 @@ use crate::cost_reporting_period::CostReportingPeriod;
 
 /// Stable namespace used by the desktop bridge for quota metric rows.
 pub const USAGE_ITEM_METRIC_PREFIX: &str = "metric:";
+/// Stable namespace for provider detail sections (upstream 0.62.0 #3638).
+pub const USAGE_ITEM_DETAIL_SECTION_PREFIX: &str = "detailSection:";
 pub const CODEX_SPARK_USAGE_ITEM_IDS: [&str; 2] = [
     "metric:extra-codex-spark",
     "metric:extra-codex-spark-weekly",
@@ -540,7 +542,8 @@ fn normalize_hidden_usage_item_ids(ids: Vec<String>) -> Vec<String> {
             !id.is_empty()
                 && id.len() <= 128
                 && !id.chars().any(char::is_control)
-                && id.starts_with(USAGE_ITEM_METRIC_PREFIX)
+                && (id.starts_with(USAGE_ITEM_METRIC_PREFIX)
+                    || id.starts_with(USAGE_ITEM_DETAIL_SECTION_PREFIX))
         })
         .filter(|id| seen.insert(id.clone()))
         .collect::<Vec<_>>();

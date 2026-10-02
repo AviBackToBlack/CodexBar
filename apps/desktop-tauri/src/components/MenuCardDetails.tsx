@@ -31,10 +31,14 @@ import { OpenAIApiUsageChart } from "./OpenAIApiUsageChart";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import QuotaBurndownChart from "./QuotaBurndownChart";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
+<<<<<<< HEAD
 import { isMonthlyLimitBlockActive } from "../lib/monthlyLimitBlock";
 import { periodCostLabel, periodTokensLabel } from "../lib/costPeriod";
 import { providerCostPeriodTitle } from "../lib/providerLabels";
 import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
+=======
+import { isDetailSectionVisible } from "../lib/usageItemVisibility";
+>>>>>>> origin/port/micro-0.62.0-detail-section-visibility
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
@@ -679,28 +683,36 @@ export default function MenuCardDetails({
         </section>
       )}
       {!provider.error && hasDisplayDetails && (
-        displayDetailGroups.map((group) => (
-          <section
-            className="menu-card__group menu-card__provider-details"
-            key={group.id}
-          >
-            {group.title && (
-              <div className="menu-card__group-title" role="heading" aria-level={4}>
-                {group.title}
-              </div>
-            )}
-            {group.rows.map((detail, index) => (
-              <ProviderDisplayRow
-                key={`${detail.id}-${index}`}
-                detail={detail}
-                lineClassName="menu-card__cost-line"
-                secondaryClassName="menu-card__cost-line--muted"
-                trackClassName="menu-metric__bar"
-                fillClassName="menu-metric__bar-fill"
-              />
-            ))}
-          </section>
-        ))
+        displayDetailGroups
+          .map((group) => ({
+            ...group,
+            rows: group.rows.filter((detail) =>
+              isDetailSectionVisible(provider.hiddenUsageItemIds, detail.title),
+            ),
+          }))
+          .filter((group) => group.rows.length > 0)
+          .map((group) => (
+            <section
+              className="menu-card__group menu-card__provider-details"
+              key={group.id}
+            >
+              {group.title && (
+                <div className="menu-card__group-title" role="heading" aria-level={4}>
+                  {group.title}
+                </div>
+              )}
+              {group.rows.map((detail, index) => (
+                <ProviderDisplayRow
+                  key={`${detail.id}-${index}`}
+                  detail={detail}
+                  lineClassName="menu-card__cost-line"
+                  secondaryClassName="menu-card__cost-line--muted"
+                  trackClassName="menu-metric__bar"
+                  fillClassName="menu-metric__bar-fill"
+                />
+              ))}
+            </section>
+          ))
       )}
 
       {wayfinderUsage && !compactOverview && <WayfinderUsageBlock usage={wayfinderUsage} />}
