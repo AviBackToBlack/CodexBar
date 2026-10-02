@@ -438,6 +438,7 @@ export interface MenuCardPresence {
   hasCreditsHistory: boolean;
   hasUsageBreakdown: boolean;
   hasQuotaWindowHistory: boolean;
+  hasBurndown: boolean;
   localUsage: ProviderChartData["localUsage"] | null;
   wayfinderUsage: ProviderUsageSnapshot["wayfinderUsage"] | null;
   hasDetails: boolean;
@@ -473,8 +474,13 @@ export function describeCard(
     chartData !== null && chartData.usageBreakdown.length > 0;
   const hasQuotaWindowHistory =
     chartData !== null && (chartData.quotaWindowHistory?.windows.length ?? 0) > 0;
+  const hasBurndown = provider.quotaBurndown != null;
   const hasCharts =
-    hasCostHistory || hasCreditsHistory || hasUsageBreakdown || hasQuotaWindowHistory;
+    hasCostHistory ||
+    hasCreditsHistory ||
+    hasUsageBreakdown ||
+    hasQuotaWindowHistory ||
+    hasBurndown;
   const isWayfinder = provider.providerId === "wayfinder";
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
@@ -513,6 +519,7 @@ export function describeCard(
     hasCreditsHistory,
     hasUsageBreakdown,
     hasQuotaWindowHistory,
+    hasBurndown,
     localUsage,
     wayfinderUsage,
     hasDetails,
@@ -554,6 +561,7 @@ export default function MenuCardDetails({
     hasCreditsHistory,
     hasUsageBreakdown,
     hasQuotaWindowHistory,
+    hasBurndown,
     localUsage,
     wayfinderUsage,
   } = presence;
