@@ -108,6 +108,12 @@ pub(crate) fn build_fetch_context(
             (SourceMode::OAuth, None, false)
         } else {
             match cookie_source {
+                // Opt-in web providers keep their default credential lane
+                // unless the usage source is explicitly Web; a stored or
+                // browser cookie must not turn Auto into Web.
+                _ if provider.web_is_opt_in() && usage_source != SourceMode::Web => {
+                    (usage_source, None, false)
+                }
                 // #433: an explicitly selected, non-empty Claude manual cookie is
                 // authoritative. Do not let an active OAuth token account silently
                 // replace it; this keeps tray refresh behavior aligned with diagnose,
@@ -218,6 +224,12 @@ pub(crate) fn build_fetch_context(
                 (SourceMode::Web, stored_cookie.clone(), false)
             }
             _ if active_token_env.is_some() => (SourceMode::OAuth, None, false),
+            // Opt-in web providers keep their default credential lane
+            // unless the usage source is explicitly Web; a stored or
+            // browser cookie must not turn Auto into Web.
+            _ if provider.web_is_opt_in() && usage_source != SourceMode::Web => {
+                (usage_source, None, false)
+            }
             // Charm Hyper: the cookie source only picks the session, and
             // the usage source keeps routing. Off and an empty Manual
             // source never import a browser session, while Auto keeps its

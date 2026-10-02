@@ -479,6 +479,55 @@ fn fetch_context_grok_explicit_web_still_uses_manual_cookie() {
 }
 
 #[test]
+fn fetch_context_zed_default_and_stored_cookie_keep_editor_credential_lane() {
+    // Zed browser billing is opt-in: neither the default manual cookie source
+    // nor a stored cookie may turn Auto into Web.
+    let ctx = super::build_fetch_context(
+        ProviderId::Zed,
+        &Settings::default(),
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.manual_cookie_missing);
+
+    let mut cookies = ManualCookies::default();
+    cookies.set("zed", "zed.session=stored");
+    let ctx = super::build_fetch_context(
+        ProviderId::Zed,
+        &Settings::default(),
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
+fn fetch_context_zed_explicit_web_uses_stored_cookie() {
+    let mut settings = Settings::default();
+    settings.set_usage_source(ProviderId::Zed, "web");
+    let mut cookies = ManualCookies::default();
+    cookies.set("zed", "zed.session=stored");
+    let ctx = super::build_fetch_context(
+        ProviderId::Zed,
+        &settings,
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("zed.session=stored")
+    );
+}
+
+#[test]
 fn fetch_context_opencode_empty_manual_remaps_to_web() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();

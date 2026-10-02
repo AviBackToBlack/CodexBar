@@ -1,7 +1,11 @@
+import type { LocaleKey } from "../../../../i18n/keys";
+
 export interface UsageSourceOption {
   value: string;
   label: string;
+  labelKey?: LocaleKey;
   description: string;
+  descriptionKey?: LocaleKey;
 }
 
 export interface UsageSourcePolicy {
@@ -51,6 +55,31 @@ const POLICIES: Readonly<Record<string, UsageSourcePolicy>> = {
       { value: "auto", label: "Auto", description: "Tries the Charm Hyper browser session, then the configured API key." },
       { value: "web", label: "Browser session", description: "Uses the selected hyper.charm.land browser session only." },
       { value: "oauth", label: "API", description: "Uses the configured Charm Hyper API key only." },
+    ],
+  },
+  zed: {
+    options: [
+      {
+        value: "auto",
+        label: "Auto",
+        labelKey: "ProviderSourceAutoShort",
+        description: "Uses the Zed editor credential; the browser session is used only when Browser session is selected.",
+        descriptionKey: "ProviderZedUsageSourceAutoHelp",
+      },
+      {
+        value: "oauth",
+        label: "API",
+        labelKey: "ProviderSourceApiShort",
+        description: "Uses the Zed editor credential only.",
+        descriptionKey: "ProviderZedUsageSourceApiHelp",
+      },
+      {
+        value: "web",
+        label: "Browser session",
+        labelKey: "ProviderZedBrowserSession",
+        description: "Reads token spend from the zed.dev browser session or manual cookie header only, with no editor-credential fallback.",
+        descriptionKey: "ProviderZedUsageSourceWebHelp",
+      },
     ],
   },
   gitkraken: {

@@ -1,22 +1,46 @@
+//! Zed provider: editor credential lane (default) and opt-in browser billing.
+
+mod snapshot;
+
 use async_trait::async_trait;
-use reqwest::Client;
-use serde_json::Value;
+use reqwest::{Client, StatusCode};
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, ManualEmptyCookiePolicy, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, ProviderStateKind, SourceMode,
 };
+use crate::providers::{BoundedBodyError, read_bounded_response};
 
 const CREDENTIAL_TARGET: &str = "codexbar-zed";
 const DEFAULT_URL: &str = "https://cloud.zed.dev/client/users/me";
+const BILLING_URL: &str = "https://cloud.zed.dev/frontend/billing/usage";
+const COOKIE_DOMAIN: &str = "zed.dev";
+const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+const SESSION_EXPIRED: &str =
+    "Zed browser session expired. Sign in to zed.dev in Chrome or update the Cookie header.";
+const MISSING_SESSION: &str =
+    "Sign in to zed.dev in a supported browser or paste a Cookie header to read token spend.";
+const COOKIES_DISABLED: &str =
+    "Enable Zed browser cookies or paste a Cookie header to read token spend.";
 
 pub struct ZedProvider {
     metadata: ProviderMetadata,
     client: Client,
+    billing_url: String,
 }
 
 impl ZedProvider {
     pub fn new() -> Self {
+        Self::with_client(
+            BILLING_URL,
+            crate::core::credentialed_http_client_builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
+        )
+    }
+
+    fn with_client(billing_url: impl Into<String>, client: Client) -> Self {
         Self {
             metadata: ProviderMetadata {
                 id: ProviderId::Zed,
@@ -31,11 +55,36 @@ impl ZedProvider {
                 status_page_url: None,
                 tertiary_label_key: None,
             },
-            client: crate::core::credentialed_http_client_builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client,
+            billing_url: billing_url.into(),
         }
+    }
+
+    async fn fetch_editor(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        let key = crate::providers::resolve_api_key(
+            ctx.api_key.as_deref(),
+            CREDENTIAL_TARGET,
+            &["ZED_API_KEY", "ZED_CREDENTIALS"],
+        )?;
+        let url = ctx.workspace_id.as_deref().unwrap_or(DEFAULT_URL);
+        let request = self
+            .client
+            .get(url)
+            .header(reqwest::header::AUTHORIZATION, key.trim())
+            .header(reqwest::header::ACCEPT, "application/json");
+        let body = read_body(request, false).await?;
+        snapshot::editor_result(&body, chrono::Utc::now())
+    }
+
+    async fn fetch_web(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        let cookie = web_cookie(ctx)?;
+        let request = self
+            .client
+            .get(&self.billing_url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::COOKIE, cookie);
+        let body = read_body(request, true).await?;
+        snapshot::web_result(&body)
     }
 }
 
@@ -57,77 +106,91 @@ impl Provider for ZedProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::OAuth => {
-                let key = crate::providers::resolve_api_key(
-                    ctx.api_key.as_deref(),
-                    CREDENTIAL_TARGET,
-                    &["ZED_API_KEY", "ZED_CREDENTIALS"],
-                )?;
-                let url = ctx.workspace_id.as_deref().unwrap_or(DEFAULT_URL);
-                let response = self
-                    .client
-                    .get(url)
-                    .header("Authorization", key.trim())
-                    .header("Accept", "application/json")
-                    .send()
-                    .await?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                    || response.status() == reqwest::StatusCode::FORBIDDEN
-                {
-                    return Err(ProviderError::AuthRequired);
-                }
-                if !response.status().is_success() {
-                    return Err(ProviderError::Other(format!(
-                        "Zed usage returned status {}",
-                        response.status()
-                    )));
-                }
-                let value: Value = response
-                    .json()
-                    .await
-                    .map_err(|e| ProviderError::Parse(format!("Failed to parse Zed usage: {e}")))?;
-                Ok(ProviderFetchResult::new(snapshot_from_user(&value), "api"))
-            }
-            SourceMode::Web | SourceMode::Cli => {
-                Err(ProviderError::UnsupportedSource(ctx.source_mode))
-            }
+            // The editor credential is the default lane. Browser billing is
+            // opt-in (Web only) and the two lanes are never combined.
+            SourceMode::Auto | SourceMode::OAuth => self.fetch_editor(ctx).await,
+            SourceMode::Web => self.fetch_web(ctx).await,
+            // The shell maps a disabled cookie source to `Cli`; it must not
+            // import cookies or send a request.
+            SourceMode::Cli => Err(ProviderError::NotInstalled(COOKIES_DISABLED.into())),
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::OAuth]
+        vec![SourceMode::Auto, SourceMode::Web, SourceMode::OAuth]
+    }
+
+    fn supports_web(&self) -> bool {
+        true
+    }
+
+    fn web_is_opt_in(&self) -> bool {
+        true
+    }
+
+    fn manual_empty_cookie_policy(&self) -> ManualEmptyCookiePolicy {
+        ManualEmptyCookiePolicy::FailClosedWeb
+    }
+
+    fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
+        match error {
+            ProviderError::Other(message) if message == SESSION_EXPIRED => {
+                ProviderStateKind::ExpiredSession
+            }
+            other => other.state_kind(),
+        }
     }
 }
 
-fn snapshot_from_user(value: &Value) -> UsageSnapshot {
-    let plan = value.get("plan").unwrap_or(value);
-    let usage = plan.get("usage").unwrap_or(plan);
-    let edits = usage
-        .pointer("/edit_predictions")
-        .or_else(|| usage.pointer("/editPredictions"))
-        .unwrap_or(usage);
-    let used = number(edits, &["used"]).unwrap_or(0.0);
-    let limit = number(edits, &["limit"]);
-    let percent = limit
-        .filter(|v| *v > 0.0)
-        .map_or(0.0, |limit| used / limit * 100.0);
-    UsageSnapshot::new(RateWindow::new(percent)).with_login_method("Zed")
+async fn read_body(request: reqwest::RequestBuilder, web: bool) -> Result<Vec<u8>, ProviderError> {
+    let response = request.send().await?;
+    let status = response.status();
+    if status != StatusCode::OK {
+        return Err(status_error(status, web));
+    }
+    read_bounded_response(response, MAX_RESPONSE_BYTES)
+        .await
+        .map_err(|error| match error {
+            BoundedBodyError::Read(error) => ProviderError::Network(error),
+            BoundedBodyError::TooLarge => ProviderError::Parse(format!(
+                "Zed usage response exceeded {MAX_RESPONSE_BYTES} bytes."
+            )),
+        })
 }
 
-fn number(value: &Value, keys: &[&str]) -> Option<f64> {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_f64))
+/// Cookie for the browser lane: a pasted header, else the browser session.
+/// A manual source with no usable header never falls back to the browser.
+fn web_cookie(ctx: &FetchContext) -> Result<String, ProviderError> {
+    let missing = || ProviderError::NotInstalled(MISSING_SESSION.into());
+    if let Some(raw) = ctx.manual_cookie_header.as_deref() {
+        return crate::providers::normalize_cookie_header(raw).ok_or_else(missing);
+    }
+    if ctx.manual_cookie_missing {
+        return Err(missing());
+    }
+    match crate::providers::browser_cookie_header(&[COOKIE_DOMAIN]) {
+        Ok(header) => crate::providers::normalize_cookie_header(&header).ok_or_else(missing),
+        Err(ProviderError::NoCookies) => Err(missing()),
+        Err(error) => Err(error),
+    }
+}
+
+fn status_error(status: StatusCode, web: bool) -> ProviderError {
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if web => {
+            ProviderError::Other(SESSION_EXPIRED.into())
+        }
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ProviderError::AuthRequired,
+        StatusCode::TOO_MANY_REQUESTS => {
+            ProviderError::Other("Zed usage requests are rate limited.".into())
+        }
+        status if status.is_server_error() => ProviderError::Other(format!(
+            "Zed cloud API is unavailable (HTTP {}).",
+            status.as_u16()
+        )),
+        status => ProviderError::Other(format!("Zed cloud API returned HTTP {}.", status.as_u16())),
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_edit_predictions() {
-        let snapshot = snapshot_from_user(
-            &serde_json::json!({"plan":{"usage":{"editPredictions":{"used":50,"limit":200}}}}),
-        );
-        assert_eq!(snapshot.primary.used_percent, 25.0);
-    }
-}
+mod tests;

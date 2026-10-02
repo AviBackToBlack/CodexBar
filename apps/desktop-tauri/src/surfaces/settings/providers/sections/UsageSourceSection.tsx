@@ -57,12 +57,16 @@ export function UsageSourceSection({
               className={`provider-detail-segmented__option${isActive ? " is-active" : ""}`}
               onClick={() => void handleSelect(option.value)}
             >
-              {option.label}
+              {option.labelKey ? t(option.labelKey) : option.label}
             </button>
           );
         })}
       </div>
-      <p className="provider-detail-helper">{selectedOption.description}</p>
+      <p className="provider-detail-helper">
+        {selectedOption.descriptionKey
+          ? t(selectedOption.descriptionKey)
+          : selectedOption.description}
+      </p>
       {error && <p className="provider-detail-error">{error}</p>}
     </section>
   );

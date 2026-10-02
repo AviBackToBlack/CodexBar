@@ -448,7 +448,7 @@ impl ProviderId {
             ProviderId::LiteLLM => None,
             ProviderId::Poe => None,
             ProviderId::Devin => None,
-            ProviderId::Zed => None,
+            ProviderId::Zed => Some("zed.dev"),
             ProviderId::CrossModel => None,
             ProviderId::Sub2Api => None,
             ProviderId::Wayfinder => None,
@@ -947,6 +947,14 @@ pub trait Provider: Send + Sync {
         false
     }
 
+    /// Whether the web lane is used only when the usage source is explicitly
+    /// `web`. A cookie domain otherwise lets the shell turn Auto into Web
+    /// (manual cookie present or browser import), which would replace a
+    /// provider's default non-web credential.
+    fn web_is_opt_in(&self) -> bool {
+        false
+    }
+
     /// Whether the cookie source only scopes the browser session the
     /// provider may use, leaving the selected usage source in charge of
     /// routing.
@@ -1401,6 +1409,7 @@ mod tests {
             Some("aistudio.google.com")
         );
         assert_eq!(ProviderId::Kiro.cookie_domain(), Some("kiro.dev"));
+        assert_eq!(ProviderId::Zed.cookie_domain(), Some("zed.dev"));
         assert_eq!(ProviderId::Kimi.cookie_domain(), Some("kimi.moonshot.cn"));
         assert_eq!(ProviderId::OpenCode.cookie_domain(), Some("opencode.ai"));
         assert_eq!(ProviderId::Venice.cookie_domain(), Some("venice.ai"));
