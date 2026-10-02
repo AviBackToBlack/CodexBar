@@ -132,12 +132,17 @@ fn resets_at(
         remains as f64
     };
     // Display/rounding conversion of an epoch value; sub-second precision is
-    // intentionally dropped.
+    // intentionally dropped. An offset that cannot be represented as a
+    // timestamp (oversized `remains`) yields no reset line and keeps the usage
+    // percentage (upstream #3758/#3764: safely handle unrepresentable
+    // timestamps).
     #[allow(
         clippy::cast_possible_truncation,
         reason = "epoch seconds truncated to whole seconds by design"
     )]
-    Some(now + Duration::seconds(seconds as i64))
+    let total_seconds = Duration::try_seconds(seconds as i64)?;
+    now.checked_add_signed(total_seconds)
+        .filter(|reset| *reset > now)
 }
 
 /// Upstream `mapModelNameToServiceType`.
@@ -692,6 +697,36 @@ pub(crate) fn is_token_plan_without_coding_plan(err: &ProviderError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_remains_yields_no_reset_line_and_keeps_usage() {
+        // `remains` above ~8.3e15 ms cannot be represented as a timestamp:
+        // `Duration::try_seconds` must return None, so `resets_at` is None and
+        // the usage percentage survives (upstream #3758/#3764).
+        assert_eq!(resets_at(None, Some(i64::MAX), now()), None);
+    }
+
+    #[test]
+    fn negative_remains_yields_no_reset_line() {
+        assert_eq!(resets_at(None, Some(-5), now()), None);
+        assert_eq!(resets_at(None, Some(0), now()), None);
+    }
+
+    #[test]
+    fn positive_remains_keeps_the_reset_line() {
+        // 90_000 > 1_000_000? No: below the heuristic, treated as seconds.
+        let reset = resets_at(None, Some(60), now()).expect("small remains");
+        assert_eq!(reset, now() + Duration::seconds(60));
+        // Above the heuristic: treated as milliseconds.
+        let reset_ms = resets_at(None, Some(2_000_000), now()).expect("ms remains");
+        assert_eq!(reset_ms, now() + Duration::seconds(2_000));
+    }
+
+    #[test]
+    fn end_time_in_the_future_wins_over_remains() {
+        let end = now() + Duration::seconds(120);
+        assert_eq!(resets_at(Some(end), Some(60), now()), Some(end));
+    }
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap()
