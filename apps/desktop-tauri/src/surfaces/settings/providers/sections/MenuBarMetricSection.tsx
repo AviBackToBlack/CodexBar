@@ -80,16 +80,16 @@ function metricOptions(
   selected: MetricPreference,
   t: (key: LocaleKey) => string,
 ): MetricOption[] {
+  // Aixy's primary budget depends on which limits currently apply to the key,
+  // so a fixed session/weekly lane would be misleading. Offer Automatic only.
+  if (AUTOMATIC_ONLY_PROVIDERS.has(provider.id)) {
+    return [{ value: "automatic", label: t("Automatic") }];
+  }
+
   const options: MetricOption[] = [
     { value: "automatic", label: t("Automatic") },
     { value: "session", label: provider.primaryLabel || t("ProviderSessionLabel") },
   ];
-
-  // Aixy's primary budget depends on which limits currently apply to the key,
-  // so a fixed session/weekly lane would be misleading. Offer Automatic only.
-  if (AUTOMATIC_ONLY_PROVIDERS.has(provider.id)) {
-    return options;
-  }
 
   if (provider.weekly) {
     options.push({ value: "weekly", label: provider.secondaryLabel || t("ProviderWeeklyLabel") });

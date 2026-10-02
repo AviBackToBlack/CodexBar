@@ -615,6 +615,7 @@ export default function MenuCardDetails({
     hasCreditsHistory,
     hasUsageBreakdown,
     hasQuotaWindowHistory,
+    hasBurndown,
     localUsage,
     wayfinderUsage,
   } = presence;
