@@ -335,9 +335,12 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
 pub(crate) fn rebuild_tray_menu(app: &AppHandle) {
     let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
+    let rates_cache = app
+        .try_state::<crate::commands::CurrencyRateCache>()
+        .map(|state| state.inner());
     let status_labels = if let Some(st) = app.try_state::<Mutex<AppState>>() {
         let guard = st.lock().unwrap();
-        TrayPresentationPlan::resolve(&settings, &guard.provider_cache)
+        TrayPresentationPlan::resolve(&settings, &guard.provider_cache, rates_cache)
             .status_labels(settings.ui_language)
     } else {
         vec![]
@@ -356,8 +359,11 @@ pub fn update_tray_status_items(
 ) {
     let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
-    let status_labels =
-        TrayPresentationPlan::resolve(&settings, snapshots).status_labels(settings.ui_language);
+    let rates_cache = app
+        .try_state::<crate::commands::CurrencyRateCache>()
+        .map(|state| state.inner());
+    let status_labels = TrayPresentationPlan::resolve(&settings, snapshots, rates_cache)
+        .status_labels(settings.ui_language);
 
     if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
         && let Some(tray) = app.tray_by_id("codexbar-main")
@@ -396,7 +402,10 @@ pub fn update_tray_icon_and_tooltip(
     };
 
     let settings = Settings::load();
-    let plan = TrayPresentationPlan::resolve(&settings, snapshots);
+    let rates_cache = app
+        .try_state::<crate::commands::CurrencyRateCache>()
+        .map(|state| state.inner());
+    let plan = TrayPresentationPlan::resolve(&settings, snapshots, rates_cache);
     let (rgba, w, h) = plan.render_icon();
     let icon = Image::new_owned(rgba, w, h);
     let _ = tray.set_icon(Some(icon));
@@ -745,6 +754,7 @@ mod tests {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            quota_burndown: None,
             session_equivalent_forecast: None,
         }
     }
@@ -835,7 +845,8 @@ mod tests {
 
         let settings = Settings::default();
         let snapshots = vec![claude];
-        let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+        let rates_cache = None;
+        let plan = TrayPresentationPlan::resolve(&settings, &snapshots, rates_cache);
         let english_label = plan.status_labels(codexbar::settings::Language::English)[0]
             .1
             .clone();

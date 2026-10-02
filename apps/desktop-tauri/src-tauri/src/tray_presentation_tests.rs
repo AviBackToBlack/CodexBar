@@ -72,6 +72,7 @@ fn fake_snapshot_with(
         fetch_duration_ms: None,
         wayfinder_usage: None,
         session_equivalent_forecast: None,
+        quota_burndown: None,
     }
 }
 
@@ -87,7 +88,7 @@ fn single_plan_uses_highest_provider_for_icon_and_summary() {
         fake_snapshot("claude", "Claude", 72.0),
     ];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -116,7 +117,7 @@ fn single_plan_borrows_selected_snapshot_from_stable_input() {
     ];
 
     // `resolve` drops its temporary ordered/healthy vectors before returning.
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert!(std::ptr::eq(plan.status_rows[0].snapshot, &snapshots[1]));
 }
@@ -137,7 +138,7 @@ fn per_provider_plan_preserves_configured_order_for_status_rows() {
     ];
 
     let labels =
-        TrayPresentationPlan::resolve(&settings, &snapshots).status_labels(Language::English);
+        TrayPresentationPlan::resolve(&settings, &snapshots, None).status_labels(Language::English);
 
     assert_eq!(
         labels,
@@ -162,7 +163,7 @@ fn stacked_plan_resolves_distinct_preferences_once() {
         fake_snapshot("gemini", "Gemini", 44.0),
     ];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -196,7 +197,7 @@ fn stacked_plan_borrows_both_snapshots_from_stable_input() {
 
     // The plan retains references to the caller-owned snapshots, not the
     // temporary vector of references used during selection.
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert!(std::ptr::eq(plan.status_rows[0].snapshot, &snapshots[1]));
     assert!(std::ptr::eq(plan.status_rows[1].snapshot, &snapshots[0]));
@@ -215,7 +216,7 @@ fn stacked_plan_falls_back_around_stale_and_duplicate_preferences() {
         fake_snapshot("claude", "Claude", 72.0),
     ];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -244,7 +245,7 @@ fn one_provider_stacked_mode_falls_back_to_single_provider_bars() {
         None,
     )];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -269,7 +270,7 @@ fn one_healthy_provider_never_uses_stacked_renderer() {
     failed.error = Some("offline".to_string());
     let snapshots = vec![healthy, failed];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -292,7 +293,7 @@ fn all_errors_produce_error_styled_zero_percent_plan() {
     snapshot.error = Some("offline".to_string());
     let snapshots = vec![snapshot];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -320,7 +321,7 @@ fn plan_uses_selected_metric_and_remaining_display_mode() {
         Some((15.0, 100.0)),
     )];
 
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.icon,
@@ -344,7 +345,7 @@ fn render_icon_delegates_to_resolved_stacked_renderer() {
         fake_snapshot("codex", "Codex", 40.0),
         fake_snapshot("claude", "Claude", 72.0),
     ];
-    let plan = TrayPresentationPlan::resolve(&settings, &snapshots);
+    let plan = TrayPresentationPlan::resolve(&settings, &snapshots, None);
 
     assert_eq!(
         plan.render_icon(),
@@ -698,6 +699,7 @@ fn tray_pace_color_is_opt_in_and_follows_canonical_stage() {
         eta_seconds: None,
         expected_used_percent: 40.0,
         actual_used_percent: 32.0,
+        monthly_limit_block: None,
     };
     let with_pace = |pace: Option<crate::commands::PaceSnapshot>| {
         let mut snapshot = fake_snapshot("codex", "Codex", 50.0);
@@ -715,7 +717,7 @@ fn tray_pace_color_is_opt_in_and_follows_canonical_stage() {
         ..Settings::default()
     };
     let render = |settings: &Settings, snapshots: &[ProviderUsageSnapshot]| {
-        TrayPresentationPlan::resolve(settings, snapshots).render_icon()
+        TrayPresentationPlan::resolve(settings, snapshots, None).render_icon()
     };
 
     let unpaced = with_pace(None);
@@ -755,6 +757,7 @@ fn stacked_tray_icon_keeps_usage_colours_when_pace_tint_is_enabled() {
         eta_seconds: None,
         expected_used_percent: 30.0,
         actual_used_percent: 50.0,
+        monthly_limit_block: None,
     });
     let claude = fake_snapshot("claude", "Claude", 20.0);
     let snapshots = vec![codex.clone(), claude.clone()];
@@ -771,11 +774,13 @@ fn stacked_tray_icon_keeps_usage_colours_when_pace_tint_is_enabled() {
         ..Settings::default()
     };
 
-    let plan = TrayPresentationPlan::resolve(&stacked(true), &snapshots);
+    let stacked_settings = stacked(true);
+    let plan = TrayPresentationPlan::resolve(&stacked_settings, &snapshots, None);
     assert!(matches!(plan.icon, TrayIconPlan::Stacked { .. }));
     assert_eq!(plan.icon_pace, None);
+    let unpaced_settings = stacked(false);
     assert_eq!(
         plan.render_icon(),
-        TrayPresentationPlan::resolve(&stacked(false), &unpaced).render_icon()
+        TrayPresentationPlan::resolve(&unpaced_settings, &unpaced, None).render_icon()
     );
 }

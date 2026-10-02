@@ -48,10 +48,16 @@ pub(crate) struct TrayPresentationPlan<'a> {
     /// (upstream 0.59.0 pace colors). Stacked icons keep usage-level colours.
     icon_pace: Option<TrayPaceColor>,
     status_rows: Vec<TrayStatusRow<'a>>,
+    rates_cache: Option<&'a crate::commands::CurrencyRateCache>,
 }
 
 impl<'a> TrayPresentationPlan<'a> {
-    pub(crate) fn resolve(settings: &'a Settings, snapshots: &'a [ProviderUsageSnapshot]) -> Self {
+    pub(crate) fn resolve(
+        settings: &'a Settings,
+        snapshots: &'a [ProviderUsageSnapshot],
+        rates_cache: Option<&'a crate::commands::CurrencyRateCache>,
+    ) -> Self {
+        let rates_cache = rates_cache;
         let ordered = ordered_snapshot_refs(settings, snapshots);
         let healthy = ordered
             .into_iter()
@@ -148,6 +154,7 @@ impl<'a> TrayPresentationPlan<'a> {
             icon,
             icon_pace,
             status_rows,
+            rates_cache,
         }
     }
 
@@ -178,7 +185,8 @@ impl<'a> TrayPresentationPlan<'a> {
         self.status_rows
             .iter()
             .map(|row| {
-                let (_, label) = provider_status_label(row.snapshot, self.settings, language);
+                let (_, label) =
+                    provider_status_label(row.snapshot, self.settings, language, self.rates_cache);
                 let key = match row.key {
                     TrayStatusKey::Summary => "status_summary".to_string(),
                     TrayStatusKey::Provider => row.snapshot.provider_id.clone(),
@@ -266,6 +274,7 @@ fn provider_status_label(
     snapshot: &ProviderUsageSnapshot,
     settings: &Settings,
     language: Language,
+    rates_cache: Option<&crate::commands::CurrencyRateCache>,
 ) -> (String, String) {
     let provider = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id);
     let preference = provider
@@ -277,7 +286,7 @@ fn provider_status_label(
         let amount = if !cost.formatted_used.is_empty() {
             cost.formatted_used.clone()
         } else {
-            crate::commands::format_cost_amount(cost)
+            crate::commands::format_cost_amount(cost, rates_cache)
         };
         return (
             snapshot.provider_id.clone(),

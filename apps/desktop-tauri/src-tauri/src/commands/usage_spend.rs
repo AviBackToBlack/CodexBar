@@ -223,7 +223,7 @@ pub async fn get_usage_spend_summary(
         codexbar::settings::Settings::load().cost_reporting_period,
     );
     let force_refresh = force_refresh.unwrap_or(false);
-    refresh_opencodex_pricing_before_build(&cached, selected_days, force_refresh).await;
+    refresh_opencodex_pricing_before_build(&cached, period, force_refresh).await;
     let built = tauri::async_runtime::spawn_blocking(move || {
         build_usage_spend_summary_cached(&cached, period, force_refresh)
     })
@@ -254,14 +254,14 @@ pub async fn get_usage_spend_summary(
 /// summary read never starts network work.
 async fn refresh_opencodex_pricing_before_build(
     cached: &[ProviderUsageSnapshot],
-    selected_days: u32,
+    period: CostReportingPeriod,
     force_refresh: bool,
 ) {
     let settings = codexbar::settings::Settings::load();
     if !settings.open_codex_usage_logs_enabled {
         return;
     }
-    let key = usage_spend_cache_key(cached, selected_days, &settings);
+    let key = usage_spend_cache_key(cached, period, &settings);
     let rebuilds = usage_spend_coordinator()
         .lock()
         .is_ok_and(|coordinator| coordinator.reusable(&key, force_refresh).is_none());
@@ -1035,9 +1035,11 @@ mod cache_key_tests {
 
     fn empty_summary() -> UsageSpendSummary {
         UsageSpendSummary {
+            reporting_period: "rolling:30".to_string(),
             rows: Vec::new(),
             contract: SpendContract {
                 provider_id: "codex".to_string(),
+                reporting_period: "rolling:30".to_string(),
                 history_days: 30,
                 known_cost_usd: None,
                 known_zero: false,
@@ -1078,8 +1080,8 @@ mod cache_key_tests {
 
     #[test]
     fn privacy_mode_is_part_of_usage_spend_cache_identity() {
-        let public = usage_spend_cache_key_with_privacy(&[], 30, false, false, false);
-        let private = usage_spend_cache_key_with_privacy(&[], 30, false, false, true);
+        let public = usage_spend_cache_key_with_privacy(&[], "rolling:30", false, false, false);
+        let private = usage_spend_cache_key_with_privacy(&[], "rolling:30", false, false, true);
         assert_ne!(public, private);
     }
 

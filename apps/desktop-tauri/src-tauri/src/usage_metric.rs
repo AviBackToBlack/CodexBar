@@ -353,6 +353,7 @@ mod tests {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            quota_burndown: None,
             session_equivalent_forecast: None,
         }
     }

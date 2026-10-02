@@ -103,10 +103,33 @@ pub(crate) fn build_fetch_context(
         // cookie_source below (the account-source pack's fix for the #619 merge).
         let keeps_auto =
             usage_source == SourceMode::Auto && provider.token_account_preserves_auto_source();
-        let (source_mode, cookie_header, missing_cookie) = if active_token_env.is_some()
-            && !keeps_auto
-        {
-            (SourceMode::OAuth, None, false)
+        // A wallet provider keeps its saved usage source even with a selected
+        // token account: rewriting it to OAuth would skip the wallet read
+        // (#725 / upstream base-source resolver).
+        if keeps_auto || active_token_env.is_none() {
+            // A wallet provider keeps its saved usage source even with a
+            // selected token account: rewriting it to OAuth would skip the
+            // wallet read (#725 / upstream base-source resolver).
+            if active_token_env.is_some() {
+                (usage_source, None, false)
+            } else {
+                match cookie_source {
+                    // #433: an explicitly selected, non-empty Claude manual cookie is
+                    // authoritative. Do not let an active OAuth token account silently
+                    // replace it; this keeps tray refresh behavior aligned with diagnose,
+                    // whose Claude Auto path tries the supplied Web cookie before OAuth.
+                    "manual"
+                        if provider.manual_cookie_precedes_token_account()
+                            && stored_cookie
+                                .as_deref()
+                                .is_some_and(|cookie| !cookie.trim().is_empty()) =>
+                    {
+                        (SourceMode::Web, stored_cookie.clone(), false)
+                    }
+                    "auto" | "browser" | "web" => (usage_source, None, false),
+                    _ => (usage_source, None, false),
+                }
+            }
         } else {
             match cookie_source {
                 // Opt-in web providers keep their default credential lane
@@ -208,8 +231,7 @@ pub(crate) fn build_fetch_context(
                 }
                 _ => (usage_source, stored_cookie, false),
             }
-        };
-        (source_mode, cookie_header, missing_cookie)
+        }
     } else {
         match cookie_source {
             // #433: an explicitly selected, non-empty Claude manual cookie is
