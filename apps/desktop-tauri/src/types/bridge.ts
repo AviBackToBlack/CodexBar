@@ -1005,6 +1005,10 @@ export interface ProviderDetail {
   // Usage windows — mirror RateWindowSnapshot.
   session: RateWindowSnapshot | null;
   weekly: RateWindowSnapshot | null;
+  /** Provider-declared label for the session (primary) lane, e.g. "Personal budget". */
+  primaryLabel?: string | null;
+  /** Provider-declared label for the weekly (secondary) lane, e.g. "Team budget". */
+  secondaryLabel?: string | null;
   modelSpecific: RateWindowSnapshot | null;
   tertiary: RateWindowSnapshot | null;
   /** Locale key for the tertiary metric lane when it carries a semantic label (upstream F5). */

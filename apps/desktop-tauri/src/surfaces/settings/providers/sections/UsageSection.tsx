@@ -34,14 +34,14 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
   if (provider.session && isUsageItemVisible(provider.hiddenUsageItemIds, "primary")) {
     bars.push({
       key: "session",
-      label: t("ProviderSessionLabel"),
+      label: provider.primaryLabel || t("ProviderSessionLabel"),
       rate: provider.session,
     });
   }
   if (provider.weekly && isUsageItemVisible(provider.hiddenUsageItemIds, "secondary")) {
     bars.push({
       key: "weekly",
-      label: t("ProviderWeeklyLabel"),
+      label: provider.secondaryLabel || t("ProviderWeeklyLabel"),
       rate: provider.weekly,
     });
   }

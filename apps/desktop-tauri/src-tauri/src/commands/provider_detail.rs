@@ -23,6 +23,12 @@ pub struct ProviderDetail {
     // Usage windows — reuse existing RateWindowSnapshot shape.
     pub session: Option<RateWindowSnapshot>,
     pub weekly: Option<RateWindowSnapshot>,
+    /// Provider-declared label for the session (primary) lane; None when the
+    /// provider uses the generic "Session" wording.
+    pub primary_label: Option<String>,
+    /// Provider-declared label for the weekly (secondary) lane; None when the
+    /// provider uses the generic "Weekly" wording.
+    pub secondary_label: Option<String>,
     pub model_specific: Option<RateWindowSnapshot>,
     pub tertiary: Option<RateWindowSnapshot>,
     /// Locale key naming the tertiary lane when it carries a semantic label
@@ -89,6 +95,8 @@ pub(crate) fn build_provider_detail(
         last_updated: None,
         session: None,
         weekly: None,
+        primary_label: None,
+        secondary_label: None,
         model_specific: None,
         tertiary: None,
         tertiary_label_key: metadata.tertiary_label_key,
@@ -165,7 +173,8 @@ pub fn get_provider_detail(
                 super::usage_item_descriptors(Some(&snapshot), &settings, parsed_provider_id);
             detail.session = Some(snapshot.primary.clone());
             detail.weekly = snapshot.secondary.clone();
-            detail.model_specific = snapshot.model_specific.clone();
+            detail.primary_label = snapshot.primary_label.clone();
+            detail.secondary_label = snapshot.secondary_label.clone();
             detail.tertiary = snapshot.tertiary.clone();
             detail.extra_rate_windows = snapshot.extra_rate_windows.clone();
             detail.inventory = snapshot.inventory.clone();

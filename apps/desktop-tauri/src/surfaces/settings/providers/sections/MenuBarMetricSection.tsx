@@ -78,11 +78,11 @@ function metricOptions(
 ): MetricOption[] {
   const options: MetricOption[] = [
     { value: "automatic", label: t("Automatic") },
-    { value: "session", label: t("ProviderSessionLabel") },
+    { value: "session", label: provider.primaryLabel || t("ProviderSessionLabel") },
   ];
 
   if (provider.weekly) {
-    options.push({ value: "weekly", label: t("ProviderWeeklyLabel") });
+    options.push({ value: "weekly", label: provider.secondaryLabel || t("ProviderWeeklyLabel") });
   }
   if (provider.modelSpecific) {
     options.push({ value: "model", label: t("DetailWindowModelSpecific") });

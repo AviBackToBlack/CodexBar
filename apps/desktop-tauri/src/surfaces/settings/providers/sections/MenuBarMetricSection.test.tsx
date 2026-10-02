@@ -123,4 +123,47 @@ describe("MenuBarMetricSection", () => {
       providerMetrics: { copilot: "extraUsage" },
     });
   });
+
+  it("offers the provider-declared lane labels in the metric picker", () => {
+    const base = provider(false);
+    base.id = "litellm";
+    base.displayName = "LiteLLM";
+    base.weekly = rateWindow(30);
+    base.primaryLabel = "Personal budget";
+    base.secondaryLabel = "Team budget";
+
+    render(
+      <MenuBarMetricSection
+        provider={base}
+        providerMetrics={{}}
+        disabled={false}
+        t={(key) => key}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Personal budget" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Team budget" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "ProviderSessionLabel" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "ProviderWeeklyLabel" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic metric labels when the provider declares none", () => {
+    const base = provider(false);
+    base.weekly = rateWindow(30);
+
+    render(
+      <MenuBarMetricSection
+        provider={base}
+        providerMetrics={{}}
+        disabled={false}
+        t={(key) => key}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "Automatic" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "ProviderSessionLabel" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "ProviderWeeklyLabel" })).toBeInTheDocument();
+  });
 });

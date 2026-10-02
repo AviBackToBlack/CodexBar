@@ -210,4 +210,36 @@ describe("UsageSection", () => {
     expect(await screen.findByText(/Limit Reset Credits: 2 available/)).toBeInTheDocument();
     expect(container.querySelector(".provider-usage-bar__track")).toBeNull();
   });
+
+  it("shows provider-declared lane labels in settings bars", async () => {
+    const detail = provider();
+    detail.weekly = rateWindow(30);
+    detail.primaryLabel = "Personal budget";
+    detail.secondaryLabel = "Team budget";
+
+    render(
+      <LocaleProvider>
+        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText("Personal budget")).toBeInTheDocument();
+    expect(screen.getByText("Team budget")).toBeInTheDocument();
+    expect(screen.queryByText("ProviderSessionLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("ProviderWeeklyLabel")).not.toBeInTheDocument();
+  });
+
+  it("keeps the generic labels when the provider declares none", async () => {
+    const detail = provider();
+    detail.weekly = rateWindow(30);
+
+    render(
+      <LocaleProvider>
+        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText("ProviderSessionLabel")).toBeInTheDocument();
+    expect(screen.getByText("ProviderWeeklyLabel")).toBeInTheDocument();
+  });
 });
