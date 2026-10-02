@@ -13,6 +13,8 @@ use super::cli_print_failure::{CliPrintFailure, ExitClassification, classify_exi
 use super::offline_reason::LiveFailure;
 use super::quota_summary;
 use crate::core::{ProviderError, ProviderFetchResult};
+#[cfg(windows)]
+use crate::managed_process::ProcessJob;
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(90);
 const REPORT_TOO_LARGE: &str = "Antigravity CLI usage report is too large";
@@ -186,6 +188,46 @@ fn prepare_command(binary: &Path, args: &[&str], working_dir: &Path) -> AsyncCom
     command
 }
 
+/// Kill-on-close job for one probe. Dropping it (success, error or timeout)
+/// terminates the probe's whole process tree, not only the direct child that
+/// `kill_on_drop` reaches; `agy` starts MCP server descendants that would
+/// otherwise outlive the probe.
+#[cfg(windows)]
+type ProbeJob = ProcessJob;
+#[cfg(not(windows))]
+type ProbeJob = ();
+
+/// Spawn the probe and place it in its own job. Only this probe's process tree
+/// is ever in the job, so unrelated `agy` processes are never touched.
+fn spawn_contained(
+    command: &mut AsyncCommand,
+) -> Result<(tokio::process::Child, Option<ProbeJob>), ProviderError> {
+    let child = command
+        .spawn()
+        .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
+    let job = contain_child(&child);
+    Ok((child, job))
+}
+
+#[cfg(windows)]
+fn contain_child(child: &tokio::process::Child) -> Option<ProbeJob> {
+    let Some(handle) = child.raw_handle() else {
+        tracing::warn!("Antigravity CLI probe exited before it could be job-contained");
+        return None;
+    };
+    ProcessJob::create("agy-probe")
+        .and_then(|job| job.contain(handle).map(|()| job))
+        .inspect_err(|error| {
+            tracing::warn!(%error, "Antigravity CLI probe could not be job-contained");
+        })
+        .ok()
+}
+
+#[cfg(not(windows))]
+fn contain_child(_child: &tokio::process::Child) -> Option<ProbeJob> {
+    None
+}
+
 async fn run_cli_command(
     binary: &Path,
     args: &[&str],
@@ -195,9 +237,7 @@ async fn run_cli_command(
     let working_dir = PrivateWorkdir::create()?;
     let mut command = prepare_command(binary, args, working_dir.path());
 
-    let mut child = command
-        .spawn()
-        .map_err(|error| LiveFailure::cli_report(CliPrintFailure::from_spawn_error(&error)))?;
+    let (mut child, _containment) = spawn_contained(&mut command)?;
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         return Err(report_failed());
     };
@@ -507,6 +547,114 @@ mod tests {
 
         drop(workdir);
         assert!(!path.exists());
+    }
+
+    #[cfg(windows)]
+    fn process_is_alive(pid: u32) -> bool {
+        use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            WaitForSingleObject,
+        };
+
+        // SAFETY: OpenProcess returns a handle owned by this function and closed below.
+        match unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            )
+        } {
+            Ok(handle) => {
+                // SAFETY: `handle` is a valid process handle.
+                let exited = unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0;
+                // SAFETY: closing the handle returned by OpenProcess exactly once.
+                drop(unsafe { CloseHandle(handle) });
+                !exited
+            }
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(windows)]
+    struct KillOnDrop(std::process::Child);
+
+    #[cfg(windows)]
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            drop(self.0.kill());
+            drop(self.0.wait());
+        }
+    }
+
+    #[cfg(windows)]
+    async fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while !condition() {
+            assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn dropping_the_probe_reaps_descendants_but_not_unrelated_processes() {
+        let workdir = PrivateWorkdir::create().expect("private working directory");
+        let marker = workdir.path().join("descendant.pid");
+        let script = format!(
+            "$p = Start-Process -PassThru -WindowStyle Hidden powershell.exe \
+             -ArgumentList '-NoLogo','-NoProfile','-Command','Start-Sleep -Seconds 120'; \
+             Set-Content -LiteralPath '{}' -Value $p.Id; Start-Sleep -Seconds 120",
+            marker.display()
+        );
+        // An unrelated process started outside the probe must survive the reap.
+        let bystander = KillOnDrop(
+            std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-Command",
+                    "Start-Sleep -Seconds 120",
+                ])
+                .spawn()
+                .expect("start bystander"),
+        );
+
+        let mut command = AsyncCommand::new("powershell.exe");
+        command
+            .args(["-NoLogo", "-NoProfile", "-Command", &script])
+            .current_dir(workdir.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let (child, containment) = spawn_contained(&mut command).expect("spawn contained probe");
+
+        let mut descendant = None;
+        wait_until(
+            || {
+                descendant = std::fs::read_to_string(&marker)
+                    .ok()
+                    .and_then(|text| text.trim().parse::<u32>().ok());
+                descendant.is_some()
+            },
+            "descendant pid",
+        )
+        .await;
+        let descendant = descendant.expect("descendant pid");
+        assert!(process_is_alive(descendant));
+
+        // kill_on_drop only kills the direct child: the descendant survives it
+        // and is reaped only when the job closes.
+        drop(child);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            process_is_alive(descendant),
+            "kill_on_drop alone must not be what reaps the descendant"
+        );
+        drop(containment);
+        wait_until(|| !process_is_alive(descendant), "descendant reaped").await;
+        assert!(process_is_alive(bystander.0.id()));
     }
 
     #[test]

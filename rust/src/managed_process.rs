@@ -19,7 +19,6 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
-#[cfg(test)]
 use std::os::windows::io::RawHandle;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
@@ -32,12 +31,10 @@ use windows::Win32::NetworkManagement::IpHelper::{
 use windows::Win32::System::Console::{
     ClosePseudoConsole, CreatePseudoConsole, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR,
 };
-#[cfg(test)]
-use windows::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
@@ -559,8 +556,33 @@ fn create_managed_job(label: &str) -> ManagedProcessResult<OwnedHandle> {
     Ok(job)
 }
 
-/// Post-creation assignment retained only for the job-termination unit test.
-#[cfg(test)]
+/// Kill-on-close Job Object for a child the caller spawned itself (for example
+/// a piped, non-PTY probe). Every process in the job, including descendants
+/// started after the child was assigned, is terminated when this value drops.
+/// Only processes explicitly assigned here (and their descendants) are touched.
+pub struct ProcessJob {
+    job: OwnedHandle,
+    label: String,
+}
+
+impl ProcessJob {
+    /// Create an empty kill-on-close job.
+    pub fn create(label: &str) -> ManagedProcessResult<Self> {
+        Ok(Self {
+            job: create_managed_job(label)?,
+            label: label.to_string(),
+        })
+    }
+
+    /// Place a freshly spawned process (and any descendants it starts from now
+    /// on) into the job. Assign immediately after spawning; unlike
+    /// [`ManagedProcess`], which joins the job atomically at creation, this is
+    /// a post-creation assignment.
+    pub fn contain(&self, process: RawHandle) -> ManagedProcessResult<()> {
+        assign_process_to_job(&self.job, process, &self.label)
+    }
+}
+
 fn assign_process_to_job(
     job: &OwnedHandle,
     process: RawHandle,
