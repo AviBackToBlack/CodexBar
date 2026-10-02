@@ -4,8 +4,8 @@ mod openai_usage_tests;
 pub(crate) mod pace;
 mod quota_block;
 mod status;
-pub use quota_block::MonthlyLimitBlockSnapshot;
 pub(crate) use openai_usage::OpenAiApiUsageSnapshot;
+pub use quota_block::MonthlyLimitBlockSnapshot;
 pub(crate) use status::{compact_tray_status_label, friendly_provider_error};
 
 use super::*;
