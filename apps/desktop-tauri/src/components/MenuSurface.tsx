@@ -1,12 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useLocale } from "../hooks/useLocale";
 
-export interface MenuSurfaceAction {
-  icon: string;
-  title: string;
-  onClick: () => void;
-}
-
 export interface MenuFooterRow {
   icon: string;
   label: string;
@@ -15,13 +9,6 @@ export interface MenuFooterRow {
 }
 
 interface MenuSurfaceProps {
-  variant: "tray" | "popout";
-  /** Optional window chrome (e.g. the PopOut title bar) rendered flush at the
-   *  top. A slot keeps this shared content container free of window APIs. */
-  titleBar?: ReactNode;
-  onRefresh: () => void;
-  isRefreshing: boolean;
-  actions: MenuSurfaceAction[];
   summary?: ReactNode;
   banner?: ReactNode;
   /** Non-button content rendered in the footer nav BEFORE the mapped
@@ -36,7 +23,8 @@ interface MenuSurfaceProps {
 }
 
 /**
- * Flush, compact container that both `TrayPanel` and `PopOutPanel` consume.
+ * Flush, compact container for the tray panel (`TrayPanel`), the only
+ * dashboard layout. It renders in the tray-panel flyout window.
  *
  * Mirrors the upstream macOS `MenuContent`: a narrow VStack(spacing: 8)
  * inside an NSMenu-like popover (310pt wide, vertical 6 / horizontal 10
@@ -44,11 +32,6 @@ interface MenuSurfaceProps {
  * cards (`MenuCard`) — one per enabled provider — exactly like upstream.
  */
 export default function MenuSurface({
-  variant,
-  titleBar,
-  onRefresh,
-  isRefreshing,
-  actions,
   summary,
   banner,
   footerLead,
@@ -58,8 +41,7 @@ export default function MenuSurface({
 }: MenuSurfaceProps) {
   const { t } = useLocale();
   return (
-    <div className={`menu-surface menu-surface--${variant}`} style={style}>
-      {titleBar}
+    <div className="menu-surface menu-surface--tray" style={style}>
       {banner}
       {summary}
       <div className="menu-surface__body">{children}</div>

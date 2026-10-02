@@ -19,6 +19,7 @@ mod surface_target;
 mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
+mod tray_presentation;
 mod tray_visibility;
 mod usage_metric;
 mod window_positioner;
@@ -27,7 +28,6 @@ use std::sync::Mutex;
 
 use state::AppState;
 use surface::SurfaceMode;
-use surface_target::SurfaceTarget;
 use tauri::Manager;
 
 const PROOF_ACTIVATION_DELAY: Duration = Duration::from_millis(0);
@@ -46,12 +46,22 @@ fn should_hide_close_request(mode: SurfaceMode) -> bool {
     )
 }
 
-fn primary_window_request() -> shell::ShellTransitionRequest {
-    shell::ShellTransitionRequest {
-        mode: SurfaceMode::PopOut,
-        target: SurfaceTarget::Dashboard,
-        position: None,
-    }
+/// Open the primary window: the tray-panel flyout, the only dashboard
+/// layout. The legacy PopOut layout on `main` is retired, so launches and
+/// relaunches land on the same panel as a tray left-click.
+///
+/// Spawned because building the flyout window synchronously can deadlock on
+/// Windows (see `shell::flyout_window::open_or_focus`).
+fn open_primary_window(app: &tauri::AppHandle, delay: Duration) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if let Err(error) = shell::flyout_window::open_or_focus(&app, None) {
+            tracing::warn!(%error, "failed to open the tray panel window");
+        }
+    });
 }
 
 fn should_open_primary_window_from_args<I, S>(args: I) -> bool
@@ -131,17 +141,27 @@ fn main() {
 
     let mut initial_state = AppState::new();
     initial_state.proof_config = proof_config;
-    // Proof-harness seed: CODEXBAR_SEED_USAGE_JSON plants one synthetic Codex
-    // ProviderUsageSnapshot before the event loop and any WebView read. The
-    // cache timestamp makes the seeded cache count as fresh so the first
-    // frontend refresh-if-stale call does not evict the synthetic data.
-    if let Some(snapshot) = proof_harness::seed_usage_snapshot_from_env() {
-        tracing::info!(
-            "proof-harness: seeded provider snapshot for '{}'",
-            snapshot.provider_id
-        );
-        initial_state.provider_cache.push(snapshot);
-        initial_state.provider_cache_updated_at = Some(std::time::Instant::now());
+    // Validate the complete proof seed before installing any snapshots, so an
+    // invalid multi-provider fixture cannot leave a partial cache behind.
+    if let Some(snapshots) =
+        proof_harness::seed_usage_snapshots_from_env(initial_state.proof_config.as_ref())
+    {
+        let seeded_at = std::time::Instant::now();
+        for snapshot in &snapshots {
+            tracing::info!(
+                "proof-harness: seeded provider snapshot for '{}'",
+                snapshot.provider_id
+            );
+            if let Some(provider) = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id)
+            {
+                initial_state
+                    .provider_cache_updated_at_by_provider
+                    .insert(provider, seeded_at);
+            }
+        }
+        initial_state.provider_cache.extend(snapshots);
+        initial_state.provider_cache_seeded = true;
+        initial_state.provider_cache_updated_at = Some(seeded_at);
     }
 
     tauri::Builder::default()
@@ -150,9 +170,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if should_reopen_primary_window_from_instance_args(args.iter().skip(1)) {
-                let request = primary_window_request();
-                let _ =
-                    shell::reopen_to_target(app, request.mode, request.target, request.position);
+                open_primary_window(app, Duration::ZERO);
             }
         }))
         .invoke_handler(tauri::generate_handler![
@@ -246,6 +264,7 @@ fn main() {
             commands::get_provider_region_options,
             commands::set_provider_workspace_id,
             commands::set_provider_gateway_url,
+            commands::get_provider_gateway_url,
             commands::get_provider_workspace_id,
             commands::get_gemini_cli_signed_in,
             commands::get_vertexai_status,
@@ -302,17 +321,10 @@ fn main() {
                     proof_harness::activate(&app_handle);
                 });
             } else if launch.open_primary_window_at_start {
-                let app = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(VISIBLE_START_ACTIVATION_DELAY).await;
-                    let request = primary_window_request();
-                    let _ = shell::reopen_to_target(
-                        &app,
-                        request.mode,
-                        request.target,
-                        request.position,
-                    );
-                });
+                if launch.suppress_blur_dismiss {
+                    shell::flyout_window::keep_open_on_blur();
+                }
+                open_primary_window(app.handle(), VISIBLE_START_ACTIVATION_DELAY);
             }
 
             Ok(())
@@ -433,14 +445,6 @@ mod tests {
     #[test]
     fn close_request_leaves_hidden_surface_alone() {
         assert!(!should_hide_close_request(SurfaceMode::Hidden));
-    }
-
-    #[test]
-    fn primary_window_request_targets_popout_dashboard() {
-        let request = primary_window_request();
-        assert_eq!(request.mode, SurfaceMode::PopOut);
-        assert_eq!(request.target, SurfaceTarget::Dashboard);
-        assert_eq!(request.position, None);
     }
 
     #[test]
