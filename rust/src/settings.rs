@@ -641,7 +641,7 @@ fn default_preferred_currency_code() -> String {
 }
 
 fn default_overview_layout() -> String {
-    "compact".to_string()
+    "detailed".to_string()
 }
 
 pub fn normalize_overview_layout(value: &str) -> String {

@@ -246,9 +246,9 @@ export default function MenuCard({
       resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });
   }
-  const visibleMetrics = metrics
-    .filter((metric) => isUsageItemVisible(provider.hiddenUsageItemIds, metric.id))
-    .slice(0, compactOverview ? 2 : metrics.length);
+  const visibleMetrics = metrics.filter((metric) =>
+    isUsageItemVisible(provider.hiddenUsageItemIds, metric.id),
+  );
   // Snapshots are cached across failed refreshes, so monthly-limit blocks are
   // re-checked against the clock and lift when the pool's reset passes.
   const monthlyLimitBlockNow = useMonthlyLimitBlockNow([

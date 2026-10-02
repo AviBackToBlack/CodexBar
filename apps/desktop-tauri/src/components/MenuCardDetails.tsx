@@ -678,7 +678,7 @@ export default function MenuCardDetails({
           ))}
         </section>
       )}
-      {!provider.error && hasDisplayDetails && !compactOverview && (
+      {!provider.error && hasDisplayDetails && (
         displayDetailGroups.map((group) => (
           <section
             className="menu-card__group menu-card__provider-details"
