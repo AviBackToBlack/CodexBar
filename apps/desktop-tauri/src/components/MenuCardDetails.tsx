@@ -31,14 +31,11 @@ import { OpenAIApiUsageChart } from "./OpenAIApiUsageChart";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
 import QuotaBurndownChart from "./QuotaBurndownChart";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
-<<<<<<< HEAD
 import { isMonthlyLimitBlockActive } from "../lib/monthlyLimitBlock";
 import { periodCostLabel, periodTokensLabel } from "../lib/costPeriod";
 import { providerCostPeriodTitle } from "../lib/providerLabels";
 import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
-=======
 import { isDetailSectionVisible } from "../lib/usageItemVisibility";
->>>>>>> origin/port/micro-0.62.0-detail-section-visibility
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
