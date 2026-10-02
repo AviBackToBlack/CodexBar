@@ -7,12 +7,11 @@
 use reqwest::Url;
 use std::path::{Path, PathBuf};
 
-use super::web;
 use super::{
-    FetchContext, KimiCodeApiUsageResponse, KimiProvider, KimiRatioPool, KimiRegion,
-    KimiUsageDetail, ProviderError, UsageSnapshot, ascii_header_value, cleaned_env, cleaned_owned,
-    kimi_window_minutes,
+    FetchContext, KimiCodeApiUsageResponse, KimiProvider, KimiRegion, ProviderError, UsageSnapshot,
+    ascii_header_value, cleaned_env, cleaned_owned, kimi_window_minutes,
 };
+use super::{ratio_pool, web};
 
 const KIMI_CODE_API_KEY_ENV: &str = "KIMI_CODE_API_KEY";
 const KIMI_CODE_BASE_URL_ENV: &str = "KIMI_CODE_BASE_URL";
@@ -126,7 +125,7 @@ pub(super) fn snapshot_from_code_api_response(
         .as_ref()
         .and_then(|pools| pools.session.as_ref())
         .and_then(|pool| {
-            resolved_ratio_window(
+            ratio_pool::resolved_ratio_window(
                 &response,
                 pool,
                 legacy_limit.map(|limit| &limit.detail),
@@ -139,7 +138,7 @@ pub(super) fn snapshot_from_code_api_response(
         .as_ref()
         .and_then(|pools| pools.weekly.as_ref())
         .and_then(|pool| {
-            resolved_ratio_window(
+            ratio_pool::resolved_ratio_window(
                 &response,
                 pool,
                 response.usage.as_ref(),
@@ -189,53 +188,6 @@ pub(super) fn snapshot_from_code_api_response(
     Ok(usage)
 }
 
-/// Resolve a ratio pool while recognizing the mixed legacy response used by
-/// Kimi accounts during the pool migration. A zero ratio is authoritative for
-/// monthly-pool accounts and for any response without matching reliable count
-/// evidence. Only a same-duration, same-reset count window can replace it.
-fn resolved_ratio_window(
-    response: &KimiCodeApiUsageResponse,
-    pool: &KimiRatioPool,
-    detail: Option<&KimiUsageDetail>,
-    window_minutes: u32,
-    count_window_minutes: Option<u32>,
-) -> Option<super::RateWindow> {
-    let ratio_window = pool.rate_window(window_minutes)?;
-    if ratio_window.used_percent != 0.0
-        || response
-            .usages
-            .as_ref()
-            .and_then(|pools| pools.monthly.as_ref())
-            .is_some()
-        || count_window_minutes != Some(window_minutes)
-    {
-        return Some(ratio_window);
-    }
-
-    let Some(detail) = detail else {
-        return Some(ratio_window);
-    };
-    let Some(used) =
-        super::value_as_f64(detail.used.as_ref()).filter(|value| value.is_finite() && *value > 0.0)
-    else {
-        return Some(ratio_window);
-    };
-    let Some(count_window) =
-        KimiProvider::rate_window_from_usage_detail(detail, Some(window_minutes)).ok()
-    else {
-        return Some(ratio_window);
-    };
-    let (Some(count_reset), Some(ratio_reset)) = (count_window.resets_at, ratio_window.resets_at)
-    else {
-        return Some(ratio_window);
-    };
-
-    if (count_reset - ratio_reset).num_milliseconds().abs() <= 2_000 && used > 0.0 {
-        Some(count_window)
-    } else {
-        Some(ratio_window)
-    }
-}
 pub(crate) fn code_api_key(explicit: Option<&str>) -> Result<String, ProviderError> {
     if let Some(key) = explicit.map(str::trim).filter(|key| !key.is_empty()) {
         return Ok(key.to_string());
@@ -545,198 +497,5 @@ mod tests {
             Err(ProviderError::Parse(message))
                 if message.contains("unusable session quota pool")
         ));
-    }
-
-    #[test]
-    fn zero_ratio_placeholders_fall_back_to_matching_legacy_counts() {
-        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
-            "usage": {
-                "limit": "100",
-                "used": "19",
-                "remaining": "81",
-                "resetTime": "2026-09-19T16:45:59.449979Z"
-            },
-            "limits": [{
-                "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
-                "detail": {
-                    "limit": "100",
-                    "used": "1",
-                    "remaining": "99",
-                    "resetTime": "2026-09-19T14:45:59.449979Z"
-                }
-            }],
-            "usages": {
-                "limit_5h": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T14:45:58Z"
-                },
-                "limit_7d": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T16:45:58Z"
-                }
-            }
-        }))
-        .unwrap();
-
-        let snapshot = snapshot_from_code_api_response(response).unwrap();
-        assert_eq!(snapshot.primary.used_percent, 1.0);
-        assert_eq!(snapshot.primary.window_minutes, Some(300));
-        let weekly = snapshot.secondary.expect("weekly count fallback");
-        assert_eq!(weekly.used_percent, 19.0);
-        assert_eq!(weekly.window_minutes, Some(10_080));
-    }
-
-    fn snapshot_with_zero_session_ratio_and_legacy_window(
-        window: Option<serde_json::Value>,
-    ) -> UsageSnapshot {
-        let mut legacy_limit = json!({
-            "detail": {
-                "limit": "100",
-                "used": "1",
-                "resetTime": "2026-09-19T14:45:58Z"
-            }
-        });
-        if let Some(window) = window {
-            legacy_limit["window"] = window;
-        }
-
-        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
-            "limits": [legacy_limit],
-            "usages": {
-                "limit_5h": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T14:45:58Z"
-                },
-                "limit_7d": { "used_ratio": 0 }
-            }
-        }))
-        .expect("fixture parses");
-
-        snapshot_from_code_api_response(response).expect("ratio pools are usable")
-    }
-
-    #[test]
-    fn missing_legacy_window_does_not_override_zero_session_ratio() {
-        let snapshot = snapshot_with_zero_session_ratio_and_legacy_window(None);
-
-        assert_eq!(snapshot.primary.window_minutes, Some(300));
-        assert_eq!(snapshot.primary.used_percent, 0.0);
-    }
-
-    #[test]
-    fn unrecognized_legacy_window_does_not_override_zero_session_ratio() {
-        let snapshot = snapshot_with_zero_session_ratio_and_legacy_window(Some(json!({
-            "duration": 300,
-            "timeUnit": "TIME_UNIT_FORTNIGHT"
-        })));
-
-        assert_eq!(snapshot.primary.window_minutes, Some(300));
-        assert_eq!(snapshot.primary.used_percent, 0.0);
-    }
-
-    #[test]
-    fn zero_ratio_with_different_reset_stays_authoritative() {
-        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
-            "usage": {
-                "limit": "100",
-                "used": "19",
-                "resetTime": "2026-09-19T16:45:59Z"
-            },
-            "limits": [{
-                "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
-                "detail": {
-                    "limit": "100",
-                    "used": "1",
-                    "resetTime": "2026-09-19T14:45:59Z"
-                }
-            }],
-            "usages": {
-                "limit_5h": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T14:46:03Z"
-                },
-                "limit_7d": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T16:46:03Z"
-                }
-            }
-        }))
-        .unwrap();
-
-        let snapshot = snapshot_from_code_api_response(response).unwrap();
-        assert_eq!(snapshot.primary.used_percent, 0.0);
-        assert_eq!(snapshot.secondary.unwrap().used_percent, 0.0);
-    }
-
-    #[test]
-    fn monthly_pool_keeps_zero_ratios_even_with_matching_counts() {
-        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
-            "usage": {
-                "limit": "100",
-                "used": "19",
-                "resetTime": "2026-09-19T16:45:59Z"
-            },
-            "limits": [{
-                "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
-                "detail": {
-                    "limit": "100",
-                    "used": "1",
-                    "resetTime": "2026-09-19T14:45:59Z"
-                }
-            }],
-            "usages": {
-                "limit_5h": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T14:45:58Z"
-                },
-                "limit_7d": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T16:45:58Z"
-                },
-                "limit_month_total": { "used_ratio": 0.0313 }
-            }
-        }))
-        .unwrap();
-
-        let snapshot = snapshot_from_code_api_response(response).unwrap();
-        assert_eq!(snapshot.primary.used_percent, 0.0);
-        assert_eq!(snapshot.secondary.unwrap().used_percent, 0.0);
-        assert!((snapshot.tertiary.unwrap().used_percent - 3.13).abs() < 0.000_001);
-    }
-
-    #[test]
-    fn invalid_legacy_counts_do_not_override_zero_ratio() {
-        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
-            "usage": {
-                "limit": "100",
-                "used": "invalid",
-                "remaining": "99",
-                "resetTime": "2026-09-19T16:45:59Z"
-            },
-            "limits": [{
-                "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
-                "detail": {
-                    "limit": "100",
-                    "used": "-1",
-                    "remaining": "99",
-                    "resetTime": "2026-09-19T14:45:59Z"
-                }
-            }],
-            "usages": {
-                "limit_5h": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T14:45:58Z"
-                },
-                "limit_7d": {
-                    "used_ratio": 0,
-                    "reset_time": "2026-09-19T16:45:58Z"
-                }
-            }
-        }))
-        .unwrap();
-
-        let snapshot = snapshot_from_code_api_response(response).unwrap();
-        assert_eq!(snapshot.primary.used_percent, 0.0);
-        assert_eq!(snapshot.secondary.unwrap().used_percent, 0.0);
     }
 }

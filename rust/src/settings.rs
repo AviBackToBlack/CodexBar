@@ -945,16 +945,16 @@ impl Settings {
         self.provider_configs.entry(id).or_default()
     }
 
-    /// Cookie source for `id`. Kimi follows upstream's automatic default;
-    /// providers with no specific default retain the legacy manual default.
+    /// Cookie source for `id`. Kimi and Charm Hyper follow upstream's
+    /// automatic default; providers with no specific default retain the
+    /// legacy manual default.
     pub fn cookie_source(&self, id: ProviderId) -> &str {
         self.provider_configs
             .get(&id)
             .and_then(|c| c.cookie_source.as_deref())
-            .unwrap_or(if id == ProviderId::Kimi {
-                "auto"
-            } else {
-                DEFAULT_COOKIE_SOURCE
+            .unwrap_or(match id {
+                ProviderId::Kimi | ProviderId::Hyper => "auto",
+                _ => DEFAULT_COOKIE_SOURCE,
             })
     }
 
