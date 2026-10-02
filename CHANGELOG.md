@@ -1,6 +1,68 @@
 # Changelog
 
-## [Windows] 0.61.0 - Unreleased
+## [Windows] 0.70.0 - 2026-10-02
+
+Windows port of upstream CodexBar **0.60.3 → 0.70.0**: every provider, cost/usage, privacy, tray, CLI and reliability port from upstream 0.60.4 through 0.70.0 integrated across the release branch.
+
+### Added
+
+- Providers: port Hyper (session-first Hypercredit balance), GitKraken AI (personal weekly credits and org pool sharing), Bifrost (self-hosted gateway budgets, rate limits and model spend), Atlas Cloud (account USD balance), Aixy (key usage and applicable budgets), ElevenLabs (endpoint override and `XI_API_KEY` alias), Helmcode (reset fallback and tenant dashboard URL), v0 (billing dashboard URL), and Hugging Face (identity cache, billing-permission message, API-only without cookies) ([#619](https://github.com/nesszer/Win-CodexBar/pull/619), [#618](https://github.com/nesszer/Win-CodexBar/pull/618), [#676](https://github.com/nesszer/Win-CodexBar/pull/676), [#661](https://github.com/nesszer/Win-CodexBar/pull/661), [#726](https://github.com/nesszer/Win-CodexBar/pull/726), [#723](https://github.com/nesszer/Win-CodexBar/pull/723), [#724](https://github.com/nesszer/Win-CodexBar/pull/724), [#725](https://github.com/nesszer/Win-CodexBar/pull/725)).
+- Providers: save labeled token accounts for Kimi web sessions, Doubao Ark API keys, and OpenCode Go keys-or-sessions, with per-account source routing and fail-closed credential isolation ([#620](https://github.com/nesszer/Win-CodexBar/pull/620)).
+- Providers: StepFun credit plans with a Credit label and no invented reset; StepFun pricing parity for Sol repricing cutoffs, Cyber rates, and Daybreak aliases ([#710](https://github.com/nesszer/Win-CodexBar/pull/710), [#734](https://github.com/nesszer/Win-CodexBar/pull/734)).
+- Providers: prefer twelve preferred currencies from one shared catalog ([#679](https://github.com/nesszer/Win-CodexBar/pull/679), [#609](https://github.com/nesszer/Win-CodexBar/pull/609)).
+- Providers: Antigravity Gemini 3.1 Pro pricing aliases with effort tiers, priced through the shared models.dev catalog ([#732](https://github.com/nesszer/Win-CodexBar/pull/732)).
+- Providers: Kimi Code API responses that carry only a monthly pool or a partial ratio pool now parse and render correctly ([#730](https://github.com/nesszer/Win-CodexBar/pull/730)).
+- Providers: Kimi web access tokens import from Chromium local storage, including `user-*` profiles, via the shared browser detector ([#649](https://github.com/nesszer/Win-CodexBar/pull/649)).
+- Providers: Venice accepts Clerk session cookies with Bearer auth and falls back per browser for web sessions ([#626](https://github.com/nesszer/Win-CodexBar/pull/626), [#729](https://github.com/nesszer/Win-CodexBar/pull/729)).
+- Providers: OpenRouter diagnostics and Activity summary ([#703](https://github.com/nesszer/Win-CodexBar/pull/703)).
+- Usage & Spend: re-land the daily ledger, capped to the newest 30 rows with a "Show all" expander ([#715](https://github.com/nesszer/Win-CodexBar/pull/715)).
+- Usage & Spend: attribute Nous OpenCodex ledger rows to Nous Portal spend and price unpriced OpenCodex rows by billing route instead of reporting zero ([#682](https://github.com/nesszer/Win-CodexBar/pull/682), [#731](https://github.com/nesszer/Win-CodexBar/pull/731)).
+- Usage & Spend: price Codex Priority turns from local trace evidence, with a historical cutoff so pre-cutover snapshots keep their original rates ([#698](https://github.com/nesszer/Win-CodexBar/pull/698)).
+- Usage & Spend: cost reporting periods — a `CostReportingPeriod` core with range-aware cost scanners, `cost --period` and period-aware serve `/cost`, and a History window setting with period-aware spend surfaces ([#648](https://github.com/nesszer/Win-CodexBar/pull/648), [#653](https://github.com/nesszer/Win-CodexBar/pull/653), [#665](https://github.com/nesszer/Win-CodexBar/pull/665)).
+- Usage & Spend: provider quota burndown charting in the tray panel details ([#739](https://github.com/nesszer/Win-CodexBar/pull/739)).
+- Tray: re-land stranded tray pace colors ([#716](https://github.com/nesszer/Win-CodexBar/pull/716)).
+- Tray: refresh sixteen provider brand accents, dropping the retired Crof entry ([#719](https://github.com/nesszer/Win-CodexBar/pull/719)).
+- Codex: re-land the stranded Codex scanner with OpenCodex numeric parsing and reserve pricing ([#714](https://github.com/nesszer/Win-CodexBar/pull/714)).
+- Integrations: disclose the provider lane label in Settings usage bars and the metric picker ([#738](https://github.com/nesszer/Win-CodexBar/pull/738)).
+
+### Fixed
+
+- Antigravity: honor unusable `ANTIGRAVITY_CLI_PATH` overrides instead of silently discovering another CLI, explain the offline fallback reason, and keep cost follow-ups — lower bounds, withheld reads, and a `--refresh` path for unknown models ([#615](https://github.com/nesszer/Win-CodexBar/pull/615), [#672](https://github.com/nesszer/Win-CodexBar/pull/672), [#706](https://github.com/nesszer/Win-CodexBar/pull/706)).
+- Antigravity: preserve grouped quotas including weekly-only Starter allowances and honor explicit quota-window cadence; usage probes no longer leave MCP server processes behind ([#694](https://github.com/nesszer/Win-CodexBar/pull/694), [#695](https://github.com/nesszer/Win-CodexBar/pull/695)).
+- Claude: scan claude-swap session homes for cost reporting without double counting ([#670](https://github.com/nesszer/Win-CodexBar/pull/670)).
+- Claude: show Web limit reset credits with opt-in retry semantics ([#689](https://github.com/nesszer/Win-CodexBar/pull/689)).
+- Claude: preserve threshold warnings across repeated CLI identity gaps ([#667](https://github.com/nesszer/Win-CodexBar/pull/667)).
+- Claude: replay CLI cursor redraws onto a virtual screen so differential redraws keep unchanged cells ([#633](https://github.com/nesszer/Win-CodexBar/pull/633)).
+- Claude: respect read-only claude-swap adapters by hiding switching and re-authentication actions ([#631](https://github.com/nesszer/Win-CodexBar/pull/631)).
+- Claude: replace unusable `claude setup-token` recovery advice with sign-in guidance and OAuth-override removal instructions ([#742](https://github.com/nesszer/Win-CodexBar/pull/742)).
+- Kimi: give stale CLI credentials clear sign-in guidance and mark windows blocked by an exhausted monthly limit ([#691](https://github.com/nesszer/Win-CodexBar/pull/691), [#697](https://github.com/nesszer/Win-CodexBar/pull/697)).
+- Kimi: check the reset arithmetic before building reset timestamps so oversized dashboard values can no longer abort the refresh ([#740](https://github.com/nesszer/Win-CodexBar/pull/740)).
+- Codex: confirm unused rolling weekly resets and reset the weekly baseline on plan change ([#629](https://github.com/nesszer/Win-CodexBar/pull/629), [#690](https://github.com/nesszer/Win-CodexBar/pull/690)).
+- Codex: retry auth.json publication races ([#688](https://github.com/nesszer/Win-CodexBar/pull/688)).
+- Codex: retain the inherited counter origin for direct fork chains and accept unused Codex analytics dashboard URLs ([#677](https://github.com/nesszer/Win-CodexBar/pull/677), [#627](https://github.com/nesszer/Win-CodexBar/pull/627)).
+- Codex: skip unchanged Codex cost cache rewrites ([#666](https://github.com/nesszer/Win-CodexBar/pull/666)).
+- DeepSeek: read the Chrome `platform.deepseek.com` session and keep the last balance visible through same-session transport failures ([#709](https://github.com/nesszer/Win-CodexBar/pull/709)).
+- GitKraken: honor `Retry-After` on 429 responses ([#727](https://github.com/nesszer/Win-CodexBar/pull/727)).
+- OpenRouter: add API key and Management key guidance ([#686](https://github.com/nesszer/Win-CodexBar/pull/686)).
+- CLI: show a provider history line with provenance and token totals ([#708](https://github.com/nesszer/Win-CodexBar/pull/708)).
+- Privacy: redact stored process environments shown in diagnostics ([#722](https://github.com/nesszer/Win-CodexBar/pull/722)).
+- Runtime: stop the app from stealing focus at launch ([#713](https://github.com/nesszer/Win-CodexBar/pull/713)).
+- Runtime: fix the reset refresh timer for resets more than 24.8 days away ([#720](https://github.com/nesszer/Win-CodexBar/pull/720)).
+- Tray: fix float bar pills for informational metrics ([#733](https://github.com/nesszer/Win-CodexBar/pull/733)).
+- Tray: make the tray panel the default layout ([#712](https://github.com/nesszer/Win-CodexBar/pull/712)).
+- CI: make the bootstrap catalog test hermetic so it no longer reads host settings ([#711](https://github.com/nesszer/Win-CodexBar/pull/711)).
+- CI: keep Codex cost fixtures on the local day to stop the 00:00-01:00 UTC test flake ([#721](https://github.com/nesszer/Win-CodexBar/pull/721)).
+
+### Changed
+
+- Docs: remove the retired Crof provider from the Rust README ([#728](https://github.com/nesszer/Win-CodexBar/pull/728)).
+- Docs: describe the tray-panel-only layout in the Windows docs after the pop-out retirement (glue commit `ed2440c3`).
+
+> Release artifacts are unsigned (SignPath onboarding pending); verify them against the attached `.sha256` sidecar files.
+
+---
+
+## [Windows] 0.61.0 - 2026-09-15
 
 Windows port of upstream CodexBar **0.60.3 → 0.61.0**: new subscription and
 spend providers (Nous Portal, Replicate, CodeRabbit, Muse Code), richer
