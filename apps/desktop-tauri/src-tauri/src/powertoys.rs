@@ -271,7 +271,7 @@ mod tests {
             fetch_duration_ms: None,
             wayfinder_usage: None,
             session_equivalent_forecast: None,
-        quota_burndown: None,
+            quota_burndown: None,
         });
         let value = serde_json::to_value(snapshot).unwrap();
 
