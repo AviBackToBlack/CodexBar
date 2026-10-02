@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { playNotificationSound, quitApp } from "../../../lib/tauri";
+import { getAppInfo, playNotificationSound, quitApp } from "../../../lib/tauri";
+import type { AppInfoBridge } from "../../../types/bridge";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type {
   Language,
@@ -198,6 +199,14 @@ export default function GeneralTab({
     invoke<LanguageOption[]>("get_available_languages")
       .then(setLanguageOptions)
       .catch(() => {}); // graceful fallback to static default
+  }, []);
+
+  const [appVersion, setAppVersion] = useState<AppInfoBridge | null>(null);
+
+  useEffect(() => {
+    getAppInfo()
+      .then(setAppVersion)
+      .catch(() => {}); // version row degrades to absent, never blocks the tab
   }, []);
 
   const handleTestSound = useCallback((event: NotificationSoundEvent) => {
@@ -589,6 +598,21 @@ export default function GeneralTab({
           </div>
         </div>
       </section>}
+
+      {/* ── Running version (upstream 0.64.0 #3806) ─────────────── */}
+      {mode === "general" && appVersion && (
+        <section className="settings-section">
+          <h3 className="settings-section__title">{t("Version")}</h3>
+          <div className="settings-section__group">
+            <Field label={appVersion.name}>
+              <span className="about-version">
+                {appVersion.version}
+                {appVersion.buildNumber !== "dev" && ` (${appVersion.buildNumber})`}
+              </span>
+            </Field>
+          </div>
+        </section>
+      )}
     </>
   );
 }
