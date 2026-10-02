@@ -4,11 +4,12 @@ use super::UsageCommand;
 use super::render::{
     render_brief_text, render_json_result, render_text_error, render_text_with_status,
 };
+use crate::cli::fetch_context::populate_api_region_from_settings;
 use crate::core::{
     ProviderFetchResult, ProviderId, TokenAccountKind, TokenAccountOverride, TokenAccountStore,
     TokenAccountSupport, instantiate_provider,
 };
-use crate::settings::ApiKeys;
+use crate::settings::{ApiKeys, Settings};
 use crate::status::{ProviderStatus as StatusInfo, fetch_provider_status};
 
 pub async fn fetch_provider_text_output(provider_id: ProviderId, command: &UsageCommand) -> String {
@@ -47,6 +48,7 @@ pub async fn fetch_provider_result(
         .then(|| fetch_provider_status(provider_id.cli_name()));
     let mut ctx = command.ctx.clone();
     let account_projected = project_cli_account(provider_id, command.account.as_deref(), &mut ctx)?;
+    populate_api_region_from_settings(provider_id, &Settings::load(), &mut ctx);
     if !account_projected && ctx.api_key.is_none() {
         ctx.api_key = resolve_cli_api_key(provider_id, command.account.as_deref())?;
     }
