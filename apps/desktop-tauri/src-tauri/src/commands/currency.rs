@@ -1,8 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use codexbar::currency::{
-    PreferredCurrency, SUPPORTED_CURRENCY_CODES, convert_amount, fetch_exchange_rates,
-    sanitize_rates,
+    CURRENCIES, PreferredCurrency, convert_amount, fetch_exchange_rates, sanitize_rates,
 };
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -91,7 +90,7 @@ pub async fn get_currency_rates(
 
     Ok(CurrencyRatesSnapshot {
         rates: state.rates.clone(),
-        supported_codes: SUPPORTED_CURRENCY_CODES.to_vec(),
+        supported_codes: CURRENCIES.iter().map(|c| c.code).collect(),
         preferred_code: preferred.raw(),
     })
 }
@@ -184,16 +183,15 @@ fn persist_rates(cached: &PersistedRates) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codexbar::currency::FALLBACK_RATES;
 
     #[test]
     fn fallback_table_covers_every_preferred_currency() {
         let rates = codexbar::currency::fallback_rates();
-        assert_eq!(rates.len(), FALLBACK_RATES.len());
-        for code in SUPPORTED_CURRENCY_CODES {
+        assert_eq!(rates.len(), CURRENCIES.len());
+        for currency in CURRENCIES {
             assert!(
                 rates
-                    .get(*code)
+                    .get(currency.code)
                     .is_some_and(|rate| rate.is_finite() && *rate > 0.0)
             );
         }
@@ -222,7 +220,7 @@ mod tests {
         let rates = merged_rates(Some(&cached));
         assert_eq!(rates.get("TRY"), Some(&40.0));
         // Unsupported codes in the cache never widen the table.
-        assert_eq!(rates.len(), FALLBACK_RATES.len());
+        assert_eq!(rates.len(), CURRENCIES.len());
     }
 
     #[test]

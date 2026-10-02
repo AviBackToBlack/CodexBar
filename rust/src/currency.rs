@@ -99,9 +99,9 @@ impl PreferredCurrency {
             return Self::Auto;
         }
         Self::Code(
-            SUPPORTED_CURRENCY_CODES
+            CURRENCIES
                 .iter()
-                .copied()
+                .map(|currency| currency.code)
                 .find(|supported| *supported == code)
                 .unwrap_or("USD"),
         )
@@ -134,12 +134,12 @@ pub fn normalize_preferred_currency(value: &str) -> String {
 /// without a correct USD pivot is unusable for conversion.
 pub fn sanitize_rates(rates: &HashMap<String, f64>) -> HashMap<String, f64> {
     let mut clean = HashMap::new();
-    for code in SUPPORTED_CURRENCY_CODES {
-        if let Some(rate) = rates.get(*code).copied()
+    for currency in CURRENCIES {
+        if let Some(rate) = rates.get(currency.code).copied()
             && rate.is_finite()
             && rate > 0.0
         {
-            clean.insert((*code).to_string(), rate);
+            clean.insert(currency.code.to_string(), rate);
         }
     }
     if clean
