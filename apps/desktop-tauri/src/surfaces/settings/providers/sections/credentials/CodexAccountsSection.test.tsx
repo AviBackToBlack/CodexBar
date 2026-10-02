@@ -84,7 +84,7 @@ describe("CodexAccountsSection", () => {
     expect(screen.getAllByText("CodexAccountsReauthenticateButton")).toHaveLength(1);
   });
 
-  it("redacts the ambient row while preserving the managed row when privacy is on", async () => {
+  it("redacts every row (ambient + managed) when privacy is on", async () => {
     const ambient = account("ambient", {
       source: "ambient",
       nickname: "Private System Name",
@@ -106,8 +106,12 @@ describe("CodexAccountsSection", () => {
 
     render(<CodexAccountsSection t={t} hidePersonalInfo />);
     await screen.findByText("Account 1");
-    expect(screen.queryByText(/system@example\.com|Private System Name/)).toBeNull();
-    expect(screen.getByText("work@example.com — Work")).toBeDefined();
+    // Upstream 0.60.5 #3702 (141ecf642): every account is redacted, not only
+    // ambient ones — managed accounts get the generic label too.
+    expect(screen.getByText("Account 2")).toBeDefined();
+    expect(
+      screen.queryByText(/system@example\.com|work@example\.com|Private System Name|Work/),
+    ).toBeNull();
     expect(screen.getByText("CodexAccountsSourceAmbient")).toBeDefined();
     expect(screen.getByText("CodexAccountsSourceManaged")).toBeDefined();
   });

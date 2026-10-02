@@ -202,7 +202,7 @@ describe("CodexAccountsMenu", () => {
     expect(tauriMocks.codexAccountSwitch).toHaveBeenCalledWith("2");
     expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
   });
-  it("uses an opaque ordinal only for the ambient account while hideEmail is on", async () => {
+  it("uses an opaque ordinal for every account while hideEmail is on", async () => {
     const { container: hidden } = renderMenu(true, {
       accounts: [account("1", { source: "ambient" }), account("2")],
       accountOrdinals: { "1": 1, "2": 2 },
@@ -213,6 +213,8 @@ describe("CodexAccountsMenu", () => {
         hidden.querySelectorAll(".codex-menu-accounts__email").length,
       ).toBe(2);
     });
+    // Upstream 0.60.5 #3702 (141ecf642): every account is redacted, not only
+    // ambient ones — managed accounts get the generic label too.
     const ambientLabel = hidden.querySelectorAll(
       ".codex-menu-accounts__email",
     )[0] as HTMLElement;
@@ -221,10 +223,12 @@ describe("CodexAccountsMenu", () => {
     expect(ambientLabel.firstChild?.textContent).not.toContain("@");
     expect(ambientLabel.firstChild?.textContent).not.toContain("example.com");
 
-    const managedEmail = hidden.querySelectorAll(
+    const managedLabel = hidden.querySelectorAll(
       ".codex-menu-accounts__email",
     )[1] as HTMLElement;
-    expect(managedEmail.textContent).toBe("user-2@example.com");
+    expect(managedLabel.getAttribute("title")).toBe("Account 2");
+    expect(managedLabel.textContent).toBe("Account 2");
+    expect(managedLabel.textContent).not.toContain("user-2@example.com");
     const switches = hidden.querySelectorAll(
       ".codex-menu-accounts__switch",
     ) as NodeListOf<HTMLButtonElement>;
@@ -247,7 +251,7 @@ describe("CodexAccountsMenu", () => {
     expect(rawEmail.getAttribute("title")).toBe("user-2@example.com");
   });
 
-  it("uses canonical opaque ordinals supplied by the account bridge", async () => {
+  it("uses canonical opaque ordinals for every account supplied by the bridge", async () => {
     const first = account("uuid-b", {
       emailHint: "alice@example.com",
       nickname: "team@example.com",
@@ -263,12 +267,16 @@ describe("CodexAccountsMenu", () => {
       accountOrdinals: { "uuid-b": 2, "uuid-a": 1 },
       snapshots: {},
     });
+    // Upstream 0.60.5 #3702 (141ecf642): every account is redacted, not only
+    // ambient ones — managed accounts get the generic label too.
     await screen.findByText("Account 2");
+    await screen.findByText("Account 1");
     const labels = container.querySelectorAll(".codex-menu-accounts__email");
     expect(labels[0].firstChild?.textContent).toBe("Account 2");
-    expect(labels[1].textContent).toBe("bob@example.com — Private workspace");
+    expect(labels[1].textContent).toBe("Account 1");
     expect(labels[0].firstChild?.textContent).not.toContain("@");
-    expect(labels[1].textContent).toContain("Private workspace");
+    expect(labels[1].textContent).not.toContain("bob@example.com");
+    expect(labels[1].textContent).not.toContain("Private workspace");
   });
 });
 
