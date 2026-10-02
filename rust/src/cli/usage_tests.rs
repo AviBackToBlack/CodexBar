@@ -403,7 +403,6 @@ fn json_inventory_is_additive_and_contains_no_redemption_token() {
     );
 }
 
-
 fn history_output(cost: CostSnapshot) -> String {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(cost);
     render_text_with_status(ProviderId::OpenRouter, &result, None, false)
