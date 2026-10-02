@@ -1549,6 +1549,7 @@ mod reset_backfill_tests {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             description_is_detail: false,
+            monthly_limit_block: None,
         }
     }
     fn codex_snapshot(primary: RateWindowSnapshot) -> ProviderUsageSnapshot {
@@ -1581,6 +1582,7 @@ mod reset_backfill_tests {
             wayfinder_usage: None,
             open_ai_api_usage: None,
             session_equivalent_forecast: None,
+            quota_burndown: None,
         }
     }
     #[test]
@@ -1589,7 +1591,7 @@ mod reset_backfill_tests {
         let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
         let cached = codex_snapshot(win(50.0, Some(&future)));
         let mut fresh = codex_snapshot(win(30.0, None));
-        codex_reset_backfill(&mut fresh, Some(&cached));
+        reset_backfill::codex_reset_backfill(&mut fresh, Some(&cached));
         assert_eq!(fresh.primary.resets_at.as_deref(), Some(future.as_str()));
         // used_percent is NOT overwritten.
         assert!((fresh.primary.used_percent - 30.0).abs() < f64::EPSILON);
@@ -1600,7 +1602,7 @@ mod reset_backfill_tests {
         let past = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
         let cached = codex_snapshot(win(50.0, Some(&past)));
         let mut fresh = codex_snapshot(win(30.0, None));
-        codex_reset_backfill(&mut fresh, Some(&cached));
+        reset_backfill::codex_reset_backfill(&mut fresh, Some(&cached));
         assert!(
             fresh.primary.resets_at.is_none(),
             "stale reset not backfilled"
@@ -1613,7 +1615,7 @@ mod reset_backfill_tests {
         let future2 = (chrono::Utc::now() + chrono::Duration::hours(5)).to_rfc3339();
         let cached = codex_snapshot(win(50.0, Some(&future2)));
         let mut fresh = codex_snapshot(win(30.0, Some(&future1)));
-        codex_reset_backfill(&mut fresh, Some(&cached));
+        reset_backfill::codex_reset_backfill(&mut fresh, Some(&cached));
         assert_eq!(fresh.primary.resets_at.as_deref(), Some(future1.as_str()));
     }
     #[test]
@@ -1623,7 +1625,7 @@ mod reset_backfill_tests {
         cached.provider_id = "claude".into();
         let mut fresh = codex_snapshot(win(30.0, None));
         fresh.provider_id = "claude".into();
-        codex_reset_backfill(&mut fresh, Some(&cached));
+        reset_backfill::codex_reset_backfill(&mut fresh, Some(&cached));
         assert!(fresh.primary.resets_at.is_none(), "non-codex skip");
     }
     #[test]
@@ -1638,7 +1640,7 @@ mod reset_backfill_tests {
             let mut fresh = codex_snapshot(win(30.0, None));
             fresh.provider_id = "zai".into();
             fresh.primary.reset_description = Some("5-hour".into());
-            codex_reset_backfill(&mut fresh, Some(&cached));
+            reset_backfill::codex_reset_backfill(&mut fresh, Some(&cached));
             assert_eq!(fresh.primary.resets_at.is_some(), should_backfill);
             assert!((fresh.primary.used_percent - 30.0).abs() < f64::EPSILON);
         }
@@ -1646,7 +1648,7 @@ mod reset_backfill_tests {
     #[test]
     fn f6_skips_when_no_cached_snapshot() {
         let mut fresh = codex_snapshot(win(30.0, None));
-        codex_reset_backfill(&mut fresh, None);
+        reset_backfill::codex_reset_backfill(&mut fresh, None);
         assert!(fresh.primary.resets_at.is_none());
     }
 }

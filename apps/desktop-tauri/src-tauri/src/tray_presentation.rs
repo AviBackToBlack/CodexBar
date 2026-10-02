@@ -364,7 +364,7 @@ fn pick_stacked_tray_providers<'a>(
     Some((top, bottom))
 }
 
-fn pick_tray_provider<'a>(
+pub(crate) fn pick_tray_provider<'a>(
     healthy: &[&'a ProviderUsageSnapshot],
     prefer_highest: bool,
 ) -> Option<&'a ProviderUsageSnapshot> {
@@ -380,7 +380,7 @@ fn pick_tray_provider<'a>(
     }
 }
 
-fn selected_tray_percents(
+pub(crate) fn selected_tray_percents(
     snapshot: &ProviderUsageSnapshot,
     settings: &Settings,
 ) -> (f64, Option<f64>) {

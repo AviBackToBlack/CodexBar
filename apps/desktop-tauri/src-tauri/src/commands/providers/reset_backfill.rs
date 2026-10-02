@@ -111,6 +111,7 @@ mod tests {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             monthly_limit_block: None,
+            description_is_detail: false,
         }
     }
 
@@ -143,6 +144,7 @@ mod tests {
             fetch_duration_ms: None,
             wayfinder_usage: None,
             quota_burndown: None,
+            open_ai_api_usage: None,
             session_equivalent_forecast: None,
         }
     }

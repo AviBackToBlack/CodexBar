@@ -531,7 +531,13 @@ fn build_native_menu_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::{self, CurrencyRateCache};
     use crate::surface::SurfaceMode;
+    use crate::tray_presentation::{
+        codex_lane_headline_window, pick_tray_provider, selected_tray_percents,
+    };
+    use codexbar::core::ProviderId;
+    use codexbar::settings::{MetricPreference, TrayIconMode};
 
     fn sample_provider_catalog() -> Vec<ProviderCatalogEntry> {
         vec![
@@ -789,6 +795,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
                 description_is_detail: false,
+                monthly_limit_block: None,
             },
         }
     }
@@ -816,71 +823,6 @@ mod tests {
         let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![];
         assert!(pick_tray_provider(&refs, true).is_none());
         assert!(pick_tray_provider(&refs, false).is_none());
-    }
-    #[test]
-    fn status_labels_per_provider_mode_lists_each_healthy_provider() {
-        let settings = Settings {
-            tray_icon_mode: TrayIconMode::PerProvider,
-            provider_order: codexbar::settings::normalize_provider_order(&[
-                "claude".to_string(),
-                "codex".to_string(),
-            ]),
-            ..Settings::default()
-        };
-        let snapshots = vec![
-            fake_snapshot("codex", "Codex", 30.0),
-            fake_snapshot("claude", "Claude", 72.0),
-        ];
-        let labels = status_labels_for_settings(
-            &settings,
-            &snapshots,
-            codexbar::settings::Language::English,
-        );
-        assert_eq!(
-            labels,
-            vec![
-                ("claude".to_string(), "Claude 72%".to_string()),
-                ("codex".to_string(), "Codex 30%".to_string()),
-            ]
-        );
-    }
-    #[test]
-    fn status_labels_single_mode_collapses_to_selected_provider() {
-        let settings = Settings {
-            tray_icon_mode: TrayIconMode::Single,
-            menu_bar_shows_highest_usage: true,
-            ..Settings::default()
-        };
-        let snapshots = vec![
-            fake_snapshot("codex", "Codex", 30.0),
-            fake_snapshot("claude", "Claude", 72.0),
-        ];
-        let labels = status_labels_for_settings(
-            &settings,
-            &snapshots,
-            codexbar::settings::Language::English,
-        );
-        assert_eq!(
-            labels,
-            vec![("status_summary".to_string(), "Claude 72%".to_string())]
-        );
-    }
-    #[test]
-    fn tray_icon_renderer_uses_percent_mode_when_enabled() {
-        let bar_settings = Settings {
-            menu_bar_shows_percent: false,
-            ..Settings::default()
-        };
-        let percent_settings = Settings {
-            menu_bar_shows_percent: true,
-            ..Settings::default()
-        };
-        let (bar, bar_w, bar_h) =
-            render_tray_icon_for_settings(&bar_settings, 72.0, Some(40.0), false);
-        let (percent, pct_w, pct_h) =
-            render_tray_icon_for_settings(&percent_settings, 72.0, Some(40.0), false);
-        assert_eq!((bar_w, bar_h), (pct_w, pct_h));
-        assert_ne!(bar, percent);
     }
     #[test]
     fn tooltip_uses_compact_status_labels() {
@@ -1154,6 +1096,7 @@ mod tests {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             description_is_detail: false,
+            monthly_limit_block: None,
         });
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
         assert_eq!(primary, 22.0);
@@ -1193,6 +1136,7 @@ mod tests {
             reserve_will_last_to_reset: false,
             reserve_eta_seconds: None,
             description_is_detail: false,
+            monthly_limit_block: None,
         });
         snapshot.extra_rate_windows.push(fake_extra_window(90.0));
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
