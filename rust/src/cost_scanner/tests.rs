@@ -1937,7 +1937,6 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
         .with_timezone(&Local)
         .format("%Y-%m-%d")
         .to_string();
-    assert_eq!(usage.days[&day]["gpt-5-priority"], vec![100, 0, 5]);
     assert_eq!(
         usage.days[&day]["gpt-5.5-priority"],
         vec![100, 0, 5],

@@ -266,8 +266,8 @@ fn gpt55_priority_turn_uses_priority_rates() {
 
 #[test]
 fn gpt56_priority_turn_doubles_the_standard_brief_rate() {
-    // Upstream seeds models.dev with the brief's gpt-5.6-sol rates; the
-    // built-in table already carries the same 5/0.5/30 per-million rates.
+    // The built-in table carries the post-repricing 4/0.4/20 per-million
+    // Sol rates (the brief's 5/0.5/30 rates now apply only before 2026-08-21).
     let env = Env::new();
     priority_session(&env, "gpt-5.6-sol", 100_000, 20_000, 20_000);
     let db = env.create_db();
@@ -275,9 +275,9 @@ fn gpt56_priority_turn_doubles_the_standard_brief_rate() {
 
     let (summary, _, _) = env.scan(CostScanOptions::app_driven(), &db.path);
 
-    // The brief's Standard total is $1.01; API Fast is 2x for GPT-5.6.
-    assert_exact_cost(summary.by_speed["fast"], 2.02);
-    assert_exact_cost(summary.by_model["gpt-5.6-sol-priority"], 2.02);
+    // Standard total $0.728; API Fast is 2x for GPT-5.6.
+    assert_exact_cost(summary.by_speed["fast"], 1.456);
+    assert_exact_cost(summary.by_model["gpt-5.6-sol-priority"], 1.456);
 }
 
 #[test]
@@ -524,9 +524,9 @@ fn long_context_rows_use_long_rates_and_short_priority_rows_use_fast_rates() {
 
     let (summary, _, _) = env.scan(CostScanOptions::app_driven(), &db.path);
 
-    let standard_turn = 272_001.0 * 1e-5 + 10.0 * 4.5e-5;
-    let standard_first_row = 300_000.0 * 1e-5 + 5.0 * 4.5e-5;
-    let priority_second_row = (100_001.0 * 5e-6 + 5.0 * 3e-5) * 2.0;
+    let standard_turn = 272_001.0 * 8e-6 + 10.0 * 3e-5;
+    let standard_first_row = 300_000.0 * 8e-6 + 5.0 * 3e-5;
+    let priority_second_row = (100_001.0 * 4e-6 + 5.0 * 2e-5) * 2.0;
     assert_cost(
         summary.total_cost_usd,
         standard_turn + standard_first_row + priority_second_row,
@@ -543,7 +543,7 @@ fn gpt56_long_context_priority_row_keeps_the_long_base_cost() {
 
     let (summary, _, _) = env.scan(CostScanOptions::app_driven(), &db.path);
 
-    let expected = 172_001.0 * 1e-5 + 100_000.0 * 1e-6 + 5.0 * 4.5e-5;
+    let expected = 172_001.0 * 8e-6 + 100_000.0 * 8e-7 + 5.0 * 3e-5;
     assert_cost(summary.total_cost_usd, expected);
     assert_cost(summary.by_model["gpt-5.6-sol"], expected);
     assert!(!summary.by_speed.contains_key("fast"));
