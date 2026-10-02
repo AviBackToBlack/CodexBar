@@ -495,22 +495,6 @@ fn history_fields_do_not_change_the_cost_json_contract() {
     assert!(!cost.contains_key("provenance"));
 }
 
-#[test]
-fn history_fields_do_not_change_the_cost_json_contract() {
-    use crate::spend_contract::CostProvenance;
-
-    let result = fetch_result(UsageSnapshot::new(RateWindow::new(0.0))).with_cost(
-        CostSnapshot::new(1.25, "USD", "Last 30 days (UTC)")
-            .with_history_tokens(15)
-            .with_provenance(CostProvenance::VendorMetered)
-            .always_visible(),
-    );
-    let json = render_json_result(ProviderId::OpenRouter, result, None);
-    let cost = json.get("cost").and_then(|cost| cost.as_object()).unwrap();
-    assert!(!cost.contains_key("historyTokens") && !cost.contains_key("history_tokens"));
-    assert!(!cost.contains_key("provenance"));
-}
-
 fn detail_window(used: f64, detail: &str, resets_at: Option<chrono::DateTime<Utc>>) -> RateWindow {
     RateWindow::with_details(used, None, resets_at, Some(detail.to_string()))
         .with_description_as_detail()
