@@ -63,6 +63,8 @@ struct QuotaSummaryBucket {
     remaining: Option<QuotaSummaryRemaining>,
     #[serde(alias = "reset_time")]
     reset_time: Option<String>,
+    /// Explicit cadence (`weekly`, `5h`, ...). When non-empty it replaces the id/name candidates.
+    window: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,14 +333,16 @@ fn group_scope(group: &QuotaSummaryGroup) -> String {
 }
 
 fn bucket_kind(bucket: &QuotaSummaryBucket) -> BucketKind {
+    // An explicit, non-empty `window` replaces the id/name candidates entirely.
+    let raw_candidates = match non_empty(bucket.window.as_deref()) {
+        Some(window) => [Some(window), None],
+        None => [
+            bucket.bucket_id.as_deref().or(bucket.id.as_deref()),
+            bucket.display_name.as_deref().or(bucket.name.as_deref()),
+        ],
+    };
     let mut candidates = Vec::new();
-    for raw in [
-        bucket.bucket_id.as_deref().or(bucket.id.as_deref()),
-        bucket.display_name.as_deref().or(bucket.name.as_deref()),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    for raw in raw_candidates.into_iter().flatten() {
         let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
         if normalized.is_empty() {
             continue;
@@ -596,6 +600,75 @@ mod tests {
                 br#"{"status":"SUCCESS","command":{"name":"models","data":{"groups":[]}}}"#
             )
             .is_err()
+        );
+    }
+
+    fn single_bucket_snapshot(bucket_id: &str, display_name: &str, window: &str) -> UsageSnapshot {
+        let data = format!(
+            r#"{{"groups":[{{"displayName":"Gemini Models","buckets":[
+              {{"bucketId":"{bucket_id}","displayName":"{display_name}","window":"{window}","remainingFraction":0.8}}
+            ]}}]}}"#
+        );
+        parse_usage_snapshot(data.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn explicit_window_sets_cadence_for_opaque_bucket_ids() {
+        let weekly = single_bucket_snapshot("gemini-allowance", "Limit Remaining", "weekly");
+        assert_eq!(
+            weekly.secondary.unwrap().window_minutes,
+            Some(WEEKLY_MINUTES)
+        );
+        assert!(weekly.primary.is_informational);
+
+        let session = single_bucket_snapshot("gemini-allowance", "Limit Remaining", "5h");
+        assert_eq!(session.primary.window_minutes, Some(SESSION_MINUTES));
+    }
+
+    #[test]
+    fn explicit_window_replaces_legacy_bucket_names() {
+        let weekly = single_bucket_snapshot("gemini-5h", "Five Hour Limit", "weekly");
+        assert_eq!(
+            weekly.secondary.unwrap().window_minutes,
+            Some(WEEKLY_MINUTES)
+        );
+        assert!(weekly.extra_rate_windows.is_empty());
+        assert!(weekly.primary.is_informational);
+
+        let unknown = single_bucket_snapshot("gemini-5h", "Five Hour Limit", "unknown");
+        assert!(unknown.secondary.is_none());
+        assert!(unknown.primary.is_informational);
+        assert_eq!(unknown.extra_rate_windows.len(), 1);
+        assert_eq!(unknown.extra_rate_windows[0].window.window_minutes, None);
+    }
+
+    #[test]
+    fn blank_explicit_window_falls_back_to_bucket_names() {
+        let data = br#"{"groups":[{"displayName":"Gemini","buckets":[
+          {"bucketId":"gemini-5h","displayName":"Five Hour Limit","window":"  ","remainingFraction":0.5}
+        ]}]}"#;
+        let snapshot = parse_usage_snapshot(data).unwrap();
+        assert_eq!(snapshot.primary.window_minutes, Some(SESSION_MINUTES));
+    }
+
+    #[test]
+    fn weekly_only_starter_groups_stay_visible_without_a_five_hour_window() {
+        let data = br#"{"groups":[
+          {"displayName":"Gemini Models","buckets":[
+            {"bucketId":"gemini-weekly","displayName":"Weekly Limit","window":"weekly","remainingFraction":1.0}]},
+          {"displayName":"Claude and GPT models","buckets":[
+            {"bucketId":"3p-weekly","displayName":"Weekly Limit","window":"weekly","remainingFraction":1.0}]}
+        ]}"#;
+        let snapshot = parse_usage_snapshot(data).unwrap();
+        assert!(snapshot.primary.is_informational);
+        let secondary = snapshot.secondary.as_ref().unwrap();
+        assert_eq!(secondary.window_minutes, Some(WEEKLY_MINUTES));
+        assert_eq!(snapshot.secondary_label.as_deref(), Some("Gemini Weekly"));
+        assert_eq!(snapshot.extra_rate_windows.len(), 1);
+        assert_eq!(snapshot.extra_rate_windows[0].title, "Claude/GPT weekly");
+        assert_eq!(
+            snapshot.extra_rate_windows[0].window.window_minutes,
+            Some(WEEKLY_MINUTES)
         );
     }
 }
