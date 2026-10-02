@@ -1310,6 +1310,7 @@ fn provider_inventory_maps_to_the_bridge_without_token_ids() {
     .with_display_detail(
         ProviderDisplayDetail::new("credits", "Used this cycle", "12")
             .and_then(|row| row.with_secondary_value("Monthly refill: 100"))
+            .and_then(|row| row.with_section_title("Credit usage"))
             .and_then(|row| row.with_progress(12.0, 100.0)),
     );
     let metadata = instantiate_provider(ProviderId::Grok).metadata().clone();
@@ -1324,6 +1325,15 @@ fn provider_inventory_maps_to_the_bridge_without_token_ids() {
     );
     assert_eq!(snapshot.display_details.len(), 1);
     assert_eq!(snapshot.display_details[0].value, "12");
+    assert_eq!(
+        snapshot.display_details[0].section_title.as_deref(),
+        Some("Credit usage")
+    );
+    let snapshot_json = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        snapshot_json["displayDetails"][0]["sectionTitle"],
+        "Credit usage"
+    );
     assert_eq!(
         snapshot.display_details[0].secondary_value.as_deref(),
         Some("Monthly refill: 100")

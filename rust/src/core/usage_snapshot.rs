@@ -785,6 +785,24 @@ mod tests {
     }
 
     #[test]
+    fn display_details_validate_optional_section_titles() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        let row = ProviderDisplayDetail::new("budget", "Project", "$10 remaining")
+            .and_then(|row| row.with_section_title("Applicable budgets"));
+        let result = ProviderFetchResult::new(usage, "api").with_display_detail(row);
+
+        assert_eq!(
+            result.display_details()[0].section_title(),
+            Some("Applicable budgets")
+        );
+        assert!(
+            ProviderDisplayDetail::new("budget", "Project", "$10")
+                .and_then(|row| row.with_section_title("\n"))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn cost_snapshot_ignores_non_finite_values() {
         let cost = CostSnapshot::new(f64::NAN, "USD", "Monthly").with_limit(f64::INFINITY);
 

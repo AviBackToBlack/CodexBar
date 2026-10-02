@@ -21,6 +21,7 @@ import deepgram from "./icons/ProviderIcon-deepgram.svg?raw";
 import deepinfra from "./icons/ProviderIcon-deepinfra.svg?raw";
 import fireworks from "./icons/ProviderIcon-fireworks.svg?raw";
 import aiand from "./icons/ProviderIcon-aiand.svg?raw";
+import aixy from "./icons/ProviderIcon-aixy.svg?raw";
 import clinepass from "./icons/ProviderIcon-clinepass.svg?raw";
 import longcat from "./icons/ProviderIcon-longcat.svg?raw";
 import neuralwatt from "./icons/ProviderIcon-neuralwatt.svg?raw";
@@ -109,6 +110,7 @@ const RAW: Record<string, string> = {
   deepinfra: tint(deepinfra),
   fireworks: tint(fireworks),
   aiand: tint(aiand),
+  aixy: tint(aixy),
   clinepass: tint(clinepass),
   longcat: tint(longcat),
   neuralwatt: tint(neuralwatt),
@@ -188,6 +190,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   grok:        { id: "grok",        brandColor: "#111827", fallbackLetter: "G", svgPath: RAW.grok },
   groq:        { id: "groq",        brandColor: "#f55036", fallbackLetter: "G", svgPath: RAW.groq },
   bifrost:     { id: "bifrost",     brandColor: "#33c09e", fallbackLetter: "B" },
+  aixy:        { id: "aixy",        brandColor: "#123650", fallbackLetter: "A", svgPath: RAW.aixy },
   gitkraken:   { id: "gitkraken",   brandColor: "#179287", fallbackLetter: "G" },
   huggingface: { id: "huggingface", brandColor: "#ffd21e", fallbackLetter: "H", svgPath: RAW.huggingface },
   hyper:       { id: "hyper",       brandColor: "#ff60ff", fallbackLetter: "H" },

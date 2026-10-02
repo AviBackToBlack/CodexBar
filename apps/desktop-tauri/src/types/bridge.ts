@@ -667,6 +667,7 @@ export interface ProviderDisplayProgress {
 /** Transient provider detail row; it is display-only and never quota math. */
 export interface ProviderDisplayDetail {
   id: string;
+  sectionTitle: string | null;
   title: string;
   value: string;
   secondaryValue: string | null;

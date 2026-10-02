@@ -47,7 +47,10 @@ import { AccentColorSection } from "./sections/AccentColorSection";
 import { ProviderIssueNotice } from "./sections/ProviderIssueNotice";
 import { CredentialStorageSection } from "./sections/CredentialStorageSection";
 import { CredentialsDispatcher } from "./sections/CredentialsDispatcher";
-import { WayfinderGatewaySection } from "./sections/WayfinderGatewaySection";
+import {
+  isGatewayProviderId,
+  WayfinderGatewaySection,
+} from "./sections/WayfinderGatewaySection";
 import { AzureApiVersionSection } from "./sections/AzureApiVersionSection";
 
 interface Props {
@@ -145,9 +148,8 @@ export function ProviderDetailPane({
     }
   }, []);
 
-  const gatewayProviderId = providerId === "wayfinder" || providerId === "bifrost"
-    ? providerId
-    : null;
+  const gatewayProviderId =
+    providerId !== null && isGatewayProviderId(providerId) ? providerId : null;
 
   useEffect(() => {
     setGatewayLoadedProviderId(null);
@@ -345,9 +347,10 @@ export function ProviderDetailPane({
         t={t}
         onChanged={reload}
       />
-      {(detail.id === "wayfinder" || detail.id === "bifrost") &&
+      {isGatewayProviderId(detail.id) &&
         gatewayLoadedProviderId === detail.id && (
         <WayfinderGatewaySection
+          providerId={detail.id}
           draft={gatewayDraft}
           error={gatewayError}
           busy={busy}
@@ -357,7 +360,6 @@ export function ProviderDetailPane({
           }
           onSave={() => void saveGateway()}
           t={t}
-          bifrost={detail.id === "bifrost"}
         />
       )}
       <MenuBarMetricSection

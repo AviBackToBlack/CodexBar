@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode, Url};
 use serde_json::Value;
-use std::{net::IpAddr, time::Duration};
+use std::time::Duration;
 
 use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderDisplayDetail, ProviderError,
@@ -227,19 +227,7 @@ pub fn validate_gateway_url(raw: &str) -> Result<(), ProviderError> {
 }
 
 fn is_private_http_host(host: &str) -> bool {
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
-        return true;
-    }
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let Ok(ip) = host.parse::<IpAddr>() else {
-        return false;
-    };
-    match ip {
-        IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
-        IpAddr::V6(ip) => {
-            ip.is_loopback() || ip.is_unique_local() || (ip.segments()[0] & 0xffc0) == 0xfe80
-        }
-    }
+    crate::providers::is_private_network_host(host)
 }
 
 fn parse_usage(value: &Value, now: DateTime<Utc>) -> Result<ParsedUsage, ProviderError> {

@@ -353,8 +353,11 @@ pub(crate) fn build_fetch_context(
 
     let workspace_id = settings.workspace_id(id).trim().to_string();
     let api_region = settings.api_region(id).trim().to_string();
-    let gateway_url = (id == ProviderId::Wayfinder && !settings.gateway_url(id).is_empty())
-        .then(|| settings.gateway_url(id).to_string());
+    // Every gateway-style provider (Wayfinder, Bifrost, Aixy) stores its base
+    // URL here; providers without one report an empty string.
+    let gateway_url = Some(settings.gateway_url(id))
+        .filter(|url| !url.is_empty())
+        .map(str::to_owned);
     // Local-first Auto providers (OpenCode Go) flip to web-first when a
     // token account or manual cookie source scopes the session to web creds.
     let auto_prefer_web = token_override.is_some() || cookie_source == "manual";

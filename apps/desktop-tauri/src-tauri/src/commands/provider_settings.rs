@@ -402,14 +402,47 @@ mod tests {
     }
 
     #[test]
+    fn fetch_context_carries_saved_gateway_urls_for_every_gateway_provider() {
+        use codexbar::settings::{ApiKeys, ManualCookies, Settings};
+        use std::collections::HashMap;
+
+        let mut settings = Settings::default();
+        for (id, url) in [
+            (ProviderId::Wayfinder, "http://localhost:8787"),
+            (ProviderId::Bifrost, "https://bifrost.example.com"),
+            (ProviderId::Aixy, "https://aixy.example.com/prefix"),
+        ] {
+            settings.set_gateway_url(id, url);
+            let ctx = super::super::providers::build_fetch_context(
+                id,
+                &settings,
+                &ManualCookies::default(),
+                &ApiKeys::default(),
+                &HashMap::new(),
+            );
+            assert_eq!(ctx.gateway_url.as_deref(), Some(url), "{id:?}");
+        }
+
+        let ctx = super::super::providers::build_fetch_context(
+            ProviderId::Codex,
+            &settings,
+            &ManualCookies::default(),
+            &ApiKeys::default(),
+            &HashMap::new(),
+        );
+        assert_eq!(ctx.gateway_url, None);
+    }
+
+    #[test]
     fn maps_gitkraken_organization_provider() {
         assert_eq!(workspace_provider("gitkraken"), Some(ProviderId::GitKraken));
     }
 
     #[test]
-    fn gateway_provider_exposes_wayfinder_and_bifrost_only() {
+    fn gateway_provider_exposes_gateway_providers_only() {
         assert_eq!(gateway_provider("wayfinder"), Some(ProviderId::Wayfinder));
         assert_eq!(gateway_provider("bifrost"), Some(ProviderId::Bifrost));
+        assert_eq!(gateway_provider("aixy"), Some(ProviderId::Aixy));
         assert_eq!(gateway_provider("codex"), None);
     }
 
@@ -467,6 +500,7 @@ fn gateway_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     match provider_id {
         "wayfinder" => Some(codexbar::core::ProviderId::Wayfinder),
         "bifrost" => Some(codexbar::core::ProviderId::Bifrost),
+        "aixy" => Some(codexbar::core::ProviderId::Aixy),
         _ => None,
     }
 }
@@ -490,6 +524,10 @@ pub fn set_provider_gateway_url(provider_id: String, gateway_url: String) -> Res
         }
         codexbar::core::ProviderId::Bifrost => {
             codexbar::providers::bifrost::validate_gateway_url(gateway_url)
+                .map_err(|error| error.to_string())?;
+        }
+        codexbar::core::ProviderId::Aixy => {
+            codexbar::providers::aixy::validate_gateway_url(gateway_url)
                 .map_err(|error| error.to_string())?;
         }
         _ => unreachable!("gateway_provider only returns gateway providers"),

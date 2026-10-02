@@ -368,6 +368,17 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: false,
                 cookie_name: None,
             }),
+            // Upstream 0.67: labeled Aixy API keys via token accounts.
+            ProviderId::Aixy => Some(TokenAccountSupport {
+                title: "API keys",
+                subtitle: "Store multiple Aixy API keys.",
+                placeholder: "Paste Aixy API key…",
+                injection: TokenInjection::Environment {
+                    key: "AIXY_API_KEY".to_string(),
+                },
+                requires_manual_cookie_source: false,
+                cookie_name: None,
+            }),
             // These providers don't support token accounts
             ProviderId::Codex
             | ProviderId::Pi
@@ -895,6 +906,7 @@ mod tests {
         assert!(TokenAccountSupport::is_supported(ProviderId::Kimi));
         assert!(TokenAccountSupport::is_supported(ProviderId::Doubao));
         assert!(TokenAccountSupport::is_supported(ProviderId::OpenCodeGo));
+        assert!(TokenAccountSupport::is_supported(ProviderId::Aixy));
         assert!(!TokenAccountSupport::is_supported(ProviderId::Codex));
         assert!(!TokenAccountSupport::is_supported(ProviderId::Gemini));
         assert!(!TokenAccountSupport::is_supported(ProviderId::Hyper));
@@ -1026,6 +1038,19 @@ mod tests {
                 TokenAccountOverride::from_account(provider, TokenAccount::new("selected", token));
             assert_eq!(account.effective_source_mode(requested), expected);
         }
+    }
+
+    #[test]
+    fn aixy_token_accounts_inject_api_key_env() {
+        let support = TokenAccountSupport::for_provider(ProviderId::Aixy).unwrap();
+        assert_eq!(support.title, "API keys");
+        assert_eq!(support.placeholder, "Paste Aixy API key…");
+        assert!(!support.requires_manual_cookie_source);
+        let env = TokenAccountSupport::env_override(ProviderId::Aixy, "gak_fixture").unwrap();
+        assert_eq!(
+            env.get("AIXY_API_KEY").map(String::as_str),
+            Some("gak_fixture")
+        );
     }
 
     #[test]

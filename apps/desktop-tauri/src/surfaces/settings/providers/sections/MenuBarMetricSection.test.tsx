@@ -124,7 +124,26 @@ describe("MenuBarMetricSection", () => {
     });
   });
 
-  it("offers the provider-declared lane labels in the metric picker", () => {
+  it("offers only Automatic for Aixy, even with extra budget windows", () => {
+    const aixy = provider();
+    aixy.id = "aixy";
+    aixy.displayName = "Aixy";
+    aixy.weekly = rateWindow(40);
+    render(
+      <MenuBarMetricSection
+        provider={aixy}
+        providerMetrics={{ aixy: "weekly" }}
+        disabled={false}
+        t={(key) => key}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(["Automatic"]);
+    expect(screen.getByRole("combobox")).toHaveValue("automatic");
+  });
+it("offers the provider-declared lane labels in the metric picker", () => {
     const base = provider(false);
     base.id = "litellm";
     base.displayName = "LiteLLM";
@@ -148,7 +167,7 @@ describe("MenuBarMetricSection", () => {
     expect(screen.queryByRole("option", { name: "ProviderWeeklyLabel" })).not.toBeInTheDocument();
   });
 
-  it("keeps the generic metric labels when the provider declares none", () => {
+it("keeps the generic metric labels when the provider declares none", () => {
     const base = provider(false);
     base.weekly = rateWindow(30);
 
@@ -166,4 +185,5 @@ describe("MenuBarMetricSection", () => {
     expect(screen.getByRole("option", { name: "ProviderSessionLabel" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "ProviderWeeklyLabel" })).toBeInTheDocument();
   });
+
 });
