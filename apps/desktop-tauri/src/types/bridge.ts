@@ -1044,6 +1044,10 @@ export interface ProviderDetail {
   tertiary: RateWindowSnapshot | null;
   /** Locale key for the tertiary metric lane when it carries a semantic label (upstream F5). */
   tertiaryLabelKey?: string | null;
+  /** Extra rate window id holding the monthly plan allowance; offers the Monthly Plan metric (upstream 0.70.0). */
+  monthlyPlanWindowId?: string | null;
+  /** Metric picker label for the primary lane when it is not a session window. */
+  primaryMetricLabel?: string | null;
   extraRateWindows: Array<{
     id: string;
     title: string;

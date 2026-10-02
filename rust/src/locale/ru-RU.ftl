@@ -752,6 +752,7 @@ DeepSeekPricingEffective = Effective local time:
 DeepSeekPricingAdvice = Official schedule: peak 01:00-04:00 and 06:00-10:00 UTC; off-peak is half-price.
 MistralMonthlySpend = Расход на API за месяц
 MistralMonthlySpendHelper = Использование API за текущий месяц для аккаунтов Mistral с оплатой по мере использования.
+MetricMonthlyPlan = Ежемесячный план
 CostSummaryDisplayStyle = Стиль отображения стоимости
 CostSummaryDisplayStyleHelper = Выберите, как стоимость отображается на каждой карте провайдера.
 CostSummaryStyleCompact = Компактный

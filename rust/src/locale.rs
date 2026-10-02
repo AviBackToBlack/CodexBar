@@ -1190,6 +1190,8 @@ locale_keys! {
     // Mistral PAYG monthly spend (#2821, #2947)
     MistralMonthlySpend,
     MistralMonthlySpendHelper,
+    // Mistral Monthly Plan menu bar metric (upstream 0.70.0 #4072)
+    MetricMonthlyPlan,
 
     // Menu cost-summary display style (#2976)
     CostSummaryDisplayStyle,

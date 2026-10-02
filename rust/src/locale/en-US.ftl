@@ -840,6 +840,7 @@ DeepSeekPricingEffective = Effective local time:
 DeepSeekPricingAdvice = Official schedule: peak 01:00-04:00 and 06:00-10:00 UTC; off-peak is half-price.
 MistralMonthlySpend = Monthly API spend
 MistralMonthlySpendHelper = Current-month API usage for pay-as-you-go Mistral accounts.
+MetricMonthlyPlan = Monthly Plan
 CostSummaryDisplayStyle = Cost summary display
 CostSummaryDisplayStyleHelper = Choose how cost is shown on every provider card.
 CostSummaryStyleCompact = Compact
