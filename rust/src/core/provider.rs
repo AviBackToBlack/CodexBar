@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use super::ProviderFetchResult;
+use super::last_good_owner::LastGoodOwner;
 use super::provider_state::ProviderStateKind;
 
 /// Unique identifier for a provider
@@ -686,6 +687,15 @@ pub enum ProviderError {
 
     #[error("{0}")]
     Other(String),
+
+    /// A transport failure tagged with the session that produced it, so the
+    /// shell can retain a cached snapshot only for the same session. Build it
+    /// with [`ProviderError::with_failure_owner`].
+    #[error("{source}")]
+    OwnedTransport {
+        owner: Option<LastGoodOwner>,
+        source: Box<ProviderError>,
+    },
 }
 
 impl ProviderError {
@@ -697,6 +707,7 @@ impl ProviderError {
                 ReqwestFailureClass::Timeout | ReqwestFailureClass::Connect
             ),
             ProviderError::Timeout => true,
+            ProviderError::OwnedTransport { source, .. } => source.is_transport_failure(),
             _ => false,
         }
     }

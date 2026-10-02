@@ -402,6 +402,7 @@ fn error_category(err: &ProviderError) -> &'static str {
         | ProviderError::NoCookies => "auth",
         ProviderError::OAuthTransient(_) => "api",
         ProviderError::Network(_) | ProviderError::Timeout => "network",
+        ProviderError::OwnedTransport { source, .. } => error_category(source),
         ProviderError::NotInstalled(_) | ProviderError::UnsupportedSource(_) => "config",
         ProviderError::Parse(_) => "parse",
         ProviderError::Other(message) => {

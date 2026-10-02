@@ -1191,6 +1191,7 @@ fn usage_item_descriptors_keep_raw_ids_and_redact_titles() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let mut snapshot =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -1425,6 +1426,7 @@ fn provider_cache_upsert_replaces_existing_provider() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let mut first =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -1453,6 +1455,7 @@ fn provider_cache_prunes_disabled_providers() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let codex =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -1489,6 +1492,7 @@ fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1526,6 +1530,7 @@ fn codex_transient_transport_failure_helper_uses_typed_policy() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result, None);
@@ -1562,6 +1567,7 @@ fn claude_repeated_auth_failure_surfaces_error() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1605,6 +1611,7 @@ fn claude_cloudflare_challenge_retains_prior_usage_while_surfaceing_guidance() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1659,6 +1666,7 @@ fn claude_cloudflare_challenge_keeps_prior_usage_when_guidance_surfaces() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let mut good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1710,6 +1718,7 @@ fn claude_cli_parse_failure_keeps_last_good_every_time() {
         has_successful_claude_cli_quota: true,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1757,6 +1766,7 @@ fn claude_hard_credentials_missing_does_not_preserve_stale() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
     let good =
         ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result, None);
@@ -1961,6 +1971,7 @@ fn japanese_provider_snapshot_localizes_weekly_label() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
 
     let snapshot =
@@ -1995,6 +2006,7 @@ fn japanese_provider_snapshot_localizes_pace_reserve_description() {
         has_successful_claude_cli_quota: false,
         pace_authoritative: true,
         account_identity: None,
+        last_good_owner: None,
     };
 
     let snapshot =

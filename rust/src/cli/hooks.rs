@@ -411,6 +411,7 @@ fn hook_refresh_failure_status(error: &ProviderError) -> String {
                 "network_error".into()
             }
         }
+        ProviderError::OwnedTransport { source, .. } => hook_refresh_failure_status(source),
         ProviderError::NotInstalled(_) => "error".into(),
         ProviderError::Parse(_) | ProviderError::UnsupportedSource(_) | ProviderError::Other(_) => {
             "error".into()

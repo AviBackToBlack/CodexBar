@@ -76,6 +76,7 @@ pub use system::*;
 pub(crate) use usage_items::*;
 
 #[cfg(test)]
+mod last_good_owner_tests;
 mod session_cookie_scope_tests;
 #[cfg(test)]
 mod tests;

@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::LastGoodOwner;
 use super::ProviderDisplayDetail;
 use super::RateWindow;
 use crate::spend_contract::CostProvenance;
@@ -669,6 +670,11 @@ pub struct ProviderFetchResult {
     /// actions. It never crosses the frontend bridge.
     #[serde(skip)]
     pub account_identity: Option<String>,
+
+    /// Live session that supplied this result, used only for owner-checked
+    /// last-good retention. It is in memory only and never crosses the bridge.
+    #[serde(skip)]
+    pub last_good_owner: Option<LastGoodOwner>,
 }
 
 fn default_pace_authoritative() -> bool {
@@ -688,7 +694,14 @@ impl ProviderFetchResult {
             has_successful_claude_cli_quota: false,
             pace_authoritative: true,
             account_identity: None,
+            last_good_owner: None,
         }
+    }
+
+    /// Record which live session supplied this result.
+    pub fn with_last_good_owner(mut self, owner: Option<LastGoodOwner>) -> Self {
+        self.last_good_owner = owner;
+        self
     }
 
     /// Attach the provider's stable account identity without exposing it to
