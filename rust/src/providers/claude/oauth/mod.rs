@@ -460,8 +460,9 @@ impl ClaudeOAuthFetcher {
         // Check for required scope
         if !credentials.scopes.is_empty() && !credentials.has_scope("user:profile") {
             return Err(ProviderError::OAuth(format!(
-                "OAuth token missing 'user:profile' scope (has: {}). Run `claude setup-token` to regenerate.",
-                credentials.scopes.join(", ")
+                "OAuth token missing 'user:profile' scope (has: {}). {}",
+                credentials.scopes.join(", "),
+                Self::scope_recovery_message()
             )));
         }
 
@@ -510,9 +511,10 @@ impl ClaudeOAuthFetcher {
             }
 
             if status.as_u16() == 403 && body.contains("user:profile") {
-                return Err(ProviderError::OAuth(
-                    "OAuth token does not meet scope requirement 'user:profile'. Run `claude setup-token` to regenerate.".to_string(),
-                ));
+                return Err(ProviderError::OAuth(format!(
+                    "OAuth token does not meet scope requirement 'user:profile'. {}",
+                    Self::scope_recovery_message()
+                )));
             }
 
             if status.as_u16() == 429 {
@@ -624,6 +626,14 @@ impl ClaudeOAuthFetcher {
             "Claude OAuth usage endpoint is rate limited. Retrying in about {}s; credentials were preserved.",
             duration.as_secs().max(1)
         ))
+    }
+
+    /// Upstream `OAuthExecutor.scopeRecoveryMessage` (#3672): recommend a
+    /// Claude Code sign-in token, and explain removing an OAuth override
+    /// before switching sources. Never mentions `claude setup-token`, which
+    /// produces a model-request token, not a usage-scope recovery.
+    fn scope_recovery_message() -> &'static str {
+        "Use a Claude Code sign-in token that includes 'user:profile'. To use Web/CLI instead, remove any configured OAuth token override and switch Claude Source."
     }
 
     fn refreshed_oauth_value(credentials: &ClaudeOAuthCredentials) -> serde_json::Value {
