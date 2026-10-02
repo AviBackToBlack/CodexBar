@@ -10,7 +10,9 @@ use crate::core::{
 const CREDENTIAL_TARGET: &str = "codexbar-devin";
 const BASE_URLS: [&str; 2] = ["https://api.devin.ai", "https://app.devin.ai/api"];
 const MISSING_ORGANIZATION_DETAIL: &str = "No organizations found for auth1 user";
-const MISSING_ORGANIZATION_MESSAGE: &str = "Devin organization context is missing. Set the organization in provider extras or DEVIN_ORG, then refresh.";
+const MISSING_ORGANIZATION_MESSAGE: &str = "No Devin organization was found. Set Organization (provider extras or DEVIN_ORG) to the internal org-... or org_... ID from a successful quota request's x-cog-org-id header, then refresh.";
+const MISSING_ORGANIZATION_CONFIG_MESSAGE: &str = "Devin organization not found; set it in provider extras, DEVIN_ORGANIZATION, or DEVIN_ORG using the internal ID from a successful quota request's x-cog-org-id header.";
+const MISSING_TOKEN_MESSAGE: &str = "Devin Bearer token not found. In app.devin.ai open Developer Tools > Network, reload Usage & Limits, select a successful billing/quota/usage request and copy its Authorization value (a leading 'Bearer ' is accepted) into the Devin token field in Preferences, or set DEVIN_BEARER_TOKEN / DEVIN_AUTHORIZATION.";
 
 pub struct DevinProvider {
     metadata: ProviderMetadata,
@@ -60,21 +62,26 @@ impl Provider for DevinProvider {
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::OAuth => {
-                let token = crate::providers::resolve_api_key(
+                let token = resolved_manual_token(crate::providers::resolve_api_key(
                     ctx.api_key.as_deref(),
                     CREDENTIAL_TARGET,
-                    &["DEVIN_BEARER_TOKEN", "DEVIN_API_KEY"],
-                )?;
-                let env_org = std::env::var("DEVIN_ORG").ok();
+                    &["DEVIN_BEARER_TOKEN", "DEVIN_AUTHORIZATION", "DEVIN_API_KEY"],
+                ))?;
+                let env_org = std::env::var("DEVIN_ORGANIZATION")
+                    .ok()
+                    .filter(|org| !org.trim().is_empty())
+                    .or_else(|| {
+                        std::env::var("DEVIN_ORG")
+                            .ok()
+                            .filter(|org| !org.trim().is_empty())
+                    });
                 let raw_org = ctx
                     .workspace_id
                     .as_deref()
+                    .filter(|org| !org.trim().is_empty())
                     .or(env_org.as_deref())
                     .ok_or_else(|| {
-                        ProviderError::NotInstalled(
-                            "Devin organization not found. Set it in provider extras or DEVIN_ORG."
-                                .into(),
-                        )
+                        ProviderError::NotInstalled(MISSING_ORGANIZATION_CONFIG_MESSAGE.into())
                     })?;
                 let org = normalized_org(raw_org);
                 fetch_quota(&self.client, &token, &org, devin_urls(&org)?).await
@@ -88,6 +95,35 @@ impl Provider for DevinProvider {
     fn available_sources(&self) -> Vec<SourceMode> {
         vec![SourceMode::Auto, SourceMode::OAuth]
     }
+}
+
+fn resolved_manual_token(raw: Result<String, ProviderError>) -> Result<String, ProviderError> {
+    match raw {
+        Ok(raw) => manual_bearer_token(&raw).ok_or_else(missing_token_error),
+        Err(ProviderError::NotInstalled(_)) => Err(missing_token_error()),
+        Err(error) => Err(error),
+    }
+}
+
+fn manual_bearer_token(raw: &str) -> Option<String> {
+    let mut token = raw.trim();
+    if token
+        .get(.."Authorization:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Authorization:"))
+    {
+        token = token["Authorization:".len()..].trim();
+    }
+    if token
+        .get(.."Bearer ".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Bearer "))
+    {
+        token = token["Bearer ".len()..].trim();
+    }
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+fn missing_token_error() -> ProviderError {
+    ProviderError::NotInstalled(MISSING_TOKEN_MESSAGE.into())
 }
 
 async fn fetch_quota(
@@ -206,7 +242,26 @@ fn auth_response_error(status: reqwest::StatusCode, body: &[u8]) -> Option<Provi
 fn normalized_org(raw: &str) -> String {
     // Both hosts serve the quota at /{org}/billing/quota/usage with the bare
     // organization id (org_...); a prefixed path 404s server-side.
-    let trimmed = raw.trim().trim_matches('/');
+    let trimmed = raw.trim();
+    let organization_from_url = Url::parse(trimmed).ok().and_then(|url| {
+        let host = url.host_str()?.to_ascii_lowercase();
+        if host != "devin.ai" && !host.ends_with(".devin.ai") {
+            return None;
+        }
+        let mut segments = url.path_segments()?;
+        let prefix = segments.next()?;
+        if prefix != "org" && prefix != "organizations" {
+            return None;
+        }
+        segments
+            .next()
+            .filter(|organization| !organization.is_empty())
+            .map(str::to_owned)
+    });
+    let trimmed = organization_from_url
+        .as_deref()
+        .unwrap_or(trimmed)
+        .trim_matches('/');
     trimmed
         .strip_prefix("organizations/")
         .or_else(|| trimmed.strip_prefix("org/"))
@@ -335,16 +390,20 @@ mod tests {
 
     #[test]
     fn keeps_unrelated_authorization_failures_as_auth_required() {
-        for body in [
-            br#"{"detail":"Unauthorized","trace":"private-trace"}"#.as_slice(),
-            br#"{"detail":"Token expired","trace":"private-trace"}"#.as_slice(),
-            br#"{"detail":"No organizations found for another user"}"#.as_slice(),
-            b"not-json".as_slice(),
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::FORBIDDEN,
         ] {
-            let error = auth_response_error(reqwest::StatusCode::UNAUTHORIZED, body)
-                .expect("authorization error");
-            assert!(matches!(error, ProviderError::AuthRequired));
-            assert_eq!(error.to_string(), "Authentication required");
+            for body in [
+                br#"{"detail":"Unauthorized","trace":"private-trace"}"#.as_slice(),
+                br#"{"detail":"Token expired","trace":"private-trace"}"#.as_slice(),
+                br#"{"detail":"No organizations found for another user"}"#.as_slice(),
+                b"not-json".as_slice(),
+            ] {
+                let error = auth_response_error(status, body).expect("authorization error");
+                assert!(matches!(error, ProviderError::AuthRequired));
+                assert_eq!(error.to_string(), "Authentication required");
+            }
         }
     }
 
@@ -360,6 +419,58 @@ mod tests {
         assert_eq!(normalized_org(" org_TJ2demo/ "), "org_TJ2demo");
         assert_eq!(normalized_org("org/org_TJ2demo"), "org_TJ2demo");
         assert_eq!(normalized_org("organizations/org_TJ2demo"), "org_TJ2demo");
+    }
+
+    #[test]
+    fn manual_bearer_token_accepts_pasted_authorization_values() {
+        for raw in [
+            "secret-token",
+            "Bearer secret-token",
+            "bearer secret-token",
+            "Authorization: Bearer secret-token",
+            "  authorization:bearer   secret-token  ",
+        ] {
+            assert_eq!(manual_bearer_token(raw).as_deref(), Some("secret-token"));
+        }
+        assert_eq!(manual_bearer_token("Bearer").as_deref(), Some("Bearer"));
+        assert_eq!(manual_bearer_token("Authorization:"), None);
+        assert_eq!(manual_bearer_token("   "), None);
+    }
+
+    #[test]
+    fn missing_or_empty_resolved_token_uses_devin_manual_guidance() {
+        for raw in [
+            Err(ProviderError::NotInstalled("generic key error".into())),
+            Ok("Authorization:   ".into()),
+        ] {
+            let error = resolved_manual_token(raw).expect_err("the token is missing");
+            assert!(
+                matches!(&error, ProviderError::NotInstalled(message) if message == MISSING_TOKEN_MESSAGE)
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_org_accepts_devin_organization_urls_only() {
+        for (raw, expected) in [
+            (
+                "https://app.devin.ai/org/example-org/settings/usage",
+                "example-org",
+            ),
+            (
+                "https://app.devin.ai/organizations/org_TJ2demo",
+                "org_TJ2demo",
+            ),
+            ("https://devin.ai/org/foo/", "foo"),
+            ("org_TJ2demo", "org_TJ2demo"),
+            (" org_TJ2demo/ ", "org_TJ2demo"),
+            ("org/org_TJ2demo", "org_TJ2demo"),
+            ("organizations/org_TJ2demo", "org_TJ2demo"),
+            ("https://evil.example/org/x", "https://evil.example/org/x"),
+            ("https://notdevin.ai/org/x", "https://notdevin.ai/org/x"),
+        ] {
+            assert_eq!(normalized_org(raw), expected, "raw organization {raw:?}");
+        }
     }
 
     #[test]
@@ -423,6 +534,30 @@ mod tests {
             .expect("the normalized organization should authenticate");
 
         assert_eq!(result.usage.primary.used_percent, 25.0);
+    }
+
+    #[tokio::test]
+    async fn pasted_authorization_and_devin_url_are_normalized_in_quota_request() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/org_TJ2demo/billing/quota/usage")
+            .match_header("authorization", "Bearer fixture-token")
+            .match_header("x-cog-org-id", "org_TJ2demo")
+            .with_status(200)
+            .with_body(r#"{"daily_percentage":0.25}"#)
+            .create_async()
+            .await;
+        let url = Url::parse(&format!("{}/org_TJ2demo/billing/quota/usage", server.url()))
+            .expect("the mock server URL should be valid");
+        let token = manual_bearer_token("Authorization: Bearer fixture-token")
+            .expect("the pasted authorization value should contain a token");
+        let org = normalized_org("https://app.devin.ai/org/org_TJ2demo/settings/usage");
+
+        fetch_quota(&test_client(), &token, &org, [url])
+            .await
+            .expect("the normalized credentials should authenticate");
+
+        mock.assert_async().await;
     }
 
     #[tokio::test]

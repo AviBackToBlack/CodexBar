@@ -38,6 +38,22 @@ CLI: `codexbar usage --source auto|web|cli|oauth`.
 
 Auth resolution helpers in `rust/src/providers/` commonly try: explicit settings → keyring/entry → environment variables (exact order is provider-specific).
 
+### Devin manual authentication
+
+On Windows, Devin uses a manually pasted Bearer token; Chrome-session import is
+not available. In Devin, open Developer Tools → Network, reload **Usage &
+Limits**, then copy the `Authorization` value from a successful
+billing/quota/usage request. In Settings → Providers → Devin, paste a bare
+token, a `Bearer ...` value, or the full `Authorization: Bearer ...` line into
+the token field. Never share this token.
+
+Set **Organization** to the internal `org-...` or `org_...` ID, an organization
+slug, or a `devin.ai` organization URL. The internal ID from the
+`x-cog-org-id` header on a successful quota request is the most direct choice.
+Environment variables are `DEVIN_BEARER_TOKEN`, `DEVIN_AUTHORIZATION`, or
+`DEVIN_API_KEY` for the token, and `DEVIN_ORGANIZATION` or `DEVIN_ORG` for the
+organization.
+
 ## Cookie-backed providers
 
 Windows browser import: Chrome, Edge, Brave (DPAPI + AES-GCM), Firefox (SQLite).  
