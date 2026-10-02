@@ -217,6 +217,7 @@ mod tests {
             fetch_duration_ms: None,
             wayfinder_usage: None,
             quota_burndown: None,
+            open_ai_api_usage: None,
             session_equivalent_forecast: None,
         });
         let value = serde_json::to_value(snapshot).unwrap();
@@ -271,6 +272,7 @@ mod tests {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            open_ai_api_usage: None,
             session_equivalent_forecast: None,
             quota_burndown: None,
         });

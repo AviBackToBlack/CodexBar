@@ -1,7 +1,11 @@
+mod openai_usage;
+#[cfg(test)]
+mod openai_usage_tests;
 pub(crate) mod pace;
 mod quota_block;
 mod status;
 pub use quota_block::MonthlyLimitBlockSnapshot;
+pub(crate) use openai_usage::OpenAiApiUsageSnapshot;
 pub(crate) use status::{compact_tray_status_label, friendly_provider_error};
 
 use super::*;
@@ -319,6 +323,9 @@ pub struct ProviderUsageSnapshot {
     pub fetch_duration_ms: Option<u128>,
     #[serde(default)]
     pub wayfinder_usage: Option<codexbar::core::WayfinderUsageSnapshot>,
+    /// Per-day OpenAI Admin API history for the daily usage chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_ai_api_usage: Option<OpenAiApiUsageSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub session_equivalent_forecast: Option<SessionEquivalentForecastSnapshot>,
     /// Recorded remaining-quota burndown for the selected window
@@ -560,6 +567,7 @@ impl ProviderUsageSnapshot {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: result.wayfinder_usage.clone(),
+            open_ai_api_usage: result.open_ai_api_usage.as_ref().map(Into::into),
             session_equivalent_forecast,
             quota_burndown,
         }
@@ -613,6 +621,7 @@ impl ProviderUsageSnapshot {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            open_ai_api_usage: None,
             session_equivalent_forecast: None,
             quota_burndown: None,
         }
