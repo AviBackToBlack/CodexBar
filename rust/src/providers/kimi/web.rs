@@ -80,10 +80,20 @@ enum WebTokenSource {
     LocalStorage,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 struct WebTokenCandidate {
     token: String,
     source: WebTokenSource,
+}
+
+impl std::fmt::Debug for WebTokenCandidate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WebTokenCandidate")
+            .field("token", &"[REDACTED]")
+            .field("source", &self.source)
+            .finish()
+    }
 }
 
 fn resolve_web_tokens(input: WebTokenInput) -> Vec<WebTokenCandidate> {

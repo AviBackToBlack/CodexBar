@@ -17,6 +17,8 @@ pub enum SnappyError {
     Truncated,
     #[error("snappy copy references data before the start of the output")]
     BadOffset,
+    #[error("snappy output buffer could not be allocated")]
+    AllocationFailed,
     #[error("snappy stream length does not match its preamble")]
     LengthMismatch,
 }
@@ -29,7 +31,9 @@ pub fn decompress(input: &[u8], max_len: usize) -> Result<Vec<u8>, SnappyError> 
         return Err(SnappyError::TooLarge(expected, max_len));
     }
 
-    let mut out = Vec::with_capacity(expected);
+    let mut out = Vec::new();
+    out.try_reserve_exact(expected)
+        .map_err(|_| SnappyError::AllocationFailed)?;
     while pos < input.len() {
         let tag = input[pos];
         pos += 1;
@@ -50,7 +54,10 @@ pub fn decompress(input: &[u8], max_len: usize) -> Result<Vec<u8>, SnappyError> 
                     .checked_add(len)
                     .and_then(|end| input.get(pos..end))
                     .ok_or(SnappyError::Truncated)?;
-                if out.len() + literal.len() > expected {
+                let Some(new_len) = out.len().checked_add(literal.len()) else {
+                    return Err(SnappyError::LengthMismatch);
+                };
+                if new_len > expected {
                     return Err(SnappyError::LengthMismatch);
                 }
                 out.extend_from_slice(literal);
@@ -105,7 +112,10 @@ fn copy_within_output(
     if offset == 0 || offset > out.len() {
         return Err(SnappyError::BadOffset);
     }
-    if out.len() + len > expected {
+    let Some(new_len) = out.len().checked_add(len) else {
+        return Err(SnappyError::LengthMismatch);
+    };
+    if new_len > expected {
         return Err(SnappyError::LengthMismatch);
     }
     let start = out.len() - offset;

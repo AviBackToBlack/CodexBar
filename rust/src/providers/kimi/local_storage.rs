@@ -12,18 +12,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::KimiRegion;
 use crate::browser::detection::BrowserDetector;
 use crate::browser::leveldb::local_storage::{
-    LocalStorageEntry, local_storage_dir, read_local_storage_entries,
+    LocalStorageEntry, local_storage_dir, read_local_storage_entries_with_budget,
 };
+use crate::browser::leveldb::{LevelDbError, MAX_TOTAL_SCAN_BYTES};
 use crate::codex_accounts::api::jwt_payload;
 
 const ACCESS_TOKEN_KEY: &str = "access_token";
+const MAX_PROFILE_DIRECTORIES: usize = 128;
+const MAX_STORED_TOKEN_BYTES: usize = 32 * 1024;
+const MAX_JWT_BYTES: usize = 16 * 1024;
 
 /// Current Kimi web access tokens stored by Chromium browsers for `region`, in browser and
 /// profile detection order, without duplicates.
 pub(super) fn local_storage_tokens(region: KimiRegion) -> Vec<String> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0.0, |elapsed| elapsed.as_secs_f64());
+    let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return Vec::new();
+    };
+    let now = elapsed.as_secs_f64();
     tokens_from_profiles(&chromium_profile_dirs(), region.web_base_url(), now)
 }
 
@@ -32,6 +37,7 @@ fn chromium_profile_dirs() -> Vec<PathBuf> {
         .into_iter()
         .filter(|browser| browser.browser_type.is_chromium_based())
         .flat_map(|browser| browser.profiles)
+        .take(MAX_PROFILE_DIRECTORIES)
         .map(|profile| profile.path)
         .collect()
 }
@@ -39,18 +45,24 @@ fn chromium_profile_dirs() -> Vec<PathBuf> {
 fn tokens_from_profiles(profiles: &[PathBuf], origin: &str, now_unix: f64) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut tokens = Vec::new();
-    for profile in profiles {
+    let mut remaining_bytes = MAX_TOTAL_SCAN_BYTES;
+    for profile in profiles.iter().take(MAX_PROFILE_DIRECTORIES) {
         let dir = local_storage_dir(profile);
         if !dir.is_dir() {
             continue;
         }
-        match read_local_storage_entries(&dir, origin) {
-            Ok(entries) => {
+        match read_local_storage_entries_with_budget(&dir, origin, remaining_bytes) {
+            Ok((entries, scanned_bytes)) => {
+                remaining_bytes = remaining_bytes.saturating_sub(scanned_bytes);
                 for token in access_tokens(&entries, now_unix) {
                     if seen.insert(token.clone()) {
                         tokens.push(token);
                     }
                 }
+            }
+            Err(LevelDbError::ResourceLimit) => {
+                tracing::debug!("Kimi local storage scan limit reached");
+                break;
             }
             Err(error) => tracing::debug!(%error, "Kimi local storage is not readable"),
         }
@@ -62,6 +74,7 @@ fn access_tokens(entries: &[LocalStorageEntry], now_unix: f64) -> impl Iterator<
     entries
         .iter()
         .filter(|entry| entry.key == ACCESS_TOKEN_KEY)
+        .filter(|entry| entry.value.len() <= MAX_STORED_TOKEN_BYTES)
         .map(|entry| normalized_value(&entry.value))
         .filter(move |token| is_current_jwt(token, now_unix))
 }
@@ -72,7 +85,8 @@ fn normalized_value(value: &str) -> String {
 }
 
 fn is_current_jwt(token: &str, now_unix: f64) -> bool {
-    token.split('.').count() == 3
+    token.len() <= MAX_JWT_BYTES
+        && token.split('.').count() == 3
         && token
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
