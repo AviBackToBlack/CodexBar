@@ -201,10 +201,10 @@ type ProbeJob = ();
 /// is ever in the job, so unrelated `agy` processes are never touched.
 fn spawn_contained(
     command: &mut AsyncCommand,
-) -> Result<(tokio::process::Child, Option<ProbeJob>), ProviderError> {
+) -> Result<(tokio::process::Child, Option<ProbeJob>), LiveFailure> {
     let child = command
         .spawn()
-        .map_err(|_| ProviderError::Other("Failed to start Antigravity CLI".into()))?;
+        .map_err(|error| LiveFailure::cli_report(CliPrintFailure::from_spawn_error(&error)))?;
     let job = contain_child(&child);
     Ok((child, job))
 }
