@@ -150,10 +150,32 @@ fn browser_auth_token(region: KimiRegion) -> Option<String> {
 pub(crate) async fn fetch_via_web(
     cookie_header: Option<&str>,
     region: KimiRegion,
+    account_isolated: bool,
 ) -> Result<UsageSnapshot, ProviderError> {
-    fetch_web_session(cookie_header, region)
+    fetch_web_session_isolated(cookie_header, region, account_isolated)
         .await
         .map_err(|failure| failure.error)
+}
+
+/// [`fetch_via_web`] entry point. A selected token account is an identity
+/// boundary: fetch only its own session cookie and never fall back to another
+/// ambient credential or browser account (upstream per-provider token account
+/// routing).
+pub(super) async fn fetch_web_session_isolated(
+    cookie_header: Option<&str>,
+    region: KimiRegion,
+    account_isolated: bool,
+) -> Result<UsageSnapshot, WebFetchFailure> {
+    // An explicitly selected token account is an identity boundary: fetch only
+    // its own session cookie and never fall back to another ambient credential
+    // or browser account (upstream per-provider token account routing).
+    if account_isolated {
+        let token = selected_account_auth_token(cookie_header)?;
+        return fetch_via_web_token(&client()?, &token, region)
+            .await
+            .map_err(WebFetchFailure::after_token);
+    }
+    fetch_web_session(cookie_header, region).await
 }
 
 /// [`fetch_via_web`], also reporting whether web auth had a token to try.
@@ -235,6 +257,12 @@ where
         error: ProviderError::AuthRequired,
         had_token: desktop_token.is_some() || browser_token.is_some(),
     })
+}
+
+fn selected_account_auth_token(cookie_header: Option<&str>) -> Result<String, ProviderError> {
+    cookie_header
+        .and_then(|header| KimiProvider::auth_token_from_cookie_header(header).ok())
+        .ok_or(ProviderError::AuthRequired)
 }
 
 fn client() -> Result<reqwest::Client, ProviderError> {
@@ -387,6 +415,22 @@ pub(super) async fn fetch_subscription_for_enrichment_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_session_rejects_missing_or_invalid_cookie_without_fallback() {
+        assert!(matches!(
+            selected_account_auth_token(None),
+            Err(ProviderError::AuthRequired)
+        ));
+        assert!(matches!(
+            selected_account_auth_token(Some("locale=en-US")),
+            Err(ProviderError::AuthRequired)
+        ));
+        assert_eq!(
+            selected_account_auth_token(Some("Cookie: kimi-auth=selected")).unwrap(),
+            "selected"
+        );
+    }
 
     fn static_desktop(_: KimiRegion) -> Option<String> {
         Some("desktop-token".to_string())

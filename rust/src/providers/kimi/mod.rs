@@ -274,7 +274,14 @@ impl KimiProvider {
     }
 
     fn auth_token_from_cookie_header(cookie_header: &str) -> Result<String, ProviderError> {
-        for cookie in cookie_header.split(';') {
+        let header = cookie_header.trim();
+        let header = header
+            .get(..7)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+            .map(|_| &header[7..])
+            .unwrap_or(header)
+            .trim();
+        for cookie in header.split(';') {
             let cookie = cookie.trim();
             if cookie.starts_with("kimi-auth=")
                 || cookie.starts_with("authorization=")
@@ -360,6 +367,11 @@ impl Provider for KimiProvider {
                     }
                 }
 
+                // Account-source order (upstream Kimi fetch plan): the classified
+                // CLI credential (fresh / stale / refresh-only), then web auth.
+                // A selected token account is an identity boundary, so the web
+                // session runs isolated and never falls back to ambient
+                // credentials.
                 auto::fetch_cli_then_web(
                     code_api::kimi_code_cli_credential(region, unix_now_secs()),
                     |cli_token| async move {
@@ -374,7 +386,13 @@ impl Provider for KimiProvider {
                         )
                         .await
                     },
-                    || web::fetch_web_session(ctx.manual_cookie_header.as_deref(), region),
+                    || {
+                        web::fetch_web_session_isolated(
+                            ctx.manual_cookie_header.as_deref(),
+                            region,
+                            ctx.token_account_isolated,
+                        )
+                    },
                 )
                 .await
             }
@@ -384,7 +402,12 @@ impl Provider for KimiProvider {
                 Ok(ProviderFetchResult::new(usage, "code-api"))
             }
             SourceMode::Web => {
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await?;
+                let usage = web::fetch_via_web(
+                    ctx.manual_cookie_header.as_deref(),
+                    region,
+                    ctx.token_account_isolated,
+                )
+                .await?;
                 Ok(ProviderFetchResult::new(usage, "web"))
             }
             SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
