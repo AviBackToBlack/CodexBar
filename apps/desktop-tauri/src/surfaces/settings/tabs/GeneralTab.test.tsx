@@ -7,16 +7,27 @@ vi.mock("../../../hooks/useLocale", () => ({
 
 // Mock Tauri invoke for get_available_languages
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue([
-    { value: "english", display: "English" },
-    { value: "chinese", display: "中文" },
-    { value: "chinesetraditional", display: "繁體中文" },
-    { value: "japanese", display: "日本語" },
-    { value: "korean", display: "한국어" },
-    { value: "spanish", display: "Español" },
-    { value: "russian", display: "Русский" },
-    { value: "turkish", display: "Türkçe" },
-  ]),
+  invoke: vi.fn(async (command: string) => {
+    if (command === "get_app_info") {
+      return {
+        name: "CodexBar",
+        version: "0.60.3",
+        buildNumber: "42",
+        updateChannel: "stable",
+        tagline: "usage",
+      };
+    }
+    return [
+      { value: "english", display: "English" },
+      { value: "chinese", display: "中文" },
+      { value: "chinesetraditional", display: "繁體中文" },
+      { value: "japanese", display: "日本語" },
+      { value: "korean", display: "한국어" },
+      { value: "spanish", display: "Español" },
+      { value: "russian", display: "Русский" },
+      { value: "turkish", display: "Türkçe" },
+    ];
+  }),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -95,6 +106,14 @@ const settings: SettingsSnapshot = {
     providerAccentColors: {},
   showResetWhenExhausted: false,
 };
+
+describe("GeneralTab running version", () => {
+  it("shows the running app version on the general tab", async () => {
+    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+
+    expect(await screen.findByText("0.60.3 (42)")).toBeInTheDocument();
+  });
+});
 
 describe("GeneralTab language picker", () => {
   it("renders all supported language options", () => {
