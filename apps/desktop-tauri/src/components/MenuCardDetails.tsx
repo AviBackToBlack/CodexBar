@@ -380,7 +380,7 @@ function MetricRow({
   const detailText = windowDetailText(snap);
   const resetText = useFormattedResetTime(
     blocked ? null : snap.resetsAt,
-    isInformational || blocked ? null : (snap.resetDescription?.trim() || resetDescriptionFallback(snap)),
+    isInformational || blocked ? null : resetDescriptionFallback(snap),
     resetTimeRelative,
     resetFormatMode ?? "reset",
   );

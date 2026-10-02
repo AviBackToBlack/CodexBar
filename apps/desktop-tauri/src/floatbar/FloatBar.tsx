@@ -236,8 +236,7 @@ function ProviderPill({
       : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
-    informational ? null : rateWindow.resetDescription,
-    resetDescriptionFallback(rateWindow),
+    informational ? null : resetDescriptionFallback(rateWindow),
     resetRelative,
   );
   const resetSuffix = resetText ? `\n${resetText}` : "";
