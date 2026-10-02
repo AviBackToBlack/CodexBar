@@ -107,7 +107,6 @@ Tüm geçmişi [CHANGELOG.md](CHANGELOG.md) dosyasında görebilirsiniz.
 | Xiaomi MiMo | Çerezler | Bakiye, Token Planı |
 | Doubao | API Anahtarı | İstek Sınırları |
 | Command Code | Çerezler | Aylık Krediler, Satın Alınan Krediler |
-| Crof | API Anahtarı | Krediler, İstek Kotası |
 | StepFun | Oasis Tokenı | 5 saatlik, Haftalık, Token yenileme |
 | Venice | API Anahtarı | USD / DIEM Bakiyesi |
 | OpenAI | Yönetici API'si / API Anahtarı | Kullanım, İstekler, Proje kapsamlı maliyet, Kredi Bakiyesi |

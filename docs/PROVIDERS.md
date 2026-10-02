@@ -55,6 +55,22 @@ spend and, when the optional balance request succeeds, prepaid credit balance.
 It keeps those values in the cost/detail surfaces and does not invent a quota
 percentage or use a Replicate API token as a website credential.
 
+### Charm Hyper balance
+
+Charm Hyper is disabled by default. It reads
+`GET https://hyper.charm.land/v1/credits` and shows one **Hypercredits** detail
+row in native HC units; it never infers a quota percentage, plan, reset or
+spend. The cookie source only picks the session: Automatic imports the
+`hyper.charm.land` session from the selected browser, Manual uses a pasted
+Cookie header, and Disabled uses only the API key. The usage source keeps
+routing. Auto prefers the session and falls back to the API key (the saved key,
+then `HYPER_API_KEY`) when there is no session, the session request fails, or
+the session is rejected (401, 403, a redirect or an HTML sign-in page).
+Browser session never uses the key, and API never reads cookies. The cookie and
+the bearer key are never sent together. Rate limits, server errors and
+malformed balances are final and do not fall back. Upstream's multiple API-key
+token accounts are not ported yet.
+
 ## API-key gateway providers
 
 ### Aixy

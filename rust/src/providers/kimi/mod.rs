@@ -11,9 +11,12 @@
 //!   from a signed-in Kimi Desktop session (#2622).
 //! - [`desktop_token`]: read-only, WAL-safe reader for the Kimi Desktop
 //!   (Electron) Chromium cookie store.
+//! - [`ratio_pool`]: zero-ratio placeholder reconciliation against matching
+//!   legacy counters (upstream 0.63.0).
 
 mod code_api;
 pub mod desktop_token;
+mod ratio_pool;
 mod region;
 mod web;
 
@@ -263,7 +266,14 @@ impl KimiProvider {
     }
 
     fn auth_token_from_cookie_header(cookie_header: &str) -> Result<String, ProviderError> {
-        for cookie in cookie_header.split(';') {
+        let header = cookie_header.trim();
+        let header = header
+            .get(..7)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+            .map(|_| &header[7..])
+            .unwrap_or(header)
+            .trim();
+        for cookie in header.split(';') {
             let cookie = cookie.trim();
             if cookie.starts_with("kimi-auth=")
                 || cookie.starts_with("authorization=")
@@ -375,7 +385,12 @@ impl Provider for KimiProvider {
                     }
                 }
 
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await?;
+                let usage = web::fetch_via_web(
+                    ctx.manual_cookie_header.as_deref(),
+                    region,
+                    ctx.token_account_isolated,
+                )
+                .await?;
                 Ok(ProviderFetchResult::new(usage, "web"))
             }
             SourceMode::OAuth => {
@@ -384,7 +399,12 @@ impl Provider for KimiProvider {
                 Ok(ProviderFetchResult::new(usage, "code-api"))
             }
             SourceMode::Web => {
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref(), region).await?;
+                let usage = web::fetch_via_web(
+                    ctx.manual_cookie_header.as_deref(),
+                    region,
+                    ctx.token_account_isolated,
+                )
+                .await?;
                 Ok(ProviderFetchResult::new(usage, "web"))
             }
             SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),

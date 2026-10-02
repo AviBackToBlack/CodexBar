@@ -109,7 +109,6 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Xiaomi MiMo | Cookies | Balance, Token Plan |
 | Doubao | API Key | Request Limits |
 | Command Code | Cookies | Monthly Credits, Purchased Credits |
-| Crof | API Key | Credits, Request Quota |
 | StepFun | Oasis Token | 5h, Weekly, Token refresh |
 | Venice | API Key | USD / DIEM Balance |
 | OpenAI | Admin API / API Key | Usage, Requests, Project-scoped cost, Credit Balance |

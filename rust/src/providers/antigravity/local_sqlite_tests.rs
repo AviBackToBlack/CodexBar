@@ -278,3 +278,64 @@ fn schema_entry_budget_is_incomplete_not_foreign() {
         SchemaInspection::Incomplete
     );
 }
+
+#[test]
+fn list_price_uses_prompt_plus_input_and_output_plus_reasoning() {
+    // Upstream AntigravityLocalReaderTests: a known model gets a list-price estimate, a routing
+    // variant prices from its base model, and an unknown model stays unpriced.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".gemini/antigravity-cli/conversations");
+    fs::create_dir_all(&root).unwrap();
+    let now = Utc::now();
+    let timestamp = u64::try_from(now.timestamp()).unwrap();
+    for (name, model) in [
+        ("direct.db", "claude-sonnet-4-6"),
+        ("routed.db", "claude-sonnet-4-6-Thinking"),
+    ] {
+        let conn = Connection::open(root.join(name)).unwrap();
+        conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+            [valid_turn_blob_with_model(100, timestamp, Some(model))],
+        )
+        .unwrap();
+    }
+
+    let SQLiteScan::Summary(summary) = summarize(std::slice::from_ref(&root), now, 30) else {
+        panic!("supported databases should produce coverage");
+    };
+    // system prompt 11 + input 100, cache read 50, output 30 + reasoning 7.
+    let per_request =
+        crate::core::CostUsagePricing::claude_cost_usd("claude-sonnet-4-6", 111, 50, 0, 37)
+            .expect("built-in public price");
+    assert_eq!(summary.coverage, LocalHistoryCoverage::Complete);
+    assert_eq!(summary.cost_estimate.coverage.estimated, 2);
+    assert_eq!(summary.cost_estimate.coverage.unpriced, 0);
+    assert_eq!(summary.total_usd(), Some(per_request * 2.0));
+
+    let conn = Connection::open(root.join("unknown.db")).unwrap();
+    conn.execute("CREATE TABLE gen_metadata(idx INTEGER, data BLOB)", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO gen_metadata(idx, data) VALUES(1, ?1)",
+        [valid_turn_blob_with_model(
+            100,
+            timestamp,
+            Some("fixture-unpriced"),
+        )],
+    )
+    .unwrap();
+    drop(conn);
+
+    let SQLiteScan::Summary(summary) = summarize(std::slice::from_ref(&root), now, 30) else {
+        panic!("supported databases should produce coverage");
+    };
+    assert_eq!(summary.cost_estimate.coverage.estimated, 2);
+    assert_eq!(summary.cost_estimate.coverage.unpriced, 1);
+    assert_eq!(summary.total_usd(), None);
+    assert_eq!(
+        summary.cost_estimate.known_subtotal_usd,
+        Some(per_request * 2.0)
+    );
+}
