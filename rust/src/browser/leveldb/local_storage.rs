@@ -6,7 +6,7 @@
 //! the same format byte. Other keys in the database (`VERSION`, `META:<origin>`,
 //! `METAACCESS:<origin>`) are bookkeeping and are ignored.
 
-use super::{Entry, LevelDbError, read_entries};
+use super::{Entry, LevelDbError, read_entries_with_budget};
 use std::path::{Path, PathBuf};
 
 const KEY_PREFIX: u8 = b'_';
@@ -15,10 +15,20 @@ const FORMAT_UTF16LE: u8 = 0;
 const FORMAT_LATIN1: u8 = 1;
 
 /// One decoded `localStorage` item.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LocalStorageEntry {
     pub key: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for LocalStorageEntry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LocalStorageEntry")
+            .field("key", &self.key)
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Directory holding Local Storage for a Chromium profile directory (`Default`, `Profile 1`, ...).
@@ -41,18 +51,26 @@ pub fn read_local_storage_entries_for_origins(
     dir: &Path,
     origins: &[&str],
 ) -> Result<Vec<LocalStorageEntry>, LevelDbError> {
-    let entries = read_entries(dir)?;
+    let entries = super::read_entries(dir)?;
     Ok(origins
         .iter()
         .flat_map(|origin| decode_origin_entries(&entries, origin))
         .collect())
 }
 
+pub(crate) fn read_local_storage_entries_with_budget(
+    dir: &Path,
+    origin: &str,
+    max_total_bytes: u64,
+) -> Result<(Vec<LocalStorageEntry>, u64), LevelDbError> {
+    let prefix = origin_key_prefix(origin);
+    let (entries, scanned_bytes) =
+        read_entries_with_budget(dir, max_total_bytes, Some(prefix.as_slice()))?;
+    Ok((decode_origin_entries(&entries, origin), scanned_bytes))
+}
+
 pub(super) fn decode_origin_entries(entries: &[Entry], origin: &str) -> Vec<LocalStorageEntry> {
-    let mut prefix = Vec::with_capacity(origin.len() + 2);
-    prefix.push(KEY_PREFIX);
-    prefix.extend_from_slice(origin.trim_end_matches('/').as_bytes());
-    prefix.push(ORIGIN_TERMINATOR);
+    let prefix = origin_key_prefix(origin);
 
     entries
         .iter()
@@ -62,6 +80,14 @@ pub(super) fn decode_origin_entries(entries: &[Entry], origin: &str) -> Vec<Loca
             Some(LocalStorageEntry { key, value })
         })
         .collect()
+}
+
+fn origin_key_prefix(origin: &str) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(origin.len() + 2);
+    prefix.push(KEY_PREFIX);
+    prefix.extend_from_slice(origin.trim_end_matches('/').as_bytes());
+    prefix.push(ORIGIN_TERMINATOR);
+    prefix
 }
 
 /// Decode a format-byte-prefixed Chromium string; `None` for an unknown format or bad UTF-16.

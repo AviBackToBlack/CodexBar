@@ -37,6 +37,10 @@ If automatic extraction fails (for example, Chromium App-Bound Encryption is act
 4. Copy the `Cookie` header value from **Request Headers**
 5. In CodexBar Settings → provider detail → **Browser Cookies**, paste the value
 
+## Kimi local-storage tokens
+
+With the Kimi cookie source set to automatic, CodexBar also reads `access_token` from Chromium browsers' `Local Storage` for the selected Kimi region (`www.kimi.com` or `www.kimi.ai`), after the Kimi Desktop session and browser cookies. Local storage is not App-Bound encrypted, so this can work when cookie decryption is blocked. Only unexpired three-segment JWTs are used; refresh tokens are never read. A manual Cookie header always wins, and Cookie source Off or Manual skips this step. Open Kimi in the browser to renew an expired session. Firefox and Safari local storage are not read, and only the `Default` and `Profile N` profiles are scanned.
+
 ## Troubleshooting
 
 - **"Chromium App-Bound Encryption"**: Modern Chrome, Edge, Brave, and other Chromium-based profiles can protect cookies with ABE. Closing the browser does not remove ABE; use a manual Cookie header or Firefox for the same login

@@ -5,10 +5,13 @@
 //! Provider policies are centralized in the submodules:
 //! - [`web`]: `kimi.com` cookie auth, browser-import gate (Cookie Source Off,
 //!   upstream #2623), and the shared web-token resolution chain
-//!   (manual cookie → Kimi Desktop session → browser import).
+//!   (manual cookie → Kimi Desktop session → browser import → Chromium
+//!   local-storage `access_token`, upstream #3923).
 //! - [`code_api`]: Kimi Code API auth/endpoint/CLI-credential policy, plus the
 //!   upstream 0.48.0 monthly-membership enrichment of Code API + CLI usage
 //!   from a signed-in Kimi Desktop session (#2622).
+//! - [`local_storage`]: current `access_token` JWTs from Chromium local storage
+//!   for the selected region, read through the shared LevelDB reader.
 //! - [`desktop_token`]: read-only, WAL-safe reader for the Kimi Desktop
 //!   (Electron) Chromium cookie store.
 //! - [`ratio_pool`]: zero-ratio placeholder reconciliation against matching
@@ -19,6 +22,7 @@
 mod auto;
 mod code_api;
 pub mod desktop_token;
+mod local_storage;
 #[cfg(test)]
 mod monthly_blocking_tests;
 mod ratio_pool;
