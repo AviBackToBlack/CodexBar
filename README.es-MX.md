@@ -102,7 +102,6 @@ Consulta el historial completo en [CHANGELOG.md](CHANGELOG.md).
 | Xiaomi MiMo | Cookies | Saldo, Plan de tokens |
 | Doubao | Clave API | Límites de solicitudes |
 | Command Code | Cookies | Créditos mensuales, Créditos comprados |
-| Crof | Clave API | Créditos, Cuota de solicitudes |
 | StepFun | Token Oasis | 5h, Semanal, Refresco de token |
 | Venice | Clave API | Saldo USD / DIEM |
 | OpenAI | Admin API / Clave API | Uso, Solicitudes, Costo con ámbito de proyecto, Saldo de créditos |

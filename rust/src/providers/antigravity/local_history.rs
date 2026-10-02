@@ -40,17 +40,6 @@ fn summarize_local_usage_from(
     }
 }
 
-pub(super) fn summarize_local_usage_from_explicit_roots(
-    database_roots: &[PathBuf],
-    jsonl_sessions_root: &Path,
-    now: DateTime<Utc>,
-    days: u32,
-) -> LocalTokenHistorySummary {
-    summarize_local_usage_from(database_roots, now, days, || {
-        local_sessions::summarize_jsonl_at(jsonl_sessions_root, now, days)
-    })
-}
-
 pub fn summarize_local_usage(days: u32) -> LocalTokenHistorySummary {
     let now = Utc::now();
     let Some(home) = dirs::home_dir() else {
@@ -58,7 +47,9 @@ pub fn summarize_local_usage(days: u32) -> LocalTokenHistorySummary {
     };
     let roots = configured_database_roots(&home);
     let tokscale_sessions = local_sessions::configured_tokscale_sessions(&home);
-    summarize_local_usage_from_explicit_roots(&roots, &tokscale_sessions, now, days)
+    summarize_local_usage_from(&roots, now, days, || {
+        local_sessions::summarize_jsonl_at(&tokscale_sessions, now, days)
+    })
 }
 
 /// Count local Antigravity conversation artifacts for the quota provider's

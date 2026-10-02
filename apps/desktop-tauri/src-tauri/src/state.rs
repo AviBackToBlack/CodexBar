@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use crate::commands::ProviderUsageSnapshot;
 use crate::proof_harness::ProofConfig;
-use crate::proof_runtime::ContainmentProof;
 use crate::surface::{SurfaceMode, SurfaceStateMachine, SurfaceTransition};
 use crate::surface_target::SurfaceTarget;
 
@@ -144,10 +143,6 @@ pub struct AppState {
     pub installer_path: Option<PathBuf>,
     /// Proof-harness configuration (set when `CODEXBAR_PROOF_MODE` is active).
     pub proof_config: Option<ProofConfig>,
-    /// Strict, isolated containment proof runtime, when active.
-    pub containment_proof: Option<ContainmentProof>,
-    /// In-memory settings route used by containment proof consumers.
-    pub proof_settings: Option<codexbar::settings::Settings>,
     /// True only after a validated proof seed was installed at startup.
     pub provider_cache_seeded: bool,
     /// Persistent notification manager — tracks which alerts have fired to prevent spam.
@@ -211,8 +206,6 @@ impl AppState {
             last_update_check_ms: None,
             installer_path: None,
             proof_config: None,
-            containment_proof: None,
-            proof_settings: None,
             provider_cache_seeded: false,
             notification_manager: codexbar::notifications::NotificationManager::new(),
             last_shown_at: None,
@@ -222,21 +215,6 @@ impl AppState {
             gesture_blur_guard: None,
             auto_resume: crate::auto_resume::AutoResumeState::default(),
         }
-    }
-
-    pub fn new_for_containment_proof(proof: ContainmentProof) -> Self {
-        let mut state = Self::new();
-        state.proof_settings = Some(proof.proof_settings());
-        state.containment_proof = Some(proof);
-        state
-    }
-
-    pub fn is_containment_proof(&self) -> bool {
-        self.containment_proof.is_some()
-    }
-
-    pub fn proof_settings(&self) -> Option<&codexbar::settings::Settings> {
-        self.proof_settings.as_ref()
     }
 
     pub fn mark_blur_dismissed(&mut self, dismissed_at: std::time::Instant) {

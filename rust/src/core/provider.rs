@@ -758,13 +758,22 @@ pub struct FetchContext {
     /// Manual cookie header (for testing)
     pub manual_cookie_header: Option<String>,
 
-    /// The cookie source is manual and no cookie is stored. The provider
-    /// decides what this means; Replicate fails closed instead of importing a
-    /// browser account the user did not select.
+    /// The cookie source is manual and no cookie is stored, or (for providers
+    /// whose cookie source only scopes the session) cookies are off. The
+    /// provider decides what this means; Replicate fails closed instead of
+    /// importing a browser account the user did not select, and Charm Hyper
+    /// skips its session lane.
     pub manual_cookie_missing: bool,
 
     /// API key for providers that require authentication
     pub api_key: Option<String>,
+
+    /// Type of the explicitly selected labeled token account, if any.
+    pub token_account_kind: Option<super::TokenAccountKind>,
+
+    /// A selected account is an identity boundary: providers must not retry
+    /// another ambient credential or account after its credential fails.
+    pub token_account_isolated: bool,
 
     /// Optional provider workspace/project scope from persisted settings.
     pub workspace_id: Option<String>,
@@ -801,6 +810,8 @@ impl Default for FetchContext {
             manual_cookie_header: None,
             manual_cookie_missing: false,
             api_key: None,
+            token_account_kind: None,
+            token_account_isolated: false,
             workspace_id: None,
             seat_credit_entitlement: None,
             api_region: None,
@@ -906,6 +917,19 @@ pub trait Provider: Send + Sync {
 
     /// Whether browser-cookie discovery/recovery is owned by the provider.
     fn owns_browser_cookie_resolution(&self) -> bool {
+        false
+    }
+
+    /// Whether the cookie source only scopes the browser session the
+    /// provider may use, leaving the selected usage source in charge of
+    /// routing.
+    ///
+    /// When true, the shell keeps the usage source for every cookie source:
+    /// `off` and a `manual` source without a stored cookie pass no header and
+    /// set [`FetchContext::manual_cookie_missing`], so the provider skips the
+    /// session and Auto can still use an API key. Otherwise the shell remaps
+    /// the source mode from the cookie source.
+    fn cookie_source_scopes_session_only(&self) -> bool {
         false
     }
 
@@ -1117,9 +1141,9 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Muse => "#0668E1",
         ProviderId::Replicate => "#000000",
         ProviderId::Nous => "#D6A55C",
-        ProviderId::Hyper => "#7C3AED",
+        ProviderId::Hyper => "#FF60FF",
         ProviderId::GitKraken => "#179287",
-        ProviderId::Bifrost => "#5B7CFA",
+        ProviderId::Bifrost => "#33C09E",
     }
 }
 
