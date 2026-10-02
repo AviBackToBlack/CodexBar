@@ -55,11 +55,7 @@ pub fn discover(kind: StorageKind) -> Vec<StorageCandidate> {
         .iter()
         .filter(|browser| browser.browser_type.is_chromium_based())
         .flat_map(|browser| {
-            candidates_in_user_data_dir(
-                &browser.user_data_dir,
-                browser.browser_type.display_name(),
-                kind,
-            )
+            candidates_in_profiles(&browser.profiles, browser.browser_type.display_name(), kind)
         })
         .collect()
 }
@@ -68,16 +64,26 @@ pub fn discover(kind: StorageKind) -> Vec<StorageCandidate> {
 ///
 /// Only `Default`, `Profile *`, and `user-*` directories count as profiles; guest and system
 /// profiles are ignored.
-pub fn candidates_in_user_data_dir(
+#[cfg(test)]
+fn candidates_in_user_data_dir(
     user_data_dir: &Path,
     label_prefix: &str,
     kind: StorageKind,
 ) -> Vec<StorageCandidate> {
-    sorted_child_dirs(user_data_dir, is_profile_dir_name)
-        .into_iter()
-        .flat_map(|(name, profile_dir)| {
-            let label = format!("{label_prefix} {name}{}", kind.label_suffix());
-            profile_store_paths(&profile_dir, kind)
+    let profiles = BrowserDetector::detect_chromium_profiles(user_data_dir);
+    candidates_in_profiles(&profiles, label_prefix, kind)
+}
+
+fn candidates_in_profiles(
+    profiles: &[super::detection::BrowserProfile],
+    label_prefix: &str,
+    kind: StorageKind,
+) -> Vec<StorageCandidate> {
+    profiles
+        .iter()
+        .flat_map(|profile| {
+            let label = format!("{label_prefix} {}{}", profile.name, kind.label_suffix());
+            profile_store_paths(&profile.path, kind)
                 .into_iter()
                 .map(move |path| StorageCandidate {
                     label: label.clone(),
@@ -106,15 +112,11 @@ fn profile_store_paths(profile_dir: &Path, kind: StorageKind) -> Vec<PathBuf> {
 }
 
 fn existing(path: PathBuf) -> Vec<PathBuf> {
-    if path.exists() {
+    if path.is_dir() {
         vec![path]
     } else {
         Vec::new()
     }
-}
-
-fn is_profile_dir_name(name: &str) -> bool {
-    name == "Default" || name.starts_with("Profile ") || name.starts_with("user-")
 }
 
 /// Child directories of `dir` whose (non-hidden, valid UTF-8) name passes `keep`, sorted by name.
