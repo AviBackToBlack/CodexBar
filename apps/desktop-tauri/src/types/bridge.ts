@@ -171,6 +171,7 @@ export interface ProviderSummary {
 }
 
 export interface SettingsSnapshot {
+  preferredCurrencyCode?: string;
   enabledProviders: string[];
   providerOrder?: string[];
   refreshIntervalSecs: number;
@@ -279,8 +280,17 @@ export interface SettingsSnapshot {
   providerAccentColors: Record<string, string>;
 }
 
+export interface CurrencyRatesSnapshot {
+  rates: Record<string, number>;
+  /** Codes the converter supports (Rust-owned list). */
+  supportedCodes: string[];
+  /** Normalized preference this snapshot was built for ("AUTO" or a code). */
+  preferredCode: string;
+}
+
 /** Partial settings object — only include fields you want to change. */
 export interface SettingsUpdate {
+  preferredCurrencyCode?: string;
   enabledProviders?: string[];
   refreshIntervalSecs?: number;
   adaptiveRefresh?: boolean;

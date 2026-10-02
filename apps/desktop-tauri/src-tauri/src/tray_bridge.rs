@@ -407,8 +407,16 @@ pub(crate) fn rebuild_tray_menu(app: &AppHandle) {
     let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
     let status_labels = if let Some(st) = app.try_state::<Mutex<AppState>>() {
+        let rates_cache = app
+            .try_state::<crate::commands::CurrencyRateCache>()
+            .map(|state| state.inner());
         let guard = st.lock().unwrap();
-        status_labels_for_settings(&settings, &guard.provider_cache, settings.ui_language)
+        status_labels_for_settings(
+            &settings,
+            &guard.provider_cache,
+            settings.ui_language,
+            rates_cache,
+        )
     } else {
         vec![]
     };
@@ -426,7 +434,11 @@ pub fn update_tray_status_items(
 ) {
     let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
-    let status_labels = status_labels_for_settings(&settings, snapshots, settings.ui_language);
+    let rates_cache = app
+        .try_state::<crate::commands::CurrencyRateCache>()
+        .map(|state| state.inner());
+    let status_labels =
+        status_labels_for_settings(&settings, snapshots, settings.ui_language, rates_cache);
 
     if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
         && let Some(tray) = app.tray_by_id("codexbar-main")
@@ -504,6 +516,7 @@ fn status_labels_for_settings(
     settings: &Settings,
     snapshots: &[crate::commands::ProviderUsageSnapshot],
     lang: codexbar::settings::Language,
+    rates_cache: Option<&crate::commands::CurrencyRateCache>,
 ) -> Vec<(String, String)> {
     let ordered_snapshots = ordered_snapshot_refs(settings, snapshots);
     let healthy: Vec<_> = ordered_snapshots
@@ -513,7 +526,7 @@ fn status_labels_for_settings(
     if settings.tray_icon_mode == TrayIconMode::PerProvider {
         return healthy
             .into_iter()
-            .map(|s| provider_status_label(s, lang))
+            .map(|s| provider_status_label(s, lang, rates_cache))
             .collect::<Vec<_>>();
     }
 
@@ -524,7 +537,7 @@ fn status_labels_for_settings(
         return vec![];
     };
 
-    let (_, label) = provider_status_label(selected, lang);
+    let (_, label) = provider_status_label(selected, lang, rates_cache);
     vec![("status_summary".to_string(), label)]
 }
 
@@ -555,6 +568,7 @@ fn ordered_snapshot_refs<'a>(
 fn provider_status_label(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     lang: codexbar::settings::Language,
+    rates_cache: Option<&crate::commands::CurrencyRateCache>,
 ) -> (String, String) {
     // MonthlyPlan metric (PAYG spend, e.g. Mistral): show formatted cost.
     let provider = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id);
@@ -564,11 +578,7 @@ fn provider_status_label(
     if preference == MetricPreference::MonthlyPlan
         && let Some(cost) = snapshot.cost.as_ref()
     {
-        let amount = if !cost.formatted_used.is_empty() {
-            cost.formatted_used.clone()
-        } else {
-            crate::commands::format_cost_amount(cost)
-        };
+        let amount = crate::commands::format_cost_amount(cost, rates_cache);
         return (
             snapshot.provider_id.clone(),
             format!("{} {}", snapshot.display_name, amount),
@@ -1180,6 +1190,7 @@ mod tests {
             &settings,
             &snapshots,
             codexbar::settings::Language::English,
+            None,
         );
 
         assert_eq!(
@@ -1207,6 +1218,7 @@ mod tests {
             &settings,
             &snapshots,
             codexbar::settings::Language::English,
+            None,
         );
 
         assert_eq!(
@@ -1312,9 +1324,9 @@ mod tests {
         );
 
         let (_, english_label) =
-            provider_status_label(&claude, codexbar::settings::Language::English);
+            provider_status_label(&claude, codexbar::settings::Language::English, None);
         let (_, japanese_label) =
-            provider_status_label(&claude, codexbar::settings::Language::Japanese);
+            provider_status_label(&claude, codexbar::settings::Language::Japanese, None);
         assert!(english_label.contains("Resets in"), "{english_label}");
         assert!(japanese_label.contains("リセットまで"), "{japanese_label}");
     }

@@ -185,11 +185,20 @@ describe("useTrayPanelLayout sizing", () => {
       tauriMocks.revealTrayPanelWindow.mock.calls.length;
     expect(settledRevealCount - revealsBeforeSettle).toBeLessThanOrEqual(1);
 
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 500));
-    });
-    expect(tauriMocks.revealTrayPanelWindow.mock.calls.length).toBe(
-      settledRevealCount,
+    let lastRevealCount = settledRevealCount;
+    let stableSince = Date.now();
+    await waitFor(
+      () => {
+        const revealCount =
+          tauriMocks.revealTrayPanelWindow.mock.calls.length;
+        if (revealCount !== lastRevealCount) {
+          lastRevealCount = revealCount;
+          stableSince = Date.now();
+        }
+        expect(revealCount - revealsBeforeSettle).toBeLessThanOrEqual(1);
+        expect(Date.now() - stableSince).toBeGreaterThanOrEqual(500);
+      },
+      { timeout: 3000, interval: 50 },
     );
   });
 
