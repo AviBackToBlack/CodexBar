@@ -256,6 +256,15 @@ pub fn parse_account_list(raw: &str) -> Result<ClaudeSwapAccountList, ClaudeSwap
     let active_field = object.get("activeAccountNumber").ok_or_else(|| {
         ClaudeSwapError::MalformedShape("missing activeAccountNumber".to_string())
     })?;
+    let supports_account_switching = match object.get("supportsAccountSwitching") {
+        None => true,
+        Some(Value::Bool(supported)) => *supported,
+        Some(_) => {
+            return Err(ClaudeSwapError::MalformedShape(
+                "supportsAccountSwitching is not a boolean".to_string(),
+            ));
+        }
+    };
     let active_account_number = match active_field {
         Value::Null => None,
         Value::Number(_) => Some(non_negative_slot(active_field).ok_or_else(|| {
@@ -303,6 +312,7 @@ pub fn parse_account_list(raw: &str) -> Result<ClaudeSwapAccountList, ClaudeSwap
     Ok(ClaudeSwapAccountList {
         active_account_number,
         accounts,
+        supports_account_switching,
     })
 }
 
@@ -473,6 +483,41 @@ mod tests {
         assert!(first.usage.five_hour.as_ref().unwrap().resets_at.is_some());
         assert_eq!(first.usage.scoped[0].name, "Fable only");
         assert_eq!(first.usage_status, ClaudeSwapUsageStatus::Ok);
+    }
+
+    #[test]
+    fn switching_capability_defaults_to_true_and_accepts_booleans() {
+        let parsed = parse_account_list(&list_fixture().to_string()).unwrap();
+        assert!(parsed.supports_account_switching);
+        for supported in [true, false] {
+            let mut fixture = list_fixture();
+            fixture["supportsAccountSwitching"] = json!(supported);
+            let parsed = parse_account_list(&fixture.to_string()).unwrap();
+            assert_eq!(parsed.supports_account_switching, supported);
+        }
+    }
+
+    #[test]
+    fn rejects_non_boolean_switching_capability() {
+        for value in [
+            json!(null),
+            json!(0),
+            json!(1),
+            json!("false"),
+            json!([]),
+            json!({}),
+        ] {
+            let mut fixture = list_fixture();
+            fixture["supportsAccountSwitching"] = value.clone();
+            assert!(
+                matches!(
+                    parse_account_list(&fixture.to_string()),
+                    Err(ClaudeSwapError::MalformedShape(ref message))
+                        if message == "supportsAccountSwitching is not a boolean"
+                ),
+                "{value} must be rejected"
+            );
+        }
     }
 
     #[test]

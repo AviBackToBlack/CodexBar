@@ -191,14 +191,21 @@ impl ClaudeSwapMutationOutcome {
 
 fn validate_claude_swap_operation(
     operation: ClaudeSwapAccountOperation,
+    list: &ClaudeSwapAccountList,
     account: &ClaudeSwapAccountRow,
 ) -> Result<(), String> {
     let expected_action = match operation {
         ClaudeSwapAccountOperation::Switch => ClaudeSwapAccountAction::Switch,
         ClaudeSwapAccountOperation::Reauthenticate => ClaudeSwapAccountAction::Reauthenticate,
     };
-    if claude_swap::action_for_account(account) == Some(expected_action) {
+    if claude_swap::action_for_account(list, account) == Some(expected_action) {
         return Ok(());
+    }
+    if !list.supports_account_switching {
+        return Err(
+            "This claude-swap adapter is read-only and does not support account switching."
+                .to_string(),
+        );
     }
     match operation {
         ClaudeSwapAccountOperation::Switch if account.is_active => {
@@ -230,7 +237,7 @@ fn run_claude_swap_operation(
     let before = claude_swap::read_account_list(&config.executable_path)
         .map_err(|error| error.to_string())?;
     let account = account_row_for_slot(&before, slot)?;
-    validate_claude_swap_operation(operation, account)?;
+    validate_claude_swap_operation(operation, &before, account)?;
 
     let result = claude_swap::switch_account(&config.executable_path, slot)
         .map_err(|error| error.to_string())?;
@@ -413,10 +420,15 @@ pub async fn claude_account_switch(
 mod tests {
     use super::*;
 
-    fn account_row(active: bool, status: &str) -> ClaudeSwapAccountRow {
+    fn account_list(
+        active: bool,
+        status: &str,
+        supports_account_switching: bool,
+    ) -> ClaudeSwapAccountList {
         let raw = serde_json::json!({
             "schemaVersion": 1,
             "activeAccountNumber": if active { serde_json::json!(1) } else { serde_json::Value::Null },
+            "supportsAccountSwitching": supports_account_switching,
             "accounts": [{
                 "number": 1,
                 "email": "test@example.com",
@@ -426,6 +438,10 @@ mod tests {
         });
         codexbar::providers::claude::claude_swap::parse_account_list(&raw.to_string())
             .expect("fixture should parse")
+    }
+
+    fn account_row(active: bool, status: &str) -> ClaudeSwapAccountRow {
+        account_list(active, status, true)
             .accounts
             .into_iter()
             .next()
@@ -434,15 +450,60 @@ mod tests {
 
     #[test]
     fn operation_validation_uses_the_projected_action_state() {
-        let switchable = account_row(false, "ok");
+        let switchable = account_list(false, "ok", true);
         assert!(
-            validate_claude_swap_operation(ClaudeSwapAccountOperation::Switch, &switchable).is_ok()
+            validate_claude_swap_operation(
+                ClaudeSwapAccountOperation::Switch,
+                &switchable,
+                &switchable.accounts[0]
+            )
+            .is_ok()
         );
 
-        let blocked = account_row(false, "no_credentials");
+        let blocked = account_list(false, "no_credentials", true);
         assert_eq!(
-            validate_claude_swap_operation(ClaudeSwapAccountOperation::Switch, &blocked),
+            validate_claude_swap_operation(
+                ClaudeSwapAccountOperation::Switch,
+                &blocked,
+                &blocked.accounts[0]
+            ),
             Err("That claude-swap account is not available for switching.".to_string())
+        );
+    }
+
+    #[test]
+    fn read_only_adapter_rejects_switch_and_reauthenticate() {
+        let expected = Err(
+            "This claude-swap adapter is read-only and does not support account switching."
+                .to_string(),
+        );
+        let inactive = account_list(false, "ok", false);
+        assert_eq!(
+            validate_claude_swap_operation(
+                ClaudeSwapAccountOperation::Switch,
+                &inactive,
+                &inactive.accounts[0]
+            ),
+            expected
+        );
+        let foreign = account_list(true, "foreign_credential", false);
+        assert_eq!(
+            validate_claude_swap_operation(
+                ClaudeSwapAccountOperation::Reauthenticate,
+                &foreign,
+                &foreign.accounts[0]
+            ),
+            expected
+        );
+        // The same row is accepted when the adapter supports switching.
+        let switching = account_list(true, "foreign_credential", true);
+        assert!(
+            validate_claude_swap_operation(
+                ClaudeSwapAccountOperation::Reauthenticate,
+                &switching,
+                &switching.accounts[0]
+            )
+            .is_ok()
         );
     }
 

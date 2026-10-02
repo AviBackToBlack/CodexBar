@@ -120,6 +120,31 @@ describe("ClaudeSwapAccountsSection", () => {
     expect(screen.getByRole("status").textContent).toBe("ClaudeSwapSwitched");
   });
 
+  it("renders no action button when the adapter is read-only", async () => {
+    mocks.getSettingsSnapshot.mockResolvedValue({
+      claudeSwapEnabled: true,
+      claudeSwapExecutablePath: "~/bin/cswap",
+    });
+    // Read-only adapters project `action: null` for every row, including
+    // inactive rows that would otherwise be switchable.
+    mocks.claudeSwapAccountsList.mockResolvedValue(
+      enabledState([
+        active,
+        { ...switchable, action: null },
+        { ...active, id: "claude-swap:4", slot: 4, label: "foreign@example.com", status: "foreign_credential", action: null },
+      ]),
+    );
+    render(<ClaudeSwapAccountsSection t={t} />);
+    await screen.findByText("work@example.com");
+
+    expect(screen.getByText("personal@example.com")).toBeTruthy();
+    expect(screen.getAllByText("TokenAccountActive").length).toBeGreaterThan(0);
+    expect(screen.queryByText("ClaudeSwapSwitchButton")).toBeNull();
+    expect(screen.queryByText("ClaudeSwapReauthenticateButton")).toBeNull();
+    expect(mocks.claudeSwapAccountSwitch).not.toHaveBeenCalled();
+    expect(mocks.claudeSwapAccountReauthenticate).not.toHaveBeenCalled();
+  });
+
   it("surfaces adapter errors without offering a switch", async () => {
     mocks.getSettingsSnapshot.mockResolvedValue({
       claudeSwapEnabled: true,
