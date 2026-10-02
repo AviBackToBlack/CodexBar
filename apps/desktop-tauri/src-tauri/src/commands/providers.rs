@@ -209,6 +209,24 @@ pub(crate) fn build_fetch_context(
                 (SourceMode::Web, stored_cookie.clone(), false)
             }
             _ if active_token_env.is_some() => (SourceMode::OAuth, None, false),
+            // Charm Hyper: the cookie source only picks the session, and
+            // the usage source keeps routing. Off and an empty Manual
+            // source never import a browser session, while Auto keeps its
+            // API-key fallback.
+            "off" | "manual" if provider.cookie_source_scopes_session_only() => {
+                let cookie_header = if cookie_source == "manual" {
+                    active_token_cookie.clone().or(stored_cookie)
+                } else {
+                    None
+                };
+                let source_mode = if provider.available_sources().contains(&usage_source) {
+                    usage_source
+                } else {
+                    SourceMode::Auto
+                };
+                let cookie_missing = cookie_header.is_none();
+                (source_mode, cookie_header, cookie_missing)
+            }
             "off" if provider_uses_oauth_without_cookies(id, usage_source) => {
                 (SourceMode::OAuth, None, false)
             }
@@ -274,8 +292,14 @@ pub(crate) fn build_fetch_context(
     // Cookie-web providers (Cursor, OpenCode, …) reject SourceMode::Cli. The shell
     // historically mapped "manual + no cookie" to Cli, which surfaces as
     // "Source mode 'Cli' not supported". Remap to Web and try browser cookies
-    // unless the user explicitly disabled cookies ("off").
-    if source_mode == SourceMode::Cli && cookie_source != "off" && !provider.supports_cli() {
+    // unless the user explicitly disabled cookies ("off"). Providers whose
+    // cookie source only scopes the session (Charm Hyper) own this contract in
+    // the provider, so the shell must not remap their source mode.
+    if source_mode == SourceMode::Cli
+        && cookie_source != "off"
+        && !provider.supports_cli()
+        && !provider.cookie_source_scopes_session_only()
+    {
         if cookie_header
             .as_deref()
             .map(str::trim)
