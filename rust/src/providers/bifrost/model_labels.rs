@@ -25,7 +25,6 @@ pub(super) fn model_name(raw: &str) -> String {
     let name = strip_dotted_prefix(name, &VENDORS);
     let name = strip_revision(name);
     let name = strip_date(name);
-    let name = name.trim_end_matches([' ', '\t', '-']);
     if name.is_empty() { raw } else { name }.to_owned()
 }
 
@@ -129,6 +128,7 @@ mod tests {
             ("gpt-4o", "gpt-4o"),
             ("global.qwen.qwen3-32b", "qwen3-32b"),
             ("usa.model", "usa.model"),
+            ("model-", "model-"),
             ("anthropic.", "anthropic."),
             ("-20250514", "-20250514"),
             ("model-v1:", "model-v1:"),
