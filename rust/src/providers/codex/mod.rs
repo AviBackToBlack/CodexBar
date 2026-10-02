@@ -5,6 +5,7 @@
 
 mod api;
 mod pat;
+pub mod reset_observations;
 mod weekly_reset;
 
 use async_trait::async_trait;
