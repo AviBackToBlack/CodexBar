@@ -182,7 +182,9 @@ fn provider_fetch_context() -> FetchContext {
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        browser_cookie_import: false,
         requires_optional_usage_completeness: false,
+        optional_details_enabled: false,
     }
 }
 
@@ -314,7 +316,9 @@ async fn collect_claude_accounts(
             api_region: None,
             gateway_url: None,
             auto_prefer_web: false,
+            browser_cookie_import: false,
             requires_optional_usage_completeness: false,
+            optional_details_enabled: false,
         };
         populate_api_region_from_settings(ProviderId::Claude, settings, &mut ctx);
         set.spawn(async move {

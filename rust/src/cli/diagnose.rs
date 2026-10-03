@@ -190,8 +190,10 @@ async fn collect_provider_diagnostic(
             .provider_config(provider_id)
             .and_then(|config| config.gateway_url.clone()),
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // Diagnostics keep the short optional-join grace (upstream #2583 gate).
         requires_optional_usage_completeness: false,
+        optional_details_enabled: settings.optional_details_enabled(provider_id),
     };
 
     let fetch_result = provider.fetch_usage(&ctx).await;

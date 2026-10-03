@@ -12,8 +12,8 @@
 )]
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::core::ProviderId;
 use crate::cost_reporting_period::CostReportingPeriod;
@@ -31,6 +31,8 @@ pub const CLAUDE_DAILY_ROUTINES_USAGE_ITEM_ID: &str = "metric:extra-claude-routi
 mod api_keys;
 mod cost_time_zone;
 mod manual_cookies;
+mod optional_details;
+mod preferences_document;
 mod provider_workspace;
 mod raw;
 mod status;
@@ -39,6 +41,8 @@ mod types;
 pub use api_keys::*;
 pub use cost_time_zone::*;
 pub use manual_cookies::*;
+pub use optional_details::provider_has_optional_details;
+pub use preferences_document::*;
 pub use provider_workspace::*;
 use raw::RawSettings;
 pub use status::*;
@@ -188,6 +192,10 @@ pub struct Settings {
     #[serde(default)]
     pub predictive_pace_warning_enabled: bool,
 
+    /// Notify once per failure episode when a provider account needs sign-in again.
+    #[serde(default)]
+    pub credential_expiry_notifications_enabled: bool,
+
     /// Show pace visualizations and forecast text in provider menu cards.
     #[serde(default = "default_true")]
     pub show_pace: bool,
@@ -235,6 +243,12 @@ pub struct Settings {
     #[serde(default = "default_global_shortcut")]
     pub global_shortcut: String,
 
+    /// Provider-switcher shortcut overrides (action -> shortcut, normalized).
+    /// Empty means every action uses its default; see
+    /// [`crate::switcher_shortcuts`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub switcher_shortcuts: BTreeMap<String, String>,
+
     /// Additional Codex home or sessions directories to include in local cost scans.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codex_custom_sessions_dirs: Vec<String>,
@@ -242,6 +256,10 @@ pub struct Settings {
     /// Discover local and configured SSH Codex/Claude sessions.
     #[serde(default)]
     pub agent_sessions_enabled: bool,
+
+    /// Keep the system awake (no idle sleep) while a local agent session is live.
+    #[serde(default)]
+    pub stay_awake_enabled: bool,
 
     /// SSH targets queried for remote agent sessions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -587,6 +605,7 @@ impl Default for Settings {
             reset_time_relative: true, // Show relative times by default
             show_reset_when_exhausted: false,
             predictive_pace_warning_enabled: false,
+            credential_expiry_notifications_enabled: false,
             show_pace: true,
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             overview_layout: default_overview_layout(),
@@ -598,8 +617,10 @@ impl Default for Settings {
             provider_metrics: HashMap::new(), // Empty = use Automatic for all
             provider_order: Vec::new(), // Empty = canonical ProviderId::all() order
             global_shortcut: default_global_shortcut(), // Ctrl+Shift+U by default
+            switcher_shortcuts: BTreeMap::new(),
             codex_custom_sessions_dirs: Vec::new(),
             agent_sessions_enabled: false,
+            stay_awake_enabled: false,
             agent_session_ssh_hosts: Vec::new(),
             hooks_enabled: false,
             http_proxy_enabled: false,
@@ -663,19 +684,12 @@ impl Settings {
 
     /// Load settings from disk
     pub fn load() -> Self {
+        let path = Self::settings_path();
         #[allow(
             unused_mut,
             reason = "mutability is needed for conditional initialization paths that the compiler cannot prove"
         )]
-        let mut settings = match Self::settings_path() {
-            Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
-                Ok(content) => {
-                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
-                }
-                Err(_) => Self::default(),
-            },
-            _ => Self::default(),
-        };
+        let mut settings = Self::load_from_path(path.as_deref());
 
         // Sync autostart toggle with actual registry state and repair stale commands from older builds.
         #[cfg(target_os = "windows")]
@@ -690,6 +704,18 @@ impl Settings {
         settings.migrate_legacy_usage_item_flags();
 
         settings
+    }
+
+    fn load_from_path(path: Option<&Path>) -> Self {
+        match path {
+            Some(path) if path.exists() => match crate::secure_file::read_string(path) {
+                Ok(content) => {
+                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
+                }
+                Err(_) => Self::default(),
+            },
+            _ => Self::default(),
+        }
     }
 
     /// Materialize `hidden_usage_item_ids` from the pre-0.62 per-provider
@@ -758,13 +784,17 @@ impl Settings {
         let path = Self::settings_path()
             .ok_or_else(|| anyhow::anyhow!("Could not determine settings path"))?;
 
+        self.save_to_path(&path)
+    }
+
+    fn save_to_path(&self, path: &Path) -> anyhow::Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        crate::secure_file::write_string(&path, &json)?;
+        crate::secure_file::write_string(path, &json)?;
 
         Ok(())
     }

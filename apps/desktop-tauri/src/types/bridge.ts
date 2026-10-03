@@ -189,6 +189,7 @@ export interface SettingsSnapshot {
   criticalUsageThreshold: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
+  credentialExpiryNotificationsEnabled: boolean;
   showPace?: boolean;
   trayIconMode: TrayIconMode;
   stackedTrayTopProvider?: string | null;
@@ -209,9 +210,13 @@ export interface SettingsSnapshot {
   autoDownloadUpdates: boolean;
   installUpdatesOnQuit: boolean;
   globalShortcut: string;
+  /** Fully resolved action -> shortcut map (defaults overlaid by overrides). */
+  switcherShortcuts: Record<string, string>;
   /** Extra Codex home or sessions directories scanned for local cost estimates. */
   codexCustomSessionsDirs: string[];
   agentSessionsEnabled?: boolean;
+  /** Hold system awake while a local agent session is live. */
+  stayAwakeEnabled?: boolean;
   agentSessionSshHosts?: string[];
   /** Master switch for external hooks (hooks.json next to settings). */
   hooksEnabled?: boolean;
@@ -315,6 +320,7 @@ export interface SettingsUpdate {
   criticalUsageThreshold?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
+  credentialExpiryNotificationsEnabled?: boolean;
   showPace?: boolean;
   trayIconMode?: TrayIconMode;
   stackedTrayTopProvider?: string;
@@ -335,8 +341,11 @@ export interface SettingsUpdate {
   autoDownloadUpdates?: boolean;
   installUpdatesOnQuit?: boolean;
   globalShortcut?: string;
+  /** Overrides only; replaces the stored map. `{}` restores the defaults. */
+  switcherShortcuts?: Record<string, string>;
   codexCustomSessionsDirs?: string[];
   agentSessionsEnabled?: boolean;
+  stayAwakeEnabled?: boolean;
   agentSessionSshHosts?: string[];
   hooksEnabled?: boolean;
   httpProxyEnabled?: boolean;
@@ -735,6 +744,8 @@ export interface ProviderUsageSnapshot {
     window: RateWindowSnapshot;
     /** Provider-declared fallback lane; only fills in without a core quota window. */
     fallbackLane?: boolean;
+    /** Provider-declared tray-icon lane this window stands in for when that core lane is absent. */
+    iconFallback?: "primary" | "secondary";
   }>;
   /** Display-only discrete provider inventory; never used as quota math. */
   inventory?: ProviderInventoryItem[];
@@ -917,6 +928,8 @@ export interface AppInfoBridge {
 export interface DailyCostPoint {
   date: string;
   value: number | null;
+  /** Claude requests excluded from this day's totals (upstream 0.60.5 #3688). */
+  incompleteRequestCount?: number;
 }
 
 /** Exact local token totals per day (upstream 0.50.0 #2930). */
@@ -949,6 +962,8 @@ export interface ProviderLocalUsageSummary {
   topModel: string | null;
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+  /** Claude requests excluded from the selected-period totals (upstream 0.60.5 #3688). */
+  incompleteRequestCount?: number;
 }
 
 export interface QuotaWindowHistoryPoint {
@@ -1069,6 +1084,9 @@ export interface ProviderDetail {
   autoResumeAfterQuotaReset: boolean;
   /** Whether the active credential lane can be correlated to a local CLI session. */
   autoResumeSupported: boolean;
+  /** LiteLLM and Claude expose one opt-in extra breakdown; other providers do not. */
+  optionalDetailsSupported: boolean;
+  optionalDetailsEnabled: boolean;
 
   // Identity
   email: string | null;
@@ -1099,6 +1117,8 @@ export interface ProviderDetail {
     window: RateWindowSnapshot;
     /** Provider-declared fallback lane; only fills in without a core quota window. */
     fallbackLane?: boolean;
+    /** Provider-declared tray-icon lane this window stands in for when that core lane is absent. */
+    iconFallback?: "primary" | "secondary";
   }>;
   /** Metric and extra rows exposed by the current provider snapshot. */
   usageItems?: ProviderUsageItem[];
@@ -1128,6 +1148,9 @@ export interface ProviderDetail {
   /** Phase 6c — currently-persisted cookie source value ("auto" | "manual" | "off" | …).
    *  `null` for providers that do not expose a cookie-source picker. */
   cookieSource: string | null;
+  /** Manual cookie source is selected with no usable header, and the provider
+   *  fails closed instead of importing browser cookies. */
+  manualCookieMissing?: boolean;
   /** Phase 6c — currently-persisted region value. `null` for non-regional providers. */
   region: string | null;
 }

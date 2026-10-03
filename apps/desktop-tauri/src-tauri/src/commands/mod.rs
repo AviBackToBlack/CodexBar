@@ -37,11 +37,13 @@ mod claude_accounts;
 pub(crate) mod claude_reconciliation;
 mod codex_accounts;
 mod codex_workspaces;
+mod credential_alerts;
 mod credential_detection;
 mod credentials;
 mod diagnostics;
 mod grok_accounts;
 mod locale_cmd;
+mod preferences_transfer;
 mod provider_detail;
 mod provider_refresh;
 mod provider_settings;
@@ -64,6 +66,7 @@ pub use credentials::*;
 pub use diagnostics::*;
 pub use grok_accounts::*;
 pub use locale_cmd::*;
+pub use preferences_transfer::*;
 pub use provider_detail::*;
 #[cfg(test)]
 pub(crate) use provider_refresh::is_provider_cache_fresh;
@@ -125,6 +128,10 @@ fn provider_dashboard_url(id: ProviderId, settings: &Settings) -> Option<String>
                 .console_url()
                 .to_string(),
         ),
+        // The llmman dashboard is the configured daemon itself.
+        ProviderId::LLMMan => Some(codexbar::providers::llmman::dashboard_url(Some(
+            settings.workspace_id(id),
+        ))),
         _ => instantiate_provider(id)
             .metadata()
             .dashboard_url

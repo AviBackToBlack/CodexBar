@@ -6,6 +6,7 @@
 //! not for inference keys (`LLM_` / `LLM|`).
 
 pub mod local_usage;
+mod web_quota;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -78,7 +79,7 @@ impl MuseProvider {
         }
     }
 
-    async fn fetch_api(&self) -> Result<ProviderFetchResult, ProviderError> {
+    async fn fetch_api(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         let token = resolve_device_token()?;
         let response = timeout(
             REQUEST_TIMEOUT,
@@ -102,7 +103,15 @@ impl MuseProvider {
         // read_bounded_body, which also covers unknown or lying
         // content-length headers; no separate precheck is needed.
         let body = read_bounded_body(response).await?;
-        parse_response(&body)
+        match parse_login_response(&body)? {
+            LoginResponse::Complete(result) => Ok(*result),
+            // The login omits quotas while the 5-hour window is idle. The
+            // selected dev.meta.ai team can fill them in when the user opted in.
+            LoginResponse::WithoutQuota(identity) => {
+                let reading = web_quota::fetch_reading(ctx, &identity).await;
+                Ok(web_quota::windowless_result(&identity, reading))
+            }
+        }
     }
 }
 
@@ -144,7 +153,7 @@ impl Provider for MuseProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::OAuth => self.fetch_api().await,
+            SourceMode::Auto | SourceMode::OAuth => self.fetch_api(ctx).await,
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
             }
@@ -156,6 +165,12 @@ impl Provider for MuseProvider {
     }
 
     fn supports_oauth(&self) -> bool {
+        true
+    }
+
+    /// dev.meta.ai cookies only fill in quotas the login response omits; the
+    /// device-code login stays the usage source.
+    fn cookies_only_enrich_usage(&self) -> bool {
         true
     }
 }
@@ -247,7 +262,22 @@ fn status_error(status: StatusCode) -> ProviderError {
     }
 }
 
+/// A parsed login response: a complete result, or an active subscription
+/// whose response carried no quota windows.
+enum LoginResponse {
+    Complete(Box<ProviderFetchResult>),
+    WithoutQuota(web_quota::LoginIdentity),
+}
+
+#[cfg(test)]
 fn parse_response(body: &[u8]) -> Result<ProviderFetchResult, ProviderError> {
+    match parse_login_response(body)? {
+        LoginResponse::Complete(result) => Ok(*result),
+        LoginResponse::WithoutQuota(identity) => Ok(web_quota::windowless_result(&identity, None)),
+    }
+}
+
+fn parse_login_response(body: &[u8]) -> Result<LoginResponse, ProviderError> {
     let decoded: Value = serde_json::from_slice(body).map_err(|_| {
         ProviderError::Parse(
             "Could not parse Muse Code subscription usage: expected JSON".to_string(),
@@ -270,24 +300,10 @@ fn parse_response(body: &[u8]) -> Result<ProviderFetchResult, ProviderError> {
     let plan = optional_text(root.get("subs_tier_name"), "subs_tier_name")?;
     let email = optional_text(root.get("user_email"), "user_email")?;
     let Some(raw_usage) = root.get("subs_usage").filter(|value| !value.is_null()) else {
-        let mut usage = UsageSnapshot::new(RateWindow::informational(
-            "Subscription active; quota was not included in this login response",
-        ))
-        .with_login_method("Muse login");
-        if let Some(email) = email {
-            usage = usage.with_email(email);
-        }
-        let mut result = ProviderFetchResult::new(usage, "oauth")
-            .with_non_authoritative_pace()
-            .with_display_detail(ProviderDisplayDetail::new(
-                "quota",
-                "Quota",
-                "Not included in this login response",
-            ));
-        if let Some(plan) = plan {
-            result = result.with_display_detail(ProviderDisplayDetail::new("plan", "Plan", plan));
-        }
-        return Ok(result);
+        return Ok(LoginResponse::WithoutQuota(web_quota::LoginIdentity {
+            email,
+            plan,
+        }));
     };
     let usage = object(raw_usage, "subs_usage")?;
     let window = object(
@@ -358,7 +374,7 @@ fn parse_response(body: &[u8]) -> Result<ProviderFetchResult, ProviderError> {
     if let Some(plan) = plan {
         result = result.with_display_detail(ProviderDisplayDetail::new("plan", "Plan", plan));
     }
-    Ok(result)
+    Ok(LoginResponse::Complete(Box::new(result)))
 }
 
 fn object<'a>(

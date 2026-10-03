@@ -132,6 +132,27 @@ pub fn set_provider_auto_resume_after_quota_reset(
     Ok(())
 }
 
+/// Persist the opt-in for a provider's optional extra breakdown (LiteLLM model
+/// activity, Claude workspace spend). Takes effect on the next refresh.
+#[tauri::command]
+pub fn set_provider_optional_details(
+    app: tauri::AppHandle,
+    provider_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let id = parse_provider_arg(&provider_id)?;
+    if !codexbar::settings::provider_has_optional_details(id) {
+        return Err(format!(
+            "Provider '{provider_id}' has no optional detail breakdown"
+        ));
+    }
+    let mut settings = Settings::load();
+    settings.set_optional_details_enabled(id, enabled);
+    settings.save().map_err(|e| e.to_string())?;
+    crate::events::emit_settings_changed(&app);
+    Ok(())
+}
+
 // ── OpenRouter Management API key ────────────────────────────────────
 
 #[tauri::command]
@@ -223,7 +244,9 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "sakana" => ProviderId::Sakana,
         "notion" => ProviderId::Notion,
         "grok" => ProviderId::Grok,
+        "muse" => ProviderId::Muse,
         "replicate" => ProviderId::Replicate,
+        "raycast" => ProviderId::Raycast,
         "helmcode" => ProviderId::Helmcode,
         "typesafe" => ProviderId::TypeSafe,
         "hyper" => ProviderId::Hyper,
@@ -329,13 +352,16 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     Some(match provider_id {
         "openaiapi" => ProviderId::OpenAIApi,
         "litellm" => ProviderId::LiteLLM,
+        "llmman" => ProviderId::LLMMan,
         "devin" => ProviderId::Devin,
         "opencodego" => ProviderId::OpenCodeGo,
         "zed" => ProviderId::Zed,
+        "llmproxy" => ProviderId::LLMProxy,
         "xai" => ProviderId::Xai,
         "v0" => ProviderId::V0,
         "helmcode" => ProviderId::Helmcode,
         "gitkraken" => ProviderId::GitKraken,
+        "muse" => ProviderId::Muse,
         _ => return None,
     })
 }
@@ -394,6 +420,21 @@ mod tests {
     use super::{gateway_provider, litellm_workspace_change_allowed, workspace_provider};
 
     #[test]
+    fn muse_exposes_cookie_source_and_browser_team_settings() {
+        assert_eq!(workspace_provider("muse"), Some(ProviderId::Muse));
+        assert_eq!(
+            super::cookie_source_provider("muse"),
+            Some(ProviderId::Muse)
+        );
+        let values: Vec<String> =
+            super::cookie_source_options_for("muse", codexbar::settings::Language::English)
+                .into_iter()
+                .map(|option| option.value)
+                .collect();
+        assert_eq!(values, ["auto", "manual", "off"]);
+    }
+
+    #[test]
     fn maps_opencode_go_workspace_provider() {
         assert_eq!(
             workspace_provider("opencodego"),
@@ -444,6 +485,11 @@ mod tests {
         assert_eq!(gateway_provider("bifrost"), Some(ProviderId::Bifrost));
         assert_eq!(gateway_provider("aixy"), Some(ProviderId::Aixy));
         assert_eq!(gateway_provider("codex"), None);
+    }
+
+    #[test]
+    fn maps_llmman_workspace_provider() {
+        assert_eq!(workspace_provider("llmman"), Some(ProviderId::LLMMan));
     }
 
     #[test]
@@ -810,6 +856,29 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             ),
             cookie_option(lang, "off", "", "", Some("Notion cookies are disabled.")),
         ],
+        "muse" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Reads the selected team's quota with the signed-in dev.meta.ai browser session.",
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste the llama_dev_sess cookie from dev.meta.ai. Nothing is read until you paste one.",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some("Browser sessions are never read for Muse Code."),
+            ),
+        ],
         "replicate" => vec![
             cookie_option(
                 lang,
@@ -824,6 +893,32 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 "",
                 "Paste a Cookie header from https://replicate.com/account/billing.",
                 None,
+            ),
+        ],
+        "raycast" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                locale::get_text(lang, locale::LocaleKey::ProviderRaycastAutoImportHelp),
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                locale::get_text(lang, locale::LocaleKey::ProviderRaycastManualCookieHelp),
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some(
+                    locale::get_text(lang, locale::LocaleKey::ProviderRaycastCookiesDisabled)
+                        .as_str(),
+                ),
             ),
         ],
         "helmcode" => vec![

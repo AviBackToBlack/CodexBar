@@ -8,6 +8,8 @@
 //! Personal/Solo path: OneConsole personal token-plan APIs (+ best-effort sec_token).
 
 mod cli;
+#[cfg(test)]
+mod monthly_tests;
 mod personal;
 mod region;
 
@@ -40,6 +42,7 @@ pub(super) const PERSONAL_QUOTA_CONFIG_API: &str =
 const FIVE_HOUR_MINUTES: u32 = 5 * 60;
 const WEEKLY_MINUTES: u32 = 7 * 24 * 60;
 const LEGACY_MINUTES: u32 = 30 * 24 * 60;
+const MONTHLY_MINUTES: u32 = 30 * 24 * 60;
 
 pub struct AlibabaTokenPlanProvider {
     metadata: ProviderMetadata,
@@ -58,6 +61,9 @@ pub(super) struct TokenPlanSnapshot {
     pub(super) weekly_used_percent: Option<f64>,
     pub(super) weekly_total_quota: Option<f64>,
     pub(super) weekly_resets_at: Option<DateTime<Utc>>,
+    pub(super) monthly_used_percent: Option<f64>,
+    pub(super) monthly_total_quota: Option<f64>,
+    pub(super) monthly_resets_at: Option<DateTime<Utc>>,
 }
 
 impl AlibabaTokenPlanProvider {
@@ -295,6 +301,9 @@ impl AlibabaTokenPlanProvider {
             weekly_used_percent: None,
             weekly_total_quota: None,
             weekly_resets_at: None,
+            monthly_used_percent: None,
+            monthly_total_quota: None,
+            monthly_resets_at: None,
         })
     }
 
@@ -334,19 +343,38 @@ impl AlibabaTokenPlanProvider {
                 quota_detail_percent(percent, snapshot.weekly_total_quota),
             )
         });
+        let monthly = snapshot.monthly_used_percent.map(|percent| {
+            RateWindow::with_details(
+                percent,
+                Some(MONTHLY_MINUTES),
+                snapshot.monthly_resets_at,
+                quota_detail_percent(percent, snapshot.monthly_total_quota),
+            )
+        });
         // Prefer the 5-hour window, then the Team/legacy credit envelope. Personal/Solo
         // payloads sometimes expose only `per1WeekPercentage`; promote that window to
-        // primary instead of failing the whole fetch.
-        let (primary, secondary) = match (five_hour.or(legacy), weekly) {
-            (Some(primary), secondary) => (primary, secondary),
-            (None, Some(weekly)) => (weekly, None),
-            (None, None) => {
-                return Err(ProviderError::Parse(
-                    "Alibaba Token Plan quota totals missing".into(),
-                ));
-            }
-        };
+        // primary instead of failing the whole fetch. A monthly window takes the primary
+        // bar only when no other window exists; otherwise it is an extra "Monthly" row.
+        let (primary, secondary, primary_label, monthly_extra) =
+            match (five_hour.or(legacy), weekly) {
+                (Some(primary), secondary) => (primary, secondary, None, monthly),
+                (None, Some(weekly)) => (weekly, None, None, monthly),
+                (None, None) => match monthly {
+                    Some(monthly) => (monthly, None, Some("Monthly"), None),
+                    None => {
+                        return Err(ProviderError::Parse(
+                            "Alibaba Token Plan quota totals missing".into(),
+                        ));
+                    }
+                },
+            };
         let mut usage = UsageSnapshot::new(primary);
+        if let Some(label) = primary_label {
+            usage = usage.with_primary_label(label);
+        }
+        if let Some(monthly) = monthly_extra {
+            usage = usage.with_extra_rate_window("monthly", "Monthly", monthly);
+        }
         if let Some(secondary) = secondary {
             usage = usage.with_secondary(secondary);
         }

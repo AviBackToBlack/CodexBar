@@ -74,6 +74,17 @@ bundled-credit quota from the session token.
   again and refresh.
 - Manual mode needs a freshly pasted Cookie header from a signed-in
   `venice.ai` request; an old header fails with the expired-session message.
+### Raycast credits
+
+Raycast reads the unofficial `frontend_api/current_user/ai_credits` route of
+`www.raycast.com` with the `__raycast_session` and `csrf_token` cookies only.
+Auto imports those cookies from Chrome (all profiles, exact `www.raycast.com`
+host first); Windows Chrome App-Bound Encryption can block automatic import, in
+which case paste a Cookie header under Manual. A manual header is pinned and
+never falls back to a browser, and Off makes no request. When the response has
+a positive allowance and a known balance the provider shows one "credits left"
+meter with the renewal date; otherwise it shows the balance and total as detail
+rows. Top-up packages and credit details are not fetched.
 
 ### Replicate billing
 
@@ -100,6 +111,55 @@ Browser session never uses the key, and API never reads cookies. The cookie and
 the bearer key are never sent together. Rate limits, server errors and
 malformed balances are final and do not fall back. Upstream's multiple API-key
 token accounts are not ported yet.
+
+### llmman daemon
+
+llmman reads a local (or LAN) llmman daemon: `GET {base}/llmman/node` for the
+memory budget plus loaded and stored models, and a best-effort
+`GET {base}/api/version`. The base URL comes from provider extras or
+`LLMMAN_HOST` and defaults to `http://127.0.0.1:17434`; a trailing `/v1` is
+accepted and dropped per request. `LLMMAN_API_KEY` is optional, because a
+daemon without configured keys is open, and is sent as a Bearer token only when
+set. Plain HTTP is accepted only for localhost, loopback, private-network
+(10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10) and `.local`
+hosts; any public host must use HTTPS. Embedded credentials, queries, and
+fragments are rejected.
+
+### DevPass
+
+DevPass reads `GET https://api.llmgateway.io/v1/key` with a regular LLM Gateway
+API key (`DEVPASS_API_KEY` or the Settings key field). Publishable keys and
+end-user sessions get HTTP 403. Plan credits are the primary lane and the
+premium weekly allowance is the secondary lane (seven-day window; the reset
+comes only from the response, and an inactive window has no reset). A
+pay-as-you-go key (`devPlan: none`) shows only key-scoped all-time spend.
+Remaining plan credits are an allowance, not a wallet balance, so no balance is
+reported. Amounts must be plain decimal strings; anything else fails the
+refresh instead of showing as zero. The key is only sent to the fixed HTTPS
+origin, redirects are not followed, and response bodies never appear in errors.
+
+### Muse Code browser team quota
+
+Muse Code reads its quota from the device-code login. When that response has no
+`subs_usage`, CodexBar can optionally read the quota of one dev.meta.ai team you
+select in Settings → Providers → Muse Code → **Browser team**.
+
+- The cookie source is **Off** by default. The Windows default ("Manual" with no
+  pasted cookie) also reads nothing, and never touches a browser.
+- **Automatic** imports the `llama_dev_sess` cookie from the selected browser.
+  **Manual** accepts a pasted Cookie header or cURL capture.
+- Requests, in order: `GET /api/auth/me` (its email must match the login email,
+  case-insensitively), `GET /api/portal/teams`, then
+  `GET /api/portal/teams/{id}/subscription-quota` for the selected team only. The
+  team's `tier` must equal the login plan. At most 5 requests, 8 seconds each.
+- The team list appears as the picker options and starts at "Choose a team...";
+  the first team is never selected for you. The team ID is stored as the provider
+  workspace value and accepts digits only.
+- The source label becomes `oauth+web`. This port has no `estimated` data
+  confidence, so the pace shown for this reading is marked non-authoritative
+  instead. The device-code token is only sent to `api.meta.ai`; dev.meta.ai
+  requests carry only the browser cookie.
+- The CLI does not read browser cookies for Muse Code.
 
 ## API-key gateway providers
 
@@ -141,7 +201,7 @@ Optional status polling (provider status pages) is available via CLI `--status` 
 
 ## Usage & Spend
 
-Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, or DeepSeek subscription instead of appearing as a second fake provider. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only. Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
+Desktop tab id: `usageSpend`. The desktop and Overview consume one shared spend catalog. Codex and Claude local logs are first-class; routed OpenCodex usage enriches the matching Codex, OpenCode Go, Kimi, or DeepSeek subscription instead of appearing as a second fake provider. xAI and OpenRouter can publish exact provider-metered daily USD spend when their management credentials are configured, while Grok local sessions contribute tokens only (the scan covers exactly the requested number of local calendar days, including today). Missing spend sources remain unknown rather than becoming a false `$0`. Do not invent cross-currency totals.
 
 ### AWS Bedrock monitoring
 
@@ -155,7 +215,7 @@ Custom pricing overlays are exact-match overrides used only where the local spen
 
 ### OpenCode, Codex quota, and local cost boundaries
 
-OpenCode-held OpenAI/Codex OAuth can be reused for **remote Codex account quota** only when the Codex provider's `External OAuth sources` setting is explicitly enabled. Native Codex credentials still take precedence, an explicit `CODEX_HOME` stays isolated, and external credentials remain read-only. This does **not** import ordinary OpenCode sessions into Codex token or spend totals. OpenCode Go's local SQLite reader remains scoped to its own `opencode-go` assistant records; OpenAI API-platform usage is a separate provider.
+OpenCode-held OpenAI/Codex OAuth can be reused for **remote Codex account quota** only when the Codex provider's `External OAuth sources` setting is explicitly enabled. Native Codex credentials still take precedence, an explicit `CODEX_HOME` stays isolated, and external credentials remain read-only. This does **not** import ordinary OpenCode sessions into Codex token or spend totals. OpenCode Go's local SQLite reader remains scoped to its own `opencode-go` assistant records; OpenAI API-platform usage is a separate provider. Its recorded local token counts (`tokens` on assistant messages and step-finish parts; step-finish parts win over their parent message) fill Usage & Spend token columns and per-model history; costs stay the recorded `cost` field, and rows with absent, malformed, negative, or overflowing tokens leave that window's totals incomplete instead of counting as zero.
 
 Codex local cost prices **Priority (Fast) turns** at the Fast rate. A turn counts as Priority when `<CODEX_HOME>/logs_2.sqlite` (Codex's trace database) holds a `response.create` websocket request with `service_tier == "priority"` for that turn's id. The database is opened read-only, scanned incrementally with a persisted cursor in the cost cache, and only turn ids, model names, and timestamps are kept; row bodies contain prompts and are never stored or logged. A missing or unreadable database keeps Standard pricing, and turn evidence never crosses `CODEX_HOME` scopes. Models without a Fast lane stay Standard. Older cost caches rebuild once (Codex cache schema v4 records each row's turn id).
 
@@ -165,7 +225,11 @@ The **API key** field (or `OPENROUTER_API_KEY`) is required and accepts either a
 
 ### z.ai Coding Plan quotas
 
-z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shortest known Coding Plan window becomes primary and the longest becomes secondary; `TIME_LIMIT` is the separate MCP lane. When absolute usage/remaining counts are available they determine the used percentage, otherwise the provider percentage is used, always clamped to 0–100%. This behavior is shared by the tray, provider detail, CLI, and other Windows surfaces.
+z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shortest known Coding Plan window becomes primary and the longest becomes secondary; `TIME_LIMIT` is the separate MCP lane. When absolute usage/remaining counts are available they determine the used percentage, otherwise the provider percentage is used, always clamped to 0–100%. This behavior is shared by the tray, provider detail, CLI, and other Windows surfaces. Empty or wholly unrecognized limits never fabricate a 0% window; they show a "Coding Plan usage: Unavailable" detail row that points to the Usage Dashboard, and mixed responses keep the recognized windows and add "Additional quota: Unavailable". Unknown string limit types are skipped, while malformed entries and unsupported envelopes fail with Usage Dashboard guidance.
+
+### xKiro daily free tokens
+
+xKiro reads `GET https://api.xkiro.com/v1/usage` with `XKIRO_API_KEY` (or the key saved in Preferences) as a bearer token. Only the `free_tokens` counters are used: the primary lane is `used_today / limit_per_day`, resetting at the next 00:00 UTC, and a limit of `0` reads as fully used. The paid `wallet` balance is never treated as headroom and is not shown. Counters that are missing stay missing rather than becoming zero, a payload with no usable counter is reported as unrecognized, and an explicit `plan: null` is labelled "Pay as you go". There are no token accounts. The wire shape follows upstream's documented example; live account behavior has not been verified.
 
 Upstream's independent **WidgetKit** provider-widget configuration has no Windows analogue in this repository. Win-CodexBar has no WidgetKit extension; provider cards and tray entries are already independent Windows/Tauri surfaces.
 

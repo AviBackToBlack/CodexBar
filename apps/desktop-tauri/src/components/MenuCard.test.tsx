@@ -274,6 +274,38 @@ describe("MenuCard", () => {
     expect(fill?.style.width).toBe("35%");
   });
 
+  it("shows an additional balance description below the meter and reset time", async () => {
+    const snapshot = provider(null, 25, {
+      resetDescription: "750 / 1000 credits left",
+    });
+    snapshot.primaryLabel = "Credits";
+    snapshot.primary.descriptionIsDetail = true;
+    snapshot.selectedMetric.descriptionIsDetail = true;
+    const resetsAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    snapshot.primary.resetsAt = resetsAt;
+    snapshot.selectedMetric.resetsAt = resetsAt;
+
+    renderCard(snapshot);
+
+    const description = await screen.findByText("750 / 1000 credits left");
+    expect(description).toHaveClass("menu-metric__detail");
+    expect(screen.getByText(/Resets in/)).toBeInTheDocument();
+  });
+
+  it("does not repeat a reset-phrase description as an extra detail", async () => {
+    const snapshot = provider(null, 20, { resetDescription: "Resets in 3h" });
+    const resetsAt = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString();
+    snapshot.primary.resetsAt = resetsAt;
+    snapshot.selectedMetric.resetsAt = resetsAt;
+
+    renderCard(snapshot);
+
+    await screen.findByText(/Resets in/);
+    expect(document.querySelectorAll(".menu-metric__reset")).toHaveLength(1);
+    expect(document.querySelectorAll(".menu-metric__detail")).toHaveLength(0);
+    expect(screen.queryByText("Resets in 3h")).not.toBeInTheDocument();
+  });
+
   it("displays over-quota usage without overflowing the bar", async () => {
     renderCard(provider(null, 115, { exhausted: true, resetDescription: "115% used" }), {
       showAsUsed: true,
@@ -332,6 +364,24 @@ describe("MenuCard", () => {
     expect(await screen.findByText("Session")).toBeInTheDocument();
     expect(screen.getByText("ProviderWeeklyLabel")).toBeInTheDocument();
     expect(screen.getByText("ProviderMonthly")).toBeInTheDocument();
+    expect(document.querySelectorAll(".menu-metric")).toHaveLength(3);
+  });
+
+  it("shows both Agent Plan lanes next to the informational placeholder in compact Overview", async () => {
+    const snapshot = provider(null, 0);
+    snapshot.primary = { ...rateWindow(0), isInformational: true, resetDescription: "No active 5h session" };
+    snapshot.extraRateWindows = [
+      { id: "doubao-agent-session", title: "5-hour", window: rateWindow(42, { windowMinutes: 300 }) },
+      { id: "doubao-agent-weekly", title: "Weekly", window: rateWindow(67, { windowMinutes: 10080 }) },
+    ];
+
+    renderCard(snapshot, { compactOverview: true });
+
+    // Compact Overview shows every quota row (upstream 0.62.0 #2616), so the
+    // placeholder no longer competes with the measured lanes for a row.
+    expect(await screen.findByText("58% left")).toBeInTheDocument();
+    expect(screen.getByText("33% left")).toBeInTheDocument();
+    expect(screen.getByText("No active 5h session")).toBeInTheDocument();
     expect(document.querySelectorAll(".menu-metric")).toHaveLength(3);
   });
 

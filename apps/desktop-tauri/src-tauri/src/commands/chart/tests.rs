@@ -50,6 +50,7 @@ fn local_usage_summary_serializes_token_cost_timestamp() {
         top_model: Some("gpt-5".to_string()),
         estimate_note: "estimated".to_string(),
         token_cost_updated_at_ms: 1234,
+        incomplete_request_count: None,
     };
 
     let json = serde_json::to_value(summary).expect("serialize summary");
@@ -75,6 +76,7 @@ fn local_usage_cache_identity_uses_the_summary_period_and_timestamp() {
         top_model: None,
         estimate_note: String::new(),
         token_cost_updated_at_ms: scanned_at.timestamp_millis(),
+        incomplete_request_count: None,
     };
 
     assert_eq!(

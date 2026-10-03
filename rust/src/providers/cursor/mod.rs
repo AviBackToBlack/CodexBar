@@ -4,9 +4,13 @@
 
 mod api;
 mod app_auth;
+mod cost_cooldown;
 pub mod local_csv;
 mod team_budget;
 mod token_cost;
+
+use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 
@@ -16,11 +20,18 @@ use crate::core::{
 };
 
 pub use api::CursorApi;
+use cost_cooldown::{CostCooldown, credential_fingerprint};
+use token_cost::TokenCostError;
 
 /// Cursor provider for fetching AI usage limits
 pub struct CursorProvider {
     metadata: ProviderMetadata,
     api: CursorApi,
+    /// Per-credential back-off for forbidden cost requests. The store is
+    /// process-wide because the shell builds a fresh provider per refresh.
+    cost_cooldown: Arc<CostCooldown>,
+    /// Injectable so tests can advance past the cooldown without sleeping.
+    clock: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
 
 impl CursorProvider {
@@ -41,6 +52,8 @@ impl CursorProvider {
                 tertiary_label_key: None,
             },
             api: CursorApi::new(),
+            cost_cooldown: CostCooldown::shared(),
+            clock: Arc::new(Instant::now),
         }
     }
 
@@ -114,19 +127,43 @@ impl CursorProvider {
     }
 
     /// Best-effort token-cost page; never fail the main usage fetch.
+    ///
+    /// A 403 is a cost-only rejection: the events request is skipped for six
+    /// hours for that credential while quota usage keeps refreshing, and
+    /// nothing about the working session is invalidated.
     async fn fetch_token_report_best_effort(
         &self,
         cookie_header: &str,
     ) -> Option<token_cost::CursorTokenCostReport> {
+        let credential = credential_fingerprint(cookie_header);
+        if self
+            .cost_cooldown
+            .is_cooling_down(&credential, (self.clock)())
+        {
+            tracing::debug!("Cursor token-cost events skipped: cooling down after HTTP 403");
+            return None;
+        }
         match token_cost::fetch_token_cost_report(
             self.api.client(),
+            self.api.base_url(),
             cookie_header,
             Some(token_cost::default_since()),
             Some(chrono::Utc::now()),
         )
         .await
         {
-            Ok(report) => Some(report),
+            Ok(report) => {
+                self.cost_cooldown.clear(&credential);
+                Some(report)
+            }
+            Err(TokenCostError::CostRequestForbidden) => {
+                self.cost_cooldown
+                    .record_forbidden(&credential, (self.clock)());
+                tracing::debug!(
+                    "Cursor token-cost events forbidden (HTTP 403); retrying in six hours"
+                );
+                None
+            }
             Err(err) => {
                 tracing::debug!("Cursor token-cost events unavailable: {err}");
                 None
@@ -183,6 +220,23 @@ impl CursorProvider {
             result = result.with_cost(c);
         }
         result
+    }
+}
+
+#[cfg(test)]
+impl CursorProvider {
+    /// Mock-server provider with its own cooldown store and clock.
+    fn for_test(
+        base_url: &str,
+        cost_cooldown: Arc<CostCooldown>,
+        clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            api: CursorApi::with_base_url(base_url),
+            cost_cooldown,
+            clock,
+            ..Self::new()
+        }
     }
 }
 
@@ -270,6 +324,8 @@ impl Provider for CursorProvider {
 mod tests {
     use super::*;
     use crate::core::{FetchContext, LastGoodFailurePolicy};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
 
     #[tokio::test]
     async fn cli_mode_does_not_return_unsupported_source() {
@@ -350,5 +406,175 @@ mod tests {
             hidden.cost.is_none(),
             "include_credits=false hides on-demand extra usage"
         );
+    }
+
+    const SUMMARY: &str = r#"{
+        "billingCycleStart": "2026-03-01T00:00:00Z",
+        "billingCycleEnd": "2026-04-01T00:00:00Z",
+        "membershipType": "pro",
+        "individualUsage": {
+            "plan": { "used": 1500, "limit": 5000, "totalPercentUsed": 30.0 }
+        }
+    }"#;
+    const COOKIE_A: &str = "WorkosCursorSessionToken=user-a%3A%3Atoken-a";
+    const COOKIE_B: &str = "WorkosCursorSessionToken=user-b%3A%3Atoken-b";
+    const EVENTS_PATH: &str = "/api/dashboard/get-filtered-usage-events";
+
+    struct Harness {
+        provider: CursorProvider,
+        offset: Arc<AtomicU64>,
+    }
+
+    impl Harness {
+        fn new(server: &mockito::ServerGuard) -> Self {
+            let offset = Arc::new(AtomicU64::new(0));
+            let base = Instant::now();
+            let clock_offset = Arc::clone(&offset);
+            let provider = CursorProvider::for_test(
+                &server.url(),
+                Arc::new(CostCooldown::default()),
+                Arc::new(move || base + Duration::from_secs(clock_offset.load(Ordering::SeqCst))),
+            );
+            Self { provider, offset }
+        }
+
+        fn advance(&self, by: Duration) {
+            self.offset.fetch_add(by.as_secs(), Ordering::SeqCst);
+        }
+
+        async fn fetch(&self, cookie: &str) -> ProviderFetchResult {
+            let ctx = FetchContext {
+                source_mode: SourceMode::Web,
+                manual_cookie_header: Some(cookie.to_string()),
+                ..FetchContext::default()
+            };
+            self.provider
+                .fetch_usage(&ctx)
+                .await
+                .expect("usage must not depend on the cost request")
+        }
+    }
+
+    async fn usage_mock(server: &mut mockito::ServerGuard, hits: usize) -> mockito::Mock {
+        server
+            .mock("GET", "/api/usage-summary")
+            .with_status(200)
+            .with_body(SUMMARY)
+            .expect(hits)
+            .create_async()
+            .await
+    }
+
+    async fn events_mock(
+        server: &mut mockito::ServerGuard,
+        cookie: &str,
+        status: usize,
+        hits: usize,
+    ) -> mockito::Mock {
+        let origin = server.url();
+        server
+            .mock("POST", EVENTS_PATH)
+            .match_header("cookie", cookie)
+            .match_header("origin", origin.as_str())
+            .with_status(status)
+            .with_body("{}")
+            .expect(hits)
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn forbidden_cost_request_is_not_repeated_inside_the_window() {
+        let mut server = mockito::Server::new_async().await;
+        let usage = usage_mock(&mut server, 2).await;
+        let events = events_mock(&mut server, COOKIE_A, 403, 1).await;
+        let harness = Harness::new(&server);
+
+        let first = harness.fetch(COOKIE_A).await;
+        harness.advance(Duration::from_secs(5 * 60 * 60));
+        let second = harness.fetch(COOKIE_A).await;
+
+        usage.assert_async().await;
+        events.assert_async().await;
+        assert!((first.usage.primary.used_percent - 30.0).abs() < 0.01);
+        assert_eq!(
+            first.usage.primary.used_percent,
+            second.usage.primary.used_percent
+        );
+        assert_eq!(
+            first.cost.as_ref().map(|cost| cost.used),
+            second.cost.as_ref().map(|cost| cost.used),
+            "quota and plan cost are unaffected by the cost-only rejection"
+        );
+        assert!(first.usage.extra_rate_windows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn forbidden_cost_request_is_retried_after_the_window() {
+        let mut server = mockito::Server::new_async().await;
+        let usage = usage_mock(&mut server, 3).await;
+        let events = events_mock(&mut server, COOKIE_A, 403, 2).await;
+        let harness = Harness::new(&server);
+
+        harness.fetch(COOKIE_A).await;
+        harness.advance(Duration::from_secs(6 * 60 * 60 - 1));
+        harness.fetch(COOKIE_A).await;
+        harness.advance(Duration::from_secs(1));
+        harness.fetch(COOKIE_A).await;
+
+        usage.assert_async().await;
+        events.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_different_credential_retries_immediately() {
+        let mut server = mockito::Server::new_async().await;
+        let usage = usage_mock(&mut server, 4).await;
+        let events_a = events_mock(&mut server, COOKIE_A, 403, 1).await;
+        let events_b = events_mock(&mut server, COOKIE_B, 403, 1).await;
+        let harness = Harness::new(&server);
+
+        harness.fetch(COOKIE_A).await;
+        harness.fetch(COOKIE_B).await;
+        harness.fetch(COOKIE_A).await;
+        harness.fetch(COOKIE_B).await;
+
+        usage.assert_async().await;
+        events_a.assert_async().await;
+        events_b.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn transient_cost_failures_keep_the_normal_cadence() {
+        let mut server = mockito::Server::new_async().await;
+        let usage = usage_mock(&mut server, 2).await;
+        let events = events_mock(&mut server, COOKIE_A, 503, 2).await;
+        let harness = Harness::new(&server);
+
+        harness.fetch(COOKIE_A).await;
+        harness.fetch(COOKIE_A).await;
+
+        usage.assert_async().await;
+        events.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn successful_cost_request_after_the_window_ends_the_cooldown() {
+        let mut server = mockito::Server::new_async().await;
+        let usage = usage_mock(&mut server, 3).await;
+        let harness = Harness::new(&server);
+
+        let forbidden = events_mock(&mut server, COOKIE_A, 403, 1).await;
+        harness.fetch(COOKIE_A).await;
+        forbidden.assert_async().await;
+        forbidden.remove_async().await;
+
+        harness.advance(cost_cooldown::FORBIDDEN_COST_COOLDOWN + Duration::from_secs(1));
+        let allowed = events_mock(&mut server, COOKIE_A, 200, 2).await;
+        harness.fetch(COOKIE_A).await;
+        harness.fetch(COOKIE_A).await;
+
+        usage.assert_async().await;
+        allowed.assert_async().await;
     }
 }

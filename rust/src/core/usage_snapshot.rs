@@ -140,6 +140,19 @@ pub struct NamedRateWindow {
     /// selection metadata only; external snapshot JSON stays stable.
     #[serde(default = "named_rate_window_fallback_lane_default", skip_serializing)]
     pub fallback_lane: bool,
+    /// Tray-icon lane this window stands in for when the snapshot has no real
+    /// core window in that lane. The snapshot's own lanes stay unchanged.
+    /// In-memory selection metadata only; external snapshot JSON stays stable.
+    #[serde(default, skip_serializing)]
+    pub icon_fallback: Option<IconLane>,
+}
+
+/// Core lane of the tray icon that a provider-declared extra window may fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IconLane {
+    Primary,
+    Secondary,
 }
 
 /// One display-only item of provider-issued discrete inventory.
@@ -173,7 +186,13 @@ impl NamedRateWindow {
             window,
             usage_known: true,
             fallback_lane: false,
+            icon_fallback: None,
         }
+    }
+
+    pub fn with_icon_fallback(mut self, lane: IconLane) -> Self {
+        self.icon_fallback = Some(lane);
+        self
     }
 
     pub fn with_usage_known(mut self, usage_known: bool) -> Self {
@@ -900,6 +919,38 @@ mod tests {
                 .and_then(|row| row.with_section_title("\n"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn display_details_batch_keeps_order_and_skips_duplicate_ids() {
+        let rows = ["a", "b", "a"]
+            .into_iter()
+            .filter_map(|id| ProviderDisplayDetail::new(id, id, "1"));
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(1.0)), "api")
+            .with_display_details(rows);
+        let ids: Vec<_> = result
+            .display_details()
+            .iter()
+            .map(|row| row.id())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn display_detail_section_titles_are_validated() {
+        let row = ProviderDisplayDetail::new("a", "Alpha", "1").unwrap();
+        assert_eq!(row.section_title(), None);
+        assert!(row.clone().with_section_title("").is_none());
+        assert!(row.clone().with_section_title("bad\nsection").is_none());
+        assert!(row.clone().with_section_title("x".repeat(129)).is_none());
+        assert_eq!(
+            row.with_section_title("Model activity")
+                .unwrap()
+                .section_title(),
+            Some("Model activity")
+        );
+        assert!(ProviderDisplayDetail::is_valid_title("fixture-alpha"));
+        assert!(!ProviderDisplayDetail::is_valid_title(""));
     }
 
     #[test]

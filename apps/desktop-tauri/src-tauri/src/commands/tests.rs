@@ -320,6 +320,20 @@ fn replicate_cookie_source_and_domain_are_exposed() {
 }
 
 #[test]
+fn raycast_cookie_source_and_domain_are_exposed() {
+    let mut settings = Settings::default();
+    super::provider_cookie_source_set(&mut settings, "raycast", "manual".to_string()).unwrap();
+    assert_eq!(
+        provider_cookie_source_lookup(&settings, "raycast").as_deref(),
+        Some("manual")
+    );
+    assert_eq!(
+        super::provider_cookie_domain(ProviderId::Raycast, &settings),
+        Some("www.raycast.com")
+    );
+}
+
+#[test]
 fn provider_cookie_source_set_rejects_unknown_provider() {
     let mut s = Settings::default();
     let err = super::provider_cookie_source_set(&mut s, "nope", "x".into()).unwrap_err();
@@ -343,6 +357,24 @@ fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
 
     // Cursor does not support Cli; empty manual cookie remaps to Web (browser attempt).
     assert_eq!(ctx.source_mode, SourceMode::Web);
+}
+
+#[test]
+fn fetch_context_carries_the_optional_details_opt_in_for_its_own_provider() {
+    let mut settings = Settings::default();
+    settings.set_optional_details_enabled(ProviderId::LiteLLM, true);
+    let build = |id| {
+        super::build_fetch_context(
+            id,
+            &settings,
+            &ManualCookies::default(),
+            &ApiKeys::default(),
+            &HashMap::new(),
+        )
+    };
+
+    assert!(build(ProviderId::LiteLLM).optional_details_enabled);
+    assert!(!build(ProviderId::Codex).optional_details_enabled);
 }
 
 #[test]
@@ -692,6 +724,115 @@ fn fetch_context_replicate_empty_manual_fails_closed_without_browser_import() {
     assert_eq!(ctx.source_mode, SourceMode::Web);
     assert!(ctx.manual_cookie_header.is_none());
     assert!(ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_raycast_cookie_sources_never_import_in_the_shell() {
+    let build = |source: &str, stored: Option<&str>| {
+        let mut settings = Settings::default();
+        settings.set_cookie_source(ProviderId::Raycast, source);
+        let mut cookies = ManualCookies::default();
+        if let Some(stored) = stored {
+            cookies.set(ProviderId::Raycast.cli_name(), stored);
+        }
+        super::build_fetch_context(
+            ProviderId::Raycast,
+            &settings,
+            &cookies,
+            &ApiKeys::default(),
+            &HashMap::new(),
+        )
+    };
+
+    // Manual with no stored header fails closed instead of using a browser.
+    let empty_manual = build("manual", None);
+    assert_eq!(empty_manual.source_mode, SourceMode::Web);
+    assert!(empty_manual.manual_cookie_header.is_none());
+    assert!(empty_manual.manual_cookie_missing);
+
+    // Off maps to the source the provider refuses, and never carries a header.
+    let off = build("off", Some("__raycast_session=stored"));
+    assert_eq!(off.source_mode, SourceMode::Cli);
+    assert!(off.manual_cookie_header.is_none());
+
+    // Auto leaves browser resolution to the provider (Chrome only).
+    let auto = build("auto", None);
+    assert_eq!(auto.source_mode, SourceMode::Auto);
+    assert!(auto.manual_cookie_header.is_none());
+    assert!(!auto.manual_cookie_missing);
+
+    let manual = build("manual", Some("__raycast_session=stored"));
+    assert_eq!(manual.source_mode, SourceMode::Web);
+    assert_eq!(
+        manual.manual_cookie_header.as_deref(),
+        Some("__raycast_session=stored")
+    );
+}
+
+#[test]
+fn fetch_context_ollama_empty_manual_fails_closed_without_browser_import() {
+    let settings = Settings::default();
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_ollama_blank_manual_header_counts_as_missing() {
+    let mut cookies = ManualCookies::default();
+    cookies.set(ProviderId::Ollama.cli_name(), "   ");
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &Settings::default(),
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert!(ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_ollama_pasted_header_is_not_reported_missing() {
+    let mut cookies = ManualCookies::default();
+    cookies.set(ProviderId::Ollama.cli_name(), "__Secure-session=abc");
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &Settings::default(),
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("__Secure-session=abc")
+    );
+    assert!(!ctx.manual_cookie_missing);
+}
+
+#[test]
+fn fetch_context_ollama_auto_source_never_reports_manual_cookie_missing() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Ollama, "auto");
+    let ctx = super::build_fetch_context(
+        ProviderId::Ollama,
+        &settings,
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert!(!ctx.manual_cookie_missing);
 }
 
 #[test]
@@ -1219,6 +1360,7 @@ fn usage_item_descriptors_keep_raw_ids_and_redact_titles() {
         title: "Credits owner@example.com".to_string(),
         window: snapshot.primary.clone(),
         fallback_lane: false,
+        icon_fallback: None,
     }];
 
     let mut settings = Settings {
@@ -1463,6 +1605,16 @@ fn provider_fetch_timeout_allows_slower_authenticated_providers() {
     assert_eq!(
         super::provider_fetch_timeout(ProviderId::DeepSeek, &ctx),
         std::time::Duration::from_secs(35)
+    );
+
+    let optional_litellm_ctx = FetchContext {
+        web_timeout: 30,
+        optional_details_enabled: true,
+        ..FetchContext::default()
+    };
+    assert_eq!(
+        super::provider_fetch_timeout(ProviderId::LiteLLM, &optional_litellm_ctx),
+        std::time::Duration::from_secs(40)
     );
 }
 
@@ -1941,15 +2093,18 @@ fn chart_data_serde_roundtrip_preserves_fields() {
             DailyCostPoint {
                 date: "2025-01-01".into(),
                 value: Some(1.25),
+                incomplete_request_count: None,
             },
             DailyCostPoint {
                 date: "2025-01-02".into(),
                 value: Some(0.0),
+                incomplete_request_count: None,
             },
         ],
         credits_history: vec![DailyCostPoint {
             date: "2025-01-01".into(),
             value: Some(42.0),
+            incomplete_request_count: None,
         }],
         usage_breakdown: vec![DailyUsageBreakdown {
             day: "2025-01-01".into(),
@@ -2127,6 +2282,13 @@ fn replicate_cookie_options_allow_automatic_and_manual_sessions() {
     let opts = super::cookie_source_options_for("replicate", Language::English);
     let values: Vec<_> = opts.iter().map(|option| option.value.as_str()).collect();
     assert_eq!(values, vec!["auto", "manual"]);
+}
+
+#[test]
+fn raycast_cookie_options_include_off_and_a_pinned_manual_session() {
+    let opts = super::cookie_source_options_for("raycast", Language::English);
+    let values: Vec<_> = opts.iter().map(|option| option.value.as_str()).collect();
+    assert_eq!(values, vec!["auto", "manual", "off"]);
 }
 
 #[test]
@@ -2354,4 +2516,72 @@ fn bootstrap_catalog_depends_only_on_supplied_settings() {
             .any(|id| id.as_str() == ProviderId::CrossModel.cli_name()),
         "a deprecated provider that is not enabled stays hidden"
     );
+}
+
+fn muse_fetch_context(cookie_source: Option<&str>, stored_cookie: Option<&str>) -> FetchContext {
+    let mut settings = Settings::default();
+    if let Some(source) = cookie_source {
+        settings.set_cookie_source(ProviderId::Muse, source);
+    }
+    let mut cookies = ManualCookies::default();
+    if let Some(header) = stored_cookie {
+        cookies.set(ProviderId::Muse.cli_name(), header);
+    }
+    super::build_fetch_context(
+        ProviderId::Muse,
+        &settings,
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    )
+}
+
+#[test]
+fn muse_default_cookie_source_reads_no_browser_and_keeps_the_login_source() {
+    let ctx = muse_fetch_context(None, None);
+
+    assert!(!ctx.browser_cookie_import);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+}
+
+#[test]
+fn muse_cookie_source_off_never_reads_or_forwards_a_cookie() {
+    let ctx = muse_fetch_context(Some("off"), Some("llama_dev_sess=abc"));
+
+    assert!(!ctx.browser_cookie_import);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
+fn muse_automatic_cookie_source_requests_the_browser_import() {
+    let ctx = muse_fetch_context(Some("auto"), Some("llama_dev_sess=abc"));
+
+    assert!(ctx.browser_cookie_import);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+}
+
+#[test]
+fn muse_manual_cookie_source_forwards_only_the_pasted_header() {
+    let ctx = muse_fetch_context(Some("manual"), Some("llama_dev_sess=abc"));
+
+    assert!(!ctx.browser_cookie_import);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("llama_dev_sess=abc")
+    );
+}
+
+#[test]
+fn other_providers_never_request_the_muse_browser_import() {
+    let ctx = super::build_fetch_context(
+        ProviderId::Cursor,
+        &Settings::default(),
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert!(!ctx.browser_cookie_import);
 }

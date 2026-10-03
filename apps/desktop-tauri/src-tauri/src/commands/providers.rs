@@ -1,3 +1,4 @@
+use super::credential_alerts::{self, FetchAttempt};
 use super::provider_refresh::{
     ProviderRefreshCompletion, ProviderRefreshReservation, complete_provider_refresh,
     reserve_provider_refresh,
@@ -95,6 +96,12 @@ pub(crate) fn build_fetch_context(
     let has_opencodego_api_key = id == ProviderId::OpenCodeGo
         && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
 
+    // Providers whose cookies only enrich an API result keep the configured
+    // usage source. Off and the default manual-without-cookie state never read
+    // a browser; only Automatic imports one (`browser_cookie_import`).
+    let cookies_only_enrich_usage = provider.cookies_only_enrich_usage();
+    let browser_cookie_import =
+        cookies_only_enrich_usage && matches!(cookie_source, "auto" | "browser" | "web");
     let (mut source_mode, mut cookie_header, fails_closed_without_cookie) = if id
         .cookie_domain()
         .is_none()
@@ -185,7 +192,9 @@ pub(crate) fn build_fetch_context(
                 "off" => (SourceMode::Cli, None, false),
                 "manual" => {
                     let cookie_header = active_token_cookie.clone().or(stored_cookie);
-                    let fails_closed_without_cookie = cookie_header.is_none()
+                    let fails_closed_without_cookie = cookie_header
+                        .as_deref()
+                        .is_none_or(|header| header.trim().is_empty())
                         && provider.manual_empty_cookie_policy()
                             == ManualEmptyCookiePolicy::FailClosedWeb;
                     let source_mode = if (has_kimi_code_api_key || has_opencodego_api_key)
@@ -233,6 +242,11 @@ pub(crate) fn build_fetch_context(
                 _ => (usage_source, stored_cookie, false),
             }
         }
+    } else if cookies_only_enrich_usage {
+        let cookie_header = (cookie_source == "manual")
+            .then(|| active_token_cookie.clone().or(stored_cookie))
+            .flatten();
+        (usage_source, cookie_header, false)
     } else {
         match cookie_source {
             // #433: an explicitly selected, non-empty Claude manual cookie is
@@ -287,7 +301,9 @@ pub(crate) fn build_fetch_context(
             "off" => (SourceMode::Cli, None, false),
             "manual" => {
                 let cookie_header = active_token_cookie.clone().or(stored_cookie);
-                let fails_closed_without_cookie = cookie_header.is_none()
+                let fails_closed_without_cookie = cookie_header
+                    .as_deref()
+                    .is_none_or(|header| header.trim().is_empty())
                     && provider.manual_empty_cookie_policy()
                         == ManualEmptyCookiePolicy::FailClosedWeb;
                 let source_mode = if (has_kimi_code_api_key || has_opencodego_api_key)
@@ -338,12 +354,14 @@ pub(crate) fn build_fetch_context(
     // historically mapped "manual + no cookie" to Cli, which surfaces as
     // "Source mode 'Cli' not supported". Remap to Web and try browser cookies
     // unless the user explicitly disabled cookies ("off"). Providers whose
-    // cookie source only scopes the session (Charm Hyper) own this contract in
-    // the provider, so the shell must not remap their source mode.
+    // cookie source only scopes the session (Charm Hyper) or only enriches an
+    // API result (Muse browser team quota) own this contract in the provider,
+    // so the shell must not remap their source mode.
     if source_mode == SourceMode::Cli
         && cookie_source != "off"
         && !provider.supports_cli()
         && !provider.cookie_source_scopes_session_only()
+        && !cookies_only_enrich_usage
     {
         if cookie_header
             .as_deref()
@@ -431,6 +449,8 @@ pub(crate) fn build_fetch_context(
         auto_prefer_web: auto_prefer_web
             && !(id == ProviderId::OpenCodeGo
                 && token_account_kind == Some(codexbar::core::TokenAccountKind::ApiKey)),
+        browser_cookie_import,
+        optional_details_enabled: settings.optional_details_enabled(id),
         ..FetchContext::default()
     }
 }
@@ -481,11 +501,13 @@ pub(crate) fn provider_cookie_domain(id: ProviderId, settings: &Settings) -> Opt
 
 const DEFAULT_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
 const SLOW_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+const OPTIONAL_LITELLM_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 const MAX_CONTEXT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65);
 
 pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std::time::Duration {
     let provider_timeout = match id {
         ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot => SLOW_PROVIDER_FETCH_TIMEOUT,
+        ProviderId::LiteLLM if ctx.optional_details_enabled => OPTIONAL_LITELLM_FETCH_TIMEOUT,
         _ => DEFAULT_PROVIDER_FETCH_TIMEOUT,
     };
     let context_timeout = std::time::Duration::from_secs(ctx.web_timeout.saturating_add(5));
@@ -591,6 +613,11 @@ async fn do_refresh_providers_with_policy(
     let settings = Settings::load();
     let enabled_ids = settings.get_enabled_provider_ids();
     let refresh_ids = scope.provider_ids(&settings, &enabled_ids);
+    if let Ok(mut guard) = state.lock() {
+        guard
+            .notification_manager
+            .retire_credential_episodes_except(&enabled_ids);
+    }
     if refresh_ids.is_empty() {
         return Ok(ProviderRefreshOutcome::Skipped {
             reason: ProviderRefreshSkipReason::NoEnabledProviders,
@@ -773,6 +800,8 @@ async fn refresh_provider(
     let (snapshot, account_identity, retention) =
         fetch_provider_snapshot(id, ctx, token_account_id).await;
     let fresh_snapshot = snapshot.error.is_none();
+    // Captured before last-good preservation can swap in a cached snapshot.
+    let fetch_attempt = FetchAttempt::of(&snapshot);
 
     let state = app.state::<Mutex<AppState>>();
     let published = if let Ok(mut guard) = state.lock() {
@@ -810,6 +839,23 @@ async fn refresh_provider(
                     .provider_cache_updated_at_by_provider
                     .insert(id, std::time::Instant::now());
             }
+            // Read consent after the fetch completes, so a toggle change made
+            // while the request was in flight takes effect for this outcome.
+            let credential_alerts = match fetch_attempt {
+                FetchAttempt::Failed(kind) if kind.needs_sign_in() => Some(
+                    codexbar::notifications::CredentialAlertPolicy::from_settings(&Settings::load()),
+                ),
+                _ => None,
+            };
+            credential_alerts::observe_attempt(
+                &mut guard.notification_manager,
+                credential_alerts,
+                id,
+                token_account_id,
+                fetch_attempt,
+                &snapshot,
+                cached.as_ref(),
+            );
             Some(snapshot)
         }
     } else {
@@ -1283,22 +1329,38 @@ fn dispatch_quota_hooks(
 
 /// Stable account discriminator for threshold/session toast dedupe.
 /// Prefer token-account id, then email, org, plan; empty for single-account lanes.
-fn quota_notification_account_identity(
+pub(super) fn quota_notification_account_identity(
     snapshot: &ProviderUsageSnapshot,
     token_account_id: Option<uuid::Uuid>,
 ) -> String {
     ProviderId::from_cli_name(&snapshot.provider_id)
         .map(|provider| {
-            WarningIdentity::new(
+            quota_notification_account_identity_for(
                 provider,
                 &snapshot.source_label,
                 snapshot.account_email.as_deref(),
                 snapshot.account_organization.as_deref(),
                 token_account_id,
             )
-            .threshold_key()
         })
         .unwrap_or_default()
+}
+
+pub(super) fn quota_notification_account_identity_for(
+    provider: ProviderId,
+    source_label: &str,
+    account_email: Option<&str>,
+    account_organization: Option<&str>,
+    token_account_id: Option<uuid::Uuid>,
+) -> String {
+    WarningIdentity::new(
+        provider,
+        source_label,
+        account_email,
+        account_organization,
+        token_account_id,
+    )
+    .threshold_key()
 }
 
 fn notify_predictive_pace(

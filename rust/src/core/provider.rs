@@ -98,6 +98,11 @@ pub enum ProviderId {
     GitKraken,
     Bifrost,
     Aixy,
+    LLMMan,
+    DevPass,
+    XKiro,
+    Raycast,
+    Vercel,
 }
 
 impl ProviderId {
@@ -188,6 +193,11 @@ impl ProviderId {
             ProviderId::GitKraken,
             ProviderId::Bifrost,
             ProviderId::Aixy,
+            ProviderId::LLMMan,
+            ProviderId::DevPass,
+            ProviderId::XKiro,
+            ProviderId::Raycast,
+            ProviderId::Vercel,
         ]
     }
 
@@ -239,6 +249,11 @@ impl ProviderId {
             ProviderId::GitKraken => "gitkraken",
             ProviderId::Bifrost => "bifrost",
             ProviderId::Aixy => "aixy",
+            ProviderId::LLMMan => "llmman",
+            ProviderId::DevPass => "devpass",
+            ProviderId::XKiro => "xkiro",
+            ProviderId::Raycast => "raycast",
+            ProviderId::Vercel => "vercel",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -330,6 +345,11 @@ impl ProviderId {
             ProviderId::GitKraken => "GitKraken AI",
             ProviderId::Bifrost => "Bifrost",
             ProviderId::Aixy => "Aixy",
+            ProviderId::LLMMan => "llmman",
+            ProviderId::DevPass => "DevPass",
+            ProviderId::XKiro => "xKiro",
+            ProviderId::Raycast => "Raycast",
+            ProviderId::Vercel => "Vercel AI Gateway",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -413,6 +433,7 @@ impl ProviderId {
             ProviderId::LongCat => Some("longcat.chat"),
             ProviderId::Replicate => Some("replicate.com"),
             ProviderId::AtlasCloud => None,
+            ProviderId::Raycast => Some("www.raycast.com"),
             // Token-based providers (don't use cookies)
             ProviderId::Copilot => None,
             ProviderId::Zai => None,
@@ -431,12 +452,16 @@ impl ProviderId {
             ProviderId::DeepInfra => None,
             ProviderId::Fireworks => None,
             ProviderId::Meta => None,
-            ProviderId::Muse => None,
+            ProviderId::Muse => Some("dev.meta.ai"),
             ProviderId::Nous => None,
             ProviderId::Hyper => Some("hyper.charm.land"),
             ProviderId::GitKraken => None,
             ProviderId::Bifrost => None,
             ProviderId::Aixy => None,
+            ProviderId::LLMMan => None,
+            ProviderId::DevPass => None,
+            ProviderId::XKiro => None,
+            ProviderId::Vercel => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -529,6 +554,12 @@ impl ProviderId {
             "gitkraken" | "gitkraken-ai" | "gitkraken ai" => Some(ProviderId::GitKraken),
             "bifrost" | "bifrost-gateway" | "bifrost gateway" => Some(ProviderId::Bifrost),
             "aixy" | "aixy-gateway" | "aixy gateway" => Some(ProviderId::Aixy),
+            "llmman" => Some(ProviderId::LLMMan),
+            "devpass" => Some(ProviderId::DevPass),
+            "xkiro" | "x-kiro" => Some(ProviderId::XKiro),
+            "vercel" | "vercel-ai-gateway" | "vercel ai gateway" | "ai-gateway" | "ai gateway" => {
+                Some(ProviderId::Vercel)
+            }
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -580,6 +611,7 @@ impl ProviderId {
             "notion" | "notion-ai" | "notionai" | "notion ai" => Some(ProviderId::Notion),
             "replicate" | "r8" => Some(ProviderId::Replicate),
             "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
+            "raycast" | "raycast-ai" => Some(ProviderId::Raycast),
             _ => None,
         }
     }
@@ -824,12 +856,23 @@ pub struct FetchContext {
     /// manual cookie source, etc.). Workspace overrides are checked separately.
     pub auto_prefer_web: bool,
 
+    /// The user chose automatic browser cookie import for a provider whose
+    /// cookies only enrich its API usage (`Provider::cookies_only_enrich_usage`).
+    /// False for the default manual-without-cookie state and for Off, so those
+    /// never read a browser.
+    pub browser_cookie_import: bool,
+
     /// Foreground usage reads (`codexbar usage`, `codexbar serve`) set this so
     /// providers join slow optional enrichment with the full optional-item
     /// timeout budget measured from task start; background/UI polls keep the
     /// short join grace instead (upstream 0.48.0
     /// `requiresOptionalUsageCompleteness`, #2583).
     pub requires_optional_usage_completeness: bool,
+
+    /// The user opted in to the requested provider's optional detail breakdown
+    /// (LiteLLM model activity, Claude workspace spend). Scoped to the provider
+    /// being fetched; false everywhere the setting is not consulted.
+    pub optional_details_enabled: bool,
 }
 
 impl Default for FetchContext {
@@ -849,7 +892,9 @@ impl Default for FetchContext {
             api_region: None,
             gateway_url: None,
             auto_prefer_web: false,
+            browser_cookie_import: false,
             requires_optional_usage_completeness: false,
+            optional_details_enabled: false,
         }
     }
 }
@@ -981,6 +1026,15 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Whether cookies only enrich an API-backed result instead of being a
+    /// usage source of their own. The shell then keeps the configured usage
+    /// source, forwards a manual cookie as-is, and reads a browser only when
+    /// the cookie source is Automatic (`FetchContext::browser_cookie_import`);
+    /// the default manual state with no cookie never triggers a browser read.
+    fn cookies_only_enrich_usage(&self) -> bool {
+        false
+    }
+
     /// Whether browser-cookie discovery/recovery is owned by the provider.
     fn owns_browser_cookie_resolution(&self) -> bool {
         false
@@ -1068,6 +1122,11 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("nous-portal", ProviderId::Nous);
     map.insert("nous portal", ProviderId::Nous);
     map.insert("hermes", ProviderId::Nous);
+    map.insert("x-kiro", ProviderId::XKiro);
+    map.insert("vercel-ai-gateway", ProviderId::Vercel);
+    map.insert("vercel ai gateway", ProviderId::Vercel);
+    map.insert("ai-gateway", ProviderId::Vercel);
+    map.insert("ai gateway", ProviderId::Vercel);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
     map.insert("muse-spark", ProviderId::Meta);
@@ -1225,6 +1284,12 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::GitKraken => "#179287",
         ProviderId::Bifrost => "#33C09E",
         ProviderId::Aixy => "#123650",
+        ProviderId::LLMMan => "#6CC5B0",
+        ProviderId::DevPass => "#2563EB",
+        ProviderId::XKiro => "#52C99B",
+        ProviderId::Raycast => "#FF6363",
+        // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
+        ProviderId::Vercel => "#737373",
     }
 }
 
@@ -1239,7 +1304,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 84);
+        assert_eq!(all.len(), 89);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1304,6 +1369,11 @@ mod tests {
         assert!(all.contains(&ProviderId::GitKraken));
         assert!(all.contains(&ProviderId::Bifrost));
         assert!(all.contains(&ProviderId::Aixy));
+        assert!(all.contains(&ProviderId::LLMMan));
+        assert!(all.contains(&ProviderId::DevPass));
+        assert!(all.contains(&ProviderId::XKiro));
+        assert!(all.contains(&ProviderId::Raycast));
+        assert!(all.contains(&ProviderId::Vercel));
     }
 
     #[test]
@@ -1575,7 +1645,7 @@ mod tests {
     fn test_provider_id_muse() {
         assert_eq!(ProviderId::Muse.cli_name(), "muse");
         assert_eq!(ProviderId::Muse.display_name(), "Muse Code");
-        assert_eq!(ProviderId::Muse.cookie_domain(), None);
+        assert_eq!(ProviderId::Muse.cookie_domain(), Some("dev.meta.ai"));
         assert_eq!(ProviderId::from_cli_name("muse"), Some(ProviderId::Muse));
         assert_eq!(
             ProviderId::from_cli_name("muse-code"),
@@ -1741,5 +1811,19 @@ mod tests {
                 "{id:?} has {color}"
             );
         }
+    }
+
+    #[test]
+    fn test_provider_id_xkiro() {
+        assert_eq!(ProviderId::XKiro.cli_name(), "xkiro");
+        assert_eq!(ProviderId::XKiro.display_name(), "xKiro");
+        assert_eq!(ProviderId::XKiro.cookie_domain(), None);
+        assert_eq!(ProviderId::from_cli_name("xkiro"), Some(ProviderId::XKiro));
+        assert_eq!(ProviderId::from_cli_name("x-kiro"), Some(ProviderId::XKiro));
+        assert_eq!(cli_name_map().get("xkiro"), Some(&ProviderId::XKiro));
+        assert_eq!(cli_name_map().get("x-kiro"), Some(&ProviderId::XKiro));
+        // xKiro is a separate provider from Kiro and shares none of its aliases.
+        assert_eq!(ProviderId::from_cli_name("kiro"), Some(ProviderId::Kiro));
+        assert_eq!(ProviderId::from_cli_name("aws"), Some(ProviderId::Kiro));
     }
 }

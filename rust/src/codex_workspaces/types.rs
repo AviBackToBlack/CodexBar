@@ -1,5 +1,7 @@
 //! Snapshot DTOs for Codex local Workspaces indexing.
 
+use std::cmp::Ordering;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -132,6 +134,48 @@ pub struct SessionUsage {
     pub top_model: Option<String>,
 }
 
+impl SessionUsage {
+    /// Cost used for ranking: `None` when nothing could be priced, so unpriced
+    /// sessions sort after priced ones (a priced zero stays priced).
+    pub fn ranking_cost_usd(&self) -> Option<f64> {
+        let cost = self.cost_estimate;
+        (cost.unknown_tokens == 0 || cost.known_usd > 0.0).then_some(cost.known_usd)
+    }
+
+    /// Ranking order for the sessions panel: cost descending with unpriced
+    /// last, then tokens descending, latest activity descending, id ascending.
+    pub fn rank_cmp(&self, other: &Self) -> Ordering {
+        match (self.ranking_cost_usd(), other.ranking_cost_usd()) {
+            (Some(left), Some(right)) => right.total_cmp(&left),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+        .then_with(|| other.totals.total_tokens.cmp(&self.totals.total_tokens))
+        .then_with(|| other.latest_activity.cmp(&self.latest_activity))
+        .then_with(|| self.id.cmp(&other.id))
+    }
+}
+
+/// Short display form of a session id: ids over 12 characters keep the first 4
+/// and last 8 (`019f...1e92b191`).
+pub fn short_session_id(value: &str) -> String {
+    let trimmed = value.trim();
+    let count = trimmed.chars().count();
+    if count <= 12 {
+        return trimmed.to_string();
+    }
+    let prefix: String = trimmed.chars().take(4).collect();
+    let suffix: String = trimmed.chars().skip(count - 8).collect();
+    format!("{prefix}...{suffix}")
+}
+
+/// Label for a session without a thread name, and the masked label under
+/// Hide personal information. The session id is not personal data.
+pub fn untitled_session_label(session_id: &str) -> String {
+    format!("Session {}", short_session_id(session_id))
+}
+
 /// Per-project usage aggregate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -170,7 +214,7 @@ impl CodexLocalProjectUsageSnapshot {
     /// Does not rewrite the sidecar.
     pub fn redact_for_privacy(&mut self) {
         for session in &mut self.sessions {
-            session.display_title = "Local Codex chat".to_string();
+            session.display_title = untitled_session_label(&session.id);
             session.cwd = None;
         }
         for project in &mut self.projects {
@@ -181,9 +225,12 @@ impl CodexLocalProjectUsageSnapshot {
             }
             project.path = None;
             for session in &mut project.top_sessions {
-                session.display_title = "Local Codex chat".to_string();
+                session.display_title = untitled_session_label(&session.id);
                 session.cwd = None;
             }
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

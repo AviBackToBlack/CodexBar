@@ -256,9 +256,13 @@ fn build_usage_fetch_context(args: &UsageArgs, source_mode: SourceMode) -> Fetch
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // `codexbar usage` is a foreground read: optional enrichment (e.g. the
         // OpenCode Go Zen balance) is worth its full bounded wait (#2583).
         requires_optional_usage_completeness: true,
+        // Per-provider opt-ins live in settings, which this shared context
+        // does not load; the optional breakdowns stay off here.
+        optional_details_enabled: false,
     }
 }
 

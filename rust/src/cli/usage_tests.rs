@@ -379,6 +379,30 @@ fn display_details_are_rendered_in_full_text_and_json() {
 }
 
 #[test]
+fn sectioned_display_details_print_one_heading_per_group() {
+    let row = |id: &str, title: &str, section: Option<&str>| {
+        let row = ProviderDisplayDetail::new(id, title, "1");
+        match section {
+            Some(section) => row.and_then(|row| row.with_section_title(section)),
+            None => row,
+        }
+    };
+    let result = fetch_result(UsageSnapshot::new(RateWindow::new(10.0)))
+        .with_display_detail(row("plain", "Plain", None))
+        .with_display_detail(row("a", "Alpha", Some("Model activity")))
+        .with_display_detail(row("b", "Beta", Some("Model activity")));
+
+    let text = render_text_with_status(ProviderId::LiteLLM, &result, None, false);
+    let json = render_json_result(ProviderId::LiteLLM, result, None);
+
+    assert_eq!(text.matches("Model activity:").count(), 1);
+    assert!(text.find("Plain: 1").unwrap() < text.find("Model activity:").unwrap());
+    assert!(text.find("Model activity:").unwrap() < text.find("Alpha: 1").unwrap());
+    assert_eq!(json["details"][0]["sectionTitle"], serde_json::Value::Null);
+    assert_eq!(json["details"][2]["sectionTitle"], "Model activity");
+}
+
+#[test]
 fn json_inventory_is_additive_and_contains_no_redemption_token() {
     let result = fetch_result(UsageSnapshot::new(RateWindow::new(10.0))).with_inventory_item(
         ProviderInventoryItem {

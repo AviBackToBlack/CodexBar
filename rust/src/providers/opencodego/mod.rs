@@ -8,6 +8,7 @@
 mod console;
 mod legacy;
 pub(crate) mod local;
+mod tokens;
 mod transport;
 mod usage_api;
 

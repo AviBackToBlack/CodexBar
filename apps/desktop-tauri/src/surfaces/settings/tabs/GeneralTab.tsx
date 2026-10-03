@@ -360,6 +360,18 @@ export default function GeneralTab({
               onChange={(v) => set({ predictivePaceWarningEnabled: v })}
             />
           </Field>
+          <Field
+            label={t("CredentialExpiryNotifications")}
+            description={t("CredentialExpiryNotificationsHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.credentialExpiryNotificationsEnabled}
+              ariaLabel={t("CredentialExpiryNotifications")}
+              disabled={saving}
+              onChange={(v) => set({ credentialExpiryNotificationsEnabled: v })}
+            />
+          </Field>
           <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
             <Toggle
               checked={settings.soundEnabled}

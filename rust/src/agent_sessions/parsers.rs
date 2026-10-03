@@ -139,31 +139,48 @@ impl WindowsProcessOutputParser {
             .filter_map(|value| serde_json::from_value::<WindowsProcessMetadata>(value).ok())
             .filter(|process| process.process_id > 0 && seen.insert(process.process_id))
             .map(|process| {
-                let display_name = process
-                    .name
-                    .as_deref()
-                    .filter(|name| !name.trim().is_empty())
-                    .or(process.executable_path.as_deref())
-                    .unwrap_or_default();
-                let classification = classify_process_command(display_name);
-                AgentProcessRecord {
-                    pid: process.process_id,
-                    ppid: process.parent_process_id,
-                    started_at: process
+                Self::record(
+                    process.process_id,
+                    process.parent_process_id,
+                    process
                         .creation_date
                         .as_deref()
                         .and_then(parse_windows_creation_date),
-                    provider: classification.provider,
-                    source: classification.source,
-                    executable: process.name.unwrap_or(classification.executable),
-                    kind: classification.kind,
-                    // Windows deliberately does not harvest other processes'
-                    // command lines (privacy); ps-based remote scans carry
-                    // them, and tests inject them.
-                    command: None,
-                }
+                    process.name,
+                    process.executable_path.as_deref(),
+                )
             })
             .collect())
+    }
+
+    /// Classify one Windows process. The image name is preferred over the
+    /// executable path, matching the CIM query and the native snapshot.
+    pub(super) fn record(
+        pid: u32,
+        ppid: u32,
+        started_at: Option<DateTime<Utc>>,
+        name: Option<String>,
+        executable_path: Option<&str>,
+    ) -> AgentProcessRecord {
+        let display_name = name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .or(executable_path)
+            .unwrap_or_default();
+        let classification = classify_process_command(display_name);
+        AgentProcessRecord {
+            pid,
+            ppid,
+            started_at,
+            provider: classification.provider,
+            source: classification.source,
+            executable: name.unwrap_or(classification.executable),
+            kind: classification.kind,
+            // Windows deliberately does not harvest other processes'
+            // command lines (privacy); ps-based remote scans carry
+            // them, and tests inject them.
+            command: None,
+        }
     }
 }
 

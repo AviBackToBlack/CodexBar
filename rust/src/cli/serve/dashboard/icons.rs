@@ -142,6 +142,10 @@ static ICONS: &[(&str, &[u8])] = &[
         include_bytes!("icons/ProviderIcon-devin.svg"),
     ),
     (
+        "ProviderIcon-devpass",
+        include_bytes!("icons/ProviderIcon-devpass.svg"),
+    ),
+    (
         "ProviderIcon-doubao",
         include_bytes!("icons/ProviderIcon-doubao.svg"),
     ),
@@ -188,6 +192,10 @@ static ICONS: &[(&str, &[u8])] = &[
     (
         "ProviderIcon-litellm",
         include_bytes!("icons/ProviderIcon-litellm.svg"),
+    ),
+    (
+        "ProviderIcon-llmman",
+        include_bytes!("icons/ProviderIcon-llmman.svg"),
     ),
     (
         "ProviderIcon-llmproxy",
@@ -262,6 +270,10 @@ static ICONS: &[(&str, &[u8])] = &[
         include_bytes!("icons/ProviderIcon-qwencloud.svg"),
     ),
     (
+        "ProviderIcon-raycast",
+        include_bytes!("icons/ProviderIcon-raycast.svg"),
+    ),
+    (
         "ProviderIcon-replicate",
         include_bytes!("icons/ProviderIcon-replicate.svg"),
     ),
@@ -304,6 +316,10 @@ static ICONS: &[(&str, &[u8])] = &[
     (
         "ProviderIcon-xai",
         include_bytes!("icons/ProviderIcon-xai.svg"),
+    ),
+    (
+        "ProviderIcon-xkiro",
+        include_bytes!("icons/ProviderIcon-xkiro.svg"),
     ),
     (
         "ProviderIcon-zai",

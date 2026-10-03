@@ -20,6 +20,7 @@ fn test_settings_default() {
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
+    assert!(!settings.credential_expiry_notifications_enabled);
     assert!(!settings.float_bar_show_cost);
     assert!(!settings.tray_panel_always_on_top);
     assert_eq!(settings.overview_layout, "detailed");
@@ -272,6 +273,7 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 
     assert!(!loaded.show_reset_when_exhausted);
     assert!(!loaded.predictive_pace_warning_enabled);
+    assert!(!loaded.credential_expiry_notifications_enabled);
 }
 
 #[test]
@@ -1426,4 +1428,22 @@ fn legacy_visibility_setters_preserve_other_explicit_hidden_items() {
         settings.hidden_usage_item_ids(ProviderId::Claude),
         vec!["metric:secondary".to_string()]
     );
+}
+
+/// Cookie-denial settings must survive the same path-based persistence used by
+/// `Settings::save` and `Settings::load`, including the secure-file wrapper
+/// shared by desktop and CLI settings.
+#[test]
+fn cookie_denial_round_trips_through_settings_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Codex, "off");
+    settings.set_openai_web_extras(ProviderId::Codex, false);
+
+    settings.save_to_path(&path).unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+
+    assert_eq!(loaded.cookie_source(ProviderId::Codex), "off");
+    assert!(!loaded.openai_web_extras(ProviderId::Codex));
 }

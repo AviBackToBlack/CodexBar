@@ -110,10 +110,12 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
 const WORKSPACE_EXTRA_IDS: Record<string, true> = {
   openaiapi: true,
   litellm: true,
+  llmman: true,
   devin: true,
   opencodego: true,
   zed: true,
   sub2api: true,
+  llmproxy: true,
   xai: true,
   fireworks: true,
   gitkraken: true,
@@ -134,6 +136,13 @@ function extraConfig(providerId: string, t: Props["t"]) {
         label: t("LiteLlmBaseUrlLabel"),
         placeholder: t("LiteLlmBaseUrlPlaceholder"),
         help: t("LiteLlmBaseUrlHelp"),
+      };
+    case "llmman":
+      return {
+        title: t("LLMManApiTitle"),
+        label: t("LLMManBaseUrlLabel"),
+        placeholder: t("LLMManBaseUrlPlaceholder"),
+        help: t("LLMManBaseUrlHelp"),
       };
     case "devin":
       return {
@@ -162,6 +171,13 @@ function extraConfig(providerId: string, t: Props["t"]) {
         label: t("Sub2ApiBaseUrlLabel"),
         placeholder: t("Sub2ApiBaseUrlPlaceholder"),
         help: t("Sub2ApiBaseUrlHelp"),
+      };
+    case "llmproxy":
+      return {
+        title: t("LlmProxyTitle"),
+        label: t("LlmProxyBaseUrlLabel"),
+        placeholder: t("LlmProxyBaseUrlPlaceholder"),
+        help: t("LlmProxyBaseUrlHelp"),
       };
     case "xai":
       return {

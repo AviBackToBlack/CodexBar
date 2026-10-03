@@ -92,6 +92,10 @@ export function getCurrencyRates(preferredCurrencyCode: string): Promise<Currenc
   return invoke<CurrencyRatesSnapshot>("get_currency_rates", { preferredCurrencyCode });
 }
 
+export function getStayAwakeStatus(): Promise<boolean> {
+  return invoke<boolean>("get_stay_awake_status");
+}
+
 export function updateSettings(
   patch: SettingsUpdate,
 ): Promise<SettingsSnapshot> {
@@ -301,6 +305,16 @@ export function writeUsageSpendExport(path: string, payload: string): Promise<vo
   return invoke<void>("write_usage_spend_export", { path, payload });
 }
 
+/** Write portable preferences to `path`; resolves with how many were exported. */
+export function exportPreferences(path: string): Promise<number> {
+  return invoke<number>("export_preferences", { path });
+}
+
+/** Apply the preferences file at `path`; the shell validates before saving anything. */
+export function importPreferences(path: string): Promise<SettingsSnapshot> {
+  return invoke<SettingsSnapshot>("import_preferences", { path });
+}
+
 export function getSpendContract(
   providerId: string,
   options?: { period?: string; includeOpenCodex?: boolean },
@@ -418,6 +432,13 @@ export function getProviderRegionOptions(providerId: string): Promise<RegionOpti
 
 export function setProviderUsageSource(providerId: string, source: string): Promise<void> {
   return invoke<void>("set_provider_usage_source", { providerId, source });
+}
+
+export function setProviderOptionalDetails(
+  providerId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("set_provider_optional_details", { providerId, enabled });
 }
 
 export function setProviderAutoResumeAfterQuotaReset(

@@ -10,12 +10,15 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::core::{
-    CostSnapshot, FetchContext, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot,
+    CostSnapshot, FetchContext, ProviderDisplayDetail, ProviderError, ProviderFetchResult,
+    RateWindow, UsageSnapshot,
 };
 
 const COST_REPORT_URL: &str = "https://api.anthropic.com/v1/organizations/cost_report";
 const MESSAGES_USAGE_URL: &str = "https://api.anthropic.com/v1/organizations/usage_report/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const WORKSPACE_SECTION_TITLE: &str = "Workspace spend \u{b7} 30d";
+const MAX_WORKSPACE_ROWS: usize = 20;
 
 pub struct ClaudeAdminApiFetcher {
     client: Client,
@@ -50,13 +53,7 @@ impl ClaudeAdminApiFetcher {
         let costs: CostReportResponse = self
             .fetch_json(
                 COST_REPORT_URL,
-                &[
-                    ("starting_at", start.to_rfc3339()),
-                    ("ending_at", end.to_rfc3339()),
-                    ("bucket_width", "1d".to_string()),
-                    ("limit", "31".to_string()),
-                    ("group_by[]", "description".to_string()),
-                ],
+                &cost_report_query(&start, &end, ctx.optional_details_enabled),
                 &api_key,
                 "cost_report",
             )
@@ -75,7 +72,12 @@ impl ClaudeAdminApiFetcher {
                 "messages",
             )
             .await?;
-        Ok(result_from_admin_usage(&costs, &messages, now))
+        Ok(result_from_admin_usage(
+            &costs,
+            &messages,
+            now,
+            ctx.optional_details_enabled,
+        ))
     }
 
     fn api_key(ctx: &FetchContext) -> Option<String> {
@@ -126,6 +128,26 @@ impl ClaudeAdminApiFetcher {
     }
 }
 
+/// Cost report query. Workspace spend only adds a second `group_by[]`; it never
+/// costs another request.
+fn cost_report_query(
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+    workspace_spend: bool,
+) -> Vec<(&'static str, String)> {
+    let mut query = vec![
+        ("starting_at", start.to_rfc3339()),
+        ("ending_at", end.to_rfc3339()),
+        ("bucket_width", "1d".to_string()),
+        ("limit", "31".to_string()),
+        ("group_by[]", "description".to_string()),
+    ];
+    if workspace_spend {
+        query.push(("group_by[]", "workspace_id".to_string()));
+    }
+    query
+}
+
 fn clean_key(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_matches('"').trim_matches('\'').trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -152,6 +174,9 @@ struct CostResult {
     amount: String,
     description: Option<String>,
     cost_type: Option<String>,
+    /// Present only when the cost report is grouped by `workspace_id`; null
+    /// for the default workspace.
+    workspace_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +213,7 @@ fn result_from_admin_usage(
     costs: &CostReportResponse,
     messages: &MessagesUsageResponse,
     now: DateTime<Utc>,
+    workspace_spend: bool,
 ) -> ProviderFetchResult {
     let cost_total: f64 = costs
         .data
@@ -301,11 +327,49 @@ fn result_from_admin_usage(
         );
     }
 
-    ProviderFetchResult::new(usage, "admin-api").with_cost(CostSnapshot::new(
+    let mut result = ProviderFetchResult::new(usage, "admin-api").with_cost(CostSnapshot::new(
         cost_total,
         "USD",
         "Last 30 days",
-    ))
+    ));
+    if workspace_spend {
+        result = result.with_display_details(workspace_spend_rows(costs));
+    }
+    result
+}
+
+/// Per-workspace spend over the same buckets as the organization total. Shown
+/// only when the report spans more than one workspace; a single workspace adds
+/// nothing over the organization view.
+fn workspace_spend_rows(costs: &CostReportResponse) -> Vec<ProviderDisplayDetail> {
+    let mut workspaces: HashMap<String, f64> = HashMap::new();
+    for result in costs.data.iter().flat_map(|bucket| &bucket.results) {
+        let name = result
+            .workspace_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Default");
+        *workspaces.entry(name.to_string()).or_default() += usd_from_lowest_unit(&result.amount);
+    }
+    if workspaces.len() < 2 {
+        return Vec::new();
+    }
+    let mut ranked: Vec<_> = workspaces.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked
+        .into_iter()
+        .take(MAX_WORKSPACE_ROWS)
+        .enumerate()
+        .filter_map(|(index, (name, spend))| {
+            ProviderDisplayDetail::new(
+                format!("claude-workspace-{index}"),
+                name,
+                format!("${spend:.2}"),
+            )?
+            .with_section_title(WORKSPACE_SECTION_TITLE)
+        })
+        .collect()
 }
 
 fn usd_from_lowest_unit(raw: &str) -> f64 {
@@ -313,14 +377,5 @@ fn usd_from_lowest_unit(raw: &str) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cleans_quoted_admin_key() {
-        assert_eq!(
-            clean_key(" 'sk-ant-admin-123' "),
-            Some("sk-ant-admin-123".to_string())
-        );
-    }
-}
+#[path = "admin_api_tests.rs"]
+mod tests;

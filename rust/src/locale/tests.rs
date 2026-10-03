@@ -317,6 +317,40 @@ fn test_locale_key_russian() {
 }
 
 #[test]
+fn provider_switcher_shortcut_strings_are_translated_in_design_locales() {
+    let keys = [
+        LocaleKey::SwitcherShortcutsTitle,
+        LocaleKey::SwitcherShortcutsHelper,
+        LocaleKey::SwitcherShortcutPrevious,
+        LocaleKey::SwitcherShortcutNext,
+        LocaleKey::SwitcherShortcutSelect,
+        LocaleKey::SwitcherShortcutNone,
+        LocaleKey::SwitcherShortcutRecordingHint,
+        LocaleKey::SwitcherShortcutReset,
+        LocaleKey::SwitcherShortcutErrorUnknown,
+        LocaleKey::SwitcherShortcutErrorDuplicate,
+        LocaleKey::SwitcherShortcutErrorReserved,
+        LocaleKey::SwitcherShortcutErrorInvalid,
+    ];
+    let languages = [
+        (Language::Spanish, "es-MX"),
+        (Language::Japanese, "ja-JP"),
+        (Language::Korean, "ko-KR"),
+        (Language::Russian, "ru-RU"),
+    ];
+
+    for (language, locale) in languages {
+        for key in keys {
+            assert_ne!(
+                get_text(language, key),
+                get_text(Language::English, key),
+                "{key:?} is falling back to English in {locale}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_locale_key_turkish() {
     assert_eq!(get_text(Language::Turkish, LocaleKey::TabGeneral), "Genel");
     assert_eq!(
@@ -392,6 +426,12 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
         .collect();
     let locale_key_names: HashSet<&str> = LocaleKey::ALL.iter().map(|(_, name)| *name).collect();
     let aixy_gateway_keys = ["AixyGatewayTitle", "AixyGatewayLabel", "AixyGatewayHelp"];
+    let credential_expiry_keys = [
+        "CredentialExpiryNotifications",
+        "CredentialExpiryNotificationsHelper",
+        "CredentialExpiryTitle",
+        "CredentialExpiryBody",
+    ];
 
     for (locale, keys) in &resource_keys {
         for name in aixy_gateway_keys {
@@ -404,6 +444,12 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
             assert!(
                 locale_key_names.contains(name),
                 "unknown Fluent key {name} in {locale}"
+            );
+        }
+        for name in credential_expiry_keys {
+            assert!(
+                keys.contains(name),
+                "missing credential-expiry localization {name} in {locale}"
             );
         }
     }

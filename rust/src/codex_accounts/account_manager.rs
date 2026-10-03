@@ -15,7 +15,9 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use super::api::CodexApiError;
-use super::credentials::{AuthBackedIdentity, load_identity, parse_credentials_json};
+use super::credentials::{
+    AuthBackedIdentity, copy_private_file, load_identity, parse_credentials_json,
+};
 use super::file_locations::{
     ambient_codex_home, auth_backups_directory, codex_desktop_session_root,
     desktop_session_snapshot_path, ensure_directories, managed_homes_directory,
@@ -247,7 +249,7 @@ impl CodexAccountManager {
 
         fs::create_dir_all(ambient_codex_home())?;
         let backup_path = self.backup_ambient_auth()?;
-        fs::copy(&target_auth_path, ambient_codex_home().join("auth.json"))?;
+        copy_private_file(&target_auth_path, &ambient_codex_home().join("auth.json"))?;
         self.sync_ambient_global_state(
             ambient_account
                 .as_ref()
@@ -291,14 +293,14 @@ impl CodexAccountManager {
                 // Never let a stale ambient file overwrite newer managed
                 // credentials; that turns a working account into a dead one.
                 if credentials_are_at_least_as_fresh(&source_auth_path, &existing_auth_path) {
-                    fs::copy(&source_auth_path, &existing_auth_path)?;
+                    copy_private_file(&source_auth_path, &existing_auth_path)?;
                 }
                 existing
             }
             None => {
                 let fresh_home = managed_homes_directory().join(Uuid::new_v4().to_string());
                 fs::create_dir_all(&fresh_home)?;
-                fs::copy(&source_auth_path, fresh_home.join("auth.json"))?;
+                copy_private_file(&source_auth_path, &fresh_home.join("auth.json"))?;
                 fresh_home
             }
         };
@@ -328,7 +330,7 @@ impl CodexAccountManager {
         }
         let backup_path =
             auth_backups_directory().join(format!("ambient-auth-{}.json", timestamp_slug()));
-        fs::copy(&auth_path, &backup_path)?;
+        copy_private_file(&auth_path, &backup_path)?;
         Ok(Some(backup_path))
     }
 

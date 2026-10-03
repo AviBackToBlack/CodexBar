@@ -19,6 +19,7 @@ import crossmodel from "./icons/ProviderIcon-crossmodel.svg?raw";
 import cursor from "./icons/ProviderIcon-cursor.svg?raw";
 import deepgram from "./icons/ProviderIcon-deepgram.svg?raw";
 import deepinfra from "./icons/ProviderIcon-deepinfra.svg?raw";
+import devpass from "./icons/ProviderIcon-devpass.svg?raw";
 import fireworks from "./icons/ProviderIcon-fireworks.svg?raw";
 import aiand from "./icons/ProviderIcon-aiand.svg?raw";
 import aixy from "./icons/ProviderIcon-aixy.svg?raw";
@@ -39,6 +40,7 @@ import jetbrains from "./icons/ProviderIcon-jetbrains.svg?raw";
 import kilo from "./icons/ProviderIcon-kilo.svg?raw";
 import kimi from "./icons/ProviderIcon-kimi.svg?raw";
 import kiro from "./icons/ProviderIcon-kiro.svg?raw";
+import llmman from "./icons/ProviderIcon-llmman.svg?raw";
 import llmproxy from "./icons/ProviderIcon-llmproxy.svg?raw";
 import manus from "./icons/ProviderIcon-manus.svg?raw";
 import meta from "./icons/ProviderIcon-meta.svg?raw";
@@ -49,18 +51,21 @@ import muse from "./icons/ProviderIcon-muse.svg?raw";
 import notion from "./icons/ProviderIcon-notion.svg?raw";
 import nous from "./icons/ProviderIcon-nous.svg?raw";
 import xai from "./icons/ProviderIcon-xai.svg?raw";
+import xkiro from "./icons/ProviderIcon-xkiro.svg?raw";
 import ollama from "./icons/ProviderIcon-ollama.svg?raw";
 import opencode from "./icons/ProviderIcon-opencode.svg?raw";
 import opencodego from "./icons/ProviderIcon-opencodego.svg?raw";
 import openrouter from "./icons/ProviderIcon-openrouter.svg?raw";
 import perplexity from "./icons/ProviderIcon-perplexity.svg?raw";
 import qoder from "./icons/ProviderIcon-qoder.svg?raw";
+import raycast from "./icons/ProviderIcon-raycast.svg?raw";
 import replicate from "./icons/ProviderIcon-replicate.svg?raw";
 import sakana from "./icons/ProviderIcon-sakana.svg?raw";
 import stepfun from "./icons/ProviderIcon-stepfun.svg?raw";
 import sub2api from "./icons/ProviderIcon-sub2api.svg?raw";
 import t3chat from "./icons/ProviderIcon-t3chat.svg?raw";
 import venice from "./icons/ProviderIcon-venice.svg?raw";
+import vercel from "./icons/ProviderIcon-vercel.svg?raw";
 import vertexai from "./icons/ProviderIcon-vertexai.svg?raw";
 import warp from "./icons/ProviderIcon-warp.svg?raw";
 import windsurf from "./icons/ProviderIcon-windsurf.svg?raw";
@@ -108,6 +113,7 @@ const RAW: Record<string, string> = {
   cursor: tint(cursor),
   deepgram: tint(deepgram),
   deepinfra: tint(deepinfra),
+  devpass: tint(devpass),
   fireworks: tint(fireworks),
   aiand: tint(aiand),
   aixy: tint(aixy),
@@ -128,6 +134,7 @@ const RAW: Record<string, string> = {
   kilo: tint(kilo),
   kimi: tint(kimi),
   kiro: tint(kiro),
+  llmman: tint(llmman),
   llmproxy: tint(llmproxy),
   manus: tint(manus),
   meta: tint(meta),
@@ -136,6 +143,7 @@ const RAW: Record<string, string> = {
   notion: tint(notion),
   nous: tint(nous),
   xai: tint(xai),
+  xkiro: tint(xkiro),
   mistral: tint(mistral),
   muse: tint(muse),
   ollama: tint(ollama),
@@ -144,12 +152,14 @@ const RAW: Record<string, string> = {
   openrouter: tint(openrouter),
   perplexity: tint(perplexity),
   qoder: tint(qoder),
+  raycast: tint(raycast),
   replicate: tint(replicate),
   sakana: tint(sakana),
   stepfun: tint(stepfun),
   sub2api: tint(sub2api),
   t3chat: tint(t3chat),
   venice: tint(venice),
+  vercel: tint(vercel),
   vertexai: tint(vertexai),
   warp: tint(warp),
   windsurf: tint(windsurf),
@@ -176,6 +186,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   cursor:      { id: "cursor",      brandColor: "#f54e00", fallbackLetter: "▸", svgPath: RAW.cursor },
   deepgram:    { id: "deepgram",    brandColor: "#13ef93", fallbackLetter: "D", svgPath: RAW.deepgram },
   deepinfra:   { id: "deepinfra",   brandColor: "#2a3275", fallbackLetter: "D", svgPath: RAW.deepinfra },
+  devpass:     { id: "devpass",     brandColor: "#2563eb", fallbackLetter: "D", svgPath: RAW.devpass },
   fireworks:   { id: "fireworks",   brandColor: "#f25b1c", fallbackLetter: "F", svgPath: RAW.fireworks },
   aiand:       { id: "aiand",       brandColor: "#e25c2b", fallbackLetter: "&", svgPath: RAW.aiand },
   clinepass:   { id: "clinepass",   brandColor: "#5487c8", fallbackLetter: "C", svgPath: RAW.clinepass },
@@ -203,6 +214,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   kimi:        { id: "kimi",        brandColor: "#fe603c", fallbackLetter: "☽", svgPath: RAW.kimi },
   kimik2:      { id: "kimik2",      brandColor: "#4c00ff", fallbackLetter: "☽", svgPath: RAW.kimi },
   kiro:        { id: "kiro",        brandColor: "#9046ff", fallbackLetter: "K", svgPath: RAW.kiro },
+  llmman:      { id: "llmman",      brandColor: "#6CC5B0", fallbackLetter: "L", svgPath: RAW.llmman },
   llmproxy:    { id: "llmproxy",    brandColor: "#4f46e5", fallbackLetter: "L", svgPath: RAW.llmproxy },
   minimax:     { id: "minimax",     brandColor: "#fe603c", fallbackLetter: "M", svgPath: RAW.minimax },
   mistral:     { id: "mistral",     brandColor: "#ff5229", fallbackLetter: "M", svgPath: RAW.mistral },
@@ -230,12 +242,14 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   commandcode: { id: "commandcode", brandColor: "#8c4edd", fallbackLetter: "C", svgPath: RAW.commandcode },
   crossmodel:  { id: "crossmodel",  brandColor: "#c084fc", fallbackLetter: "X", svgPath: RAW.crossmodel },
   qoder:       { id: "qoder",       brandColor: "#2563eb", fallbackLetter: "Q", svgPath: RAW.qoder },
+  raycast:     { id: "raycast",     brandColor: "#FF6363", fallbackLetter: "R", svgPath: RAW.raycast },
   replicate:   { id: "replicate",   brandColor: "#000000", fallbackLetter: "R", svgPath: RAW.replicate },
   codebuddy:   { id: "codebuddy",   brandColor: "#0052d9", fallbackLetter: "C" },
   sakana:      { id: "sakana",      brandColor: "#0ea5e9", fallbackLetter: "S", svgPath: RAW.sakana },
   stepfun:     { id: "stepfun",     brandColor: "#999999", fallbackLetter: "S", svgPath: RAW.stepfun },
   sub2api:     { id: "sub2api",     brandColor: "#14b8a6", fallbackLetter: "S", svgPath: RAW.sub2api },
   venice:      { id: "venice",      brandColor: "#3c8fdd", fallbackLetter: "V", svgPath: RAW.venice },
+  vercel:      { id: "vercel",      brandColor: "#737373", fallbackLetter: "V", svgPath: RAW.vercel },
   openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
   chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
   litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },
@@ -246,6 +260,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   notion:      { id: "notion",      brandColor: "#337EA9", fallbackLetter: "N", svgPath: RAW.notion },
   nous:        { id: "nous",        brandColor: "#D6A55C", fallbackLetter: "N", svgPath: RAW.nous },
   xai:         { id: "xai",         brandColor: "#8e8e93", fallbackLetter: "X", svgPath: RAW.xai },
+  xkiro:       { id: "xkiro",       brandColor: "#52c99b", fallbackLetter: "X", svgPath: RAW.xkiro },
   meta:        { id: "meta",        brandColor: "#0467DF", fallbackLetter: "M", svgPath: RAW.meta },
 };
 
@@ -314,6 +329,7 @@ const ALIASES: Record<string, string> = {
   // xai is its own Management API provider (not an alias of consumer Grok).
   "x.ai": "xai",
   "x-ai": "xai",
+  "x-kiro": "xkiro",
   supergrok: "grok",
   "super-grok": "grok",
   "eleven labs": "elevenlabs",

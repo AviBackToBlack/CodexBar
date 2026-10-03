@@ -16,6 +16,8 @@ import type {
 interface Props {
   providerId: string;
   cookieDomain: string | null;
+  /** Called after the stored cookie changes so the detail pane can refresh. */
+  onChanged?: () => void;
 }
 
 function cookiePlaceholder(
@@ -35,7 +37,7 @@ function cookiePlaceholder(
  * Per-provider browser cookie management. Renders nothing for providers
  * that do not have a cookieDomain (i.e. don't authenticate via web cookies).
  */
-export function CookieSection({ providerId, cookieDomain }: Props) {
+export function CookieSection({ providerId, cookieDomain, onChanged }: Props) {
   const { t } = useLocale();
   const [saved, setSaved] = useState<CookieInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -98,6 +100,7 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     try {
       const next = await removeManualCookie(providerId);
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
+      onChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -114,6 +117,7 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
       const next = await importBrowserCookies(providerId, browserType);
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
       setImportStatus(t("BrowserCookieImportSuccess"));
+      onChanged?.();
     } catch (err: unknown) {
       setImportError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -129,6 +133,7 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
       const next = await setManualCookie(providerId, pasteValue.trim());
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
       setPasteValue("");
+      onChanged?.();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -85,6 +85,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     highUsageThreshold: 70,
     criticalUsageThreshold: 90,
     predictivePaceWarningEnabled: false,
+    credentialExpiryNotificationsEnabled: false,
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
@@ -102,6 +103,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     autoDownloadUpdates: false,
     installUpdatesOnQuit: false,
     globalShortcut: "Ctrl+Shift+U",
+    switcherShortcuts: {},
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     // "dark" (not "auto") so useTheme's effect short-circuits before ever

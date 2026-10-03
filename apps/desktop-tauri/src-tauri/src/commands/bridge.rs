@@ -171,6 +171,10 @@ pub struct NamedRateWindowSnapshot {
     /// when the provider reports no real core quota window.
     #[serde(default)]
     pub fallback_lane: bool,
+    /// Provider-declared tray-icon lane this window stands in for when the
+    /// snapshot has no real core window in that lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_fallback: Option<codexbar::core::IconLane>,
 }
 
 /// Pace prediction snapshot for tray/bridge display.
@@ -495,6 +499,7 @@ impl ProviderUsageSnapshot {
                     window: RateWindowSnapshot::from_rate_window(&extra.window)
                         .with_quota_block(is_blocked, &blocked),
                     fallback_lane: extra.fallback_lane,
+                    icon_fallback: extra.icon_fallback,
                 })
                 .collect(),
             inventory: result
@@ -809,6 +814,7 @@ pub struct SettingsSnapshot {
     provider_usage_thresholds:
         std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>,
     predictive_pace_warning_enabled: bool,
+    credential_expiry_notifications_enabled: bool,
     show_pace: bool,
     tray_icon_mode: &'static str,
     stacked_tray_top_provider: Option<String>,
@@ -829,8 +835,10 @@ pub struct SettingsSnapshot {
     auto_download_updates: bool,
     install_updates_on_quit: bool,
     global_shortcut: String,
+    switcher_shortcuts: std::collections::BTreeMap<String, String>,
     codex_custom_sessions_dirs: Vec<String>,
     agent_sessions_enabled: bool,
+    stay_awake_enabled: bool,
     agent_session_ssh_hosts: Vec<String>,
     hooks_enabled: bool,
     http_proxy_enabled: bool,
@@ -941,6 +949,8 @@ impl From<Settings> for SettingsSnapshot {
             critical_usage_threshold: settings.critical_usage_threshold,
             provider_usage_thresholds: settings.provider_usage_thresholds,
             predictive_pace_warning_enabled: settings.predictive_pace_warning_enabled,
+            credential_expiry_notifications_enabled: settings
+                .credential_expiry_notifications_enabled,
             show_pace: settings.show_pace,
             tray_icon_mode: tray_icon_mode_label(settings.tray_icon_mode),
             stacked_tray_top_provider: settings.stacked_tray_top_provider,
@@ -960,9 +970,13 @@ impl From<Settings> for SettingsSnapshot {
             update_channel: update_channel_label(settings.update_channel),
             auto_download_updates: settings.auto_download_updates,
             install_updates_on_quit: settings.install_updates_on_quit,
+            switcher_shortcuts: codexbar::switcher_shortcuts::resolve_or_default(
+                &settings.switcher_shortcuts,
+            ),
             global_shortcut: settings.global_shortcut,
             codex_custom_sessions_dirs: settings.codex_custom_sessions_dirs,
             agent_sessions_enabled: settings.agent_sessions_enabled,
+            stay_awake_enabled: settings.stay_awake_enabled,
             agent_session_ssh_hosts: settings.agent_session_ssh_hosts,
             hooks_enabled: settings.hooks_enabled,
             http_proxy_enabled: settings.http_proxy_enabled,
@@ -1174,6 +1188,26 @@ mod tests {
             compact_tray_status_label(&window, Language::English),
             "8% • Resets in 2h 05m"
         );
+    }
+
+    #[test]
+    fn credit_balance_detail_crosses_the_bridge_and_is_not_a_reset_phrase() {
+        let rw = RateWindow::with_details(25.0, None, None, Some("750 / 1000 credits left".into()))
+            .with_description_as_detail();
+        let window = RateWindowSnapshot::from_rate_window(&rw);
+
+        assert!(window.description_is_detail);
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("750 / 1000 credits left")
+        );
+        let json = serde_json::to_value(&window).unwrap();
+        assert_eq!(json["descriptionIsDetail"], true);
+        assert_eq!(compact_tray_status_label(&window, Language::English), "25%");
+
+        let plain = RateWindowSnapshot::from_rate_window(&RateWindow::new(10.0));
+        let json = serde_json::to_value(&plain).unwrap();
+        assert_eq!(json["descriptionIsDetail"], false);
     }
 
     #[test]

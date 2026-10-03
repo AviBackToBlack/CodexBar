@@ -14,8 +14,11 @@ use crate::settings::Settings;
 use crate::sound::{NotificationSoundEvent, play_alert};
 use chrono::{DateTime, Utc};
 
+mod credential;
 mod identity_gaps;
 
+pub use credential::CredentialAlertPolicy;
+use credential::CredentialEpisodes;
 pub use identity_gaps::WarningScope;
 
 /// Notification types
@@ -137,6 +140,8 @@ pub struct NotificationManager {
     predictive_warning_keys: std::collections::HashSet<PredictiveWarningKey>,
     deepseek_pricing_period: Option<String>,
     identity_gaps: identity_gaps::IdentityGapState,
+    /// Open credential-expiry episodes (in memory; reset on restart).
+    credential_episodes: CredentialEpisodes,
     /// Toasts that would have been shown; tests assert on this instead of popping real toasts.
     #[cfg(test)]
     toasts: std::cell::RefCell<Vec<String>>,
@@ -150,6 +155,7 @@ impl NotificationManager {
             predictive_warning_keys: std::collections::HashSet::new(),
             deepseek_pricing_period: None,
             identity_gaps: identity_gaps::IdentityGapState::default(),
+            credential_episodes: CredentialEpisodes::default(),
             #[cfg(test)]
             toasts: std::cell::RefCell::new(Vec::new()),
         }
@@ -525,13 +531,17 @@ impl NotificationManager {
         Self::play_notification_sound(NotificationSoundEvent::StatusIssue, settings);
     }
 
+    /// Tests record the toast and report it as handed to the OS.
     #[cfg(test)]
-    fn show_toast(&self, title: &str, body: &str) {
+    fn show_toast(&self, title: &str, body: &str) -> bool {
         self.toasts.borrow_mut().push(format!("{title}: {body}"));
+        true
     }
 
+    /// Returns whether the toast was handed to the OS (a spawn failure is the
+    /// only failure the fire-and-forget PowerShell dispatch can observe).
     #[cfg(all(target_os = "windows", not(test)))]
-    fn show_toast(&self, title: &str, body: &str) {
+    fn show_toast(&self, title: &str, body: &str) -> bool {
         use std::os::windows::process::CommandExt;
         use std::process::Command;
         use std::sync::Once;
@@ -589,13 +599,19 @@ impl NotificationManager {
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
         {
-            Ok(_) => tracing::debug!("Toast notification dispatched: {}", title),
-            Err(e) => tracing::warn!("Failed to dispatch toast notification '{}': {}", title, e),
+            Ok(_) => {
+                tracing::debug!("Toast notification dispatched: {}", title);
+                true
+            }
+            Err(e) => {
+                tracing::warn!("Failed to dispatch toast notification '{}': {}", title, e);
+                false
+            }
         }
     }
 
     #[cfg(all(not(target_os = "windows"), not(test)))]
-    fn show_toast(&self, title: &str, body: &str) {
+    fn show_toast(&self, title: &str, body: &str) -> bool {
         use std::process::Command;
 
         // Try notify-send first (works on most Linux distros including WSL with WSLg)
@@ -610,10 +626,11 @@ impl NotificationManager {
             && output.status.success()
         {
             tracing::debug!("Sent notification via notify-send: {}", title);
-            return;
+            return true;
         }
 
         tracing::info!("Notification: {} - {}", title, body);
+        false
     }
 }
 

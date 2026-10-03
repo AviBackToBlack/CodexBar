@@ -31,6 +31,10 @@ const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 pub struct DailyCostPoint {
     pub date: String,
     pub value: Option<f64>,
+    /// Claude requests that only produced a preliminary proxy usage row that
+    /// day (upstream 0.60.5 #3688). Omitted when zero or not applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_request_count: Option<u32>,
 }
 
 /// A single (date, tokens) point for the Tokens chart mode (upstream 0.50.0
@@ -80,6 +84,10 @@ pub struct ProviderLocalUsageSummary {
     pub top_model: Option<String>,
     pub estimate_note: String,
     pub token_cost_updated_at_ms: i64,
+    /// Incomplete Claude requests excluded from the selected-period totals
+    /// (`period_cost` / `period_tokens`). Omitted when zero or not applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incomplete_request_count: Option<u32>,
 }
 
 /// One display-only quota-window history row.  Completeness is tracked per
@@ -197,7 +205,18 @@ fn build_provider_chart_data_with_cancel(
             .daily_cost
             .iter()
             .cloned()
-            .map(|(date, value)| DailyCostPoint { date, value })
+            .map(|(date, value)| {
+                let incomplete_request_count = snapshot
+                    .daily_incomplete
+                    .iter()
+                    .find(|(day, _)| *day == date)
+                    .map(|(_, count)| *count);
+                DailyCostPoint {
+                    date,
+                    value,
+                    incomplete_request_count,
+                }
+            })
             .collect();
         let tokens_history = snapshot
             .daily_tokens
@@ -258,7 +277,11 @@ fn build_provider_chart_data_with_cancel(
         let raw_cost = get_daily_cost_history(&provider_id, 30);
         let cost_history: Vec<DailyCostPoint> = raw_cost
             .into_iter()
-            .map(|(date, value)| DailyCostPoint { date, value })
+            .map(|(date, value)| DailyCostPoint {
+                date,
+                value,
+                incomplete_request_count: None,
+            })
             .collect();
 
         let (raw_tokens, tokens_incomplete) = get_daily_token_history(&provider_id, 30);
@@ -382,7 +405,10 @@ fn local_usage_summary_from_cost_summary(
     period_summary: Option<&CostSummary>,
 ) -> Option<ProviderLocalUsageSummary> {
     let thirty_tokens = total_tokens(summary);
-    let has_usage = summary.sessions_count > 0 || summary.total_cost_usd > 0.0 || thirty_tokens > 0;
+    let has_usage = summary.sessions_count > 0
+        || summary.total_cost_usd > 0.0
+        || thirty_tokens > 0
+        || summary.incomplete_request_count > 0;
     has_usage.then(|| ProviderLocalUsageSummary {
         today_cost: None,
         thirty_day_cost: non_zero_f64(summary.total_cost_usd),
@@ -394,6 +420,9 @@ fn local_usage_summary_from_cost_summary(
         top_model: top_model(summary),
         estimate_note: localized_estimate_note(provider_id, locale::current_language()),
         token_cost_updated_at_ms: current_unix_ms(),
+        // The note sits under the selected-period totals, so count that window.
+        incomplete_request_count: period_summary
+            .and_then(|s| non_zero_u32(s.incomplete_request_count)),
     })
 }
 
@@ -469,8 +498,10 @@ fn load_local_usage_summary_with_unknown_models(
 
     let thirty_day_tokens = total_tokens(&thirty_day);
     let latest_tokens = total_tokens(&today);
-    let has_usage =
-        thirty_day.sessions_count > 0 || thirty_day.total_cost_usd > 0.0 || thirty_day_tokens > 0;
+    let has_usage = thirty_day.sessions_count > 0
+        || thirty_day.total_cost_usd > 0.0
+        || thirty_day_tokens > 0
+        || thirty_day.incomplete_request_count > 0;
     if !has_usage {
         return (None, unknown_models);
     }
@@ -492,6 +523,9 @@ fn load_local_usage_summary_with_unknown_models(
             top_model: top_model(&thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
+            incomplete_request_count: period_summary
+                .as_ref()
+                .and_then(|s| non_zero_u32(s.incomplete_request_count)),
         }),
         unknown_models,
     )
@@ -534,6 +568,7 @@ fn muse_local_usage_summary(
         top_model: report.top_model.clone(),
         estimate_note: locale::get_text(lang, LocaleKey::PanelEstimatedFromLocalLogsMuse),
         token_cost_updated_at_ms: current_unix_ms(),
+        incomplete_request_count: None,
     })
 }
 
@@ -777,6 +812,10 @@ fn non_zero_u64(value: u64) -> Option<u64> {
     (value > 0).then_some(value)
 }
 
+fn non_zero_u32(value: u32) -> Option<u32> {
+    (value > 0).then_some(value)
+}
+
 fn top_model(summary: &CostSummary) -> Option<String> {
     summary
         .by_model_tokens
@@ -827,6 +866,7 @@ fn load_openai_dashboard_chart_data(
         .map(|d| DailyCostPoint {
             date: d.day.clone(),
             value: Some(d.total_credits_used),
+            incomplete_request_count: None,
         })
         .collect();
 

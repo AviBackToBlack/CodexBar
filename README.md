@@ -81,6 +81,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Kiro | Cookies / CLI | Monthly Credits, Overage |
 | Vertex AI | gcloud OAuth | Cost |
 | v0 | API Key | Billing quota, API rate limits, on-demand balance |
+| Vercel AI Gateway | API Key | Team credit balance, lifetime spend |
 | Augment | Cookies | Credits |
 | OpenCode | Local Config | Usage |
 | Kimi | Cookies | 5h Rate, Weekly |
@@ -114,12 +115,16 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | OpenAI | Admin API / API Key | Usage, Requests, Project-scoped cost, Credit Balance |
 | Grok | Cookies / auth.json | Billing |
 | Helmcode (also NaN Builders) | Browser cookies / manual Cookie header | Per-model token quotas, reset windows, Helmcode prepaid balance |
+| Raycast | Cookies (Chrome auto or manual) | Monthly AI credits, plan, renewal |
 | Replicate | Cookies / token accounts | Monthly spend, credit balance |
 | Aixy | API Key / token accounts | Applicable budget balances, 7-day key usage |
 | ElevenLabs | API Key | Subscription Credits, Voice Slots |
 | Deepgram | API Key | Project Usage |
 | Groq | API Key | Enterprise Metrics |
 | LLM Proxy | API Key | Quota Stats |
+| llmman | Local daemon / optional API Key | Memory in use, loaded and stored models |
+| DevPass | API Key | Plan credits, Premium weekly, API-key spend |
+| xKiro | API Key | Daily free tokens |
 
 </details>
 

@@ -132,6 +132,7 @@ pub(super) struct RawSettings {
     reset_time_relative: bool,
     show_reset_when_exhausted: bool,
     predictive_pace_warning_enabled: bool,
+    credential_expiry_notifications_enabled: bool,
     #[serde(default = "default_true")]
     show_pace: bool,
     menu_bar_display_mode: String,
@@ -208,8 +209,11 @@ pub(super) struct RawSettings {
     provider_order: Vec<String>,
     #[serde(default = "default_global_shortcut")]
     global_shortcut: String,
+    switcher_shortcuts: BTreeMap<String, String>,
     codex_custom_sessions_dirs: Vec<String>,
     agent_sessions_enabled: bool,
+    #[serde(default)]
+    stay_awake_enabled: bool,
     agent_session_ssh_hosts: Vec<String>,
     #[serde(default)]
     hooks_enabled: bool,
@@ -311,6 +315,7 @@ impl Default for RawSettings {
             reset_time_relative: s.reset_time_relative,
             show_reset_when_exhausted: s.show_reset_when_exhausted,
             predictive_pace_warning_enabled: s.predictive_pace_warning_enabled,
+            credential_expiry_notifications_enabled: s.credential_expiry_notifications_enabled,
             show_pace: s.show_pace,
             menu_bar_display_mode: s.menu_bar_display_mode,
             overview_layout: s.overview_layout,
@@ -350,8 +355,10 @@ impl Default for RawSettings {
             provider_metrics: s.provider_metrics,
             provider_order: s.provider_order,
             global_shortcut: s.global_shortcut,
+            switcher_shortcuts: s.switcher_shortcuts,
             codex_custom_sessions_dirs: s.codex_custom_sessions_dirs,
             agent_sessions_enabled: s.agent_sessions_enabled,
+            stay_awake_enabled: s.stay_awake_enabled,
             agent_session_ssh_hosts: s.agent_session_ssh_hosts,
             hooks_enabled: s.hooks_enabled,
             http_proxy_enabled: s.http_proxy_enabled,
@@ -654,6 +661,7 @@ impl From<RawSettings> for Settings {
             reset_time_relative: raw.reset_time_relative,
             show_reset_when_exhausted: raw.show_reset_when_exhausted,
             predictive_pace_warning_enabled: raw.predictive_pace_warning_enabled,
+            credential_expiry_notifications_enabled: raw.credential_expiry_notifications_enabled,
             show_pace: raw.show_pace,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             overview_layout: normalize_overview_layout(&raw.overview_layout),
@@ -669,8 +677,10 @@ impl From<RawSettings> for Settings {
                 normalize_provider_order(&raw.provider_order)
             },
             global_shortcut: raw.global_shortcut,
+            switcher_shortcuts: sanitize_switcher_shortcuts(raw.switcher_shortcuts),
             codex_custom_sessions_dirs: raw.codex_custom_sessions_dirs,
             agent_sessions_enabled: raw.agent_sessions_enabled,
+            stay_awake_enabled: raw.stay_awake_enabled,
             agent_session_ssh_hosts: raw.agent_session_ssh_hosts,
             hooks_enabled: raw.hooks_enabled,
             http_proxy_enabled: raw.http_proxy_enabled,
@@ -719,4 +729,13 @@ impl From<RawSettings> for Settings {
             ),
         }
     }
+}
+
+/// A hand-edited or stale stored map must not break loading: an invalid map
+/// falls back to the defaults (empty overrides).
+fn sanitize_switcher_shortcuts(stored: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    crate::switcher_shortcuts::normalize_overrides(&stored).unwrap_or_else(|error| {
+        tracing::warn!("Ignoring invalid switcher shortcuts in settings: {error}");
+        BTreeMap::new()
+    })
 }

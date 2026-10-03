@@ -8,6 +8,7 @@ use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike,
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
+use super::tokens::{RowTokens, TokenSums};
 use crate::core::{ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
 
 const FIVE_HOURS_MS: i64 = 5 * 60 * 60 * 1000;
@@ -22,7 +23,9 @@ SELECT
   CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
   CAST(json_extract(data, '$.cost') AS REAL) AS cost,
   1 AS requestCount,
-  COALESCE(json_extract(data, '$.modelID'), '') AS modelID
+  COALESCE(json_extract(data, '$.modelID'), '') AS modelID,
+  CASE WHEN json_type(data, '$.tokens') = 'object'
+    THEN json_extract(data, '$.tokens') END AS tokens
 FROM message
 WHERE json_valid(data)
   AND json_extract(data, '$.providerID') = 'opencode-go'
@@ -37,7 +40,9 @@ WITH provider_messages AS (
     CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
     CAST(json_extract(data, '$.cost') AS REAL) AS cost,
     json_type(data, '$.cost') IN ('integer', 'real') AS hasCost,
-    COALESCE(json_extract(data, '$.modelID'), '') AS modelID
+    COALESCE(json_extract(data, '$.modelID'), '') AS modelID,
+    CASE WHEN json_type(data, '$.tokens') = 'object'
+      THEN json_extract(data, '$.tokens') END AS tokens
   FROM message
   WHERE json_valid(data)
     AND json_extract(data, '$.providerID') = 'opencode-go'
@@ -48,14 +53,16 @@ SELECT
     AS createdMs,
   CAST(json_extract(p.data, '$.cost') AS REAL) AS cost,
   1 AS requestCount,
-  m.modelID AS modelID
+  m.modelID AS modelID,
+  CASE WHEN json_type(p.data, '$.tokens') = 'object'
+    THEN json_extract(p.data, '$.tokens') END AS tokens
 FROM part p
 JOIN provider_messages m ON m.messageID = p.message_id
 WHERE json_valid(p.data)
   AND json_extract(p.data, '$.type') = 'step-finish'
   AND json_type(p.data, '$.cost') IN ('integer', 'real')
 UNION ALL
-SELECT createdMs, cost, 1 AS requestCount, modelID
+SELECT createdMs, cost, 1 AS requestCount, modelID, tokens
 FROM provider_messages m
 WHERE hasCost
   AND NOT EXISTS (
@@ -76,6 +83,8 @@ pub(crate) struct UsageRow {
     request_count: u32,
     /// The underlying model behind the `opencode-go` Zen proxy; empty when unattributed.
     model: String,
+    /// Recorded token counts; `None` when absent or unusable (never zero).
+    tokens: Option<RowTokens>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +246,11 @@ fn read_rows(db_path: &Path) -> Result<Vec<UsageRow>, ProviderError> {
                     .map(|n| u32::try_from(n.max(1)).unwrap_or(u32::MAX))
                     .unwrap_or(1),
                 model: row.get::<_, String>(3).unwrap_or_default(),
+                tokens: row
+                    .get::<_, Option<String>>(4)
+                    .ok()
+                    .flatten()
+                    .and_then(|json| RowTokens::parse(&json)),
             })
         })
         .map_err(|e| {
@@ -339,6 +353,8 @@ pub struct DailyModelCost {
     pub cost: f64,
     /// Number of provider invocations (step-finish parts, or one per message).
     pub request_count: u32,
+    /// Recorded token sums for this bucket; incomplete when any row lacked usable tokens.
+    pub tokens: TokenSums,
 }
 
 /// Provider-local cost summary reusing the shared `CostSummary` fields the chart
@@ -349,6 +365,10 @@ pub struct ModelCostSummary {
     pub total_cost_usd: f64,
     pub by_model: std::collections::HashMap<String, f64>,
     pub request_count: u32,
+    /// Recorded token sums across the window (costs never derive from these).
+    pub tokens: TokenSums,
+    /// Recorded token sums per trimmed model id, keyed like `by_model`.
+    pub by_model_tokens: std::collections::HashMap<String, TokenSums>,
     pub period_start: Option<NaiveDate>,
     pub period_end: Option<NaiveDate>,
 }
@@ -390,7 +410,7 @@ pub fn daily_model_costs(
 
     let mut by_day_model: std::collections::BTreeMap<
         String,
-        std::collections::BTreeMap<String, (f64, u32)>,
+        std::collections::BTreeMap<String, (f64, u32, TokenSums)>,
     > = std::collections::BTreeMap::new();
     for row in rows {
         if row.created_ms < since_ms || row.created_ms > now_ms {
@@ -406,19 +426,21 @@ pub fn daily_model_costs(
             trimmed
         };
         let entry = by_day_model.entry(key).or_default();
-        let bucket = entry.entry(model.to_string()).or_insert((0.0, 0));
+        let bucket = entry.entry(model.to_string()).or_default();
         bucket.0 += row.cost;
         bucket.1 = bucket.1.saturating_add(row.request_count);
+        bucket.2.add(row.tokens.as_ref());
     }
 
     let mut out = Vec::new();
     for (day_key, models) in by_day_model {
-        for (model, (cost, request_count)) in models {
+        for (model, (cost, request_count, tokens)) in models {
             out.push(DailyModelCost {
                 day_key: day_key.clone(),
                 model,
                 cost,
                 request_count,
+                tokens,
             });
         }
     }
@@ -444,6 +466,9 @@ pub fn model_cost_summary_from_rows(
     let mut total = 0.0;
     let mut request_count = 0u32;
     let mut by_model: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    let mut tokens = TokenSums::default();
+    let mut by_model_tokens: std::collections::HashMap<String, TokenSums> =
+        std::collections::HashMap::new();
     let mut earliest: Option<NaiveDate> = None;
     let mut latest: Option<NaiveDate> = None;
     for row in rows {
@@ -459,6 +484,11 @@ pub fn model_cost_summary_from_rows(
             trimmed
         };
         *by_model.entry(model.to_string()).or_insert(0.0) += row.cost;
+        tokens.add(row.tokens.as_ref());
+        by_model_tokens
+            .entry(model.to_string())
+            .or_default()
+            .add(row.tokens.as_ref());
         if let Some(day) = day_key_local(row.created_ms)
             .and_then(|k| NaiveDate::parse_from_str(&k, "%Y-%m-%d").ok())
         {
@@ -470,6 +500,8 @@ pub fn model_cost_summary_from_rows(
         total_cost_usd: total,
         by_model,
         request_count,
+        tokens,
+        by_model_tokens,
         period_start: earliest,
         period_end: latest,
     }
@@ -599,6 +631,9 @@ fn anchored_month(year: i32, month: u32, anchor: &DateTime<Utc>) -> DateTime<Utc
         .unwrap_or_default();
     Utc.from_utc_datetime(&ndt)
 }
+
+#[cfg(test)]
+mod tokens_tests;
 
 #[cfg(test)]
 mod tests {

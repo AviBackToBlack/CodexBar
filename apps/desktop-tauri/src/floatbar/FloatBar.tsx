@@ -22,7 +22,7 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
-import { resetDescriptionFallback } from "../lib/usageWindows";
+import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
@@ -239,7 +239,9 @@ function ProviderPill({
     informational ? null : resetDescriptionFallback(rateWindow),
     resetRelative,
   );
+  const detailText = windowDetailText(rateWindow);
   const resetSuffix = resetText ? `\n${resetText}` : "";
+  const detailSuffix = detailText ? `\n${detailText}` : "";
   const inlineReset = resetText
     ? inlineResetTime(resetText, rateWindow.resetsAt, resetRelative)
     : null;
@@ -254,7 +256,7 @@ function ProviderPill({
           ? `${provider.displayName}: ${stateLabel}`
           : informational
             ? `${provider.displayName}: ${infoText}${resetSuffix}`
-            : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
+            : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}${detailSuffix}`
       }
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}

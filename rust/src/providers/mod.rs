@@ -35,6 +35,7 @@ pub mod deepgram;
 pub mod deepinfra;
 pub mod deepseek;
 pub mod devin;
+pub mod devpass;
 pub mod doubao;
 pub mod elevenlabs;
 pub mod factory;
@@ -54,6 +55,7 @@ pub mod kimi;
 pub mod kimik2;
 pub mod kiro;
 pub mod litellm;
+pub mod llmman;
 pub mod llmproxy;
 pub mod longcat;
 pub mod manus;
@@ -77,6 +79,7 @@ pub mod pi;
 pub mod poe;
 pub mod qoder;
 pub mod qwencloud;
+pub mod raycast;
 pub mod replicate;
 pub mod sakana;
 pub mod stepfun;
@@ -85,11 +88,13 @@ pub mod t3chat;
 pub mod typesafe;
 pub mod v0;
 pub mod venice;
+pub mod vercel;
 pub mod vertexai;
 pub mod warp;
 pub mod wayfinder;
 pub mod windsurf;
 pub mod xai;
+pub mod xkiro;
 pub mod zai;
 pub mod zed;
 pub mod zenmux;
@@ -123,6 +128,7 @@ pub use deepgram::DeepgramProvider;
 pub use deepinfra::DeepInfraProvider;
 pub use deepseek::DeepSeekProvider;
 pub use devin::DevinProvider;
+pub use devpass::DevPassProvider;
 pub use doubao::DoubaoProvider;
 pub use elevenlabs::ElevenLabsProvider;
 pub use factory::FactoryProvider;
@@ -141,6 +147,7 @@ pub use kimi::{KimiProvider, KimiRegion};
 pub use kimik2::KimiK2Provider;
 pub use kiro::KiroProvider;
 pub use litellm::LiteLLMProvider;
+pub use llmman::LLMManProvider;
 pub use llmproxy::LLMProxyProvider;
 pub use longcat::LongCatProvider;
 pub use manus::ManusProvider;
@@ -163,6 +170,7 @@ pub use pi::PiProvider;
 pub use poe::PoeProvider;
 pub use qoder::QoderProvider;
 pub use qwencloud::QwenCloudProvider;
+pub use raycast::RaycastProvider;
 pub use replicate::ReplicateProvider;
 pub use sakana::SakanaProvider;
 pub use stepfun::StepFunProvider;
@@ -171,11 +179,13 @@ pub use t3chat::T3ChatProvider;
 pub use typesafe::TypeSafeProvider;
 pub use v0::V0Provider;
 pub use venice::VeniceProvider;
+pub use vercel::VercelProvider;
 pub use vertexai::VertexAIProvider;
 pub use warp::WarpProvider;
 pub use wayfinder::WayfinderProvider;
 pub use windsurf::WindsurfProvider;
 pub use xai::XaiProvider;
+pub use xkiro::XKiroProvider;
 pub use zai::ZaiProvider;
 pub use zed::ZedProvider;
 pub use zenmux::ZenMuxProvider;
@@ -311,6 +321,18 @@ pub(crate) fn browser_cookies_for_domain(
     crate::browser::cookies::get_cookies_for_domain(domain).map_err(map_browser_cookie_error)
 }
 
+/// Cookies for `domain` from one browser only, so a provider can avoid
+/// touching unrelated browsers (and their credential prompts).
+pub(crate) fn browser_cookies_from_browser(
+    browser_type: crate::browser::detection::BrowserType,
+    domain: &str,
+) -> Result<Vec<crate::browser::cookies::Cookie>, crate::core::ProviderError> {
+    let browser = crate::browser::detection::BrowserDetector::detect(browser_type)
+        .ok_or(crate::core::ProviderError::NoCookies)?;
+    crate::browser::cookies::CookieExtractor::extract_for_domain(&browser, domain)
+        .map_err(map_browser_cookie_error)
+}
+
 fn map_browser_cookie_error(
     error: crate::browser::cookies::CookieError,
 ) -> crate::core::ProviderError {
@@ -356,6 +378,54 @@ pub(crate) fn validated_https_url(
     raw: &str,
     label: &str,
 ) -> Result<reqwest::Url, crate::core::ProviderError> {
+    validated_endpoint_url(raw, label, false)
+}
+
+/// Like [`validated_https_url`], but plain HTTP is also accepted for loopback,
+/// private-network (RFC1918, unique-local), link-local and `.local` hosts
+/// (upstream `https-or-private-network-http` endpoint policy).
+pub(crate) fn validated_https_or_private_http_url(
+    raw: &str,
+    label: &str,
+) -> Result<reqwest::Url, crate::core::ProviderError> {
+    validated_endpoint_url(raw, label, true)
+}
+
+/// Endpoint-policy host check for [`validated_https_or_private_http_url`].
+/// Stricter than [`is_private_network_host`] about `localhost` (no
+/// `*.localhost`) and also accepts `<label>.local` mDNS names.
+fn is_private_http_endpoint_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    // Upstream `isPrivateNetworkHost`: `localhost` exactly, or a non-empty
+    // label before `.local` once one trailing dot is dropped.
+    let hostname = host.strip_suffix('.').unwrap_or(&host);
+    if host == "localhost"
+        || hostname
+            .strip_suffix(".local")
+            .is_some_and(|label| !label.is_empty())
+    {
+        return true;
+    }
+    let ip_candidate = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&host);
+    match ip_candidate.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+        Err(_) => false,
+    }
+}
+
+fn validated_endpoint_url(
+    raw: &str,
+    label: &str,
+    allow_private_http: bool,
+) -> Result<reqwest::Url, crate::core::ProviderError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(crate::core::ProviderError::Other(format!(
@@ -381,14 +451,21 @@ pub(crate) fn validated_https_url(
     let host = url.host_str().ok_or_else(|| {
         crate::core::ProviderError::Other(format!("{label} URL must include a host"))
     })?;
-    if url.scheme() != "https"
+    let scheme_ok = url.scheme() == "https"
+        || (allow_private_http && url.scheme() == "http" && is_private_http_endpoint_host(host));
+    if !scheme_ok
         || !url.username().is_empty()
         || url.password().is_some()
         || host.contains('%')
         || host.chars().any(|c| c.is_control() || c.is_whitespace())
     {
+        let scheme_rule = if allow_private_http {
+            "HTTPS (or plain HTTP for loopback, private-network and .local hosts)"
+        } else {
+            "HTTPS"
+        };
         return Err(crate::core::ProviderError::Other(format!(
-            "{label} URL must use HTTPS without user info or encoded host tricks"
+            "{label} URL must use {scheme_rule} without user info or encoded host tricks"
         )));
     }
     Ok(url)

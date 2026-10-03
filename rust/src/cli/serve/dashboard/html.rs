@@ -88,6 +88,93 @@ mod tests {
     }
 
     #[test]
+    fn usage_display_control_offers_server_used_remaining() {
+        let html = render_shell(60);
+        assert!(html.contains(r#"<select id="usage-display">"#));
+        assert!(html.contains(r#"<option value="server">Follow server</option>"#));
+        assert!(html.contains(r#"<option value="used">Used</option>"#));
+        assert!(html.contains(r#"<option value="remaining">Remaining</option>"#));
+        assert!(html.contains(r#"<label class="display-preference" for="usage-display">"#));
+    }
+
+    #[test]
+    fn usage_display_preference_is_stored_defensively() {
+        let html = render_shell(60);
+        assert!(html.contains(r#"const USAGE_DISPLAY_KEY = "codexbar.dashboard.usageDisplay""#));
+        // Only `used` and `remaining` are accepted; everything else, including a
+        // throwing `getItem`, falls back to following the server.
+        assert!(
+            html.contains(
+                r#"return value === "used" || value === "remaining" ? value : "server";"#
+            )
+        );
+        assert!(html.contains("localStorage.removeItem(USAGE_DISPLAY_KEY)"));
+        assert!(html.contains("localStorage.setItem(USAGE_DISPLAY_KEY, state.usageDisplay)"));
+        assert!(html.contains("the selection still applies to this page without storage"));
+    }
+
+    #[test]
+    fn usage_display_change_rerenders_cached_snapshot_without_refetch() {
+        let html = render_shell(60);
+        let start = html
+            .find("function changeUsageDisplay()")
+            .expect("change handler");
+        let end = html[start..].find("\n}\n").expect("handler end") + start;
+        let handler = &html[start..end];
+        assert!(handler.contains("renderProviders();"));
+        for forbidden in [
+            "refresh(",
+            "fetch(",
+            "showError(",
+            "sessionStorage",
+            "state.token",
+        ] {
+            assert!(
+                !handler.contains(forbidden),
+                "usage display change must not touch {forbidden}"
+            );
+        }
+        assert!(html.contains("els.usageDisplay.addEventListener(\"change\", changeUsageDisplay)"));
+    }
+
+    #[test]
+    fn usage_display_override_wins_over_server_preference() {
+        let html = render_shell(60);
+        assert!(html.contains("const showUsed = showUsedBars();"));
+        assert!(html.contains(
+            r#"if (state.usageDisplay !== "server") return state.usageDisplay === "used";"#
+        ));
+        assert!(html.contains(
+            "Boolean(state.snapshot && state.snapshot.host && state.snapshot.host.usageBarsShowUsed)"
+        ));
+    }
+
+    #[test]
+    fn severity_follows_consumption_not_displayed_value() {
+        let html = render_shell(60);
+        assert!(html.contains("function windowBarClass(w)"));
+        assert!(html.contains("return Number.isFinite(used) ? pctClass(used) : \"bar\";"));
+        assert!(html.contains("windowBarClass(w)"));
+        assert!(
+            !html.contains("pctClass(pct)"),
+            "severity must not be derived from the displayed (possibly remaining) value"
+        );
+    }
+
+    #[test]
+    fn snapshot_is_cached_before_rows_render() {
+        let html = render_shell(60);
+        let assign = html.find("state.snapshot = snapshot;").expect("assignment");
+        let render = html
+            .find("renderProviders();\n  const host")
+            .expect("render call");
+        assert!(
+            assign < render,
+            "rows must read the new snapshot's host preference"
+        );
+    }
+
+    #[test]
     fn daily_chart_gate_reads_upstream_total_cost_key() {
         let html = render_shell(60);
         // Gate: render only when some row has a positive totalCost.

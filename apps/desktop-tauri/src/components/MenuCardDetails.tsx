@@ -207,6 +207,15 @@ function LocalUsageBlock({
         </div>
       )}
 
+      {summary.incompleteRequestCount != null && summary.incompleteRequestCount > 0 && (
+        <div className="menu-card__local-note">
+          <strong>{t("IncompleteRequestsLabel")}</strong>
+          <span>
+            {t("IncompleteRequestsDetail").replace("{}", String(summary.incompleteRequestCount))}
+          </span>
+        </div>
+      )}
+
       <div className="menu-card__local-note">
         {summary.topModel && <strong>{t("PanelTopModelPrefix")}: {summary.topModel}</strong>}
         <span>

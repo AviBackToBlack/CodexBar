@@ -152,6 +152,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     highUsageThreshold: 70,
     criticalUsageThreshold: 90,
     predictivePaceWarningEnabled: false,
+    credentialExpiryNotificationsEnabled: false,
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
@@ -169,6 +170,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     autoDownloadUpdates: false,
     installUpdatesOnQuit: false,
     globalShortcut: "Ctrl+Shift+U",
+    switcherShortcuts: {},
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",
@@ -344,7 +346,9 @@ describe("FloatBar", () => {
     const { container } = renderFloatBar(bootstrap({ floatBarShowResetInline: true }));
     await waitFor(() => {
       const pill = container.querySelector(".floatbar__pill");
-      expect(pill?.getAttribute("title")).toBe("Claude: 13% used");
+      expect(pill?.getAttribute("title")).toBe(
+        "Claude: 13% used\n34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+      );
       expect(container.querySelector(".floatbar__reset")).toBeNull();
     });
   });

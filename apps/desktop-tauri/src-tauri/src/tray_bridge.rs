@@ -13,7 +13,7 @@ use crate::shell;
 use crate::state::{AppState, TrayAnchor};
 #[cfg(test)]
 use crate::tray_menu::build_tray_menu;
-use crate::tray_menu::{TrayMenuEntry, build_tray_menu_with};
+use crate::tray_menu::{MenuState, TrayMenuEntry, build_tray_menu_with};
 use crate::tray_presentation::{TrayPresentationPlan, headline_window};
 
 #[derive(Debug, Clone, Copy)]
@@ -128,7 +128,10 @@ fn build_native_tray_menu(
         providers,
         status_labels,
         &enabled,
-        settings.float_bar_enabled,
+        MenuState {
+            float_bar_enabled: settings.float_bar_enabled,
+            stay_awake_held: crate::stay_awake::is_held(),
+        },
         settings.ui_language,
     );
     crate::tray_accounts::prepend_account_menus(&mut spec, &settings);
@@ -782,6 +785,7 @@ mod tests {
             id: "additional_budget".to_string(),
             title: "Additional Budget".to_string(),
             fallback_lane: false,
+            icon_fallback: None,
             window: crate::commands::RateWindowSnapshot {
                 used_percent: percent,
                 remaining_percent: 100.0 - percent,

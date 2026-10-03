@@ -1,11 +1,14 @@
 //! Grok provider implementation.
 //!
-//! Uses the grok.com billing gRPC-web endpoint via either browser cookies or
-//! `~/.grok/auth.json` produced by `grok login`.
+//! Bearer logins (`~/.grok/auth.json` from `grok login`) read credits from the
+//! Grok CLI credits proxy first, then fall back to the grok.com billing
+//! gRPC-web endpoint. Browser cookies use the gRPC-web endpoint only.
 
 pub mod accounts;
 mod billing;
+mod credits_proxy;
 pub mod local_sessions;
+mod product_usage;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -24,6 +27,7 @@ use crate::core::{
 
 use self::accounts::{GrokAuthKind, ParsedGrokAuthFile};
 use self::billing::GrokBillingSnapshot;
+use self::credits_proxy::{BearerBilling, CREDITS_PROXY_ENDPOINT};
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const BILLING_REQUEST_BODY: [u8; 7] = [0, 0, 0, 0, 2, 0x08, 0];
@@ -37,6 +41,7 @@ pub struct GrokProvider {
     metadata: ProviderMetadata,
     client: Client,
     billing_endpoint: String,
+    credits_proxy_endpoint: String,
 }
 
 impl GrokProvider {
@@ -60,6 +65,7 @@ impl GrokProvider {
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             billing_endpoint: BILLING_ENDPOINT.to_string(),
+            credits_proxy_endpoint: CREDITS_PROXY_ENDPOINT.to_string(),
         }
     }
 
@@ -80,6 +86,12 @@ impl GrokProvider {
     #[cfg(test)]
     fn with_billing_endpoint_for_tests(mut self, endpoint: String) -> Self {
         self.billing_endpoint = endpoint;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_credits_proxy_endpoint_for_tests(mut self, endpoint: String) -> Self {
+        self.credits_proxy_endpoint = endpoint;
         self
     }
 
@@ -117,17 +129,21 @@ impl GrokProvider {
         kind: GrokAuthKind,
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
+        // Validate before starting the optional reset-credit request.
+        if credentials.is_expired(Utc::now()) {
+            return Err(ProviderError::AuthRequired);
+        }
         let reset_lookup = GrokProvider::spawn_remaining_resets(
             ctx,
             Some(credentials.access_token.clone()),
             None,
             self.client.clone(),
         );
-        let billing = match self
-            .fetch_billing(Some(format!("Bearer {}", credentials.access_token)), None)
-            .await
-        {
-            Ok(billing) => billing,
+        let BearerBilling {
+            billing,
+            subscription_tier,
+        } = match self.fetch_bearer_billing(credentials).await {
+            Ok(bearer) => bearer,
             Err(error) => {
                 reset_lookup.abort();
                 return Err(error);
@@ -138,6 +154,7 @@ impl GrokProvider {
         } else {
             None
         }
+        .or(subscription_tier)
         .or_else(|| credentials.login_method());
         let reset_credits = reset_lookup
             .join(ctx.requires_optional_usage_completeness)
@@ -670,6 +687,10 @@ impl GrokCredentials {
         })
     }
 
+    fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at.is_some_and(|expires_at| expires_at <= now)
+    }
+
     fn login_method(&self) -> Option<String> {
         match self.auth_mode.as_deref().map(str::to_lowercase).as_deref() {
             Some("oidc") => Some("SuperGrok".to_string()),
@@ -784,7 +805,13 @@ fn result_from_billing(
     usage.account_email = email;
     usage.account_organization = team_id;
     usage.login_method = login_method;
-    ProviderFetchResult::new(usage, source_label)
+    // Reset-credit enrichment adds inventory only, so the breakdown survives it.
+    product_usage::display_details(&billing.product_usage)
+        .into_iter()
+        .fold(
+            ProviderFetchResult::new(usage, source_label),
+            |result, detail| result.with_display_detail(Some(detail)),
+        )
 }
 
 /// Whether a cookie-path error should invalidate the cached browser session.
@@ -817,3 +844,11 @@ fn cookie_refresh_action(
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "credits_proxy_tests.rs"]
+mod credits_proxy_tests;
+
+#[cfg(test)]
+#[path = "product_usage_tests.rs"]
+mod product_usage_tests;

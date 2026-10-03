@@ -26,8 +26,8 @@ use reqwest::Url;
 use serde::Deserialize;
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, Provider, ProviderDisplayDetail, ProviderError, ProviderFetchResult, ProviderId,
+    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 use reset_plausibility::is_plausible_five_hour_reset;
@@ -49,15 +49,16 @@ struct ZaiQuotaResponse {
     message: Option<String>,
     #[serde(default)]
     data: Option<ZaiQuotaData>,
-    /// Legacy flat limits array (backwards compat)
+    /// Legacy flat limits array (backwards compat). Entries stay raw so an
+    /// unknown limit type is skipped without requiring the legacy fields.
     #[serde(default)]
-    limits: Vec<ZaiLimit>,
+    limits: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ZaiQuotaData {
     #[serde(default)]
-    limits: Vec<ZaiLimit>,
+    limits: Option<Vec<serde_json::Value>>,
     #[serde(rename = "planName")]
     plan_name: Option<String>,
     /// Upstream plan-name fallbacks (`level` added in 0.48.0).
@@ -99,6 +100,98 @@ struct ZaiLimit {
     /// Reset time as Unix epoch milliseconds (current response)
     #[serde(rename = "nextResetTime")]
     next_reset_time: Option<i64>,
+}
+
+impl ZaiLimit {
+    /// Whether the entry carries any usage figure to derive a percentage from.
+    fn has_quota_signal(&self) -> bool {
+        [
+            self.used,
+            self.usage,
+            self.current_value,
+            self.limit,
+            self.remaining,
+            self.percentage,
+        ]
+        .iter()
+        .any(Option::is_some)
+    }
+}
+
+const ZAI_UNSUPPORTED_FORMAT: &str =
+    "Unsupported z.ai quota format. Check Usage Dashboard for plan usage.";
+const ZAI_UNSUPPORTED_ENTRY: &str =
+    "Unsupported z.ai quota entry. Check Usage Dashboard for plan usage.";
+const ZAI_UNAVAILABLE_HINT: &str = "Check Usage Dashboard for complete plan usage.";
+
+/// Parsed quota plus the display detail explaining any unavailable quota.
+#[derive(Debug)]
+struct ZaiParsedQuota {
+    usage: UsageSnapshot,
+    unavailable_detail: Option<ProviderDisplayDetail>,
+}
+
+fn is_token_limit_type(limit_type: Option<&str>) -> bool {
+    matches!(
+        limit_type,
+        Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
+    )
+}
+
+fn is_time_limit_type(limit_type: Option<&str>) -> bool {
+    matches!(limit_type, Some("TIME_LIMIT") | Some("mcp"))
+}
+
+/// Split raw limit entries into recognized limits and a skipped-entry count.
+///
+/// Upstream 0.69.0 (#4091): a string `type` outside the known limit types is
+/// skipped without needing legacy fields; a missing or non-string `type`, a
+/// recognized entry that does not deserialize, or a recognized entry with no
+/// quota signal at all (which would fabricate a 0% window) is a malformed entry.
+fn recognized_limits(raw: &[serde_json::Value]) -> Result<(Vec<ZaiLimit>, usize), ProviderError> {
+    let unsupported_entry = || ProviderError::Parse(ZAI_UNSUPPORTED_ENTRY.to_string());
+    let mut limits = Vec::with_capacity(raw.len());
+    let mut skipped = 0;
+    for entry in raw {
+        let Some(limit_type) = entry.get("type").and_then(serde_json::Value::as_str) else {
+            return Err(unsupported_entry());
+        };
+        if !is_token_limit_type(Some(limit_type)) && !is_time_limit_type(Some(limit_type)) {
+            skipped += 1;
+            continue;
+        }
+        let limit = ZaiLimit::deserialize(entry).map_err(|_| unsupported_entry())?;
+        if !limit.has_quota_signal() {
+            return Err(unsupported_entry());
+        }
+        limits.push(limit);
+    }
+    Ok((limits, skipped))
+}
+
+/// Decode the quota envelope. A well-formed JSON body of the wrong shape is an
+/// unsupported format (points at the Usage Dashboard); a syntax error keeps
+/// the parser message.
+fn parse_quota_body(body: &[u8]) -> Result<ZaiQuotaResponse, ProviderError> {
+    serde_json::from_slice(body).map_err(|e| {
+        if e.classify() == serde_json::error::Category::Data {
+            ProviderError::Parse(ZAI_UNSUPPORTED_FORMAT.to_string())
+        } else {
+            ProviderError::Parse(e.to_string())
+        }
+    })
+}
+
+/// Detail row for quota the API returned but this client cannot show. The
+/// title mirrors upstream: "Additional quota" when recognized token windows
+/// exist, otherwise "Coding Plan usage".
+fn unavailable_quota_detail(has_token_limits: bool) -> Option<ProviderDisplayDetail> {
+    let (id, title) = if has_token_limits {
+        ("additional-quota", "Additional quota")
+    } else {
+        ("coding-plan-usage", "Coding Plan usage")
+    };
+    ProviderDisplayDetail::new(id, title, "Unavailable")?.with_secondary_value(ZAI_UNAVAILABLE_HINT)
 }
 
 /// z.ai provider
@@ -236,7 +329,10 @@ impl ZaiProvider {
     }
 
     /// Fetch usage from z.ai API
-    async fn fetch_usage_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
+    async fn fetch_usage_api(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
         let env = settings::process_env();
         let region = Self::effective_region(ctx, &env);
         // Canonical cross-region overrides are rejected before any bearer
@@ -286,10 +382,12 @@ impl ZaiProvider {
             ));
         }
 
-        let quota: ZaiQuotaResponse =
-            serde_json::from_slice(&resp_bytes).map_err(|e| ProviderError::Parse(e.to_string()))?;
+        let quota = parse_quota_body(&resp_bytes)?;
 
-        let mut usage = self.parse_quota_response(&quota)?;
+        let ZaiParsedQuota {
+            mut usage,
+            unavailable_detail,
+        } = self.parse_quota_response(&quota)?;
         if region == ZaiRegion::BigModelCn
             && let Some(balance) = balance::fetch_cn_balance(&client, &authorization).await
         {
@@ -297,13 +395,13 @@ impl ZaiProvider {
             row.reset_description = Some(format!("¥{balance:.2} available"));
             usage = usage.with_extra_rate_window("zai-account-balance", "Account balance", row);
         }
-        Ok(usage)
+        Ok(ProviderFetchResult::new(usage, "oauth").with_display_detail(unavailable_detail))
     }
 
     fn parse_quota_response(
         &self,
         quota: &ZaiQuotaResponse,
-    ) -> Result<UsageSnapshot, ProviderError> {
+    ) -> Result<ZaiParsedQuota, ProviderError> {
         if quota.code.is_some_and(|code| code != 0 && code != 200) {
             return Err(ProviderError::Other(
                 quota
@@ -316,11 +414,12 @@ impl ZaiProvider {
         }
 
         // Get limits from data.limits (upstream) or flat limits (legacy)
-        let limits = if let Some(data) = &quota.data {
-            &data.limits
-        } else {
-            &quota.limits
-        };
+        let raw_limits = match &quota.data {
+            Some(data) => data.limits.as_deref(),
+            None => quota.limits.as_deref(),
+        }
+        .ok_or_else(|| ProviderError::Parse(ZAI_UNSUPPORTED_FORMAT.to_string()))?;
+        let (limits, skipped_limits) = recognized_limits(raw_limits)?;
         // Upstream 0.48.0 plan-name fallbacks: planName, plan, plan_type,
         // packageName, level — first non-empty trimmed wins.
         let plan_name = quota
@@ -343,14 +442,8 @@ impl ZaiProvider {
         // Collect token/credit limit entries (upstream 0.49.0 #2724: credit
         // Coding Plans report `CREDIT_LIMIT` rows with the same shape as
         // `TOKENS_LIMIT`; upstream uses "TOKENS_LIMIT", legacy uses "tokens").
-        let is_tokens = |l: &&ZaiLimit| {
-            matches!(
-                l.limit_type.as_deref(),
-                Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
-            )
-        };
-        let is_time =
-            |l: &&ZaiLimit| matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp"));
+        let is_tokens = |l: &&ZaiLimit| is_token_limit_type(l.limit_type.as_deref());
+        let is_time = |l: &&ZaiLimit| is_time_limit_type(l.limit_type.as_deref());
         let mut token_limits: Vec<&ZaiLimit> = limits.iter().filter(is_tokens).collect();
         // Upstream ordering: ascending window minutes, unknown windows last.
         token_limits.sort_by_key(|l| Self::window_minutes(l).unwrap_or(u32::MAX));
@@ -402,11 +495,7 @@ impl ZaiProvider {
         // "5-hour"; otherwise the explicit window label is used.
         let now = Utc::now();
         let make_window = |l: &ZaiLimit| -> RateWindow {
-            let is_tokens = matches!(
-                l.limit_type.as_deref(),
-                Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
-            );
-            let window_mins = if is_tokens {
+            let window_mins = if is_token_limit_type(l.limit_type.as_deref()) {
                 ZaiProvider::window_minutes(l)
             } else {
                 None
@@ -446,9 +535,11 @@ impl ZaiProvider {
             None
         };
 
+        // No recognized limit: never fabricate a 0% quota window. The detail
+        // row below explains that plan usage is unavailable.
         let primary = primary_limit
             .map(make_window)
-            .unwrap_or_else(|| RateWindow::new(0.0));
+            .unwrap_or_else(|| RateWindow::informational("Unavailable"));
         let mut usage = UsageSnapshot::new(primary).with_login_method(plan_name);
         if let Some(secondary) = secondary_limit {
             usage = usage.with_secondary(make_window(secondary));
@@ -461,7 +552,14 @@ impl ZaiProvider {
             usage = usage.with_extra_rate_window("zai-mcp", "MCP", make_window(mcp));
         }
 
-        Ok(usage)
+        let unavailable_detail = (limits.is_empty() || skipped_limits > 0)
+            .then(|| unavailable_quota_detail(!token_limits.is_empty()))
+            .flatten();
+
+        Ok(ZaiParsedQuota {
+            usage,
+            unavailable_detail,
+        })
     }
 
     /// Compute window_minutes from a limit's unit + number fields.
@@ -483,14 +581,10 @@ impl ZaiProvider {
 /// Upstream 0.48.0 `resetDescription`: MCP (TIME_LIMIT) → "MCP"; 5-hour
 /// token window → "5-hour"; else the explicit window label, if any.
 fn rate_window_reset_description(l: &ZaiLimit, window_mins: Option<u32>) -> Option<String> {
-    if matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp")) {
+    if is_time_limit_type(l.limit_type.as_deref()) {
         return Some("MCP".to_string());
     }
-    if matches!(
-        l.limit_type.as_deref(),
-        Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
-    ) && window_mins == Some(300)
-    {
+    if is_token_limit_type(l.limit_type.as_deref()) && window_mins == Some(300) {
         return Some("5-hour".to_string());
     }
     window_label(l)
@@ -593,10 +687,7 @@ impl Provider for ZaiProvider {
 
         // z.ai only supports OAuth/API token - no CLI or web cookie fallback
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::OAuth => {
-                let usage = self.fetch_usage_api(ctx).await?;
-                Ok(ProviderFetchResult::new(usage, "oauth"))
-            }
+            SourceMode::Auto | SourceMode::OAuth => self.fetch_usage_api(ctx).await,
             SourceMode::Web | SourceMode::Cli => {
                 // z.ai doesn't support web cookies or CLI
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))

@@ -49,7 +49,20 @@ codexbar config path
 
 # API key via stdin (example)
 printf '%s' $env:OPENROUTER_API_KEY | codexbar config set-api-key -p openrouter --stdin
+
+# Portable preferences (also under Settings > Advanced)
+codexbar config preferences export --file prefs.json   # omit --file to print to stdout
+codexbar config preferences import --file prefs.json
 ```
+
+Portable preferences are a versioned JSON document (`{"version": 1, "preferences": {...}}`)
+limited to display, refresh, notification, provider-order, float-bar, cost reporting period,
+preferred currency and switcher-shortcut choices. API keys, cookies, token accounts, folders, SSH
+hosts, proxy settings, update settings, Stay Awake and the pinned cost time zone are never
+exported, and an import that contains any other key, or any invalid value, is rejected without
+changing settings.
+The CLI import writes `settings.json` only; restart a running CodexBar to pick it up. The desktop
+Import button applies the file live.
 
 Notes:
 
@@ -71,6 +84,35 @@ Proof / automation example:
 $env:CODEXBAR_PROOF_MODE = "settings:menu"
 # then launch the desktop binary
 ```
+
+## Provider switcher keys
+
+The tray flyout switches providers from the keyboard (ported from upstream 0.67.0; the shortcuts are menu-local, not global hotkeys):
+
+| Action | Default key |
+|--------|-------------|
+| Previous / next | `Left` / `Right` (wraps through Overview) |
+| Overview, then providers in display order | `Ctrl+1` ... `Ctrl+9` |
+
+Keys are ignored while a text field, select or slider (the zoom slider) has focus, or while a grid drag is active.
+
+### Customizing the keys
+
+**Settings → Menu → Provider switcher shortcuts** lists all 11 actions. Choose **Record**, then press the key or combination; **Backspace** while recording (or **Clear**) disables the action, **Reset to defaults** restores every default. The editor rejects duplicates and reserved keys with an inline message and saves nothing in that case.
+
+Only the actions you changed are stored, in `settings.json` under `switcher_shortcuts` (the key is omitted when everything is default):
+
+```json
+{ "switcher_shortcuts": { "previous": "shift+left", "select2": "ctrl+alt+2", "next": "none" } }
+```
+
+Rules (upstream grammar, validated by `rust/src/switcher_shortcuts.rs` and mirrored in `apps/desktop-tauri/src/lib/switcherShortcuts.ts`):
+
+- Actions: `previous`, `next`, `select1` ... `select9`. Unknown actions are rejected.
+- A shortcut is optional `ctrl`, `alt`, `shift` modifiers plus one key: `left`, `right`, `,`, a letter or a digit. `cmd` is accepted as an alias for `ctrl`, so shortcuts copied from macOS stay valid.
+- Letters, digits and `,` need `ctrl` or `alt`. `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w` are reserved (Refresh, Quit, Settings and window close).
+- Two actions cannot share a shortcut. `none` disables an action and frees its key.
+- An invalid stored map is ignored on load (defaults apply) and logged as a warning; it never blocks the rest of the settings.
 
 ## Claude Code accounts
 

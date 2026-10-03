@@ -673,6 +673,10 @@ PredictivePaceWarnings = 預測配額告警
 PredictivePaceWarningsHelper = 當 Codex 或 Claude 的用量可能在重置前耗盡時提醒
 PredictivePaceWarningTitle = { "{}" } { "{}" } 配額告警
 PredictivePaceWarningBody = 配額可能在 { "{}" } 內耗盡
+CredentialExpiryNotifications = 憑證過期提醒
+CredentialExpiryNotificationsHelper = 提供者帳戶需要重新登入時提醒一次
+CredentialExpiryTitle = { "{}" } 需要重新登入
+CredentialExpiryBody = 開啟 CodexBar 查看帳戶錯誤並重新登入。
 ShowResetWhenExhausted = 耗盡時顯示重置時間
 ShowResetWhenExhaustedHelper = 用量百分比耗盡時,用即時重置倒數替換顯示
 
@@ -796,3 +800,6 @@ ProviderAccentColor = 強調色
 ProviderAccentColorHelper = 覆蓑用於用量條和圖表的品牌顏色。輸入十六進位顏色，如 #FF5733。
 ProviderAccentColorReset = 恢復預設
 ProviderAccentColorInvalid = 無效的十六進位顏色。請使用 #RRGGBB 格式，例如 #FF5733。
+ProviderRaycastAutoImportHelp = 自動從 Chrome 匯入已登入的 www.raycast.com 工作階段。
+ProviderRaycastManualCookieHelp = 貼上來自 www.raycast.com/settings 的 Cookie 標頭。
+ProviderRaycastCookiesDisabled = Raycast Cookie 已停用。

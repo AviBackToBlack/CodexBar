@@ -3,53 +3,128 @@
 //! Fetches compute-point usage and billing info via apps.abacus.ai web APIs.
 //! Uses browser cookies for authentication.
 
+use std::future::Future;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    ProviderStateKind, RateWindow, SourceMode, UsageSnapshot,
 };
 
-const COMPUTE_URL: &str = "https://apps.abacus.ai/api/_getOrganizationComputePoints";
-const BILLING_URL: &str = "https://apps.abacus.ai/api/_getBillingInfo";
+#[cfg(test)]
+mod tests;
+
+const ORIGIN: &str = "https://apps.abacus.ai";
+const COMPUTE_PATH: &str = "/api/_getOrganizationComputePoints";
+const BILLING_PATH: &str = "/api/_getBillingInfo";
+/// Parent domain of `apps.abacus.ai`; one browser query covers both hosts.
+const COOKIE_DOMAIN: &str = "abacus.ai";
 const CREDITS_LABEL: &str = "Credits";
 const FALLBACK_MONTHLY_WINDOW_MINUTES: u32 = 30 * 24 * 60;
+const MAX_COOKIE_CANDIDATES: u32 = 5;
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+const BILLING_BUDGET_CAP: Duration = Duration::from_secs(5);
+const REFRESH_DEADLINE_CAP: Duration = Duration::from_secs(90);
+const MISSING_SESSION_MESSAGE: &str = "No Abacus AI session found. Please log in to apps.abacus.ai in your browser or paste a Cookie header in manual mode.";
 
+/// Exact cookie names that carry Abacus session state. CSRF tokens are
+/// excluded on purpose: anonymous jars contain them.
+const KNOWN_SESSION_COOKIE_NAMES: [&str; 5] = [
+    "sessionid",
+    "session_id",
+    "session_token",
+    "auth_token",
+    "access_token",
+];
+/// Substrings that mark a session cookie when no exact name matches.
+const SESSION_COOKIE_SUBSTRINGS: [&str; 4] = ["session", "auth", "sid", "jwt"];
+/// Prefixes that mark a non-session cookie even if a substring matches.
+const EXCLUDED_COOKIE_PREFIXES: [&str; 5] = ["csrf", "_ga", "_gid", "tracking", "analytics"];
+/// `success:false` messages containing one of these mean the session is bad.
+const AUTH_ERROR_KEYWORDS: [&str; 7] = [
+    "expired",
+    "session",
+    "login",
+    "authenticate",
+    "unauthorized",
+    "unauthenticated",
+    "forbidden",
+];
+
+/// `{"success": true, "result": {...}}`. Every field tolerates a wrong type so
+/// a malformed envelope becomes a classified error rather than a serde error.
 #[derive(Debug, Deserialize)]
-struct ApiEnvelope<T> {
-    #[serde(default)]
+struct ApiEnvelope {
+    #[serde(default, deserialize_with = "lenient_true")]
     success: bool,
-    result: Option<T>,
+    #[serde(default)]
+    result: Option<Value>,
+    #[serde(default, deserialize_with = "lenient_string")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RawComputePoints {
+    #[serde(default, deserialize_with = "lenient_finite_number")]
+    total_compute_points: Option<f64>,
+    #[serde(default, deserialize_with = "lenient_finite_number")]
+    compute_points_left: Option<f64>,
+}
+
+#[derive(Debug, PartialEq)]
 struct ComputePoints {
-    #[serde(default)]
-    total_compute_points: f64,
-    #[serde(default)]
-    compute_points_left: f64,
+    total: f64,
+    left: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BillingInfo {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_string")]
     next_billing_date: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_string")]
     current_tier: Option<String>,
+}
+
+fn lenient_true<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Value::deserialize(deserializer)? == Value::Bool(true))
+}
+
+fn lenient_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(text) => Some(text),
+        _ => None,
+    })
+}
+
+fn lenient_finite_number<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    Ok(Value::deserialize(deserializer)?
+        .as_f64()
+        .filter(|number| number.is_finite()))
 }
 
 pub struct AbacusProvider {
     metadata: ProviderMetadata,
     client: Client,
+    origin: String,
 }
 
 impl AbacusProvider {
     pub fn new() -> Self {
+        Self::with_origin(ORIGIN)
+    }
+
+    fn with_origin(origin: &str) -> Self {
         Self {
             metadata: ProviderMetadata {
                 id: ProviderId::Abacus,
@@ -64,10 +139,12 @@ impl AbacusProvider {
                 status_page_url: None,
                 tertiary_label_key: None,
             },
+            // Every request sets its own timeout; the client has none so a
+            // configured web timeout above 30 s is honored.
             client: crate::core::credentialed_http_client_builder()
-                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
+            origin: origin.to_string(),
         }
     }
 
@@ -75,9 +152,8 @@ impl AbacusProvider {
         compute: ComputePoints,
         billing: Option<BillingInfo>,
     ) -> Result<UsageSnapshot, ProviderError> {
-        let total = compute.total_compute_points.max(0.0);
-        let left = compute.compute_points_left.max(0.0);
-        let used = (total - left).max(0.0);
+        let ComputePoints { total, left } = compute;
+        let used = total - left;
         let percent = if total > 0.0 {
             ((used / total) * 100.0).clamp(0.0, 100.0)
         } else {
@@ -87,8 +163,7 @@ impl AbacusProvider {
         let resets_at = billing
             .as_ref()
             .and_then(|b| b.next_billing_date.as_deref())
-            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+            .and_then(parse_billing_date);
         let primary = RateWindow::with_details(
             percent,
             RateWindow::monthly_window_minutes(resets_at).or(Some(FALLBACK_MONTHLY_WINDOW_MINUTES)),
@@ -106,66 +181,251 @@ impl AbacusProvider {
         Ok(snapshot)
     }
 
-    async fn fetch_compute(&self, cookie_header: &str) -> Result<ComputePoints, ProviderError> {
-        let resp = self
+    async fn fetch_compute(
+        &self,
+        cookie_header: &str,
+        timeout: Duration,
+    ) -> Result<ComputePoints, ProviderError> {
+        let request = self
             .client
-            .get(COMPUTE_URL)
+            .get(format!("{}{COMPUTE_PATH}", self.origin))
             .header("Cookie", cookie_header)
             .header("Accept", "application/json")
-            .send()
-            .await?;
-
-        let status = resp.status();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            return Err(ProviderError::AuthRequired);
+            .header("Content-Type", "application/json")
+            .timeout(timeout);
+        let raw: RawComputePoints = send_envelope(request).await?;
+        match (raw.total_compute_points, raw.compute_points_left) {
+            (Some(total), Some(left)) => Ok(ComputePoints { total, left }),
+            _ => Err(parse_failure(
+                "Missing credit fields in compute points response",
+            )),
         }
-        if !status.is_success() {
-            return Err(ProviderError::Other(format!(
-                "Abacus compute API returned {}",
-                status
-            )));
-        }
-
-        let body = resp.text().await?;
-        let env: ApiEnvelope<ComputePoints> = serde_json::from_str(&body)
-            .map_err(|e| ProviderError::Parse(format!("Failed to parse compute points: {}", e)))?;
-
-        if !env.success {
-            return Err(ProviderError::AuthRequired);
-        }
-        env.result
-            .ok_or_else(|| ProviderError::Parse("Missing compute points result".to_string()))
     }
 
-    async fn fetch_billing(&self, cookie_header: &str) -> Option<BillingInfo> {
-        let resp = self
+    /// Billing only enriches the credits result, so every failure is `None`.
+    async fn fetch_billing(&self, cookie_header: &str, budget: Duration) -> Option<BillingInfo> {
+        let request = self
             .client
-            .post(BILLING_URL)
+            .post(format!("{}{BILLING_PATH}", self.origin))
             .header("Cookie", cookie_header)
-            .header("Content-Type", "application/json")
             .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
             .body("{}")
-            .send()
-            .await
-            .ok()?;
-
-        if !resp.status().is_success() {
-            return None;
+            .timeout(budget);
+        match send_envelope(request).await {
+            Ok(billing) => Some(billing),
+            Err(error) => {
+                tracing::debug!(%error, "Abacus billing info unavailable; using fallback window");
+                None
+            }
         }
-
-        let body = resp.text().await.ok()?;
-        let env: ApiEnvelope<BillingInfo> = serde_json::from_str(&body).ok()?;
-        env.result
     }
 
     async fn fetch_with_cookies(
         &self,
         cookie_header: &str,
+        request_timeout: Duration,
     ) -> Result<UsageSnapshot, ProviderError> {
-        let compute = self.fetch_compute(cookie_header).await?;
-        let billing = self.fetch_billing(cookie_header).await;
+        let budget = request_timeout.min(BILLING_BUDGET_CAP);
+        let (compute, billing) = credits_with_billing(
+            self.fetch_compute(cookie_header, request_timeout),
+            self.fetch_billing(cookie_header, budget),
+            budget,
+        )
+        .await?;
         Self::build_snapshot(compute, billing)
     }
+
+    /// Try each imported session in order. Any failure moves on to the next
+    /// one; the last failure is reported when none succeeds.
+    async fn fetch_with_candidates(
+        &self,
+        candidates: &[(String, String)],
+        request_timeout: Duration,
+    ) -> Result<UsageSnapshot, ProviderError> {
+        let mut last_error = None;
+        for (label, cookie_header) in candidates {
+            match self
+                .fetch_with_cookies(cookie_header, request_timeout)
+                .await
+            {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) => {
+                    tracing::debug!(browser = %label, %error, "Abacus session candidate failed");
+                    last_error = Some(error);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| ProviderError::Other(MISSING_SESSION_MESSAGE.to_string())))
+    }
+
+    async fn fetch_web(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
+        let request_timeout = request_timeout(ctx.web_timeout);
+        let refresh = async {
+            // A pasted header is exclusive: never fall back to browser cookies.
+            if let Some(cookie_header) = ctx.manual_cookie_header.as_deref() {
+                return self
+                    .fetch_with_cookies(cookie_header, request_timeout)
+                    .await;
+            }
+            let candidates = session_candidates(
+                crate::providers::browser_cookie_headers_for_domain(COOKIE_DOMAIN),
+            )?;
+            self.fetch_with_candidates(&candidates, request_timeout)
+                .await
+        };
+        tokio::time::timeout(refresh_timeout(request_timeout), refresh)
+            .await
+            .map_err(|_| ProviderError::Timeout)?
+    }
+}
+
+/// Web timeout clamped to the 1..=90 s request range.
+fn request_timeout(web_timeout: u64) -> Duration {
+    Duration::from_secs(web_timeout.clamp(1, 90))
+}
+
+/// Total refresh deadline: room for every candidate plus one billing budget,
+/// never more than 90 s.
+fn refresh_timeout(request_timeout: Duration) -> Duration {
+    (request_timeout * MAX_COOKIE_CANDIDATES + request_timeout.min(BILLING_BUDGET_CAP))
+        .min(REFRESH_DEADLINE_CAP)
+}
+
+/// Run the required credits request and the optional billing request
+/// concurrently. Billing gets `budget` from the start; when it errors or runs
+/// out it is dropped, and a credits failure cancels it immediately.
+async fn credits_with_billing<T, U>(
+    credits: impl Future<Output = Result<T, ProviderError>>,
+    billing: impl Future<Output = Option<U>>,
+    budget: Duration,
+) -> Result<(T, Option<U>), ProviderError> {
+    let billing = async { tokio::time::timeout(budget, billing).await.ok().flatten() };
+    tokio::pin!(credits, billing);
+    let mut billing_result = None;
+    let credits = loop {
+        tokio::select! {
+            result = &mut credits => break result?,
+            result = &mut billing, if billing_result.is_none() => billing_result = Some(result),
+        }
+    };
+    let billing = match billing_result {
+        Some(result) => result,
+        None => billing.await,
+    };
+    Ok((credits, billing))
+}
+
+/// Send `request` and decode the `{success, result}` envelope into `T`.
+async fn send_envelope<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+) -> Result<T, ProviderError> {
+    let response = request.send().await?;
+    let status = response.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err(ProviderError::AuthRequired);
+    }
+    if status != 200 {
+        return Err(ProviderError::Other(format!(
+            "Abacus AI API error: HTTP {status}"
+        )));
+    }
+    let body = crate::providers::read_bounded_response(response, MAX_BODY_BYTES)
+        .await
+        .map_err(|error| match error {
+            crate::providers::BoundedBodyError::TooLarge => parse_failure("response is too large"),
+            crate::providers::BoundedBodyError::Read(error) => ProviderError::Network(error),
+        })?;
+    decode_envelope(&body)
+}
+
+fn decode_envelope<T: DeserializeOwned>(body: &[u8]) -> Result<T, ProviderError> {
+    let root: Value = serde_json::from_slice(body).map_err(|_| parse_failure("invalid JSON"))?;
+    if !root.is_object() {
+        return Err(parse_failure("invalid response"));
+    }
+    let envelope: ApiEnvelope =
+        serde_json::from_value(root).map_err(|_| parse_failure("invalid response"))?;
+    match envelope.result {
+        Some(result) if envelope.success && result.is_object() => {
+            serde_json::from_value(result).map_err(|_| parse_failure("invalid result"))
+        }
+        _ => {
+            let message = envelope
+                .error
+                .map_or_else(|| "unknown error".to_string(), |text| text.to_lowercase());
+            if AUTH_ERROR_KEYWORDS
+                .iter()
+                .any(|keyword| message.contains(keyword))
+            {
+                Err(ProviderError::AuthRequired)
+            } else {
+                Err(parse_failure(&message))
+            }
+        }
+    }
+}
+
+fn parse_failure(message: &str) -> ProviderError {
+    ProviderError::Parse(format!("Could not parse Abacus AI usage: {message}"))
+}
+
+/// Billing dates must look like ISO 8601 date-times before they are trusted.
+fn parse_billing_date(value: &str) -> Option<DateTime<Utc>> {
+    let bytes = value.as_bytes();
+    let looks_iso = bytes.len() > 10
+        && bytes[..10]
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                4 | 7 => *byte == b'-',
+                _ => byte.is_ascii_digit(),
+            })
+        && bytes[10] == b'T';
+    if !looks_iso {
+        return None;
+    }
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|date| date.with_timezone(&Utc))
+}
+
+/// Browser cookie sets worth trying, Chrome first, at most five. Sets without
+/// a session cookie (anonymous or marketing-only jars) are skipped.
+fn session_candidates(
+    headers: Result<Vec<(String, String)>, ProviderError>,
+) -> Result<Vec<(String, String)>, ProviderError> {
+    let mut candidates = match headers {
+        Ok(headers) => headers,
+        Err(ProviderError::NoCookies) => Vec::new(),
+        Err(error) => return Err(error),
+    };
+    candidates.retain(|(_, header)| has_session_cookie(header));
+    candidates.sort_by_key(|(label, _)| label != "Google Chrome");
+    candidates.truncate(MAX_COOKIE_CANDIDATES as usize);
+    Ok(candidates)
+}
+
+fn has_session_cookie(cookie_header: &str) -> bool {
+    cookie_header.split(';').any(|pair| {
+        let name = pair
+            .split_once('=')
+            .map_or(pair, |(name, _)| name)
+            .trim()
+            .to_ascii_lowercase();
+        if KNOWN_SESSION_COOKIE_NAMES.contains(&name.as_str()) {
+            return true;
+        }
+        if EXCLUDED_COOKIE_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        {
+            return false;
+        }
+        SESSION_COOKIE_SUBSTRINGS
+            .iter()
+            .any(|needle| name.contains(needle))
+    })
 }
 
 fn format_credit_detail(used: f64, total: f64) -> String {
@@ -235,25 +495,20 @@ impl Provider for AbacusProvider {
 
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::Web => {
-                if let Some(ref cookie_header) = ctx.manual_cookie_header {
-                    let usage = self.fetch_with_cookies(cookie_header).await?;
-                    return Ok(ProviderFetchResult::new(usage, "web"));
-                }
-
-                match crate::providers::browser_cookie_header(&["apps.abacus.ai"]) {
-                    Ok(cookie_header) => match self.fetch_with_cookies(&cookie_header).await {
-                        Ok(usage) => return Ok(ProviderFetchResult::new(usage, "web")),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(e) => return Err(e),
-                    },
-                    Err(ProviderError::NoCookies) => {}
-                    Err(e) => return Err(e),
-                }
-
-                Err(ProviderError::AuthRequired)
+                let usage = self.fetch_web(ctx).await?;
+                Ok(ProviderFetchResult::new(usage, "web"))
             }
             SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
             SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
+        }
+    }
+
+    fn error_state_kind(&self, error: &ProviderError) -> ProviderStateKind {
+        match error {
+            ProviderError::Other(message) if message == MISSING_SESSION_MESSAGE => {
+                ProviderStateKind::NeedsAuthentication
+            }
+            _ => error.state_kind(),
         }
     }
 
@@ -267,71 +522,5 @@ impl Provider for AbacusProvider {
 
     fn supports_cli(&self) -> bool {
         false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_compute_points_and_tier() {
-        let compute = ComputePoints {
-            total_compute_points: 1000.0,
-            compute_points_left: 750.0,
-        };
-        let billing = BillingInfo {
-            next_billing_date: Some("2025-03-01T00:00:00Z".into()),
-            current_tier: Some("Pro".into()),
-        };
-        let snap = AbacusProvider::build_snapshot(compute, Some(billing)).unwrap();
-        assert!((snap.primary.used_percent - 25.0).abs() < 0.001);
-        assert_eq!(
-            snap.primary.reset_description.as_deref(),
-            Some("250 / 1,000 credits")
-        );
-        assert_eq!(
-            snap.primary.resets_at,
-            Some(
-                DateTime::parse_from_rfc3339("2025-03-01T00:00:00Z")
-                    .unwrap()
-                    .with_timezone(&Utc)
-            )
-        );
-        assert_eq!(snap.primary.window_minutes, Some(28 * 24 * 60));
-        assert_eq!(snap.primary_label.as_deref(), Some(CREDITS_LABEL));
-        assert_eq!(snap.login_method.as_deref(), Some("Pro"));
-        assert!(snap.account_email.is_none());
-        assert!(snap.account_organization.is_none());
-    }
-
-    #[test]
-    fn handles_missing_billing() {
-        let compute = ComputePoints {
-            total_compute_points: 500.0,
-            compute_points_left: 500.0,
-        };
-        let snap = AbacusProvider::build_snapshot(compute, None).unwrap();
-        assert!((snap.primary.used_percent - 0.0).abs() < f64::EPSILON);
-        assert_eq!(
-            snap.primary.reset_description.as_deref(),
-            Some("0 / 500 credits")
-        );
-        assert_eq!(
-            snap.primary.window_minutes,
-            Some(FALLBACK_MONTHLY_WINDOW_MINUTES)
-        );
-        assert!(snap.primary.resets_at.is_none());
-        assert_eq!(snap.primary_label.as_deref(), Some(CREDITS_LABEL));
-        assert!(snap.login_method.is_none());
-    }
-
-    #[test]
-    fn formats_credit_details_with_grouping_and_fraction() {
-        assert_eq!(
-            format_credit_detail(12_345.0, 50_000.0),
-            "12,345 / 50,000 credits"
-        );
-        assert_eq!(format_credit_detail(42.5, 100.0), "42.5 / 100 credits");
     }
 }

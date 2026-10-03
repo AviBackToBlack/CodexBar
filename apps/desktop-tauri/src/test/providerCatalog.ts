@@ -51,6 +51,7 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["commandcode", "Command Code"],
   ["stepfun", "StepFun"],
   ["venice", "Venice"],
+  ["vercel", "Vercel AI Gateway"],
   ["openaiapi", "OpenAI API"],
   ["grok", "Grok"],
   ["elevenlabs", "ElevenLabs"],
@@ -81,4 +82,8 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["gitkraken", "GitKraken AI"],
   ["bifrost", "Bifrost"],
   ["aixy", "Aixy"],
+  ["llmman", "llmman"],
+  ["devpass", "DevPass"],
+  ["xkiro", "xKiro"],
+  ["raycast", "Raycast"],
 ];

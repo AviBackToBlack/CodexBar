@@ -35,6 +35,7 @@ use crate::providers::claude::quota_history::{
 };
 use crate::providers::opencodego::local as opencodego_local;
 use crate::settings::Settings;
+mod claude_incomplete;
 mod claude_pricing;
 mod claude_roots;
 mod claude_usage;
@@ -42,6 +43,8 @@ mod codex;
 mod read_receipt;
 mod stats;
 mod window;
+pub use claude_incomplete::ClaudeIncompleteReport;
+use claude_incomplete::ClaudeIncompleteTracker;
 use claude_pricing::ClaudeScanPricingResolver;
 #[cfg(test)]
 use claude_pricing::{ClaudePricing, FALLBACK_CLAUDE_MODEL};
@@ -114,6 +117,12 @@ pub struct CostSummary {
     /// the scan found no sessions/tokens (upstream 0.50.1 #2932). Never
     /// fabricated on incomplete scans.
     pub known_zero: bool,
+    /// Claude preliminary proxy rows (null stop reason, input only) that were
+    /// excluded from cost and tokens and never superseded by a completed row
+    /// (upstream 0.60.5 #3688). Zero for every other provider.
+    pub incomplete_request_count: u32,
+    /// Incomplete Claude request counts per model.
+    pub incomplete_by_model: HashMap<String, u32>,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
@@ -465,6 +474,8 @@ pub struct ClaudeChartSnapshot {
     pub summary: CostSummary,
     pub daily_cost: Vec<(String, Option<f64>)>,
     pub daily_tokens: Vec<(String, u64)>,
+    /// Incomplete request count per local day; only days with a count appear.
+    pub daily_incomplete: Vec<(String, u32)>,
     pub quota_history: ClaudeQuotaHistoryScan,
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -622,6 +633,8 @@ impl CostScanner {
         // Walk through projects directory, de-duplicating usage records
         // that appear across multiple files.
         let mut claude_scan = ClaudeFileScanResult::default();
+        let mut incomplete = ClaudeIncompleteTracker::default();
+        let mut completed_keys = HashSet::new();
         if !roots.paths.is_empty() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
@@ -634,6 +647,7 @@ impl CostScanner {
                         &mut seen,
                         cancel,
                         &mut pricing,
+                        &mut incomplete,
                         |record| {
                             aggregation_complete &= record.timestamp.is_some();
                             aggregation_complete &=
@@ -655,7 +669,9 @@ impl CostScanner {
                 .read_failures
                 .saturating_add(roots.read_failures)
                 .saturating_add(traversal_read_failures);
+            completed_keys = seen;
         }
+        incomplete.resolve(&completed_keys).apply_to(&mut summary);
 
         // OMP / pi-compatible anthropic rows, deduped across shared files.
         if include_pi_sessions {
@@ -719,6 +735,8 @@ impl CostScanner {
 
         let mut quota_records = Vec::new();
         let mut scan_result = ClaudeFileScanResult::default();
+        let mut incomplete = ClaudeIncompleteTracker::default();
+        let mut completed_keys = HashSet::new();
         if !roots.paths.is_empty() {
             let mut seen = HashSet::new();
             let mut pricing = ClaudeScanPricingResolver::default();
@@ -732,6 +750,7 @@ impl CostScanner {
                         &mut seen,
                         cancel,
                         &mut pricing,
+                        &mut incomplete,
                         |record| {
                             file_has_usage = true;
                             aggregation_complete &= record.timestamp.is_some();
@@ -762,7 +781,10 @@ impl CostScanner {
                 .read_failures
                 .saturating_add(roots.read_failures)
                 .saturating_add(traversal_read_failures);
+            completed_keys = seen;
         }
+        let incomplete_report = incomplete.resolve(&completed_keys);
+        incomplete_report.apply_to(&mut summary);
 
         crate::pi_session_cost::scan_pi_compatible_into(
             &mut summary,
@@ -792,6 +814,7 @@ impl CostScanner {
             summary,
             daily_cost,
             daily_tokens,
+            daily_incomplete: incomplete_report.daily_sorted(),
             quota_history: ClaudeQuotaHistoryScan {
                 records: quota_records,
                 history_coverage_established: complete,
@@ -822,25 +845,59 @@ impl CostScanner {
     ///
     /// Reads the local `opencode.db` and maps rows onto the shared `CostSummary`
     /// (`total_cost_usd`, `by_model`, `sessions_count`, period) so the chart's
-    /// local-usage summary treats OpenCode Go like Codex/Claude. No token counts
-    /// are available from the SQLite reader, so token fields stay zero.
-    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+    /// local-usage summary treats OpenCode Go like Codex/Claude. Recorded token
+    /// counts fill the token fields and `by_model_tokens` (costs stay the recorded
+    /// `cost`, never derived from tokens). Rows without usable tokens add nothing
+    /// to the sums, and `reasoning_tokens` stays `None` unless every row reports it.
+    fn scan_opencodego_model_cost_summary_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<opencodego_local::ModelCostSummary> {
         if is_cancelled(cancel) {
-            return CostSummary::default();
+            return None;
         }
         let now = Utc::now();
         let days = self.calendar_window(now, None).days;
-        let Some(local) = opencodego_local::model_cost_summary_scan(now, days) else {
+        opencodego_local::model_cost_summary_scan(now, days)
+    }
+
+    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let Some(local) = self.scan_opencodego_model_cost_summary_with_cancel(cancel) else {
             return CostSummary::default();
         };
+        let totals = local.tokens.to_model_token_counts().unwrap_or_default();
+        let by_model_tokens = local
+            .by_model_tokens
+            .iter()
+            .filter_map(|(model, sums)| {
+                sums.to_model_token_counts()
+                    .map(|counts| (model.clone(), counts))
+            })
+            .collect();
         CostSummary {
             total_cost_usd: local.total_cost_usd,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cached_tokens: totals.cached_tokens,
+            reasoning_tokens: totals.reasoning_tokens,
             by_model: local.by_model,
+            by_model_tokens,
             sessions_count: local.request_count,
             period_start: local.period_start,
             period_end: local.period_end,
             ..CostSummary::default()
         }
+    }
+
+    /// Return the exact local input + output token total for Usage & Spend.
+    /// `None` when any contributing row lacks usable input/output counts.
+    pub fn scan_opencodego_usage_tokens_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<u64> {
+        self.scan_opencodego_model_cost_summary_with_cancel(cancel)?
+            .tokens
+            .complete_input_output()
     }
 
     /// Existing Claude transcript roots: the profile root plus claude-swap
@@ -941,7 +998,17 @@ where
     F: FnMut(&ClaudeUsageRecord),
 {
     let mut pricing = ClaudeScanPricingResolver::default();
-    scan_claude_file_with_pricing(path, cutoff, seen, cancel, &mut pricing, on_record).counted
+    let mut incomplete = ClaudeIncompleteTracker::default();
+    scan_claude_file_with_pricing(
+        path,
+        cutoff,
+        seen,
+        cancel,
+        &mut pricing,
+        &mut incomplete,
+        on_record,
+    )
+    .counted
 }
 
 fn scan_claude_file_with_pricing<F>(
@@ -950,6 +1017,7 @@ fn scan_claude_file_with_pricing<F>(
     seen: &mut HashSet<ClaudeUsageDedupKey>,
     cancel: Option<&AtomicBool>,
     pricing: &mut ClaudeScanPricingResolver,
+    incomplete: &mut ClaudeIncompleteTracker,
     mut on_record: F,
 ) -> ClaudeFileScanResult
 where
@@ -982,6 +1050,18 @@ where
         }
         if is_preliminary_claude_usage(&event) {
             result.incomplete_requests = result.incomplete_requests.saturating_add(1);
+            if let Some(message) = event.message.as_ref() {
+                incomplete.record(
+                    claude_usage_dedup_key(
+                        message.id.as_deref(),
+                        event.request_id.as_deref(),
+                        event.session_id(),
+                    ),
+                    message.model.as_deref().unwrap_or("claude-3-5-sonnet"),
+                    event.parsed_timestamp(),
+                    cutoff,
+                );
+            }
             return true;
         }
         if let Some(record) = claude_usage_record_from_event_with_pricing(&event, pricing)
@@ -1259,6 +1339,17 @@ pub fn has_cost_usage_sources() -> bool {
 /// Returns calendar-preserving daily costs sorted by date. `None` means the day
 /// is unscanned or contains unpriced Codex usage; `Some(0)` is a known zero.
 pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<f64>)> {
+    get_daily_cost_and_incomplete_history(provider, days).0
+}
+
+/// Daily cost series plus per-day incomplete request counts.
+pub type DailyCostAndIncomplete = (Vec<(String, Option<f64>)>, Vec<(String, u32)>);
+
+/// Daily cost history plus, for Claude, the per-day count of incomplete proxy
+/// requests (upstream 0.60.5 #3688). Days with no incomplete request are
+/// absent from the second vector; it is empty for every other provider.
+pub fn get_daily_cost_and_incomplete_history(provider: &str, days: u32) -> DailyCostAndIncomplete {
+    let mut daily_incomplete = Vec::new();
     let scanner = CostScanner::new(days);
     let today = cost_bucket_zone().date(Utc::now());
     let mut daily_costs: HashMap<String, Option<f64>> = HashMap::new();
@@ -1318,6 +1409,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                 let mut seen = HashSet::new();
                 let mut pricing = ClaudeScanPricingResolver::default();
                 let mut claude_scan = ClaudeFileScanResult::default();
+                let mut incomplete = ClaudeIncompleteTracker::default();
                 let mut unknown_cost_dates = HashSet::new();
                 let traversal_read_failures = {
                     let mut handle_file = |path: &Path| {
@@ -1328,6 +1420,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                             &mut seen,
                             None,
                             &mut pricing,
+                            &mut incomplete,
                             |record| {
                                 aggregation_complete &= record.timestamp.is_some();
                                 aggregation_complete &= add_claude_record_to_daily_costs(
@@ -1349,6 +1442,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
                     .read_failures
                     .saturating_add(roots.read_failures)
                     .saturating_add(traversal_read_failures);
+                daily_incomplete = incomplete.resolve(&seen).daily_sorted();
                 if claude_scan.is_complete() {
                     zero_fill_uninitialized_claude_daily_costs(
                         &mut daily_costs,
@@ -1387,7 +1481,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, Option<
     // Convert to sorted vector
     let mut result: Vec<(String, Option<f64>)> = daily_costs.into_iter().collect();
     result.sort_by(|a, b| a.0.cmp(&b.0));
-    result
+    (result, daily_incomplete)
 }
 
 /// Daily token totals (input + output) for the Tokens chart mode, plus
@@ -1524,11 +1618,23 @@ fn scan_claude_file_for_daily_tokens(
     daily_tokens: &mut HashMap<String, u64>,
 ) -> ClaudeFileScanResult {
     let mut aggregation_failures = 0u32;
-    let mut result = scan_claude_file_with_pricing(path, cutoff, seen, None, pricing, |record| {
-        if record.timestamp.is_none() || !add_claude_record_to_daily_tokens(daily_tokens, record) {
-            aggregation_failures = aggregation_failures.saturating_add(1);
-        }
-    });
+    // Token history ignores incomplete-request markers.
+    let mut incomplete = ClaudeIncompleteTracker::default();
+    let mut result = scan_claude_file_with_pricing(
+        path,
+        cutoff,
+        seen,
+        None,
+        pricing,
+        &mut incomplete,
+        |record| {
+            if record.timestamp.is_none()
+                || !add_claude_record_to_daily_tokens(daily_tokens, record)
+            {
+                aggregation_failures = aggregation_failures.saturating_add(1);
+            }
+        },
+    );
     result.aggregation_failures = result
         .aggregation_failures
         .saturating_add(aggregation_failures);

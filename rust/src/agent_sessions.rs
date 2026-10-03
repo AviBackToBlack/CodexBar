@@ -340,6 +340,7 @@ pub struct AgentSessionDiscovery {
 
 mod claude_desktop;
 mod focus;
+mod native_processes;
 mod parsers;
 pub mod pi_family;
 mod remote;

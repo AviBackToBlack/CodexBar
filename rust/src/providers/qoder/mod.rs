@@ -1,20 +1,28 @@
 //! Qoder provider implementation.
 //!
-//! Uses browser/manual cookies against the global or China Qoder usage API.
+//! Uses browser/manual cookies against the international (`qoder.com`) or
+//! China (`qoder.com.cn`) usage API. Every cookie is bound to the origin it
+//! belongs to; see `routing`.
+
+mod routing;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
+use reqwest::header::HeaderValue;
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
     RateWindow, SourceMode, UsageSnapshot,
 };
 
-const GLOBAL_API: &str = "https://qoder.com/api/v2/me/usages/big_model_credits";
-const CHINA_API: &str = "https://qoder.com.cn/api/v2/me/usages/big_model_credits";
+const BX_VERSION: &str = "2.5.35";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+use routing::QoderSite;
 
 pub struct QoderProvider {
     metadata: ProviderMetadata,
@@ -38,75 +46,155 @@ impl QoderProvider {
                 tertiary_label_key: None,
             },
             client: crate::core::credentialed_http_client_builder()
-                .timeout(std::time::Duration::from_secs(15))
+                .timeout(REQUEST_TIMEOUT)
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         }
     }
 
-    async fn fetch_web(&self, cookie_header: &str) -> Result<ProviderFetchResult, ProviderError> {
-        let cookie = normalize_cookie_header(cookie_header).ok_or(ProviderError::NoCookies)?;
-        let regions = [
-            (GLOBAL_API, "https://qoder.com/account/usage", "Qoder"),
-            (
-                CHINA_API,
-                "https://qoder.com.cn/account/usage",
-                "Qoder China",
-            ),
-        ];
+    async fn fetch_usage_web(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        if let Some(raw) = ctx.manual_cookie_header.as_deref() {
+            // An invalid or unroutable capture never becomes a request.
+            let credential = routing::manual_credential(raw).ok_or(ProviderError::NoCookies)?;
+            let candidate = Candidate {
+                site: credential.site,
+                cookie_header: credential.cookie_header,
+                source: format!("manual / {}", credential.site.domain()),
+            };
+            // A manual credential is terminal: a rejection or failure is the
+            // answer, never a reason to try another site or a browser.
+            return self.fetch_candidate(&candidate).await;
+        }
+        self.fetch_browser_candidates().await
+    }
 
-        let mut auth_failed = false;
-        let mut last_error = None;
-        for (url, referer, login_method) in regions {
-            match self.fetch_region(url, referer, &cookie).await {
-                Ok(value) => {
-                    return Ok(ProviderFetchResult::new(
-                        snapshot_from_payload(&value, login_method)?,
-                        "web",
-                    ));
+    /// Try every browser session for the international site, then the China
+    /// site. Each session is sent only to the origin it was read for.
+    async fn fetch_browser_candidates(&self) -> Result<ProviderFetchResult, ProviderError> {
+        let mut tally = AttemptTally::default();
+        for site in QoderSite::ALL {
+            let candidates =
+                match crate::providers::browser_cookie_headers_for_domain(site.domain()) {
+                    Ok(headers) => browser_candidates(site, headers),
+                    Err(ProviderError::NoCookies) => continue,
+                    Err(error) => {
+                        tally.record_import_error(error);
+                        continue;
+                    }
+                };
+            for candidate in &candidates {
+                match self.fetch_candidate(candidate).await {
+                    Ok(result) => return Ok(result),
+                    Err(error) => tally.record(error),
                 }
-                Err(ProviderError::AuthRequired) => auth_failed = true,
-                Err(err) => last_error = Some(err),
             }
         }
+        Err(tally.into_error())
+    }
 
-        if auth_failed {
-            Err(ProviderError::AuthRequired)
-        } else {
-            Err(last_error.unwrap_or_else(|| ProviderError::Parse("No Qoder usage payload".into())))
+    async fn fetch_candidate(
+        &self,
+        candidate: &Candidate,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let request = build_request(&self.client, candidate)?;
+        let response = self.client.execute(request).await?;
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Other(format!(
+                "Qoder API returned HTTP {}.",
+                status.as_u16()
+            )));
+        }
+        let value = response
+            .json::<Value>()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Failed to parse Qoder usage: {e}")))?;
+        Ok(ProviderFetchResult::new(
+            snapshot_from_payload(&value, &candidate.source)?,
+            "web",
+        ))
+    }
+}
+
+/// One credential bound to the single site it may be sent to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Candidate {
+    site: QoderSite,
+    cookie_header: String,
+    /// Shown as the login method: `<browser> / <domain>` or `manual / <domain>`.
+    source: String,
+}
+
+fn browser_candidates(site: QoderSite, headers: Vec<(String, String)>) -> Vec<Candidate> {
+    headers
+        .into_iter()
+        .filter_map(|(browser, header)| {
+            Some(Candidate {
+                site,
+                cookie_header: normalize_cookie_header(&header)?,
+                source: format!("{browser} / {}", site.domain()),
+            })
+        })
+        .collect()
+}
+
+fn build_request(
+    client: &Client,
+    candidate: &Candidate,
+) -> Result<reqwest::Request, ProviderError> {
+    let origin = candidate.site.origin();
+    let mut cookie =
+        HeaderValue::from_str(&candidate.cookie_header).map_err(|_| ProviderError::NoCookies)?;
+    cookie.set_sensitive(true);
+    Ok(client
+        .get(candidate.site.usage_url())
+        .header("Cookie", cookie)
+        .header("Accept", "application/json, text/plain, */*")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("User-Agent", USER_AGENT)
+        .header("Origin", origin)
+        .header("Referer", candidate.site.referer())
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Bx-V", BX_VERSION)
+        .build()?)
+}
+
+/// Outcome bookkeeping across candidates. A rejection (401/403) moves on to
+/// the next candidate; any other failure is remembered but does not stop the
+/// search either, and outranks a rejection when nothing succeeds.
+#[derive(Default)]
+struct AttemptTally {
+    rejected: bool,
+    failure: Option<ProviderError>,
+    import_error: Option<ProviderError>,
+}
+
+impl AttemptTally {
+    fn record(&mut self, error: ProviderError) {
+        match error {
+            ProviderError::AuthRequired => self.rejected = true,
+            other => self.failure = Some(other),
         }
     }
 
-    async fn fetch_region(
-        &self,
-        url: &str,
-        referer: &str,
-        cookie: &str,
-    ) -> Result<Value, ProviderError> {
-        let response = self
-            .client
-            .get(url)
-            .header("Cookie", cookie)
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Referer", referer)
-            .header("User-Agent", USER_AGENT)
-            .send()
-            .await?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            || response.status() == reqwest::StatusCode::FORBIDDEN
-        {
-            return Err(ProviderError::AuthRequired);
+    fn record_import_error(&mut self, error: ProviderError) {
+        self.import_error.get_or_insert(error);
+    }
+
+    fn into_error(self) -> ProviderError {
+        if let Some(failure) = self.failure {
+            failure
+        } else if self.rejected {
+            ProviderError::AuthRequired
+        } else {
+            self.import_error.unwrap_or(ProviderError::NoCookies)
         }
-        if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "Qoder usage returned status {}",
-                response.status()
-            )));
-        }
-        response
-            .json::<Value>()
-            .await
-            .map_err(|e| ProviderError::Parse(format!("Failed to parse Qoder usage: {e}")))
     }
 }
 
@@ -118,6 +206,9 @@ impl Default for QoderProvider {
 
 fn normalize_cookie_header(raw: &str) -> Option<String> {
     let mut header = raw.trim();
+    if header.chars().any(char::is_control) {
+        return None;
+    }
     if header
         .get(.."cookie:".len())
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
@@ -424,18 +515,7 @@ impl Provider for QoderProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
-                let cookie = match ctx.manual_cookie_header.as_deref() {
-                    Some(cookie) => cookie.to_string(),
-                    None => crate::providers::browser_cookie_header(&[
-                        "qoder.com",
-                        "www.qoder.com",
-                        "qoder.com.cn",
-                        "www.qoder.com.cn",
-                    ])?,
-                };
-                self.fetch_web(&cookie).await
-            }
+            SourceMode::Auto | SourceMode::Web => self.fetch_usage_web(ctx).await,
             SourceMode::OAuth | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
             }
@@ -520,5 +600,121 @@ mod tests {
             normalize_cookie_header("Cookie: a=1; empty=; b=2").as_deref(),
             Some("a=1; b=2")
         );
+    }
+
+    #[test]
+    fn normalize_cookie_header_rejects_control_characters() {
+        assert_eq!(
+            normalize_cookie_header(
+                "a=1
+Host: qoder.com.cn"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn browser_candidates_bind_each_header_to_its_site_and_label() {
+        let candidates = browser_candidates(
+            QoderSite::China,
+            vec![
+                ("Chrome".to_string(), "Cookie: session=one".to_string()),
+                ("Edge".to_string(), "empty=".to_string()),
+                ("Brave".to_string(), "session=two".to_string()),
+            ],
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                Candidate {
+                    site: QoderSite::China,
+                    cookie_header: "session=one".to_string(),
+                    source: "Chrome / qoder.com.cn".to_string(),
+                },
+                Candidate {
+                    site: QoderSite::China,
+                    cookie_header: "session=two".to_string(),
+                    source: "Brave / qoder.com.cn".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn request_carries_upstream_headers_for_the_candidate_origin_only() {
+        for (site, origin) in [
+            (QoderSite::International, "https://qoder.com"),
+            (QoderSite::China, "https://qoder.com.cn"),
+        ] {
+            let candidate = Candidate {
+                site,
+                cookie_header: "session=fixture".to_string(),
+                source: format!("manual / {}", site.domain()),
+            };
+            let request = build_request(&Client::new(), &candidate).unwrap();
+            let header = |name: &str| request.headers().get(name).unwrap().to_str().unwrap();
+            assert_eq!(
+                request.url().as_str(),
+                format!("{origin}/api/v2/me/usages/big_model_credits")
+            );
+            assert_eq!(header("Cookie"), "session=fixture");
+            assert_eq!(header("Origin"), origin);
+            assert_eq!(header("Referer"), format!("{origin}/account/usage"));
+            assert_eq!(header("Bx-V"), "2.5.35");
+            assert_eq!(header("X-Requested-With"), "XMLHttpRequest");
+            assert_eq!(header("Accept-Language"), "en-US,en;q=0.9");
+            assert!(request.headers().get("Cookie").unwrap().is_sensitive());
+        }
+    }
+
+    #[test]
+    fn tally_without_attempts_reports_missing_credential() {
+        assert!(matches!(
+            AttemptTally::default().into_error(),
+            ProviderError::NoCookies
+        ));
+    }
+
+    #[test]
+    fn tally_reports_expired_auth_when_every_candidate_was_rejected() {
+        let mut tally = AttemptTally::default();
+        tally.record(ProviderError::AuthRequired);
+        tally.record(ProviderError::AuthRequired);
+        assert!(matches!(tally.into_error(), ProviderError::AuthRequired));
+    }
+
+    #[test]
+    fn tally_keeps_last_non_auth_failure_over_rejections() {
+        for order in [[500, 0], [0, 503]] {
+            let mut tally = AttemptTally::default();
+            for status in order {
+                tally.record(if status == 0 {
+                    ProviderError::AuthRequired
+                } else {
+                    ProviderError::Other(format!("Qoder API returned HTTP {status}."))
+                });
+            }
+            let ProviderError::Other(message) = tally.into_error() else {
+                panic!("expected the non-auth failure");
+            };
+            assert!(message.contains("HTTP 50") || message.contains("HTTP 503"));
+        }
+
+        let mut tally = AttemptTally::default();
+        tally.record(ProviderError::Other("first".into()));
+        tally.record(ProviderError::Other("last".into()));
+        assert!(matches!(tally.into_error(), ProviderError::Other(m) if m == "last"));
+    }
+
+    #[test]
+    fn tally_reports_import_error_only_when_nothing_else_happened() {
+        let mut tally = AttemptTally::default();
+        tally.record_import_error(ProviderError::Other("locked".into()));
+        assert!(matches!(tally.into_error(), ProviderError::Other(m) if m == "locked"));
+
+        let mut tally = AttemptTally::default();
+        tally.record_import_error(ProviderError::Other("locked".into()));
+        tally.record(ProviderError::AuthRequired);
+        assert!(matches!(tally.into_error(), ProviderError::AuthRequired));
     }
 }

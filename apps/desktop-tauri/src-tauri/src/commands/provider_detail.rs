@@ -11,6 +11,9 @@ pub struct ProviderDetail {
     pub enabled: bool,
     pub auto_resume_after_quota_reset: bool,
     pub auto_resume_supported: bool,
+    /// LiteLLM/Claude expose one opt-in extra breakdown; other providers do not.
+    pub optional_details_supported: bool,
+    pub optional_details_enabled: bool,
 
     // Identity
     pub email: Option<String>,
@@ -73,6 +76,31 @@ pub struct ProviderDetail {
     pub usage_source: Option<String>,
     pub cookie_source: Option<String>,
     pub region: Option<String>,
+    /// True when the Manual cookie source has no usable header and the
+    /// provider opted in to failing closed (`manual_empty_cookie_policy`).
+    /// Drives the "No cookie header pasted." hint and the switch-to-Auto action.
+    pub manual_cookie_missing: bool,
+}
+
+/// Same decision the refresh path makes in `build_fetch_context`, gated on the
+/// provider's fail-closed policy so opening the pane never triggers a browser
+/// cookie import.
+fn manual_cookie_missing_for(id: ProviderId, settings: &Settings) -> bool {
+    if settings.cookie_source(id) != "manual"
+        || instantiate_provider(id).manual_empty_cookie_policy()
+            != ManualEmptyCookiePolicy::FailClosedWeb
+    {
+        return false;
+    }
+    let token_accounts = TokenAccountStore::new().load().unwrap_or_default();
+    build_fetch_context(
+        id,
+        settings,
+        &ManualCookies::load(),
+        &ApiKeys::load(),
+        &token_accounts,
+    )
+    .manual_cookie_missing
 }
 
 pub(crate) fn build_provider_detail(
@@ -97,6 +125,8 @@ pub(crate) fn build_provider_detail(
         enabled,
         auto_resume_after_quota_reset: settings.auto_resume_after_quota_reset(id),
         auto_resume_supported: resume_supported,
+        optional_details_supported: codexbar::settings::provider_has_optional_details(id),
+        optional_details_enabled: settings.optional_details_enabled(id),
         email: None,
         plan: None,
         auth_type: None,
@@ -135,6 +165,7 @@ pub(crate) fn build_provider_detail(
         usage_source: provider_usage_source_lookup(&settings, id.cli_name()),
         cookie_source: provider_cookie_source_lookup(&settings, id.cli_name()),
         region: provider_region_lookup(&settings, id.cli_name()),
+        manual_cookie_missing: manual_cookie_missing_for(id, &settings),
     };
 
     Ok((detail, settings, id))

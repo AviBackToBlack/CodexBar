@@ -27,6 +27,7 @@ import { IdentitySection } from "./sections/IdentitySection";
 import { UsageSection } from "./sections/UsageSection";
 import { UsageItemVisibilitySection } from "./sections/UsageItemVisibilitySection";
 import { AutoResumeSection } from "./sections/AutoResumeSection";
+import { OptionalDetailsSection } from "./sections/OptionalDetailsSection";
 import { PaceSection } from "./sections/PaceSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
@@ -52,6 +53,7 @@ import {
   WayfinderGatewaySection,
 } from "./sections/WayfinderGatewaySection";
 import { AzureApiVersionSection } from "./sections/AzureApiVersionSection";
+import { MuseBrowserTeamSection } from "./sections/MuseBrowserTeamSection";
 
 interface Props {
   providerId: string | null;
@@ -352,6 +354,14 @@ export function ProviderDetailPane({
         t={t}
         onChanged={reload}
       />
+      <OptionalDetailsSection
+        providerId={detail.id}
+        enabled={detail.optionalDetailsEnabled}
+        available={detail.optionalDetailsSupported}
+        disabled={settingsDisabled}
+        t={t}
+        onChanged={reload}
+      />
       {isGatewayProviderId(detail.id) &&
         gatewayLoadedProviderId === detail.id && (
         <WayfinderGatewaySection
@@ -401,6 +411,16 @@ export function ProviderDetailPane({
           providerId={detail.id}
           currentValue={detail.cookieSource}
           options={cookieOptions}
+          manualCookieMissing={detail.manualCookieMissing}
+          t={t}
+          onChanged={reload}
+        />
+      )}
+      {detail.id === "muse" && (
+        <MuseBrowserTeamSection
+          providerId={detail.id}
+          details={detail.displayDetails}
+          disabled={settingsDisabled}
           t={t}
           onChanged={reload}
         />
@@ -439,6 +459,7 @@ export function ProviderDetailPane({
         key={`cookie-${credKey}`}
         providerId={detail.id}
         cookieDomain={cookieDomain}
+        onChanged={reload}
       />
       <ChartsSection
         providerId={detail.id}

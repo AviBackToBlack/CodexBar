@@ -13,18 +13,18 @@ use crate::providers::{
     BifrostProvider, ChutesProvider, ClaudeProvider, ClinePassProvider, CodeBuddyProvider,
     CodeRabbitProvider, CodebuffProvider, CodexProvider, CommandCodeProvider, CopilotProvider,
     CrossModelProvider, CursorProvider, DeepInfraProvider, DeepSeekProvider, DeepgramProvider,
-    DevinProvider, DoubaoProvider, ElevenLabsProvider, FactoryProvider, FireworksProvider,
-    GeminiProvider, GitKrakenProvider, GrokProvider, GroqProvider, HelmcodeProvider,
-    HuggingFaceProvider, HyperProvider, InfiniProvider, JetBrainsProvider, KiloProvider,
-    KimiK2Provider, KimiProvider, KiroProvider, LLMProxyProvider, LiteLLMProvider, LongCatProvider,
-    ManusProvider, MetaProvider, MiMoProvider, MiniMaxProvider, MistralProvider, MuseProvider,
-    NanoGPTProvider, NeuralwattProvider, NotionProvider, NousProvider, OllamaProvider,
-    OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider,
-    PerplexityProvider, PiProvider, PoeProvider, QoderProvider, QwenCloudProvider,
-    ReplicateProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider, T3ChatProvider,
-    TypeSafeProvider, V0Provider, VeniceProvider, VertexAIProvider, WarpProvider,
-    WayfinderProvider, WindsurfProvider, XaiProvider, ZaiProvider, ZedProvider, ZenMuxProvider,
-    ZoomMateProvider,
+    DevPassProvider, DevinProvider, DoubaoProvider, ElevenLabsProvider, FactoryProvider,
+    FireworksProvider, GeminiProvider, GitKrakenProvider, GrokProvider, GroqProvider,
+    HelmcodeProvider, HuggingFaceProvider, HyperProvider, InfiniProvider, JetBrainsProvider,
+    KiloProvider, KimiK2Provider, KimiProvider, KiroProvider, LLMManProvider, LLMProxyProvider,
+    LiteLLMProvider, LongCatProvider, ManusProvider, MetaProvider, MiMoProvider, MiniMaxProvider,
+    MistralProvider, MuseProvider, NanoGPTProvider, NeuralwattProvider, NotionProvider,
+    NousProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider,
+    OpenRouterProvider, PerplexityProvider, PiProvider, PoeProvider, QoderProvider,
+    QwenCloudProvider, RaycastProvider, ReplicateProvider, SakanaProvider, StepFunProvider,
+    Sub2ApiProvider, T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider, VercelProvider,
+    VertexAIProvider, WarpProvider, WayfinderProvider, WindsurfProvider, XKiroProvider,
+    XaiProvider, ZaiProvider, ZedProvider, ZenMuxProvider, ZoomMateProvider,
 };
 
 /// Instantiate the concrete [`Provider`] implementation for a given [`ProviderId`].
@@ -117,6 +117,11 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::GitKraken => Box::new(GitKrakenProvider::new()),
         ProviderId::Bifrost => Box::new(BifrostProvider::new()),
         ProviderId::Aixy => Box::new(AixyProvider::new()),
+        ProviderId::LLMMan => Box::new(LLMManProvider::new()),
+        ProviderId::DevPass => Box::new(DevPassProvider::new()),
+        ProviderId::XKiro => Box::new(XKiroProvider::new()),
+        ProviderId::Raycast => Box::new(RaycastProvider::new()),
+        ProviderId::Vercel => Box::new(VercelProvider::new()),
     }
 }
 

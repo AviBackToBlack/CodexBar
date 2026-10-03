@@ -422,10 +422,10 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
         ProviderConfigInfo {
             id: ProviderId::ClinePass,
             name: "ClinePass",
-            requires_api_key: true,
-            api_key_env_var: Some("CLINEPASS_API_KEY"),
+            requires_api_key: false,
+            api_key_env_var: Some("CLINE_API_KEY"),
             api_key_help: Some(
-                "Get your API key from Cline / ClinePass. Also accepts CLINE_API_KEY.",
+                "Paste an API key, or run cline auth. Reads the existing Cline session without copying it. Also accepts CLINEPASS_API_KEY.",
             ),
             config_file_path: None,
             dashboard_url: Some("https://app.cline.bot/dashboard/subscription?personal=true"),
@@ -438,6 +438,39 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             api_key_help: Some("Get your API key from portal.neuralwatt.com."),
             config_file_path: None,
             dashboard_url: Some("https://portal.neuralwatt.com/dashboard"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::DevPass,
+            name: "DevPass",
+            requires_api_key: true,
+            api_key_env_var: Some("DEVPASS_API_KEY"),
+            api_key_help: Some(
+                "Use a regular LLM Gateway API key. Publishable keys and end-user sessions cannot read plan state.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://devpass.llmgateway.io/dashboard"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::XKiro,
+            name: "xKiro",
+            requires_api_key: true,
+            api_key_env_var: Some("XKIRO_API_KEY"),
+            api_key_help: Some(
+                "Create an API key at xkiro.com. It is sent only to api.xkiro.com and reads the free usage endpoint.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://xkiro.com"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Vercel,
+            name: "Vercel AI Gateway",
+            requires_api_key: true,
+            api_key_env_var: Some("AI_GATEWAY_API_KEY"),
+            api_key_help: Some(
+                "Add a Vercel AI Gateway API key to show the team's credit balance and lifetime spend.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway"),
         },
         ProviderConfigInfo {
             id: ProviderId::Doubao,
@@ -533,7 +566,9 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             name: "LLM Proxy",
             requires_api_key: true,
             api_key_env_var: Some("LLM_PROXY_API_KEY + LLM_PROXY_BASE_URL"),
-            api_key_help: Some("Set an LLM Proxy API key and base URL for quota-stats."),
+            api_key_help: Some(
+                "Set an LLM Proxy API key and base URL (Settings or LLM_PROXY_BASE_URL) for quota-stats.",
+            ),
             config_file_path: None,
             dashboard_url: None,
         },
@@ -555,6 +590,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             api_key_env_var: Some("LITELLM_API_KEY + LITELLM_BASE_URL"),
             api_key_help: Some(
                 "Paste a LiteLLM key and set the base URL in provider extras or LITELLM_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
+        },
+        ProviderConfigInfo {
+            id: ProviderId::LLMMan,
+            name: "llmman",
+            requires_api_key: false,
+            api_key_env_var: Some("LLMMAN_API_KEY + LLMMAN_HOST"),
+            api_key_help: Some(
+                "Optional: an open local daemon needs no key. Set the base URL in provider extras or LLMMAN_HOST (default http://127.0.0.1:17434).",
             ),
             config_file_path: None,
             dashboard_url: None,
