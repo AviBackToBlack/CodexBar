@@ -66,6 +66,28 @@ pub enum ConfigCommand {
     },
     /// Show configuration file paths
     Path,
+    /// Allow or deny reading (and refreshing) Claude Code's own credentials
+    /// (~/.claude/.credentials.json or Credential Manager), or show the
+    /// current choice. Off by default; without it Claude Auto falls back to
+    /// reduced-fidelity CLI usage.
+    ClaudeCodeCredentials {
+        /// allow, deny, or status
+        #[arg(value_enum)]
+        action: ConsentAction,
+        #[command(flatten)]
+        output: ConfigOutputArgs,
+    },
+}
+
+/// `config claude-code-credentials` action.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentAction {
+    /// Let CodexBar read and refresh Claude Code's credentials
+    Allow,
+    /// Keep Claude Code's credentials closed (the default)
+    Deny,
+    /// Show the current choice without changing it
+    Status,
 }
 
 /// `--format`, `--json`, and `--pretty` for the config subcommands that
@@ -151,6 +173,9 @@ pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
             no_enable,
         } => set_api_key(target.name(), api_key.as_deref(), stdin, !no_enable).await,
         ConfigCommand::Path => show_paths().await,
+        ConfigCommand::ClaudeCodeCredentials { action, output } => {
+            claude_code_credentials(action, output).await
+        }
     }
 }
 
@@ -479,6 +504,55 @@ async fn set_provider_enabled(
     Ok(())
 }
 
+/// `config claude-code-credentials` JSON result.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeCodeCredentialsConsent {
+    allowed: bool,
+    config_path: Option<String>,
+}
+
+/// Apply a consent action to the settings `claude_allow_reading_claude_code_credentials`
+/// flag; returns whether it changed (and so needs saving).
+fn apply_consent_action(settings: &mut Settings, action: ConsentAction) -> bool {
+    let allowed = match action {
+        ConsentAction::Allow => true,
+        ConsentAction::Deny => false,
+        ConsentAction::Status => return false,
+    };
+    let changed = settings.claude_allow_reading_claude_code_credentials != allowed;
+    settings.claude_allow_reading_claude_code_credentials = allowed;
+    changed
+}
+
+fn consent_text(allowed: bool) -> &'static str {
+    if allowed {
+        "Claude Code credentials: allowed (CodexBar may read and refresh Claude Code's OAuth credentials)"
+    } else {
+        "Claude Code credentials: not allowed (Claude Auto falls back to reduced-fidelity CLI usage)"
+    }
+}
+
+/// Allow, deny, or show consent to read Claude Code's own credentials.
+async fn claude_code_credentials(
+    action: ConsentAction,
+    output: ConfigOutputArgs,
+) -> anyhow::Result<()> {
+    let mut settings = Settings::load();
+    if apply_consent_action(&mut settings, action) {
+        settings.save()?;
+    }
+    let allowed = settings.claude_allow_reading_claude_code_credentials;
+    if output.is_json() {
+        return output.print_json(&ClaudeCodeCredentialsConsent {
+            allowed,
+            config_path: Settings::settings_path().map(|path| path.display().to_string()),
+        });
+    }
+    println!("{}", consent_text(allowed));
+    Ok(())
+}
+
 /// Store an API key and optionally enable the provider.
 async fn set_api_key(
     provider: &str,
@@ -596,7 +670,8 @@ async fn show_paths() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigCommand, ConfigFileError, ConfigOutputArgs, provider_statuses, read_json_config,
+        ClaudeCodeCredentialsConsent, ConfigCommand, ConfigFileError, ConfigOutputArgs,
+        ConsentAction, apply_consent_action, consent_text, provider_statuses, read_json_config,
         sanitize_settings_for_dump,
     };
     use crate::cli::{Cli, Commands};
@@ -731,6 +806,62 @@ mod tests {
     #[test]
     fn default_output_args_are_text() {
         assert!(!ConfigOutputArgs::default().is_json());
+    }
+
+    #[test]
+    fn claude_code_credentials_parses_each_action() {
+        for (word, expected) in [
+            ("allow", ConsentAction::Allow),
+            ("deny", ConsentAction::Deny),
+            ("status", ConsentAction::Status),
+        ] {
+            let ConfigCommand::ClaudeCodeCredentials { action, output } =
+                parse_config(&["claude-code-credentials", word, "--json"]).unwrap()
+            else {
+                panic!("expected claude-code-credentials for {word}");
+            };
+            assert_eq!(action, expected);
+            assert!(output.is_json());
+        }
+        assert!(parse_config(&["claude-code-credentials"]).is_err());
+        assert!(parse_config(&["claude-code-credentials", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn consent_actions_toggle_only_the_claude_code_flag() {
+        let mut settings = Settings::default();
+        assert!(!settings.claude_allow_reading_claude_code_credentials);
+        let before = serde_json::to_value(&settings).unwrap();
+
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Status));
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Deny));
+        assert!(apply_consent_action(&mut settings, ConsentAction::Allow));
+        assert!(settings.claude_allow_reading_claude_code_credentials);
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Allow));
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Status));
+        assert!(settings.claude_allow_reading_claude_code_credentials);
+
+        let mut after = serde_json::to_value(&settings).unwrap();
+        after["claude_allow_reading_claude_code_credentials"] = json!(false);
+        assert_eq!(after, before, "no other setting changes");
+
+        assert!(apply_consent_action(&mut settings, ConsentAction::Deny));
+        assert!(!settings.claude_allow_reading_claude_code_credentials);
+    }
+
+    #[test]
+    fn consent_output_reports_the_choice() {
+        let value = serde_json::to_value(ClaudeCodeCredentialsConsent {
+            allowed: true,
+            config_path: Some("settings.json".to_string()),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            json!({ "allowed": true, "configPath": "settings.json" })
+        );
+        assert!(consent_text(true).contains("allowed"));
+        assert!(consent_text(false).contains("not allowed"));
     }
 
     #[cfg(windows)]
