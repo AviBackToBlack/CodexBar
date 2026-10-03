@@ -1256,6 +1256,13 @@ locale_keys! {
     OverviewSpendPeriodTitle,
     UsageSpendModelsPeriodCaption,
     UsageSpendProjectsPeriodCaption,
+
+    // Opt-in provider breakdowns (upstream 0.67.0)
+    ProviderOptionalDetailsTitle,
+    ProviderLiteLLMModelActivity,
+    ProviderLiteLLMModelActivityHelper,
+    ProviderClaudeWorkspaceSpend,
+    ProviderClaudeWorkspaceSpendHelper,
 }
 
 #[cfg(test)]

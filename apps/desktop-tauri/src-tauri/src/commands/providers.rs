@@ -431,6 +431,7 @@ pub(crate) fn build_fetch_context(
         auto_prefer_web: auto_prefer_web
             && !(id == ProviderId::OpenCodeGo
                 && token_account_kind == Some(codexbar::core::TokenAccountKind::ApiKey)),
+        optional_details_enabled: settings.optional_details_enabled(id),
         ..FetchContext::default()
     }
 }
@@ -481,11 +482,13 @@ pub(crate) fn provider_cookie_domain(id: ProviderId, settings: &Settings) -> Opt
 
 const DEFAULT_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
 const SLOW_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+const OPTIONAL_LITELLM_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 const MAX_CONTEXT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65);
 
 pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std::time::Duration {
     let provider_timeout = match id {
         ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot => SLOW_PROVIDER_FETCH_TIMEOUT,
+        ProviderId::LiteLLM if ctx.optional_details_enabled => OPTIONAL_LITELLM_FETCH_TIMEOUT,
         _ => DEFAULT_PROVIDER_FETCH_TIMEOUT,
     };
     let context_timeout = std::time::Duration::from_secs(ctx.web_timeout.saturating_add(5));

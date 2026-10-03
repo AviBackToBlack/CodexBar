@@ -10,6 +10,8 @@ function provider(extra = true): ProviderDetail {
     enabled: true,
     autoResumeAfterQuotaReset: false,
     autoResumeSupported: false,
+    optionalDetailsSupported: false,
+    optionalDetailsEnabled: false,
     email: null,
     plan: null,
     authType: null,

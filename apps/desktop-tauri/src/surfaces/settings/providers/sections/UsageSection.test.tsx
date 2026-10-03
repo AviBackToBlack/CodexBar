@@ -40,6 +40,8 @@ function provider(): ProviderDetail {
     enabled: true,
     autoResumeAfterQuotaReset: false,
     autoResumeSupported: false,
+    optionalDetailsSupported: false,
+    optionalDetailsEnabled: false,
     email: null,
     plan: null,
     authType: null,
@@ -286,5 +288,47 @@ describe("UsageSection", () => {
 
     expect(await screen.findByText("ProviderSessionLabel")).toBeInTheDocument();
     expect(screen.getByText("ProviderWeeklyLabel")).toBeInTheDocument();
+  });
+
+  it("prints one heading per display detail section", async () => {
+    const detail = provider();
+    detail.session = null;
+    detail.extraRateWindows = [];
+    detail.displayDetails = [
+      {
+        id: "plain",
+        sectionTitle: null,
+        title: "Plain",
+        value: "1",
+        secondaryValue: null,
+        progress: null,
+      },
+      {
+        id: "a",
+        sectionTitle: "Model activity",
+        title: "fixture-alpha",
+        value: "60 tokens",
+        secondaryValue: null,
+        progress: null,
+      },
+      {
+        id: "b",
+        sectionTitle: "Model activity",
+        title: "fixture-beta",
+        value: "30 tokens",
+        secondaryValue: null,
+        progress: null,
+      },
+    ];
+
+    render(
+      <LocaleProvider>
+        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText(/fixture-alpha: 60 tokens/)).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "Model activity" })).toHaveLength(1);
+    expect(screen.getByText(/Plain: 1/)).toBeInTheDocument();
   });
 });

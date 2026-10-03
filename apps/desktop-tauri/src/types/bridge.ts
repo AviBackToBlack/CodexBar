@@ -1069,6 +1069,9 @@ export interface ProviderDetail {
   autoResumeAfterQuotaReset: boolean;
   /** Whether the active credential lane can be correlated to a local CLI session. */
   autoResumeSupported: boolean;
+  /** LiteLLM and Claude expose one opt-in extra breakdown; other providers do not. */
+  optionalDetailsSupported: boolean;
+  optionalDetailsEnabled: boolean;
 
   // Identity
   email: string | null;

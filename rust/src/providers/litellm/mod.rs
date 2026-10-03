@@ -11,6 +11,7 @@ use crate::providers::{BoundedBodyError, read_bounded_response};
 
 mod endpoint;
 mod info;
+mod model_activity;
 mod spend_report;
 #[cfg(test)]
 mod tests;
@@ -85,6 +86,7 @@ impl Provider for LiteLLMProvider {
                     |path, query| management_url(&base, path, query),
                     &key,
                     Utc::now(),
+                    ctx.optional_details_enabled,
                 )
                 .await
             }
@@ -103,12 +105,15 @@ impl Provider for LiteLLMProvider {
 /// budgets are then read. When the management routes are unavailable to the
 /// key (401, 403 or 404), the UTC month-to-date spend report is shown instead.
 /// `url_for(path, query)` builds a management-route URL, so tests can route
-/// individual requests; `now` fixes the report period.
+/// individual requests; `now` fixes the report period and the model-activity
+/// window, which is requested only for a user-bound key when
+/// `include_model_activity` (the opt-in) is set (upstream 0.67.0).
 async fn fetch_key_usage<F>(
     client: &Client,
     url_for: F,
     key: &str,
     now: DateTime<Utc>,
+    include_model_activity: bool,
 ) -> Result<ProviderFetchResult, ProviderError>
 where
     F: Fn(&str, Option<(&str, &str)>) -> Result<Url, ProviderError>,
@@ -124,7 +129,18 @@ where
     if let Some(user_id) = binding.user_id.as_deref() {
         let url = url_for("user/info", Some(("user_id", user_id)))?;
         let response: UserInfoResponse = get_json(client, url, key).await?;
-        result_from_user(&binding, user_id, response)
+        let result = result_from_user(&binding, user_id, response)?;
+        if !include_model_activity {
+            return Ok(result);
+        }
+        // Upstream 0.67.0: optional history must never fail the budget fetch.
+        let rows = match url_for("user/daily/activity", None) {
+            Ok(endpoint) => {
+                model_activity::fetch(client, &endpoint, key, user_id, now.date_naive()).await
+            }
+            Err(_) => Vec::new(),
+        };
+        Ok(result.with_display_details(rows))
     } else if let Some(team_id) = binding.team_id.as_deref() {
         let url = url_for("team/info", Some(("team_id", team_id)))?;
         let response: TeamInfoResponse = get_json(client, url, key).await?;

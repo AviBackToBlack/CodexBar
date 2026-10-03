@@ -48,7 +48,7 @@ impl ProviderDisplayDetail {
             progress: None,
         };
         let valid = is_display_shape(&row.id, 64)
-            && is_display_shape(&row.title, 128)
+            && Self::is_valid_title(&row.title)
             && is_display_shape(&row.value, 512);
         valid.then_some(row)
     }
@@ -71,6 +71,12 @@ impl ProviderDisplayDetail {
         }
         self.secondary_value = Some(value);
         Some(self)
+    }
+
+    /// Whether `title` would be accepted as a row title, for providers that
+    /// must reject a whole payload when any wire-supplied label is unusable.
+    pub fn is_valid_title(title: &str) -> bool {
+        is_display_shape(title, 128)
     }
 
     /// Attach a progress bar; rejects non-finite or non-positive ranges.
@@ -132,6 +138,16 @@ impl ProviderFetchResult {
             self.display_details.push(detail);
         }
         self
+    }
+
+    /// Attach several validated rows in order; see [`Self::with_display_detail`].
+    pub fn with_display_details(
+        self,
+        details: impl IntoIterator<Item = ProviderDisplayDetail>,
+    ) -> Self {
+        details.into_iter().fold(self, |result, detail| {
+            result.with_display_detail(Some(detail))
+        })
     }
 
     pub fn display_details(&self) -> &[ProviderDisplayDetail] {

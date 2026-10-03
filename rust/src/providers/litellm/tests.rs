@@ -633,12 +633,22 @@ async fn run(
     server: &mockito::ServerGuard,
     now: DateTime<Utc>,
 ) -> Result<ProviderFetchResult, ProviderError> {
+    run_with(server, now, false).await
+}
+
+/// [`run`] with the model-activity opt-in set as given.
+async fn run_with(
+    server: &mockito::ServerGuard,
+    now: DateTime<Utc>,
+    include_model_activity: bool,
+) -> Result<ProviderFetchResult, ProviderError> {
     let base = format!("{}/proxy/v1", server.url());
     fetch_key_usage(
         &test_client(),
         |path, query| management_url(&base, path, query),
         "fixture-key",
         now,
+        include_model_activity,
     )
     .await
 }
@@ -851,6 +861,7 @@ async fn transport_failure_does_not_switch_report_scopes() {
         },
         "fixture-key",
         sept_21(),
+        false,
     )
     .await;
     assert!(matches!(result, Err(ProviderError::Network(_))));
@@ -950,4 +961,135 @@ async fn key_info_success_is_unchanged() {
     user.assert_async().await;
     report.assert_async().await;
     assert_eq!(result.usage.primary.used_percent, 25.0);
+}
+
+// Opt-in model activity (upstream 0.67.0) on the combined key/user/team flow.
+const ACTIVITY_PAGE: &str = r#"{"results":[{"date":"2026-09-21","breakdown":{"models":{
+    "example-model":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30,
+    "api_requests":1}}}}],"metadata":{"total_pages":1,"page":1}}"#;
+const USER_KEY_INFO: &str = r#"{"info":{"user_id":"user-1"}}"#;
+const USER_INFO: &str = r#"{"user_info":{"user_id":"user-1","spend":25.0,"max_budget":100.0}}"#;
+
+async fn stub_user_budget(server: &mut mockito::ServerGuard) {
+    stub(server, "/proxy/key/info", 200, USER_KEY_INFO, 1).await;
+    stub(server, "/proxy/user/info", 200, USER_INFO, 1).await;
+}
+
+#[tokio::test]
+async fn opted_in_user_key_adds_model_activity_after_budgets() {
+    let mut server = mockito::Server::new_async().await;
+    stub_user_budget(&mut server).await;
+    let activity = server
+        .mock("GET", "/proxy/user/daily/activity")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("user_id".into(), "user-1".into()),
+            mockito::Matcher::UrlEncoded("start_date".into(), "2026-08-23".into()),
+            mockito::Matcher::UrlEncoded("end_date".into(), "2026-09-21".into()),
+            mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+        ]))
+        .match_header("authorization", "Bearer fixture-key")
+        .with_status(200)
+        .with_body(ACTIVITY_PAGE)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let result = run_with(&server, sept_21(), true).await.unwrap();
+
+    activity.assert_async().await;
+    assert_eq!(result.usage.primary.used_percent, 25.0);
+    let rows = result.display_details();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title(), "example-model");
+    assert_eq!(rows[0].value(), "30 tokens \u{b7} 1 requests");
+    assert_eq!(
+        rows[0].section_title(),
+        Some("Model activity \u{b7} 30d UTC")
+    );
+}
+
+#[tokio::test]
+async fn model_activity_failure_keeps_the_budgets() {
+    for status in [403, 500] {
+        let mut server = mockito::Server::new_async().await;
+        stub_user_budget(&mut server).await;
+        let activity = stub(&mut server, "/proxy/user/daily/activity", status, "{}", 1).await;
+
+        let result = run_with(&server, sept_21(), true).await.unwrap();
+
+        activity.assert_async().await;
+        assert_eq!(result.usage.primary.used_percent, 25.0);
+        assert!(result.display_details().is_empty(), "status {status}");
+    }
+}
+
+#[tokio::test]
+async fn model_activity_is_requested_only_for_opted_in_user_keys() {
+    // Opted out: the user flow never asks for activity.
+    let mut server = mockito::Server::new_async().await;
+    stub_user_budget(&mut server).await;
+    let activity = stub(
+        &mut server,
+        "/proxy/user/daily/activity",
+        200,
+        ACTIVITY_PAGE,
+        0,
+    )
+    .await;
+    let result = run(&server, sept_21()).await.unwrap();
+    activity.assert_async().await;
+    assert!(result.display_details().is_empty());
+
+    // A team-bound key has no user to report on.
+    let mut server = mockito::Server::new_async().await;
+    stub(
+        &mut server,
+        "/proxy/key/info",
+        200,
+        r#"{"info":{"team_id":"team-1"}}"#,
+        1,
+    )
+    .await;
+    stub(
+        &mut server,
+        "/proxy/team/info",
+        200,
+        r#"{"team_id":"team-1","team_info":{"spend":5.0,"max_budget":50.0}}"#,
+        1,
+    )
+    .await;
+    let activity = stub(
+        &mut server,
+        "/proxy/user/daily/activity",
+        200,
+        ACTIVITY_PAGE,
+        0,
+    )
+    .await;
+    let result = run_with(&server, sept_21(), true).await.unwrap();
+    activity.assert_async().await;
+    assert!(result.display_details().is_empty());
+
+    // The spend-report fallback returns before any activity request.
+    let mut server = mockito::Server::new_async().await;
+    stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+    stub(
+        &mut server,
+        &format!("/proxy/key/spend/report{KEY_QUERY}"),
+        200,
+        REPORT,
+        1,
+    )
+    .await;
+    let activity = stub(
+        &mut server,
+        "/proxy/user/daily/activity",
+        200,
+        ACTIVITY_PAGE,
+        0,
+    )
+    .await;
+    let result = run_with(&server, sept_21(), true).await.unwrap();
+    activity.assert_async().await;
+    assert!(result.display_details().is_empty());
 }

@@ -420,6 +420,13 @@ export function setProviderUsageSource(providerId: string, source: string): Prom
   return invoke<void>("set_provider_usage_source", { providerId, source });
 }
 
+export function setProviderOptionalDetails(
+  providerId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("set_provider_optional_details", { providerId, enabled });
+}
+
 export function setProviderAutoResumeAfterQuotaReset(
   providerId: string,
   enabled: boolean,

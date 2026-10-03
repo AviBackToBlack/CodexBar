@@ -305,6 +305,7 @@ async fn hooks_watch_observation(
         auto_prefer_web: false,
         // Hook watches keep the short optional-join grace.
         requires_optional_usage_completeness: false,
+        optional_details_enabled: settings.optional_details_enabled(provider_id),
     };
 
     if ctx.api_key.is_none() {

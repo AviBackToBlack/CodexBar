@@ -862,6 +862,11 @@ pub struct FetchContext {
     /// short join grace instead (upstream 0.48.0
     /// `requiresOptionalUsageCompleteness`, #2583).
     pub requires_optional_usage_completeness: bool,
+
+    /// The user opted in to the requested provider's optional detail breakdown
+    /// (LiteLLM model activity, Claude workspace spend). Scoped to the provider
+    /// being fetched; false everywhere the setting is not consulted.
+    pub optional_details_enabled: bool,
 }
 
 impl Default for FetchContext {
@@ -882,6 +887,7 @@ impl Default for FetchContext {
             gateway_url: None,
             auto_prefer_web: false,
             requires_optional_usage_completeness: false,
+            optional_details_enabled: false,
         }
     }
 }

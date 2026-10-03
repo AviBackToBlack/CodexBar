@@ -875,6 +875,11 @@ ProviderAccentColorInvalid = Invalid hex color. Use #RRGGBB format, e.g. #FF5733
 ProviderAutoResumeTitle = Automatic session resume
 ProviderAutoResumeAfterQuotaReset = Reopen the CLI session when quota resets
 ProviderAutoResumeAfterQuotaResetHelper = Reopen the exact local Codex or Claude session after its quota becomes available. No prompt is sent automatically.
+ProviderOptionalDetailsTitle = Optional details
+ProviderLiteLLMModelActivity = Show model activity
+ProviderLiteLLMModelActivityHelper = Adds tokens and requests per model for your user over the last 30 UTC days (top 20). Makes up to 3 extra requests to your LiteLLM proxy per refresh; if it is unavailable the section is hidden and budgets are unaffected. Off by default.
+ProviderClaudeWorkspaceSpend = Show workspace spend
+ProviderClaudeWorkspaceSpendHelper = Adds Admin API spend per workspace over the last 30 days (top 20, shown only when more than one workspace has spend). Organization totals are unchanged and no extra request is made. Off by default.
 
 OpenRouterManagementKeyTitle = OpenRouter spend history
 OpenRouterManagementKeyLabel = Management API key

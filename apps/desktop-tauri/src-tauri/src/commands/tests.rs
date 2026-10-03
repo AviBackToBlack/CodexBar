@@ -360,6 +360,24 @@ fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
 }
 
 #[test]
+fn fetch_context_carries_the_optional_details_opt_in_for_its_own_provider() {
+    let mut settings = Settings::default();
+    settings.set_optional_details_enabled(ProviderId::LiteLLM, true);
+    let build = |id| {
+        super::build_fetch_context(
+            id,
+            &settings,
+            &ManualCookies::default(),
+            &ApiKeys::default(),
+            &HashMap::new(),
+        )
+    };
+
+    assert!(build(ProviderId::LiteLLM).optional_details_enabled);
+    assert!(!build(ProviderId::Codex).optional_details_enabled);
+}
+
+#[test]
 fn fetch_context_cursor_cookie_off_stays_cli() {
     let mut settings = Settings::default();
     settings.set_cookie_source(ProviderId::Cursor, "off");
@@ -1520,6 +1538,16 @@ fn provider_fetch_timeout_allows_slower_authenticated_providers() {
     assert_eq!(
         super::provider_fetch_timeout(ProviderId::DeepSeek, &ctx),
         std::time::Duration::from_secs(35)
+    );
+
+    let optional_litellm_ctx = FetchContext {
+        web_timeout: 30,
+        optional_details_enabled: true,
+        ..FetchContext::default()
+    };
+    assert_eq!(
+        super::provider_fetch_timeout(ProviderId::LiteLLM, &optional_litellm_ctx),
+        std::time::Duration::from_secs(40)
     );
 }
 

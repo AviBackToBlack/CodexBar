@@ -31,6 +31,7 @@ pub const CLAUDE_DAILY_ROUTINES_USAGE_ITEM_ID: &str = "metric:extra-claude-routi
 mod api_keys;
 mod cost_time_zone;
 mod manual_cookies;
+mod optional_details;
 mod provider_workspace;
 mod raw;
 mod status;
@@ -39,6 +40,7 @@ mod types;
 pub use api_keys::*;
 pub use cost_time_zone::*;
 pub use manual_cookies::*;
+pub use optional_details::provider_has_optional_details;
 pub use provider_workspace::*;
 use raw::RawSettings;
 pub use status::*;

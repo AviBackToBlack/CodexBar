@@ -82,6 +82,7 @@ pub fn render_json_result(
                         "title": detail.title(),
                         "value": detail.value(),
                         "secondaryValue": detail.secondary_value(),
+                        "sectionTitle": detail.section_title(),
                         "progress": detail.progress().map(|progress| {
                             serde_json::json!({
                                 "used": progress.used(),
@@ -299,7 +300,14 @@ fn append_inventory_lines(lines: &mut Vec<String>, inventory: &[ProviderInventor
 }
 
 fn append_display_detail_lines(lines: &mut Vec<String>, details: &[ProviderDisplayDetail]) {
+    let mut current_section: Option<&str> = None;
     for detail in details {
+        if detail.section_title() != current_section {
+            current_section = detail.section_title();
+            if let Some(section) = current_section {
+                lines.push(format!("  {section}:"));
+            }
+        }
         let secondary = detail
             .secondary_value()
             .map(|value| format!(" ({value})"))

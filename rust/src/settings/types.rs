@@ -414,6 +414,11 @@ pub struct ProviderConfig {
     /// Disabled by default; the desktop shell never injects a prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_resume_after_quota_reset: bool,
+    /// LiteLLM/Claude-only: fetch one optional extra breakdown (LiteLLM model
+    /// activity, Claude workspace spend). Disabled by default; each provider
+    /// has exactly one such breakdown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional_details_enabled: bool,
     /// Per-provider accent color override (hex, e.g. "#FF5733"). `None`
     /// means the shipped brand color is used (#2972).
     #[serde(skip_serializing_if = "Option::is_none")]

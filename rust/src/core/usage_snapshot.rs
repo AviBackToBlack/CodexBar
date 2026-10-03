@@ -903,6 +903,38 @@ mod tests {
     }
 
     #[test]
+    fn display_details_batch_keeps_order_and_skips_duplicate_ids() {
+        let rows = ["a", "b", "a"]
+            .into_iter()
+            .filter_map(|id| ProviderDisplayDetail::new(id, id, "1"));
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(1.0)), "api")
+            .with_display_details(rows);
+        let ids: Vec<_> = result
+            .display_details()
+            .iter()
+            .map(|row| row.id())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn display_detail_section_titles_are_validated() {
+        let row = ProviderDisplayDetail::new("a", "Alpha", "1").unwrap();
+        assert_eq!(row.section_title(), None);
+        assert!(row.clone().with_section_title("").is_none());
+        assert!(row.clone().with_section_title("bad\nsection").is_none());
+        assert!(row.clone().with_section_title("x".repeat(129)).is_none());
+        assert_eq!(
+            row.with_section_title("Model activity")
+                .unwrap()
+                .section_title(),
+            Some("Model activity")
+        );
+        assert!(ProviderDisplayDetail::is_valid_title("fixture-alpha"));
+        assert!(!ProviderDisplayDetail::is_valid_title(""));
+    }
+
+    #[test]
     fn cost_snapshot_ignores_non_finite_values() {
         let cost = CostSnapshot::new(f64::NAN, "USD", "Monthly").with_limit(f64::INFINITY);
 

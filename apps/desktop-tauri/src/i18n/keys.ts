@@ -976,6 +976,13 @@ export const ALL_LOCALE_KEYS = [
   "OverviewSpendPeriodTitle",
   "UsageSpendModelsPeriodCaption",
   "UsageSpendProjectsPeriodCaption",
+
+  // Opt-in provider breakdowns (upstream 0.67.0)
+  "ProviderOptionalDetailsTitle",
+  "ProviderLiteLLMModelActivity",
+  "ProviderLiteLLMModelActivityHelper",
+  "ProviderClaudeWorkspaceSpend",
+  "ProviderClaudeWorkspaceSpendHelper",
 ] as const;
 
 export type LocaleKey = (typeof ALL_LOCALE_KEYS)[number];

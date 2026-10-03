@@ -37,6 +37,7 @@ mod tests {
             gateway_url: None,
             auto_prefer_web: false,
             requires_optional_usage_completeness: false,
+            optional_details_enabled: false,
         }
     }
 
