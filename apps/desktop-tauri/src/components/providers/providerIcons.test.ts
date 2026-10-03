@@ -12,7 +12,8 @@ const REPO_ROOT = import.meta.dirname + "/../../../../../";
  * is the registry id for every provider).
  */
 function rustBrandColors(): Map<string, string> {
-  const source = readFileSync(REPO_ROOT + "rust/src/core/provider.rs", "utf8");
+  // CI checks out with CRLF line endings; normalize so the "\n}\n" search below matches.
+  const source = readFileSync(REPO_ROOT + "rust/src/core/provider.rs", "utf8").replace(/\r\n/g, "\n");
   const start = source.indexOf("pub fn brand_color(id: ProviderId)");
   const end = source.indexOf("\n}\n", start);
   const rows = new Map<string, string>();
