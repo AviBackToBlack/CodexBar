@@ -115,7 +115,8 @@ mod tests {
 
     #[test]
     fn usage_display_change_rerenders_cached_snapshot_without_refetch() {
-        let html = render_shell(60);
+        // CI checks out with CRLF; the boundary search below assumes LF.
+        let html = render_shell(60).replace("\r\n", "\n");
         let start = html
             .find("function changeUsageDisplay()")
             .expect("change handler");
@@ -163,7 +164,8 @@ mod tests {
 
     #[test]
     fn snapshot_is_cached_before_rows_render() {
-        let html = render_shell(60);
+        // CI checks out with CRLF; the multi-line search below assumes LF.
+        let html = render_shell(60).replace("\r\n", "\n");
         let assign = html.find("state.snapshot = snapshot;").expect("assignment");
         let render = html
             .find("renderProviders();\n  const host")
