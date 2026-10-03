@@ -55,7 +55,10 @@ where
     // UsageSnapshot needs a primary lane; a report carries no budget, so the
     // labeled window is informational and the amount lives in the cost.
     let snapshot = UsageSnapshot::new(RateWindow::informational(period.clone()));
-    Ok(ProviderFetchResult::new(snapshot, "api").with_cost(CostSnapshot::new(used, "USD", period)))
+    // Upstream's "API spend" card (cost without a limit): the amount is the
+    // only usage signal, so it stays visible like the budget-less spend.
+    let cost = CostSnapshot::new(used, "USD", period).always_visible();
+    Ok(ProviderFetchResult::new(snapshot, "api").with_cost(cost))
 }
 
 #[derive(Deserialize)]

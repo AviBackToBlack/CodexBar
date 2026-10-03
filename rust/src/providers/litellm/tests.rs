@@ -736,6 +736,7 @@ async fn management_denial_falls_back_to_key_spend() {
             (cost.limit, cost.resets_at, cost.balance),
             (None, None, None)
         );
+        assert!(cost.always_visible, "spend-only cost is the API spend card");
         let primary = &result.usage.primary;
         assert!(primary.is_informational && !primary.usage_known);
         assert_eq!(primary.reset_description.as_deref(), Some(period));
