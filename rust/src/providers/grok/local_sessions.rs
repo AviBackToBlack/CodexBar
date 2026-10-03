@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Days, Local, NaiveDate};
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +38,7 @@ fn grok_home() -> PathBuf {
 }
 
 fn summarize_root(root: &Path, lookback_days: u32, now: DateTime<Local>) -> Summary {
-    let cutoff = now - Duration::days(i64::from(lookback_days.max(1)));
+    let (first_day, last_day) = calendar_day_window(now, lookback_days);
     let mut stack = vec![root.to_path_buf()];
     let mut session_count = 0u32;
     let mut total_tokens = 0u64;
@@ -66,7 +66,8 @@ fn summarize_root(root: &Path, lookback_days: u32, now: DateTime<Local>) -> Summ
                 continue;
             };
             let modified: DateTime<Local> = modified.into();
-            if modified < cutoff || modified > now {
+            let modified_day = modified.date_naive();
+            if modified_day < first_day || modified_day > last_day {
                 continue;
             }
             let Ok(text) = fs::read_to_string(&path) else {
@@ -145,6 +146,15 @@ fn summarize_root(root: &Path, lookback_days: u32, now: DateTime<Local>) -> Summ
     }
 }
 
+/// Inclusive local-date window covering `max(1, days)` days through today.
+fn calendar_day_window(now: DateTime<Local>, days: u32) -> (NaiveDate, NaiveDate) {
+    let today = now.date_naive();
+    let first_day = today
+        .checked_sub_days(Days::new(u64::from(days.saturating_sub(1))))
+        .unwrap_or(NaiveDate::MIN);
+    (first_day, today)
+}
+
 fn nonnegative_u64(value: &Value) -> Option<u64> {
     value
         .as_u64()
@@ -154,6 +164,7 @@ fn nonnegative_u64(value: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn summarizes_signal_token_totals_by_local_day() {
@@ -165,11 +176,72 @@ mod tests {
             r#"{"totalTokensBeforeCompaction":100,"contextTokensUsed":25,"primaryModelId":"grok-4","modelsUsed":["grok-4-fast"]}"#,
         )
         .unwrap();
-        let summary = summarize_root(root.path(), 30, Local::now() + Duration::seconds(1));
+        let summary = summarize_root(root.path(), 30, Local::now());
         assert_eq!(summary.session_count, 1);
         assert_eq!(summary.total_tokens, 125);
         assert_eq!(summary.daily.len(), 1);
         assert_eq!(summary.daily[0].total_tokens, 125);
         assert_eq!(summary.daily[0].models, vec!["grok-4", "grok-4-fast"]);
+    }
+
+    fn write_signals_at(root: &Path, name: &str, tokens: u64, modified: DateTime<Local>) {
+        let session = root.join("project").join(name);
+        fs::create_dir_all(&session).unwrap();
+        let path = session.join("signals.json");
+        fs::write(
+            &path,
+            format!(r#"{{"totalTokensBeforeCompaction":{tokens},"contextTokensUsed":0}}"#),
+        )
+        .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified.into())
+            .unwrap();
+    }
+
+    fn local_at(today: NaiveDate, offset: i64, hour: u32) -> DateTime<Local> {
+        let day = if offset >= 0 {
+            today.checked_add_days(Days::new(offset.unsigned_abs()))
+        } else {
+            today.checked_sub_days(Days::new(offset.unsigned_abs()))
+        }
+        .unwrap();
+        Local
+            .from_local_datetime(&day.and_hms_opt(hour, 0, 0).unwrap())
+            .earliest()
+            .unwrap()
+    }
+
+    #[test]
+    fn scan_totals_cover_only_the_advertised_local_calendar_days() {
+        for days in [1u32, 7, 30] {
+            let root = tempfile::tempdir().unwrap();
+            let today = Local::now().date_naive();
+            let now = local_at(today, 0, 11);
+            let back = i64::from(days);
+            write_signals_at(root.path(), "outside", 100, local_at(today, -back, 12));
+            write_signals_at(root.path(), "first", 100, local_at(today, -(back - 1), 12));
+            write_signals_at(root.path(), "today", 100, local_at(today, 0, 12));
+            write_signals_at(root.path(), "tomorrow", 100, local_at(today, 1, 12));
+
+            let summary = summarize_root(root.path(), days, now);
+            assert_eq!(summary.session_count, 2, "days={days}");
+            assert_eq!(summary.total_tokens, 200, "days={days}");
+            let daily_total: u64 = summary.daily.iter().map(|d| d.total_tokens).sum();
+            assert_eq!(daily_total, summary.total_tokens, "days={days}");
+        }
+    }
+
+    #[test]
+    fn calendar_day_window_covers_the_requested_local_dates() {
+        let now = local_at(Local::now().date_naive(), 0, 11);
+        let today = now.date_naive();
+        let (first_day, last_day) = calendar_day_window(now, 7);
+        assert_eq!(first_day, today - Days::new(6));
+        assert_eq!(last_day, today);
+        let (zero_first_day, zero_last_day) = calendar_day_window(now, 0);
+        assert_eq!((zero_first_day, zero_last_day), (today, today));
     }
 }
