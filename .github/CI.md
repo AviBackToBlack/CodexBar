@@ -38,22 +38,15 @@ second tag trigger.
 
 ## Fork pull requests
 
-CircleCI GitHub App pipelines never fire for pull requests from forks. To
-build one:
+CircleCI GitHub App pipelines never fire for pull requests from forks, and
+this project does not trigger hosted CircleCI runs any other way (no API
+token). Validate a fork PR locally instead:
 
-1. Read the fork PR's diff. The build runs the contributor's code on CircleCI
-   with this project's environment variables.
-2. Add the `ci:run` label. .github/workflows/fork-ci-mirror.yml pushes
-   exactly that head commit to ci/pr-<number> in this repository.
-3. CircleCI builds the ci/pr-<number> push. The trigger gate in
-   scripts/circleci-pr-common.ps1 lets those branches through, and the
-   docs-only gate finds the PR base from the number. The check lands on the
-   same commit, so it shows on the fork PR.
-
-Any new push to the fork PR removes the label; re-add it after reviewing the
-new commits. Closing the PR removes the mirror branch. GITHUB_TOKEN cannot
-push commits that change .github/workflows/**, so the mirror fails for those
-PRs; review them by hand and use the manual Blacksmith workflow if needed.
+1. Read the diff, then fetch the head: `git fetch origin pull/<number>/head`.
+2. Check it out in its own worktree and run
+   `.\scripts\local-check.ps1 -Slice ci`, the same steps as the hosted job.
+3. Post the result on the PR. The PR has no `ci/circleci: pr-check`, so a
+   maintainer merges it with an admin override.
 
 ## Code review
 

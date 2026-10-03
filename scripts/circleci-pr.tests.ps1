@@ -88,16 +88,6 @@ Assert-True $decision.Skip 'non-PR topic branch skips'
 Assert-True ($decision.Reason -match 'codex/topic') 'topic branch skip reason'
 $decision = Get-TriggerGateDecision -BudgetMode 'off' -Branch 'main' -PrUrl ''
 Assert-True $decision.Skip 'budget off wins over main push'
-$decision = Get-TriggerGateDecision -BudgetMode 'normal' -Branch 'ci/pr-750' -PrUrl ''
-Assert-True (-not $decision.Skip) 'fork mirror branch runs'
-$decision = Get-TriggerGateDecision -BudgetMode 'off' -Branch 'ci/pr-750' -PrUrl ''
-Assert-True $decision.Skip 'budget off wins over fork mirror'
-foreach ($branch in @('ci/pr-', 'ci/pr-0', 'ci/pr-12x', 'ci/pr-7/extra', 'x/ci/pr-7', 'ci/pr-7-old')) {
-    $decision = Get-TriggerGateDecision -BudgetMode 'normal' -Branch $branch -PrUrl ''
-    Assert-True $decision.Skip "look-alike mirror branch '$branch' skips"
-}
-Assert-Equal (Get-ForkMirrorPrNumber -Branch 'ci/pr-750') '750' 'mirror PR number parsed'
-Assert-Equal (Get-ForkMirrorPrNumber -Branch 'main') '' 'non-mirror branch has no PR number'
 
 Write-Host '==> Hosted Node provisioning guard'
 $prRunnerText = Get-Content -Raw -LiteralPath (Join-Path $scriptRoot 'run-circleci-pr-check.ps1')

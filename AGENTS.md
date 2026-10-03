@@ -129,7 +129,7 @@ pnpm run tauri:build
 - Rust: prefer focused `#[cfg(test)]` unit tests near the changed module. Run both manifests after Rust changes.
 - Frontend: Vitest 3 + jsdom + Testing Library. From `apps/desktop-tauri`: `pnpm test` (`src/**/*.{test,spec}.{ts,tsx}`).
 - **Hosted PR check**: CircleCI Windows is primary and runs `scripts/local-check.ps1 -Slice ci` for ordinary/canonical PRs and `main`; micro PRs targeting `port/upstream-*` intentionally skip hosted Windows compute; a micro-named PR targeting `main` does not. `.github/workflows/pr-check.yml` is manual Blacksmith Windows reserve only. Budget details: `CONTEXT.md`, `.github/CI.md`, and ADRs under `docs/adr/`.
-- **Fork PRs and reviews**: CircleCI never triggers on fork PRs by itself. After reading the diff, a maintainer adds the `ci:run` label; `fork-ci-mirror.yml` copies that head to `ci/pr-<number>` for CircleCI, and any new push removes the label. CodeRabbit (`.coderabbit.yaml`) reviews every PR, drafts included, against these rules; fix or answer its findings before merging.
+- **Fork PRs and reviews**: CircleCI never runs on fork PRs, and this project adds no CircleCI API token. Fetch the fork head (`pull/<number>/head`) into a worktree, run `.\scripts\local-check.ps1 -Slice ci`, and post the result (see `.github/CI.md`). CodeRabbit (`.coderabbit.yaml`) reviews every PR, drafts included, against these rules; fix or answer its findings before merging.
 - **Hosted mirror**: `.\scripts\local-check.ps1 -Slice ci`. The default no-parameter developer slice remains available and does not run full installer/smoke unless requested.
 - Parser / fetcher changes: add deterministic samples or fixtures where practical.
 - No coverage thresholds are configured — do not invent any.
