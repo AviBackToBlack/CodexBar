@@ -36,6 +36,34 @@ CircleCI's GitHub App trigger and auto-cancel settings live outside the
 repository. Keep PR, default-branch, and budget rules there; do not add a
 second tag trigger.
 
+## Fork pull requests
+
+CircleCI GitHub App pipelines never fire for pull requests from forks. To
+build one:
+
+1. Read the fork PR's diff. The build runs the contributor's code on CircleCI
+   with this project's environment variables.
+2. Add the `ci:run` label. .github/workflows/fork-ci-mirror.yml pushes
+   exactly that head commit to ci/pr-<number> in this repository.
+3. CircleCI builds the ci/pr-<number> push. The trigger gate in
+   scripts/circleci-pr-common.ps1 lets those branches through, and the
+   docs-only gate finds the PR base from the number. The check lands on the
+   same commit, so it shows on the fork PR.
+
+Any new push to the fork PR removes the label; re-add it after reviewing the
+new commits. Closing the PR removes the mirror branch. GITHUB_TOKEN cannot
+push commits that change .github/workflows/**, so the mirror fails for those
+PRs; review them by hand and use the manual Blacksmith workflow if needed.
+
+## Code review
+
+CodeRabbit reviews every PR, drafts included, with the settings in
+.coderabbit.yaml. It uses AGENTS.md as its guidelines and runs blocking
+pre-merge checks for provider data siloing, secret handling and new
+dependencies. It approves a PR once its comments are resolved; maintainers
+still merge. It does not build or test anything, and it does not replace UI
+proof on a fresh Windows build.
+
 ## GitHub Actions release path
 
 .github/workflows/release.yml runs only for canonical vX.Y.Z tag pushes on a
