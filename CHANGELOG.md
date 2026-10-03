@@ -74,7 +74,7 @@ Windows port of upstream CodexBar **0.60.3 → 0.70.0**: every provider, cost/us
 - Claude: the Windows `/usage` PTY probe retries, takes turns across processes with a lock, shares a fresh result, and kills its child tree on close, contributed by @marcus7989 ([#641](https://github.com/nesszer/Win-CodexBar/pull/641)).
 - Gemini: read OAuth client constants from the bundled Gemini CLI layout, contributed by @marcus7989 ([#642](https://github.com/nesszer/Win-CodexBar/pull/642)).
 - Codex: keep users distinct in a shared Team workspace, contributed by @gleaming9 ([#593](https://github.com/nesszer/Win-CodexBar/pull/593)); exclude inherited fork baselines ([#597](https://github.com/nesszer/Win-CodexBar/pull/597)); redact every Codex System Account label under Hide Personal Info ([#741](https://github.com/nesszer/Win-CodexBar/pull/741)).
-- Codex: cost history includes archived and flat legacy session rollouts ([#616](https://github.com/nesszer/Win-CodexBar/issues/616)).
+- Codex: cost history also scans archived and flat legacy session rollouts (refs [#616](https://github.com/nesszer/Win-CodexBar/issues/616); this may not be the cause of that report, which is still open).
 - Groq: use the correct metrics URL and explain a 404 as an Enterprise-plan limit ([#606](https://github.com/nesszer/Win-CodexBar/issues/606)).
 - Float bar: moves made by Windows (display sleep, resolution or DPI changes) no longer overwrite the saved placement, and the bar returns once the monitor layout is back ([#625](https://github.com/nesszer/Win-CodexBar/issues/625)).
 - Kimi: reconcile zero ratio placeholders, honor the manual cookie policy, and route through the selected region ([#587](https://github.com/nesszer/Win-CodexBar/pull/587), [#598](https://github.com/nesszer/Win-CodexBar/pull/598), [#599](https://github.com/nesszer/Win-CodexBar/pull/599)).
@@ -94,8 +94,9 @@ Windows port of upstream CodexBar **0.60.3 → 0.70.0**: every provider, cost/us
 
 ### Issues fixed
 
-- Fixed in this release: [#606](https://github.com/nesszer/Win-CodexBar/issues/606) Groq metrics URL; [#612](https://github.com/nesszer/Win-CodexBar/issues/612) Vercel AI Gateway provider (via #678); [#613](https://github.com/nesszer/Win-CodexBar/issues/613) Chrome channels and Chromium (via #614); [#616](https://github.com/nesszer/Win-CodexBar/issues/616) archived Codex sessions in cost history; [#622](https://github.com/nesszer/Win-CodexBar/issues/622) Codex reset credits in metrics (via #623); [#625](https://github.com/nesszer/Win-CodexBar/issues/625) float bar placement; [#640](https://github.com/nesszer/Win-CodexBar/issues/640) CLI parity for embedding apps (with #641 and #642).
+- Fixed in this release: [#606](https://github.com/nesszer/Win-CodexBar/issues/606) Groq metrics URL; [#612](https://github.com/nesszer/Win-CodexBar/issues/612) Vercel AI Gateway provider (via #678); [#613](https://github.com/nesszer/Win-CodexBar/issues/613) Chrome channels and Chromium (via #614); [#622](https://github.com/nesszer/Win-CodexBar/issues/622) Codex reset credits in metrics (via #623); [#625](https://github.com/nesszer/Win-CodexBar/issues/625) float bar placement; [#640](https://github.com/nesszer/Win-CodexBar/issues/640) CLI parity for embedding apps (with #641 and #642).
 - Already fixed on this release line, now pinned by regression tests: [#591](https://github.com/nesszer/Win-CodexBar/issues/591) OpenCode Go console URL; [#592](https://github.com/nesszer/Win-CodexBar/issues/592) distinct users in a shared Team workspace (via #593).
+- Related, not confirmed fixed: [#616](https://github.com/nesszer/Win-CodexBar/issues/616) Codex cost history shows $0.00. Archived and flat legacy rollouts are now scanned, but the reporter's root cause is not confirmed.
 
 ### Community contributions
 
