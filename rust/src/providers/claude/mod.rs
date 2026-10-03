@@ -259,6 +259,14 @@ fn login_fingerprint_at(credentials: &std::path::Path) -> Option<String> {
     Some(crate::core::sha256_hex(identity.as_bytes()))
 }
 
+/// The probe screen as it may appear in a log: secrets and email addresses
+/// (the screen can show the signed-in account) are masked.
+fn redacted_probe_screen(visible: &str) -> String {
+    let redacted = crate::core::SecretRedactor::redact(visible);
+    crate::core::PersonalInfoRedactor::redact_emails_in_text(Some(&redacted), true)
+        .unwrap_or(redacted)
+}
+
 /// Only a parseable usage screen is worth sharing; errors are retried live.
 fn claude_cli_output_is_shareable(output: &str) -> bool {
     claude_cli_error_from_output(output).is_none()
@@ -992,9 +1000,11 @@ impl ClaudeProvider {
 
         let claude_path = resolve_claude_cli_path()?;
         let combined = fetch_claude_cli_usage_text(claude_path).await?;
-        tracing::trace!(output = %strip_ansi(&combined), "Claude CLI probe output");
         // Replay cursor redraws once; rendering is idempotent on rendered text.
         let visible = cli_screen::render(&combined, true);
+        if tracing::enabled!(tracing::Level::TRACE) {
+            tracing::trace!(output = %redacted_probe_screen(&visible), "Claude CLI probe output");
+        }
 
         if let Some(error) = claude_cli_error_from_output(&visible) {
             return Err(error);
@@ -1664,6 +1674,18 @@ mod tests {
         let other = tempfile::tempdir().unwrap();
         run_locked_probe(other.path(), None, || Ok(SHAREABLE_USAGE_SCREEN.into())).unwrap();
         assert!(!other.path().join(CLAUDE_PROBE_CACHE_FILE).exists());
+    }
+
+    #[test]
+    fn logged_probe_screen_masks_account_email_and_secrets() {
+        let screen = "Login: someone@example.com (Claude Max)\n\
+                      access_token=abcdef0123456789 sk-ant-abcdefgh12345678\n\
+                      Current session 12% used";
+        let logged = redacted_probe_screen(screen);
+        assert!(!logged.contains("someone@example.com"), "{logged}");
+        assert!(!logged.contains("abcdef0123456789"), "{logged}");
+        assert!(!logged.contains("sk-ant-abcdefgh12345678"), "{logged}");
+        assert!(logged.contains("Current session 12% used"));
     }
 
     #[test]
