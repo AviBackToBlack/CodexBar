@@ -270,26 +270,31 @@ async fn collect_json_results(command: &UsageCommand) -> Vec<serde_json::Value> 
                             .map(|account| claude_swap_json_payload(account, status.as_ref())),
                     );
                 }
-                Err(error) => {
-                    let mut payload = serde_json::json!({
-                        "provider": ProviderId::Claude.cli_name(),
-                        "source": "claude-swap",
-                        "error": error,
-                    });
-                    if let Some(status) = status.as_ref() {
-                        payload["status"] = serde_json::json!({
-                            "level": format!("{:?}", status.level).to_lowercase(),
-                            "description": status.description,
-                        });
-                    }
-                    results.push(payload);
-                }
+                Err(error) => results.push(claude_swap_error_payload(&error, status.as_ref())),
             }
             continue;
         }
         results.push(fetch_provider_json_output(*provider_id, command).await);
     }
     results
+}
+
+/// JSON row for a failed claude-swap account read. Like every usage error
+/// row it carries `errorKind`; an external tool failure is `unknown`.
+fn claude_swap_error_payload(error: &str, status: Option<&StatusInfo>) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "provider": ProviderId::Claude.cli_name(),
+        "source": "claude-swap",
+        "error": error,
+        "errorKind": crate::cli::error_kind::ERROR_KIND_UNKNOWN,
+    });
+    if let Some(status) = status {
+        payload["status"] = serde_json::json!({
+            "level": format!("{:?}", status.level).to_lowercase(),
+            "description": status.description,
+        });
+    }
+    payload
 }
 
 pub(super) async fn collect_usage_output(command: &UsageCommand) -> UsageOutput {
@@ -339,5 +344,24 @@ pub(super) async fn collect_usage_output(command: &UsageCommand) -> UsageOutput 
             pretty: command.pretty,
         },
         UsageOutputFormat::Toon => UsageOutput::Toon(collect_json_results(command).await),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::claude_swap_error_payload;
+    use serde_json::json;
+
+    #[test]
+    fn claude_swap_error_rows_carry_an_error_kind() {
+        assert_eq!(
+            claude_swap_error_payload("claude-swap exited with status 2", None),
+            json!({
+                "provider": "claude",
+                "source": "claude-swap",
+                "error": "claude-swap exited with status 2",
+                "errorKind": "unknown",
+            })
+        );
     }
 }
