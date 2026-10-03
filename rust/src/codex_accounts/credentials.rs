@@ -157,10 +157,21 @@ pub fn save_credentials(
 }
 
 pub(super) fn write_auth_contents(home: &Path, contents: &[u8]) -> std::io::Result<()> {
+    write_private_file(&home.join("auth.json"), contents)
+}
+
+/// Copy a credential file through the exclusive-staged private writer, so the
+/// destination is never a partly written or world-readable copy of the secret.
+pub(super) fn copy_private_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    write_private_file(destination, &std::fs::read(source)?)
+}
+
+/// Stage `contents` in an exclusive owner-only sibling and publish it over
+/// `path`, leaving the previous file intact when any step fails.
+fn write_private_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let auth_path = home.join("auth.json");
-    // Preserve an existing auth-file symlink by replacing its resolved target.
-    let destination = auth_path.canonicalize().unwrap_or(auth_path);
+    // Preserve an existing symlink by replacing its resolved target.
+    let destination = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let staged = destination.with_file_name(format!(".auth-{}.tmp", uuid::Uuid::new_v4()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -170,7 +181,17 @@ pub(super) fn write_auth_contents(home: &Path, contents: &[u8]) -> std::io::Resu
         options.mode(0o600);
     }
     let mut file = options.open(&staged)?;
-    let written = file.write_all(contents);
+    let written = (|| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // `OpenOptionsExt::mode` is filtered through umask. Restore the
+            // promised mode before writing, as `secure_file` does.
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(contents)?;
+        file.sync_all()
+    })();
     drop(file);
     let result = written.and_then(|()| std::fs::rename(&staged, &destination));
     if result.is_err() {
@@ -253,4 +274,76 @@ pub(super) fn string_value(value: &serde_json::Value, key: &str) -> Option<Strin
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir_entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn copy_private_file_replaces_destination_and_leaves_no_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.json");
+        let destination = dir.path().join("auth.json");
+        std::fs::write(&source, b"new-credentials").unwrap();
+        std::fs::write(&destination, b"old-credentials").unwrap();
+
+        copy_private_file(&source, &destination).unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), b"new-credentials");
+        assert_eq!(dir_entries(dir.path()), ["auth.json", "source.json"]);
+    }
+
+    #[test]
+    fn copy_private_file_keeps_destination_when_source_is_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("auth.json");
+        std::fs::write(&destination, b"old-credentials").unwrap();
+
+        assert!(copy_private_file(&dir.path().join("missing.json"), &destination).is_err());
+
+        assert_eq!(std::fs::read(&destination).unwrap(), b"old-credentials");
+        assert_eq!(dir_entries(dir.path()), ["auth.json"]);
+    }
+
+    #[test]
+    fn failed_publish_keeps_destination_and_removes_the_staged_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("auth.json");
+        std::fs::create_dir(&destination).unwrap();
+
+        assert!(write_auth_contents(dir.path(), b"secret-credentials").is_err());
+
+        assert!(destination.is_dir());
+        assert_eq!(dir_entries(dir.path()), ["auth.json"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_private_file_publishes_owner_only_even_from_a_world_readable_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.json");
+        let destination = dir.path().join("auth.json");
+        std::fs::write(&source, b"credentials").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        copy_private_file(&source, &destination).unwrap();
+
+        let mode = std::fs::metadata(&destination)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+    }
 }

@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::core::ProviderId;
 use crate::cost_reporting_period::CostReportingPeriod;
@@ -663,19 +663,12 @@ impl Settings {
 
     /// Load settings from disk
     pub fn load() -> Self {
+        let path = Self::settings_path();
         #[allow(
             unused_mut,
             reason = "mutability is needed for conditional initialization paths that the compiler cannot prove"
         )]
-        let mut settings = match Self::settings_path() {
-            Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
-                Ok(content) => {
-                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
-                }
-                Err(_) => Self::default(),
-            },
-            _ => Self::default(),
-        };
+        let mut settings = Self::load_from_path(path.as_deref());
 
         // Sync autostart toggle with actual registry state and repair stale commands from older builds.
         #[cfg(target_os = "windows")]
@@ -690,6 +683,18 @@ impl Settings {
         settings.migrate_legacy_usage_item_flags();
 
         settings
+    }
+
+    fn load_from_path(path: Option<&Path>) -> Self {
+        match path {
+            Some(path) if path.exists() => match crate::secure_file::read_string(path) {
+                Ok(content) => {
+                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
+                }
+                Err(_) => Self::default(),
+            },
+            _ => Self::default(),
+        }
     }
 
     /// Materialize `hidden_usage_item_ids` from the pre-0.62 per-provider
@@ -758,13 +763,17 @@ impl Settings {
         let path = Self::settings_path()
             .ok_or_else(|| anyhow::anyhow!("Could not determine settings path"))?;
 
+        self.save_to_path(&path)
+    }
+
+    fn save_to_path(&self, path: &Path) -> anyhow::Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        crate::secure_file::write_string(&path, &json)?;
+        crate::secure_file::write_string(path, &json)?;
 
         Ok(())
     }

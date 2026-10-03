@@ -1427,3 +1427,21 @@ fn legacy_visibility_setters_preserve_other_explicit_hidden_items() {
         vec!["metric:secondary".to_string()]
     );
 }
+
+/// Cookie-denial settings must survive the same path-based persistence used by
+/// `Settings::save` and `Settings::load`, including the secure-file wrapper
+/// shared by desktop and CLI settings.
+#[test]
+fn cookie_denial_round_trips_through_settings_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Codex, "off");
+    settings.set_openai_web_extras(ProviderId::Codex, false);
+
+    settings.save_to_path(&path).unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+
+    assert_eq!(loaded.cookie_source(ProviderId::Codex), "off");
+    assert!(!loaded.openai_web_extras(ProviderId::Codex));
+}
