@@ -451,6 +451,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://devpass.llmgateway.io/dashboard"),
         },
         ProviderConfigInfo {
+            id: ProviderId::XKiro,
+            name: "xKiro",
+            requires_api_key: true,
+            api_key_env_var: Some("XKIRO_API_KEY"),
+            api_key_help: Some(
+                "Create an API key at xkiro.com. It is sent only to api.xkiro.com and reads the free usage endpoint.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://xkiro.com"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::Doubao,
             name: "Doubao / Volcengine Ark",
             requires_api_key: true,

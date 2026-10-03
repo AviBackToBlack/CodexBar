@@ -100,6 +100,7 @@ pub enum ProviderId {
     Aixy,
     LLMMan,
     DevPass,
+    XKiro,
 }
 
 impl ProviderId {
@@ -192,6 +193,7 @@ impl ProviderId {
             ProviderId::Aixy,
             ProviderId::LLMMan,
             ProviderId::DevPass,
+            ProviderId::XKiro,
         ]
     }
 
@@ -245,6 +247,7 @@ impl ProviderId {
             ProviderId::Aixy => "aixy",
             ProviderId::LLMMan => "llmman",
             ProviderId::DevPass => "devpass",
+            ProviderId::XKiro => "xkiro",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -338,6 +341,7 @@ impl ProviderId {
             ProviderId::Aixy => "Aixy",
             ProviderId::LLMMan => "llmman",
             ProviderId::DevPass => "DevPass",
+            ProviderId::XKiro => "xKiro",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -447,6 +451,7 @@ impl ProviderId {
             ProviderId::Aixy => None,
             ProviderId::LLMMan => None,
             ProviderId::DevPass => None,
+            ProviderId::XKiro => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -541,6 +546,7 @@ impl ProviderId {
             "aixy" | "aixy-gateway" | "aixy gateway" => Some(ProviderId::Aixy),
             "llmman" => Some(ProviderId::LLMMan),
             "devpass" => Some(ProviderId::DevPass),
+            "xkiro" | "x-kiro" => Some(ProviderId::XKiro),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -1080,6 +1086,7 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("nous-portal", ProviderId::Nous);
     map.insert("nous portal", ProviderId::Nous);
     map.insert("hermes", ProviderId::Nous);
+    map.insert("x-kiro", ProviderId::XKiro);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
     map.insert("muse-spark", ProviderId::Meta);
@@ -1239,6 +1246,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Aixy => "#123650",
         ProviderId::LLMMan => "#6CC5B0",
         ProviderId::DevPass => "#2563EB",
+        ProviderId::XKiro => "#52C99B",
     }
 }
 
@@ -1253,7 +1261,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 86);
+        assert_eq!(all.len(), 87);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1320,6 +1328,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Aixy));
         assert!(all.contains(&ProviderId::LLMMan));
         assert!(all.contains(&ProviderId::DevPass));
+        assert!(all.contains(&ProviderId::XKiro));
     }
 
     #[test]
@@ -1757,5 +1766,19 @@ mod tests {
                 "{id:?} has {color}"
             );
         }
+    }
+
+    #[test]
+    fn test_provider_id_xkiro() {
+        assert_eq!(ProviderId::XKiro.cli_name(), "xkiro");
+        assert_eq!(ProviderId::XKiro.display_name(), "xKiro");
+        assert_eq!(ProviderId::XKiro.cookie_domain(), None);
+        assert_eq!(ProviderId::from_cli_name("xkiro"), Some(ProviderId::XKiro));
+        assert_eq!(ProviderId::from_cli_name("x-kiro"), Some(ProviderId::XKiro));
+        assert_eq!(cli_name_map().get("xkiro"), Some(&ProviderId::XKiro));
+        assert_eq!(cli_name_map().get("x-kiro"), Some(&ProviderId::XKiro));
+        // xKiro is a separate provider from Kiro and shares none of its aliases.
+        assert_eq!(ProviderId::from_cli_name("kiro"), Some(ProviderId::Kiro));
+        assert_eq!(ProviderId::from_cli_name("aws"), Some(ProviderId::Kiro));
     }
 }

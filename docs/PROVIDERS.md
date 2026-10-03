@@ -193,6 +193,10 @@ The **API key** field (or `OPENROUTER_API_KEY`) is required and accepts either a
 
 z.ai Coding Plans accept both `TOKENS_LIMIT` and `CREDIT_LIMIT` rows. The shortest known Coding Plan window becomes primary and the longest becomes secondary; `TIME_LIMIT` is the separate MCP lane. When absolute usage/remaining counts are available they determine the used percentage, otherwise the provider percentage is used, always clamped to 0–100%. This behavior is shared by the tray, provider detail, CLI, and other Windows surfaces. Empty or wholly unrecognized limits never fabricate a 0% window; they show a "Coding Plan usage: Unavailable" detail row that points to the Usage Dashboard, and mixed responses keep the recognized windows and add "Additional quota: Unavailable". Unknown string limit types are skipped, while malformed entries and unsupported envelopes fail with Usage Dashboard guidance.
 
+### xKiro daily free tokens
+
+xKiro reads `GET https://api.xkiro.com/v1/usage` with `XKIRO_API_KEY` (or the key saved in Preferences) as a bearer token. Only the `free_tokens` counters are used: the primary lane is `used_today / limit_per_day`, resetting at the next 00:00 UTC, and a limit of `0` reads as fully used. The paid `wallet` balance is never treated as headroom and is not shown. Counters that are missing stay missing rather than becoming zero, a payload with no usable counter is reported as unrecognized, and an explicit `plan: null` is labelled "Pay as you go". There are no token accounts. The wire shape follows upstream's documented example; live account behavior has not been verified.
+
 Upstream's independent **WidgetKit** provider-widget configuration has no Windows analogue in this repository. Win-CodexBar has no WidgetKit extension; provider cards and tray entries are already independent Windows/Tauri surfaces.
 
 ### LiteLLM budgets

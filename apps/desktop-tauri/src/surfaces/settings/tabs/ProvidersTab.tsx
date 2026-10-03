@@ -242,6 +242,7 @@ function providerSourceHintShort(
     case "clinepass":
     case "neuralwatt":
     case "devpass":
+    case "xkiro":
     case "doubao":
     case "stepfun":
     case "venice":
