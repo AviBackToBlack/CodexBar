@@ -99,6 +99,7 @@ pub enum ProviderId {
     Bifrost,
     Aixy,
     LLMMan,
+    DevPass,
 }
 
 impl ProviderId {
@@ -190,6 +191,7 @@ impl ProviderId {
             ProviderId::Bifrost,
             ProviderId::Aixy,
             ProviderId::LLMMan,
+            ProviderId::DevPass,
         ]
     }
 
@@ -242,6 +244,7 @@ impl ProviderId {
             ProviderId::Bifrost => "bifrost",
             ProviderId::Aixy => "aixy",
             ProviderId::LLMMan => "llmman",
+            ProviderId::DevPass => "devpass",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -334,6 +337,7 @@ impl ProviderId {
             ProviderId::Bifrost => "Bifrost",
             ProviderId::Aixy => "Aixy",
             ProviderId::LLMMan => "llmman",
+            ProviderId::DevPass => "DevPass",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -442,6 +446,7 @@ impl ProviderId {
             ProviderId::Bifrost => None,
             ProviderId::Aixy => None,
             ProviderId::LLMMan => None,
+            ProviderId::DevPass => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -535,6 +540,7 @@ impl ProviderId {
             "bifrost" | "bifrost-gateway" | "bifrost gateway" => Some(ProviderId::Bifrost),
             "aixy" | "aixy-gateway" | "aixy gateway" => Some(ProviderId::Aixy),
             "llmman" => Some(ProviderId::LLMMan),
+            "devpass" => Some(ProviderId::DevPass),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -1232,6 +1238,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Bifrost => "#33C09E",
         ProviderId::Aixy => "#123650",
         ProviderId::LLMMan => "#6CC5B0",
+        ProviderId::DevPass => "#2563EB",
     }
 }
 
@@ -1246,7 +1253,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 85);
+        assert_eq!(all.len(), 86);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1312,6 +1319,7 @@ mod tests {
         assert!(all.contains(&ProviderId::Bifrost));
         assert!(all.contains(&ProviderId::Aixy));
         assert!(all.contains(&ProviderId::LLMMan));
+        assert!(all.contains(&ProviderId::DevPass));
     }
 
     #[test]

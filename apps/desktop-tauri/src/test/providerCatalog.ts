@@ -82,4 +82,5 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["bifrost", "Bifrost"],
   ["aixy", "Aixy"],
   ["llmman", "llmman"],
+  ["devpass", "DevPass"],
 ];

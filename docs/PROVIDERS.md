@@ -114,6 +114,19 @@ set. Plain HTTP is accepted only for localhost, loopback, private-network
 hosts; any public host must use HTTPS. Embedded credentials, queries, and
 fragments are rejected.
 
+### DevPass
+
+DevPass reads `GET https://api.llmgateway.io/v1/key` with a regular LLM Gateway
+API key (`DEVPASS_API_KEY` or the Settings key field). Publishable keys and
+end-user sessions get HTTP 403. Plan credits are the primary lane and the
+premium weekly allowance is the secondary lane (seven-day window; the reset
+comes only from the response, and an inactive window has no reset). A
+pay-as-you-go key (`devPlan: none`) shows only key-scoped all-time spend.
+Remaining plan credits are an allowance, not a wallet balance, so no balance is
+reported. Amounts must be plain decimal strings; anything else fails the
+refresh instead of showing as zero. The key is only sent to the fixed HTTPS
+origin, redirects are not followed, and response bodies never appear in errors.
+
 ## API-key gateway providers
 
 ### Aixy

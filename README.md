@@ -121,6 +121,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Groq | API Key | Enterprise Metrics |
 | LLM Proxy | API Key | Quota Stats |
 | llmman | Local daemon / optional API Key | Memory in use, loaded and stored models |
+| DevPass | API Key | Plan credits, Premium weekly, API-key spend |
 
 </details>
 

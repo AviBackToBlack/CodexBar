@@ -427,7 +427,8 @@ impl TokenAccountSupport {
             | ProviderId::Hyper
             | ProviderId::GitKraken
             | ProviderId::Bifrost
-            | ProviderId::LLMMan => None,
+            | ProviderId::LLMMan
+            | ProviderId::DevPass => None,
         }
     }
 

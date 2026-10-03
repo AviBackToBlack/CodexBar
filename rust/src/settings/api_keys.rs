@@ -440,6 +440,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://portal.neuralwatt.com/dashboard"),
         },
         ProviderConfigInfo {
+            id: ProviderId::DevPass,
+            name: "DevPass",
+            requires_api_key: true,
+            api_key_env_var: Some("DEVPASS_API_KEY"),
+            api_key_help: Some(
+                "Use a regular LLM Gateway API key. Publishable keys and end-user sessions cannot read plan state.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://devpass.llmgateway.io/dashboard"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::Doubao,
             name: "Doubao / Volcengine Ark",
             requires_api_key: true,
