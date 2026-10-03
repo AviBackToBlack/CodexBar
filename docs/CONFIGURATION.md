@@ -72,6 +72,17 @@ $env:CODEXBAR_PROOF_MODE = "settings:menu"
 # then launch the desktop binary
 ```
 
+## Provider switcher keys
+
+The tray flyout and the pop-out window switch providers from the keyboard (ported from upstream 0.67.0; the shortcuts are menu-local, not global hotkeys):
+
+| Action | Default key |
+|--------|-------------|
+| Previous / next | `Left` / `Right` (wraps through Overview) |
+| Overview, then providers in display order | `Ctrl+1` ... `Ctrl+9` |
+
+Keys are ignored while a text field, select or slider (the zoom slider) has focus, or while a grid drag is active. Customizing the keys is not yet exposed in Settings; the shortcut grammar (`ctrl`/`alt`/`shift` modifiers, `cmd` accepted as an alias for `ctrl`, `none` to disable) lives in `apps/desktop-tauri/src/lib/switcherShortcuts.ts`.
+
 ## Claude Code accounts
 
 In **Settings → Providers → Claude → Claude Code accounts**, use **Save current

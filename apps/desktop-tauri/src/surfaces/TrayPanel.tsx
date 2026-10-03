@@ -69,8 +69,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     trayScaleFillPercent,
     handleTrayScaleChange,
     sorted,
-    denseTrayProviders,
-    expectsDenseOverview,
+    gridProviders,
     selectedProviderId,
     gridExpanded,
     setGridExpanded,
@@ -196,7 +195,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         {stayAwakeStatus}
         {settings.agentSessionsEnabled && <AgentSessions />}
         <ProviderGrid
-          providers={expectsDenseOverview ? denseTrayProviders : sorted}
+          providers={gridProviders}
           selectedProviderId={selectedProviderId}
           showAsUsed={settings.showAsUsed}
           showProviderIcons={settings.switcherShowsIcons}
