@@ -172,10 +172,19 @@ pub(super) fn scan_codex_detailed_with_cache(
     let sessions_dirs = scanner.get_codex_sessions_dirs();
     let now = Utc::now();
     let today = crate::cost_reporting_period::cost_bucket_zone().date(now);
-    // All-available history opens at the first existing partition; with no
-    // partitions it is just today, so an empty tree costs no directory probes.
-    let earliest = (scanner.period == CostReportingPeriod::AllAvailable)
-        .then(|| first_codex_partition_date(&sessions_dirs).unwrap_or(today));
+    // All-available history opens at the first existing partition or dated
+    // flat rollout; with neither it is just today, so an empty tree costs no
+    // directory probes.
+    let earliest = (scanner.period == CostReportingPeriod::AllAvailable).then(|| {
+        [
+            first_codex_partition_date(&sessions_dirs),
+            earliest_flat_codex_day(&sessions_dirs),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(today)
+    });
     let window = scanner.calendar_window(now, earliest);
     let (start_date, today) = (window.start, window.end);
     let range = CostUsageDayRange::new(start_date, today);
@@ -269,12 +278,19 @@ pub(super) fn scan_codex_detailed_with_cache(
     cache.codex_pending_scan_root_paths = pending_scan.root_paths.clone();
     cache.codex_pending_scan_timezone = Some(pending_scan.timezone.clone());
 
+    // Archiving moves a rollout between its date partition and the flat
+    // archive. Follow those moves in the cache first, so a moved file keeps
+    // its usage without a reread and never looks deleted.
+    let flat_listing = CodexFlatListing::read(&sessions_dirs, scan_range, &cache, cancel);
+    relocate_moved_codex_rollouts(&mut cache, &sessions_dirs, &flat_listing, scan_range);
+
     let cached_lineage = CodexLineagePlanner::new(&cache);
     let (mut candidates, discovery_complete) = scanner.collect_codex_candidates(
         &sessions_dirs,
         scan_range,
         &cache,
         &cached_lineage,
+        &flat_listing,
         cancel,
         &mut stats,
     );

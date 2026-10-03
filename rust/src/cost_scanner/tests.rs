@@ -3502,3 +3502,7 @@ mod paginated;
 
 #[path = "tests/period.rs"]
 mod period;
+
+#[cfg(test)]
+#[path = "tests/archived.rs"]
+mod archived;
