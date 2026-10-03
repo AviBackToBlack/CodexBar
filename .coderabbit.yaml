@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 # CodeRabbit is the first-pass reviewer for every PR, including drafts and
-# fork PRs. CircleCI pr-check runs the builds and tests (fork PRs need the
-# ci:run label, see .github/workflows/fork-ci-mirror.yml). UI proof on a real
+# fork PRs. CircleCI pr-check runs the builds and tests (fork PRs are checked
+# locally with scripts/local-check.ps1 -Slice ci, see .github/CI.md). UI proof on a real
 # Windows build stays a human or agent responsibility (AGENTS.md).
 language: en-US
 reviews:
