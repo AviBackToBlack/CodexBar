@@ -376,35 +376,78 @@ fn cleanup_probe_session_jsonl(probe_dir: &std::path::Path) {
 }
 
 /// Claude stores the transcript for a working directory under
-/// `~/.claude/projects/<sanitized cwd>/<session-id>.jsonl`, where the cwd is
-/// sanitized by replacing every non-alphanumeric character with `-`
-/// (`C:\\Users\\x` -> `C--Users-x`). Remove the probe session transcript there,
-/// otherwise the fixed `--session-id` fails with "already in use" on the next run.
+/// `<config dir>/projects/<sanitized cwd>/<session-id>.jsonl`, where the
+/// config dir is `CLAUDE_CONFIG_DIR` or `~/.claude`. Remove the probe session
+/// transcripts there, otherwise the fixed `--session-id` fails with "already
+/// in use" on the next run.
 fn cleanup_probe_transcript(probe_dir: &std::path::Path) {
-    let Some(home) = dirs::home_dir() else {
+    let Ok(config_dir) = accounts::config_dir() else {
         return;
     };
-    let project_dir = home
-        .join(".claude")
-        .join("projects")
-        .join(claude_project_dir_name(probe_dir));
+    cleanup_probe_transcripts_in(&config_dir.join("projects"), probe_dir);
+}
+
+fn cleanup_probe_transcripts_in(projects_root: &std::path::Path, probe_dir: &std::path::Path) {
+    let project_dir = projects_root.join(claude_project_dir_name(probe_dir));
     let Ok(entries) = std::fs::read_dir(&project_dir) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+        let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+        if is_file && path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
             // Best-effort cleanup: a locked transcript just stays.
             let _removed = std::fs::remove_file(&path);
         }
     }
+    // Succeeds only when nothing else is left in the probe's project dir.
+    let _removed = std::fs::remove_dir(&project_dir);
 }
 
+/// Longest project directory name Claude Code writes before it truncates the
+/// name and appends a hash of the full path.
+const CLAUDE_PROJECT_DIR_NAME_MAX: usize = 200;
+
+/// Claude Code's project directory name for a working directory: every UTF-16
+/// code unit that is not an ASCII letter or digit becomes `-`
+/// (`C:\Users\x` -> `C--Users-x`), and long names are cut to 200 characters
+/// plus `-<base36 hash of the path>`. (Claude Code also NFC-normalizes the
+/// path first; Windows paths are normally NFC already.)
 fn claude_project_dir_name(dir: &std::path::Path) -> String {
-    dir.to_string_lossy()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect()
+    let path = dir.to_string_lossy();
+    let sanitized: String = path
+        .encode_utf16()
+        .map(|unit| match u8::try_from(unit) {
+            Ok(byte) if byte.is_ascii_alphanumeric() => char::from(byte),
+            _ => '-',
+        })
+        .collect();
+    if sanitized.len() <= CLAUDE_PROJECT_DIR_NAME_MAX {
+        return sanitized;
+    }
+    format!(
+        "{}-{}",
+        &sanitized[..CLAUDE_PROJECT_DIR_NAME_MAX],
+        javascript_hash_base36(&path)
+    )
+}
+
+/// `Math.abs(hash).toString(36)` of the JavaScript string hash
+/// `hash = (hash << 5) - hash + charCode`, kept in 32 bits.
+fn javascript_hash_base36(text: &str) -> String {
+    let hash = text.encode_utf16().fold(0i32, |hash, unit| {
+        hash.wrapping_mul(31).wrapping_add(i32::from(unit))
+    });
+    let mut magnitude = i64::from(hash).unsigned_abs();
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit((magnitude % 36) as u32, 36).unwrap_or('0'));
+        magnitude /= 36;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
 }
 
 /// Arguments shared by every Claude CLI `/usage` probe.
@@ -1691,18 +1734,6 @@ mod tests {
 
     #[test]
     fn probe_session_jsonl_cleanup_removes_transcript_files() {
-        assert_eq!(
-            claude_project_dir_name(std::path::Path::new(
-                r"C:\Users\erwin\AppData\Local\CodexBar\claude-usage-probe"
-            )),
-            "C--Users-erwin-AppData-Local-CodexBar-claude-usage-probe"
-        );
-        assert_eq!(
-            claude_project_dir_name(std::path::Path::new(
-                "/Users/me/Library/Application Support/x"
-            )),
-            "-Users-me-Library-Application-Support-x"
-        );
         let dir = tempfile::tempdir().unwrap();
         let jsonl = dir.path().join("session.jsonl");
         std::fs::write(&jsonl, "{}").unwrap();
@@ -1710,6 +1741,69 @@ mod tests {
         cleanup_probe_session_jsonl(dir.path());
         assert!(!jsonl.exists());
         assert!(dir.path().join("keep.txt").exists());
+    }
+
+    #[test]
+    fn probe_project_dir_name_matches_claude_code() {
+        use std::path::Path;
+        assert_eq!(
+            claude_project_dir_name(Path::new(
+                r"C:\Users\user\AppData\Local\CodexBar\claude-usage-probe"
+            )),
+            "C--Users-user-AppData-Local-CodexBar-claude-usage-probe"
+        );
+        assert_eq!(
+            claude_project_dir_name(Path::new("/Users/me/Library/Application Support/x")),
+            "-Users-me-Library-Application-Support-x"
+        );
+        // One dash per UTF-16 code unit, so two for a character outside the BMP.
+        assert_eq!(
+            claude_project_dir_name(Path::new("C:\\Users\\J\u{f6}rg\u{1F600}\\probe")),
+            "C--Users-J-rg---probe"
+        );
+        // Reference values from Claude Code's JavaScript implementation.
+        let long = format!(
+            r"C:\Users\user\AppData\Local\{}claude-usage-probe",
+            r"deep\".repeat(40)
+        );
+        assert_eq!(
+            claude_project_dir_name(Path::new(&long)),
+            format!(
+                "C--Users-user-AppData-Local-{}de-ttzy4x",
+                "deep-".repeat(34)
+            )
+        );
+        assert_eq!(javascript_hash_base36("hello"), "1n1e4y");
+        assert_eq!(javascript_hash_base36(""), "0");
+    }
+
+    #[test]
+    fn probe_transcript_cleanup_stays_inside_the_probe_project() {
+        use std::path::Path;
+        let projects = tempfile::tempdir().unwrap();
+        let other = projects.path().join("C--work-repo");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("session.jsonl"), "{}").unwrap();
+
+        let busy_probe = Path::new(r"C:\Users\user\AppData\Local\CodexBar\busy-probe");
+        let busy = projects.path().join(claude_project_dir_name(busy_probe));
+        std::fs::create_dir_all(busy.join("folder.jsonl")).unwrap();
+        std::fs::write(busy.join("session.jsonl"), "{}").unwrap();
+        std::fs::write(busy.join("notes.txt"), "x").unwrap();
+        cleanup_probe_transcripts_in(projects.path(), busy_probe);
+        assert!(!busy.join("session.jsonl").exists());
+        assert!(busy.join("notes.txt").exists());
+        assert!(busy.join("folder.jsonl").is_dir(), "only files are removed");
+
+        let probe = Path::new(r"C:\Users\user\AppData\Local\CodexBar\claude-usage-probe");
+        let project = projects.path().join(claude_project_dir_name(probe));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("a.jsonl"), "{}").unwrap();
+        std::fs::write(project.join("b.jsonl"), "{}").unwrap();
+        cleanup_probe_transcripts_in(projects.path(), probe);
+        assert!(!project.exists(), "an emptied probe project dir is removed");
+
+        assert!(other.join("session.jsonl").exists(), "other projects stay");
     }
 
     #[test]
