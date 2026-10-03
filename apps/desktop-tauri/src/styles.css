@@ -2548,6 +2548,10 @@ body:has(.tray-panel-reveal) {
   color: var(--provider-row-text-secondary);
 }
 
+.provider-detail-cookie-source__missing .credential-btn {
+  margin-top: 8px;
+}
+
 .provider-detail-select {
   appearance: none;
   background: var(--provider-row-bg);

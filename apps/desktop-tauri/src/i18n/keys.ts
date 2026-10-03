@@ -310,6 +310,8 @@ export const ALL_LOCALE_KEYS = [
   "ProviderRaycastAutoImportHelp",
   "ProviderRaycastManualCookieHelp",
   "ProviderRaycastCookiesDisabled",
+  "ProviderManualCookieMissing",
+  "ProviderUseAutomaticCookies",
   "ProviderRegion",
   "ProviderClaudeCookies",
   "ProviderClaudeCookiesHelp",

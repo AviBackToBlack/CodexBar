@@ -410,6 +410,7 @@ export function ProviderDetailPane({
           providerId={detail.id}
           currentValue={detail.cookieSource}
           options={cookieOptions}
+          manualCookieMissing={detail.manualCookieMissing}
           t={t}
           onChanged={reload}
         />
@@ -448,6 +449,7 @@ export function ProviderDetailPane({
         key={`cookie-${credKey}`}
         providerId={detail.id}
         cookieDomain={cookieDomain}
+        onChanged={reload}
       />
       <ChartsSection
         providerId={detail.id}

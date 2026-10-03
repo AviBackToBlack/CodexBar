@@ -554,6 +554,8 @@ locale_keys! {
     ProviderRaycastAutoImportHelp,
     ProviderRaycastManualCookieHelp,
     ProviderRaycastCookiesDisabled,
+    ProviderManualCookieMissing,
+    ProviderUseAutomaticCookies,
     ProviderRegion,
     ProviderClaudeCookies,
     ProviderClaudeCookiesHelp,
