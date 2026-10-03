@@ -42,10 +42,17 @@ CircleCI GitHub App pipelines never fire for pull requests from forks, and
 this project does not trigger hosted CircleCI runs any other way (no API
 token). Validate a fork PR locally instead:
 
-1. Read the diff, then fetch the head: `git fetch origin pull/<number>/head`.
-2. Check it out in its own worktree and run
-   `.\scripts\local-check.ps1 -Slice ci`, the same steps as the hosted job.
-3. Post the result on the PR. The PR has no `ci/circleci: pr-check`, so a
+1. Read the whole diff first, including build.rs, Cargo and package
+   manifests, scripts and tests. Building and testing a fork runs its code.
+2. Run the check in a disposable, credential-free Windows environment, such
+   as Windows Sandbox or a throwaway VM. It must have no GitHub, CircleCI,
+   SignPath or provider logins, and no access to your profile. A worktree on
+   your own machine is not isolation.
+3. In that environment, fetch the head (`git fetch origin pull/<number>/head`)
+   and run the steps listed under "CircleCI validation" above, taken from
+   main's copy of scripts/local-check.ps1. Don't run the fork's own copy of
+   the script; the fork can change it.
+4. Post the result on the PR. The PR has no `ci/circleci: pr-check`, so a
    maintainer merges it with an admin override.
 
 ## Code review
