@@ -229,28 +229,47 @@ fn store_cached_probe_output(probe_dir: &std::path::Path, output: &str) {
 struct ClaudeProbeLock(std::fs::File);
 
 impl ClaudeProbeLock {
-    fn acquire(probe_dir: &std::path::Path) -> Option<Self> {
+    /// Wait for the probe lock. `Ok(None)` means locking is unsupported here
+    /// and the probe runs unlocked. A probe still running elsewhere after the
+    /// wait is an error: probing alongside it would reuse its session id.
+    fn acquire(probe_dir: &std::path::Path) -> Result<Option<Self>, ProviderError> {
+        Self::acquire_within(probe_dir, CLAUDE_PROBE_LOCK_WAIT)
+    }
+
+    fn acquire_within(
+        probe_dir: &std::path::Path,
+        wait: Duration,
+    ) -> Result<Option<Self>, ProviderError> {
         let path = probe_dir.join(CLAUDE_PROBE_LOCK_FILE);
-        let file = std::fs::OpenOptions::new()
+        let file = match std::fs::OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
             .open(&path)
-            .ok()?;
-        let deadline = Instant::now() + CLAUDE_PROBE_LOCK_WAIT;
+        {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::debug!(error = %err, "Claude probe lock file unavailable; continuing unlocked");
+                return Ok(None);
+            }
+        };
+        let deadline = Instant::now() + wait;
         loop {
             match file.try_lock() {
-                Ok(()) => return Some(Self(file)),
+                Ok(()) => return Ok(Some(Self(file))),
                 Err(std::fs::TryLockError::WouldBlock) => {}
                 Err(std::fs::TryLockError::Error(err)) => {
                     tracing::debug!(error = %err, "Claude probe lock unavailable; continuing unlocked");
-                    return None;
+                    return Ok(None);
                 }
             }
             if Instant::now() >= deadline {
-                tracing::debug!("Claude probe lock wait expired; continuing unlocked");
-                return None;
+                return Err(ProviderError::Other(
+                    "Timed out waiting for another CodexBar process to finish its Claude CLI \
+                     usage probe."
+                        .to_string(),
+                ));
             }
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -562,7 +581,7 @@ async fn run_claude_pty_probe(
         // Keep ownership in the worker: cancelling the async refresh does not
         // stop spawn_blocking or its CLI process from rotating credentials.
         let _account_operation = accounts::CREDENTIAL_OPERATION.blocking_lock();
-        let _probe_lock = ClaudeProbeLock::acquire(&working_directory);
+        let _probe_lock = ClaudeProbeLock::acquire(&working_directory)?;
         cleanup_probe_session_jsonl(&working_directory);
         let session_id = load_or_create_probe_session_id(&working_directory);
         let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());
@@ -603,13 +622,17 @@ async fn run_claude_pty_probe(
         TtyCommandRunner::new()
             .run(&claude_path.to_string_lossy(), probe.script, options)
             .map(|result| result.text)
+            .map_err(claude_tty_error)
     })
     .await
     .map_err(|e| ProviderError::Other(format!("Claude CLI probe failed: {}", e)))?
-    .map_err(|e| match e {
+}
+
+fn claude_tty_error(error: crate::cli::tty_runner::TtyCommandError) -> ProviderError {
+    match error {
         crate::cli::tty_runner::TtyCommandError::TimedOut => ProviderError::Timeout,
         other => ProviderError::Other(format!("Claude CLI failed: {}", other)),
-    })
+    }
 }
 
 fn last_good_failure_policy_for_error(error: &str) -> LastGoodFailurePolicy {
@@ -1409,6 +1432,31 @@ mod tests {
         )
         .unwrap();
         assert!(load_cached_probe_output(dir.path()).is_none());
+    }
+
+    #[test]
+    fn probe_lock_wait_expiry_fails_instead_of_probing_alongside() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = ClaudeProbeLock::acquire_within(dir.path(), Duration::ZERO)
+            .expect("first lock")
+            .expect("file locking is supported");
+
+        let error = match ClaudeProbeLock::acquire_within(dir.path(), Duration::from_millis(300)) {
+            Ok(lock) => panic!("second lock acquired while held: {}", lock.is_some()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Timed out waiting"), "{error}");
+        assert_eq!(
+            last_good_failure_policy_for_error(&error.to_string()),
+            LastGoodFailurePolicy::Preserve
+        );
+
+        drop(held);
+        assert!(
+            ClaudeProbeLock::acquire_within(dir.path(), Duration::ZERO)
+                .expect("lock after release")
+                .is_some()
+        );
     }
 
     #[test]
