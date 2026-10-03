@@ -43,6 +43,7 @@ mod credentials;
 mod diagnostics;
 mod grok_accounts;
 mod locale_cmd;
+mod preferences_transfer;
 mod provider_detail;
 mod provider_refresh;
 mod provider_settings;
@@ -65,6 +66,7 @@ pub use credentials::*;
 pub use diagnostics::*;
 pub use grok_accounts::*;
 pub use locale_cmd::*;
+pub use preferences_transfer::*;
 pub use provider_detail::*;
 #[cfg(test)]
 pub(crate) use provider_refresh::is_provider_cache_fresh;

@@ -49,7 +49,18 @@ codexbar config path
 
 # API key via stdin (example)
 printf '%s' $env:OPENROUTER_API_KEY | codexbar config set-api-key -p openrouter --stdin
+
+# Portable preferences (also under Settings > Advanced)
+codexbar config preferences export --file prefs.json   # omit --file to print to stdout
+codexbar config preferences import --file prefs.json
 ```
+
+Portable preferences are a versioned JSON document (`{"version": 1, "preferences": {...}}`)
+limited to display, refresh, notification, provider-order and float-bar choices. API keys, cookies,
+token accounts, folders, SSH hosts, proxy settings and update settings are never exported, and
+an import that contains any other key, or any invalid value, is rejected without changing settings.
+The CLI import writes `settings.json` only; restart a running CodexBar to pick it up. The desktop
+Import button applies the file live.
 
 Notes:
 

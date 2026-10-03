@@ -8,6 +8,7 @@ import {
 import { ShortcutCapture } from "../../../components/ShortcutCapture";
 import { Field, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../settingsTabs";
+import PreferencesTransferSection from "./PreferencesTransferSection";
 
 function formatCodexSessionsDirs(paths: string[]): string {
   return paths.join("; ");
@@ -382,6 +383,8 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
           </Field>
         </div>
       </section>
+
+      <PreferencesTransferSection />
 
       {/* ── Diagnostics ──────────────────────────────────────────── */}
       <section className="settings-section">
