@@ -581,10 +581,10 @@ fn build_usage_spend_summary(
             "codex" => SpendValues {
                 seven_day: codex_7_contract.known_cost_usd,
                 thirty_day: codex_30_contract.known_cost_usd,
-                seven_day_tokens: total_token_mix(&codex_7_contract.token_mix),
-                thirty_day_tokens: total_token_mix(&codex_30_contract.token_mix),
+                seven_day_tokens: codex_7_contract.token_total,
+                thirty_day_tokens: codex_30_contract.token_total,
                 period_cost: codex_period_contract.known_cost_usd,
-                period_tokens: total_token_mix(&codex_period_contract.token_mix),
+                period_tokens: codex_period_contract.token_total,
                 source: if include_opencodex && !codex_30_contract.imports.is_empty() {
                     "local logs + OpenCodex".to_string()
                 } else {
@@ -596,22 +596,10 @@ fn build_usage_spend_summary(
             "claude" => SpendValues {
                 seven_day: Some(claude_7_summary.total_cost_usd),
                 thirty_day: Some(claude_30_summary.total_cost_usd),
-                seven_day_tokens: Some(
-                    claude_7_summary
-                        .input_tokens
-                        .saturating_add(claude_7_summary.output_tokens),
-                ),
-                thirty_day_tokens: Some(
-                    claude_30_summary
-                        .input_tokens
-                        .saturating_add(claude_30_summary.output_tokens),
-                ),
+                seven_day_tokens: Some(claude_7_summary.total_tokens_for_provider("claude")),
+                thirty_day_tokens: Some(claude_30_summary.total_tokens_for_provider("claude")),
                 period_cost: Some(claude_period_summary.total_cost_usd),
-                period_tokens: Some(
-                    claude_period_summary
-                        .input_tokens
-                        .saturating_add(claude_period_summary.output_tokens),
-                ),
+                period_tokens: Some(claude_period_summary.total_tokens_for_provider("claude")),
                 source: "local logs".to_string(),
                 refreshing: false,
                 stale_updated_at: None,
@@ -619,10 +607,10 @@ fn build_usage_spend_summary(
             "pi" => SpendValues {
                 seven_day: pi_7_contract.known_cost_usd,
                 thirty_day: pi_30_contract.known_cost_usd,
-                seven_day_tokens: total_token_mix(&pi_7_contract.token_mix),
-                thirty_day_tokens: total_token_mix(&pi_30_contract.token_mix),
+                seven_day_tokens: pi_7_contract.token_total,
+                thirty_day_tokens: pi_30_contract.token_total,
                 period_cost: pi_period_contract.known_cost_usd,
-                period_tokens: total_token_mix(&pi_period_contract.token_mix),
+                period_tokens: pi_period_contract.token_total,
                 source: "local Pi/OMP history".to_string(),
                 refreshing: !pi_30_summary.history_coverage_established,
                 stale_updated_at: None,
@@ -636,10 +624,10 @@ fn build_usage_spend_summary(
                     SpendValues {
                         seven_day: seven.known_cost_usd,
                         thirty_day: thirty.known_cost_usd,
-                        seven_day_tokens: total_token_mix(&seven.token_mix),
-                        thirty_day_tokens: total_token_mix(&thirty.token_mix),
+                        seven_day_tokens: seven.token_total,
+                        thirty_day_tokens: thirty.token_total,
                         period_cost: selected.known_cost_usd,
-                        period_tokens: total_token_mix(&selected.token_mix),
+                        period_tokens: selected.token_total,
                         source: if provider_id == "opencodego" {
                             "local logs + OpenCodex".to_string()
                         } else {
@@ -808,21 +796,6 @@ fn last_included_reporting_day(contract: &SpendContract) -> String {
         .unwrap_or_else(|| chrono::Local::now().date_naive())
         .format("%Y-%m-%d")
         .to_string()
-}
-
-fn total_token_mix(mix: &codexbar::spend_contract::SpendTokenMix) -> Option<u64> {
-    let values = [
-        mix.input_tokens,
-        mix.output_tokens,
-        mix.cache_creation_tokens,
-    ];
-    let mut saw = false;
-    let mut total = 0u64;
-    for value in values.into_iter().flatten() {
-        saw = true;
-        total = total.saturating_add(value);
-    }
-    saw.then_some(total)
 }
 
 fn antigravity_spend_values(
@@ -1048,6 +1021,7 @@ mod cache_key_tests {
                 price_coverage_ratio: None,
                 history_coverage_established: false,
                 token_mix: Default::default(),
+                token_total: None,
                 conversation_count: 0,
                 models: Vec::new(),
                 projects: Vec::new(),

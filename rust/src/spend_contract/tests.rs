@@ -324,6 +324,7 @@ fn resolve_spend_preserves_merged_report_details() {
             reasoning_tokens: Some(1),
             ..SpendTokenMix::default()
         },
+        token_total: Some(5),
         coverage: CostCoverageCounts {
             priced: 2,
             unpriced: 1,
@@ -560,6 +561,7 @@ fn spend_contract_serializes_provenance_for_tauri_and_cli() {
         price_coverage_ratio: None,
         history_coverage_established: true,
         token_mix: SpendTokenMix::default(),
+        token_total: None,
         conversation_count: 0,
         models: Vec::new(),
         projects: Vec::new(),
@@ -730,4 +732,83 @@ fn legacy_summary_builder_keeps_a_rolling_period() {
     );
     assert_eq!(contract.reporting_period, "rolling:90");
     assert_eq!(contract.history_days, 90);
+}
+
+fn summary_with_model(model: &str, input: u64, output: u64, cached: u64) -> CostSummary {
+    CostSummary {
+        input_tokens: input,
+        output_tokens: output,
+        cached_tokens: cached,
+        by_model: HashMap::from([(model.to_string(), 1.0)]),
+        by_model_tokens: HashMap::from([(
+            model.to_string(),
+            ModelTokenCounts {
+                input_tokens: input,
+                output_tokens: output,
+                cached_tokens: cached,
+                reasoning_tokens: None,
+            },
+        )]),
+        ..CostSummary::default()
+    }
+}
+
+fn imported_with_total(token_total: Option<u64>) -> ImportedSpendSource {
+    ImportedSpendSource {
+        source_id: "opencodex".to_string(),
+        display_name: "OpenCodex".to_string(),
+        request_count: 1,
+        conversation_count: 1,
+        known_cost_usd: None,
+        provenance: CostProvenance::Unknown,
+        // The OpenCodex fixture row: cache_read is inside input, total is 105.
+        token_mix: SpendTokenMix {
+            input_tokens: Some(100),
+            output_tokens: Some(5),
+            cache_read_tokens: Some(10),
+            ..SpendTokenMix::default()
+        },
+        token_total,
+        coverage: CostCoverageCounts::default(),
+        models: Vec::new(),
+        daily: Vec::new(),
+        hourly_activity: Vec::new(),
+    }
+}
+
+// Regression (PR #611 review): the native side follows the provider's cache
+// rule, so the window total agrees with the native model totals.
+#[test]
+fn native_window_total_matches_model_totals_for_each_provider() {
+    for (provider, expected) in [("codex", 1_050), ("claude", 1_950)] {
+        let summary = summary_with_model("m", 1_000, 50, 900);
+        let rows = model_rows(provider, &summary, &CustomPricing::default());
+        let model_total: u64 = rows.iter().map(|row| row.total_tokens).sum();
+        let window_total =
+            resolve_token_total(summary.total_tokens_for_provider(provider), None, false);
+        assert_eq!(model_total, expected, "{provider} model total");
+        assert_eq!(window_total, Some(expected), "{provider} window total");
+    }
+}
+
+// Regression (PR #611 review): the imported side uses the importer's resolved
+// total (105), not a total re-derived from its token mix (115).
+#[test]
+fn imported_window_total_uses_resolved_import_total() {
+    let imported = imported_with_total(Some(105));
+    assert_eq!(
+        resolve_token_total(1_050, Some(&imported), false),
+        Some(1_155)
+    );
+    assert_eq!(
+        resolve_token_total(1_050, Some(&imported), true),
+        Some(105),
+        "replace_native drops the native side entirely"
+    );
+    assert_eq!(resolve_token_total(1_050, None, false), Some(1_050));
+    assert_eq!(
+        resolve_token_total(1_050, Some(&imported_with_total(None)), true),
+        None,
+        "an import without token data stays unknown"
+    );
 }

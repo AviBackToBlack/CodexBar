@@ -159,6 +159,12 @@ pub struct ImportedSpendSource {
     pub known_cost_usd: Option<f64>,
     pub provenance: CostProvenance,
     pub token_mix: SpendTokenMix,
+    /// Sum of the importer's resolved per-entry totals: the authoritative
+    /// `totalTokens` when present, else input + output + cache creation
+    /// (`cache_read` is already part of input). Same basis as `models` and
+    /// `daily`. Not part of the wire contract.
+    #[serde(skip)]
+    pub token_total: Option<u64>,
     pub coverage: CostCoverageCounts,
     pub models: Vec<SpendModelRow>,
     pub daily: Vec<SpendDailyPoint>,
@@ -204,6 +210,11 @@ pub struct SpendContract {
     pub price_coverage_ratio: Option<f64>,
     pub history_coverage_established: bool,
     pub token_mix: SpendTokenMix,
+    /// Window token total with each source's own rule applied
+    /// (see [`resolve_token_total`]). Not part of the wire contract: the merged
+    /// `token_mix` above cannot express native and imported rules at once.
+    #[serde(skip)]
+    pub token_total: Option<u64>,
     pub conversation_count: u32,
     pub models: Vec<SpendModelRow>,
     pub projects: Vec<ProjectUsage>,
@@ -475,6 +486,11 @@ pub fn build_contract_from_period_summary(
     let imported = imports.first();
     let replace_native =
         provider_id == "codex" && hide_native_codex_when_opencodex_present && imported.is_some();
+    let token_total = resolve_token_total(
+        summary.total_tokens_for_provider(provider_id),
+        imported,
+        replace_native,
+    );
     let resolved = resolve_spend(
         native_cost,
         native_provenance,
@@ -527,6 +543,7 @@ pub fn build_contract_from_period_summary(
         price_coverage: resolved.price_coverage,
         history_coverage_established: summary.history_coverage_established,
         token_mix: resolved.token_mix,
+        token_total,
         conversation_count,
         models: resolved.models,
         projects: native.projects,
@@ -584,6 +601,26 @@ fn load_native_spend(
             daily: daily_points(provider_id, history_days),
         },
     }
+}
+
+/// Totals native and imported sources separately, each with its own rule, then
+/// combines them. The native total comes from
+/// [`CostSummary::total_tokens_for_provider`], the same rule as the native
+/// model and daily totals. The imported side uses the importer's resolved per-entry
+/// totals (authoritative `totalTokens` when present) instead of re-deriving a
+/// total from the merged `token_mix`, whose `cache_read` is already part of
+/// input. `replace_native` mirrors [`resolve_spend`]: the imported source
+/// replaces the native one entirely.
+fn resolve_token_total(
+    native_total: u64,
+    imported: Option<&ImportedSpendSource>,
+    replace_native: bool,
+) -> Option<u64> {
+    let imported_total = imported.and_then(|source| source.token_total);
+    if replace_native {
+        return imported_total;
+    }
+    Some(native_total.saturating_add(imported_total.unwrap_or(0)))
 }
 
 #[allow(
@@ -720,7 +757,7 @@ fn model_rows(
                 input_tokens: counts.input_tokens,
                 output_tokens: counts.output_tokens,
                 cache_read_tokens: counts.cached_tokens,
-                total_tokens: counts.total(),
+                total_tokens: counts.total_for_provider(provider_id),
                 custom_pricing: custom_rates.is_some(),
             }
         })
