@@ -2517,3 +2517,71 @@ fn bootstrap_catalog_depends_only_on_supplied_settings() {
         "a deprecated provider that is not enabled stays hidden"
     );
 }
+
+fn muse_fetch_context(cookie_source: Option<&str>, stored_cookie: Option<&str>) -> FetchContext {
+    let mut settings = Settings::default();
+    if let Some(source) = cookie_source {
+        settings.set_cookie_source(ProviderId::Muse, source);
+    }
+    let mut cookies = ManualCookies::default();
+    if let Some(header) = stored_cookie {
+        cookies.set(ProviderId::Muse.cli_name(), header);
+    }
+    super::build_fetch_context(
+        ProviderId::Muse,
+        &settings,
+        &cookies,
+        &ApiKeys::default(),
+        &HashMap::new(),
+    )
+}
+
+#[test]
+fn muse_default_cookie_source_reads_no_browser_and_keeps_the_login_source() {
+    let ctx = muse_fetch_context(None, None);
+
+    assert!(!ctx.browser_cookie_import);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+}
+
+#[test]
+fn muse_cookie_source_off_never_reads_or_forwards_a_cookie() {
+    let ctx = muse_fetch_context(Some("off"), Some("llama_dev_sess=abc"));
+
+    assert!(!ctx.browser_cookie_import);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
+fn muse_automatic_cookie_source_requests_the_browser_import() {
+    let ctx = muse_fetch_context(Some("auto"), Some("llama_dev_sess=abc"));
+
+    assert!(ctx.browser_cookie_import);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+}
+
+#[test]
+fn muse_manual_cookie_source_forwards_only_the_pasted_header() {
+    let ctx = muse_fetch_context(Some("manual"), Some("llama_dev_sess=abc"));
+
+    assert!(!ctx.browser_cookie_import);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("llama_dev_sess=abc")
+    );
+}
+
+#[test]
+fn other_providers_never_request_the_muse_browser_import() {
+    let ctx = super::build_fetch_context(
+        ProviderId::Cursor,
+        &Settings::default(),
+        &ManualCookies::default(),
+        &ApiKeys::default(),
+        &HashMap::new(),
+    );
+
+    assert!(!ctx.browser_cookie_import);
+}

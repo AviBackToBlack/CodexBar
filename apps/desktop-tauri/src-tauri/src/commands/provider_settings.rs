@@ -244,6 +244,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "sakana" => ProviderId::Sakana,
         "notion" => ProviderId::Notion,
         "grok" => ProviderId::Grok,
+        "muse" => ProviderId::Muse,
         "replicate" => ProviderId::Replicate,
         "raycast" => ProviderId::Raycast,
         "helmcode" => ProviderId::Helmcode,
@@ -360,6 +361,7 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "v0" => ProviderId::V0,
         "helmcode" => ProviderId::Helmcode,
         "gitkraken" => ProviderId::GitKraken,
+        "muse" => ProviderId::Muse,
         _ => return None,
     })
 }
@@ -416,6 +418,21 @@ mod tests {
     use codexbar::core::ProviderId;
 
     use super::{gateway_provider, litellm_workspace_change_allowed, workspace_provider};
+
+    #[test]
+    fn muse_exposes_cookie_source_and_browser_team_settings() {
+        assert_eq!(workspace_provider("muse"), Some(ProviderId::Muse));
+        assert_eq!(
+            super::cookie_source_provider("muse"),
+            Some(ProviderId::Muse)
+        );
+        let values: Vec<String> =
+            super::cookie_source_options_for("muse", codexbar::settings::Language::English)
+                .into_iter()
+                .map(|option| option.value)
+                .collect();
+        assert_eq!(values, ["auto", "manual", "off"]);
+    }
 
     #[test]
     fn maps_opencode_go_workspace_provider() {
@@ -838,6 +855,29 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 None,
             ),
             cookie_option(lang, "off", "", "", Some("Notion cookies are disabled.")),
+        ],
+        "muse" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                "Reads the selected team's quota with the signed-in dev.meta.ai browser session.",
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                "Paste the llama_dev_sess cookie from dev.meta.ai. Nothing is read until you paste one.",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some("Browser sessions are never read for Muse Code."),
+            ),
         ],
         "replicate" => vec![
             cookie_option(

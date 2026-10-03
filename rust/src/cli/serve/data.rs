@@ -37,6 +37,7 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // Serve `/usage` is a background poll read: keep the short optional-
         // join grace (upstream #2583), unlike `codexbar usage` which blocks
         // for the full completeness window.

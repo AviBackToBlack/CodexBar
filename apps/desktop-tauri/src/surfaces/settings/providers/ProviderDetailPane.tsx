@@ -53,6 +53,7 @@ import {
   WayfinderGatewaySection,
 } from "./sections/WayfinderGatewaySection";
 import { AzureApiVersionSection } from "./sections/AzureApiVersionSection";
+import { MuseBrowserTeamSection } from "./sections/MuseBrowserTeamSection";
 
 interface Props {
   providerId: string | null;
@@ -411,6 +412,15 @@ export function ProviderDetailPane({
           currentValue={detail.cookieSource}
           options={cookieOptions}
           manualCookieMissing={detail.manualCookieMissing}
+          t={t}
+          onChanged={reload}
+        />
+      )}
+      {detail.id === "muse" && (
+        <MuseBrowserTeamSection
+          providerId={detail.id}
+          details={detail.displayDetails}
+          disabled={settingsDisabled}
           t={t}
           onChanged={reload}
         />

@@ -36,6 +36,7 @@ mod tests {
             api_region: api_region.map(str::to_string),
             gateway_url: None,
             auto_prefer_web: false,
+            browser_cookie_import: false,
             requires_optional_usage_completeness: false,
             optional_details_enabled: false,
         }
