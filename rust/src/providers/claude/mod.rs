@@ -215,11 +215,21 @@ fn store_cached_probe_output(probe_dir: &std::path::Path, output: &str) {
         captured_at_unix: unix_now_secs(),
         output: output.to_string(),
     };
-    if let Ok(json) = serde_json::to_string(&cache)
-        && let Err(err) = std::fs::write(probe_dir.join(CLAUDE_PROBE_CACHE_FILE), json)
-    {
+    // Atomic, because other processes read the cache without the probe lock.
+    let stored = serde_json::to_vec(&cache)
+        .map_err(anyhow::Error::from)
+        .and_then(|json| {
+            crate::atomic_file::write_atomic(&probe_dir.join(CLAUDE_PROBE_CACHE_FILE), &json)
+        });
+    if let Err(err) = stored {
         tracing::debug!(error = %err, "failed to persist Claude probe cache");
     }
+}
+
+/// Only a parseable usage screen is worth sharing; errors are retried live.
+fn claude_cli_output_is_shareable(output: &str) -> bool {
+    claude_cli_error_from_output(output).is_none()
+        && ClaudeProvider::new().parse_cli_output(output).is_ok()
 }
 
 /// Cross-process guard around the Claude PTY probe. Claude Code refuses to
@@ -402,6 +412,9 @@ struct ClaudePtyProbeOptions {
     script_echo_substrings: &'static [&'static str],
     /// Idle window after the done marker appeared (trailing output only).
     idle_timeout_after_done_secs: Option<f64>,
+    /// Reuse a recent usage screen another process stored, and share this
+    /// one (the `/usage` probe only, never the trust preflight).
+    share_output: bool,
 }
 
 /// Offsets (seconds after launch) at which `/usage` is re-sent when Claude's
@@ -439,6 +452,7 @@ async fn run_claude_usage_pty_probe(
             script_done_substrings: CLAUDE_USAGE_DONE_MARKERS,
             script_echo_substrings: CLAUDE_USAGE_ECHO_MARKERS,
             idle_timeout_after_done_secs: Some(1.5),
+            share_output: true,
         },
     )
     .await
@@ -463,6 +477,7 @@ async fn run_claude_trust_preflight(
             script_done_substrings: &[],
             script_echo_substrings: &[],
             idle_timeout_after_done_secs: None,
+            share_output: false,
         },
     )
     .await
@@ -485,15 +500,7 @@ async fn fetch_claude_cli_usage_text(
     }
     let combined = run_claude_usage_pty_probe(claude_path.clone(), probe_dir.clone()).await?;
 
-    let combined =
-        rerun_claude_usage_after_trust_prompt(claude_path, probe_dir.clone(), combined).await?;
-    // Only a parseable limits screen is worth sharing; errors are retried live.
-    if claude_cli_error_from_output(&combined).is_none()
-        && ClaudeProvider::new().parse_cli_output(&combined).is_ok()
-    {
-        store_cached_probe_output(&probe_dir, &combined);
-    }
-    Ok(combined)
+    rerun_claude_usage_after_trust_prompt(claude_path, probe_dir, combined).await
 }
 
 async fn rerun_claude_usage_after_trust_prompt(
@@ -581,51 +588,71 @@ async fn run_claude_pty_probe(
         // Keep ownership in the worker: cancelling the async refresh does not
         // stop spawn_blocking or its CLI process from rotating credentials.
         let _account_operation = accounts::CREDENTIAL_OPERATION.blocking_lock();
-        let _probe_lock = ClaudeProbeLock::acquire(&working_directory)?;
-        cleanup_probe_session_jsonl(&working_directory);
-        let session_id = load_or_create_probe_session_id(&working_directory);
-        let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());
+        run_locked_probe(&working_directory, probe.share_output, || {
+            cleanup_probe_session_jsonl(&working_directory);
+            let session_id = load_or_create_probe_session_id(&working_directory);
+            let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());
 
-        let mut options = TtyCommandOptions::new()
-            .with_timeout(probe.timeout_secs)
-            .with_initial_delay(probe.initial_delay_secs)
-            .with_script_char_delay(probe.script_char_delay_secs)
-            .with_script_line_delay(probe.script_line_delay_secs)
-            .with_working_directory(working_directory)
-            .with_extra_args(claude_probe_launch_args(&session_id));
-        if let Some(idle) = probe.idle_timeout_secs {
-            options = options.with_idle_timeout(idle);
-        }
-        if let Some(idle) = probe.idle_timeout_after_done_secs {
-            options = options.with_idle_timeout_after_done(idle);
-        }
-        if let Some((trigger, keys)) = probe.send_on_substring {
-            options = options.with_send_on_substring(trigger, keys);
-        }
-        if !probe.script_retry_delays_secs.is_empty() {
-            options = options.with_script_retries(
-                probe.script_retry_delays_secs.to_vec(),
-                probe
-                    .script_done_substrings
-                    .iter()
-                    .map(|marker| (*marker).to_string())
-                    .collect(),
-                probe
-                    .script_echo_substrings
-                    .iter()
-                    .map(|marker| (*marker).to_string())
-                    .collect(),
-            );
-        }
-        options.env = env.into();
+            let mut options = TtyCommandOptions::new()
+                .with_timeout(probe.timeout_secs)
+                .with_initial_delay(probe.initial_delay_secs)
+                .with_script_char_delay(probe.script_char_delay_secs)
+                .with_script_line_delay(probe.script_line_delay_secs)
+                .with_working_directory(working_directory.clone())
+                .with_extra_args(claude_probe_launch_args(&session_id));
+            if let Some(idle) = probe.idle_timeout_secs {
+                options = options.with_idle_timeout(idle);
+            }
+            if let Some(idle) = probe.idle_timeout_after_done_secs {
+                options = options.with_idle_timeout_after_done(idle);
+            }
+            if let Some((trigger, keys)) = probe.send_on_substring {
+                options = options.with_send_on_substring(trigger, keys);
+            }
+            if !probe.script_retry_delays_secs.is_empty() {
+                options = options.with_script_retries(
+                    probe.script_retry_delays_secs.to_vec(),
+                    probe
+                        .script_done_substrings
+                        .iter()
+                        .map(|marker| (*marker).to_string())
+                        .collect(),
+                    probe
+                        .script_echo_substrings
+                        .iter()
+                        .map(|marker| (*marker).to_string())
+                        .collect(),
+                );
+            }
+            options.env = env.into();
 
-        TtyCommandRunner::new()
-            .run(&claude_path.to_string_lossy(), probe.script, options)
-            .map(|result| result.text)
-            .map_err(claude_tty_error)
+            TtyCommandRunner::new()
+                .run(&claude_path.to_string_lossy(), probe.script, options)
+                .map(|result| result.text)
+                .map_err(claude_tty_error)
+        })
     })
     .await
     .map_err(|e| ProviderError::Other(format!("Claude CLI probe failed: {}", e)))?
+}
+
+/// Run one probe under the cross-process probe lock. With `share_output`, a
+/// fresh usage screen another process stored while this one waited is reused,
+/// and a parseable screen is stored for the others.
+fn run_locked_probe(
+    probe_dir: &std::path::Path,
+    share_output: bool,
+    probe: impl FnOnce() -> Result<String, ProviderError>,
+) -> Result<String, ProviderError> {
+    let _probe_lock = ClaudeProbeLock::acquire(probe_dir)?;
+    if share_output && let Some(cached) = load_cached_probe_output(probe_dir) {
+        return Ok(cached);
+    }
+    let output = probe()?;
+    if share_output && claude_cli_output_is_shareable(&output) {
+        store_cached_probe_output(probe_dir, &output);
+    }
+    Ok(output)
 }
 
 fn claude_tty_error(error: crate::cli::tty_runner::TtyCommandError) -> ProviderError {
@@ -1432,6 +1459,57 @@ mod tests {
         )
         .unwrap();
         assert!(load_cached_probe_output(dir.path()).is_none());
+    }
+
+    const SHAREABLE_USAGE_SCREEN: &str = "Current session\n\
+        ████████▌ 17% used\n\
+        Resets 12pm (America/Bogota)\n";
+
+    #[test]
+    fn locked_probe_reuses_a_screen_stored_while_it_waited() {
+        let dir = tempfile::tempdir().unwrap();
+        store_cached_probe_output(dir.path(), SHAREABLE_USAGE_SCREEN);
+
+        let output = run_locked_probe(dir.path(), true, || {
+            panic!("a fresh shared screen must not launch another probe")
+        })
+        .unwrap();
+        assert_eq!(output, SHAREABLE_USAGE_SCREEN);
+    }
+
+    #[test]
+    fn locked_probe_shares_only_parseable_usage_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run_locked_probe(dir.path(), true, || Ok("Not logged in".to_string()));
+        assert_eq!(output.unwrap(), "Not logged in");
+        assert!(load_cached_probe_output(dir.path()).is_none());
+
+        let output = run_locked_probe(dir.path(), true, || Ok(SHAREABLE_USAGE_SCREEN.into()));
+        assert_eq!(output.unwrap(), SHAREABLE_USAGE_SCREEN);
+        assert_eq!(
+            load_cached_probe_output(dir.path()).as_deref(),
+            Some(SHAREABLE_USAGE_SCREEN)
+        );
+        assert!(
+            !dir.path()
+                .read_dir()
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".tmp-")),
+            "the atomic write left no staging file behind"
+        );
+    }
+
+    #[test]
+    fn unshared_probe_neither_reuses_nor_stores_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        store_cached_probe_output(dir.path(), SHAREABLE_USAGE_SCREEN);
+        let output = run_locked_probe(dir.path(), false, || Ok("trust preflight".into()));
+        assert_eq!(output.unwrap(), "trust preflight");
+
+        let other = tempfile::tempdir().unwrap();
+        run_locked_probe(other.path(), false, || Ok(SHAREABLE_USAGE_SCREEN.into())).unwrap();
+        assert!(load_cached_probe_output(other.path()).is_none());
     }
 
     #[test]
