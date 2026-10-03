@@ -128,7 +128,7 @@ pub async fn cost_response(provider: Option<&str>) -> String {
                 "provider": provider_id.cli_name(),
                 "supported": true,
                 "days_scanned": days,
-                "totals": cost_totals_json(&summary),
+                "totals": cost_totals_json(provider_id.cli_name(), &summary),
                 "cost": {
                     "total_usd": summary.total_cost_usd,
                     "currency": "USD"

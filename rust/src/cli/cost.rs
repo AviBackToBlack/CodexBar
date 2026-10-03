@@ -554,7 +554,7 @@ fn build_json_payloads(
                     "provider": r.provider,
                     "supported": true,
                     "days_scanned": days,
-                    "totals": cost_totals_json(&r.summary),
+                    "totals": cost_totals_json(&r.provider, &r.summary),
                     "cost": {"total_usd": r.summary.total_cost_usd, "currency": "USD"},
                     "tokens": {"input": r.summary.input_tokens, "output": r.summary.output_tokens, "cached": r.summary.cached_tokens},
                     "sessions_count": r.summary.sessions_count,

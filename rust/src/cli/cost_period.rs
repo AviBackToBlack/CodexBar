@@ -57,7 +57,10 @@ pub(crate) fn stamp_period(payload: &mut Value, period: CostReportingPeriod) {
 
 /// Totals for the selected window. `null` when the scan found nothing and did
 /// not establish a known zero, so a missing scan is never shown as `$0`.
-pub(crate) fn cost_totals_json(summary: &CostSummary) -> Value {
+/// `totalTokens` uses the provider's own rule, the same total the desktop
+/// spend rows show (Claude and Pi add cache tokens; Codex input already
+/// includes them).
+pub(crate) fn cost_totals_json(provider: &str, summary: &CostSummary) -> Value {
     if summary.sessions_count == 0 && !summary.known_zero {
         return Value::Null;
     }
@@ -66,7 +69,7 @@ pub(crate) fn cost_totals_json(summary: &CostSummary) -> Value {
         "outputTokens": summary.output_tokens,
         "cachedTokens": summary.cached_tokens,
         "reasoningTokens": summary.reasoning_tokens,
-        "totalTokens": summary.input_tokens.saturating_add(summary.output_tokens),
+        "totalTokens": summary.total_tokens_for_provider(provider),
         "totalCost": summary.total_cost_usd,
     })
 }
@@ -174,7 +177,7 @@ mod tests {
             sessions_count: 2,
             ..CostSummary::default()
         };
-        let totals = cost_totals_json(&summary);
+        let totals = cost_totals_json("codex", &summary);
         assert_eq!(totals["inputTokens"], 100);
         assert_eq!(totals["outputTokens"], 20);
         assert_eq!(totals["cachedTokens"], 7);
@@ -182,11 +185,27 @@ mod tests {
         assert_eq!(totals["totalCost"], 1.5);
         assert!(totals["reasoningTokens"].is_null());
 
-        assert!(cost_totals_json(&CostSummary::default()).is_null());
+        assert!(cost_totals_json("codex", &CostSummary::default()).is_null());
         let known_zero = CostSummary {
             known_zero: true,
             ..CostSummary::default()
         };
-        assert_eq!(cost_totals_json(&known_zero)["totalCost"], 0.0);
+        assert_eq!(cost_totals_json("codex", &known_zero)["totalCost"], 0.0);
+    }
+
+    #[test]
+    fn total_tokens_follow_each_provider_cache_rule() {
+        let summary = CostSummary {
+            input_tokens: 100,
+            output_tokens: 20,
+            cached_tokens: 7,
+            sessions_count: 1,
+            ..CostSummary::default()
+        };
+        // Codex input already includes cached input; Claude and Pi report
+        // cache reads and writes outside input.
+        assert_eq!(cost_totals_json("codex", &summary)["totalTokens"], 120);
+        assert_eq!(cost_totals_json("claude", &summary)["totalTokens"], 127);
+        assert_eq!(cost_totals_json("pi", &summary)["totalTokens"], 127);
     }
 }
