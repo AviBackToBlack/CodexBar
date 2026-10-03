@@ -1,7 +1,7 @@
 use super::*;
 use chrono::TimeZone;
 
-fn billing_response_with_percent(percent: f32) -> Vec<u8> {
+pub(super) fn billing_response_with_percent(percent: f32) -> Vec<u8> {
     let mut payload = vec![0x0a, 0x05, 0x0d];
     payload.extend(percent.to_le_bytes());
 
@@ -57,7 +57,16 @@ async fn oauth_billing_auth_failure_falls_back_to_configured_local_token() {
         .with_body(billing_response_with_percent(42.0))
         .create_async()
         .await;
-    let provider = GrokProvider::new().with_billing_endpoint_for_tests(endpoint);
+    // The credits proxy is unavailable, so both tokens use the gRPC-web path.
+    let proxy = server
+        .mock("GET", "/credits")
+        .with_status(500)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let provider = GrokProvider::new()
+        .with_billing_endpoint_for_tests(endpoint)
+        .with_credits_proxy_endpoint_for_tests(format!("{}/credits", server.url()));
     let credentials = GrokCredentials::from_bearer("expired-token");
     let context = FetchContext {
         include_credits: false,
@@ -70,6 +79,7 @@ async fn oauth_billing_auth_failure_falls_back_to_configured_local_token() {
         .await
         .unwrap();
 
+    proxy.assert_async().await;
     rejected.assert_async().await;
     fallback.assert_async().await;
     assert_eq!(result.source_label, "grok-oauth");
