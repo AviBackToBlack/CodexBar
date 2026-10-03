@@ -31,10 +31,7 @@ pub async fn fetch_provider_json_output(
 ) -> serde_json::Value {
     match fetch_provider_result(provider_id, command).await {
         Ok((result, status)) => render_json_result(provider_id, result, status.as_ref()),
-        Err(e) => serde_json::json!({
-            "provider": provider_id.cli_name(),
-            "error": e.to_string(),
-        }),
+        Err(e) => crate::cli::error_kind::usage_error_row(provider_id, &e),
     }
 }
 

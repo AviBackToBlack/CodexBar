@@ -105,6 +105,10 @@ pub const CLOUDFLARE_CHALLENGE_MESSAGE: &str = concat!(
     "(Usage credits balance will be unavailable), or try a different network."
 );
 
+/// Page that signs the browser in to claude.ai, restoring the session the Web
+/// source reads (Issue #640 item 8).
+pub const CLAUDE_BROWSER_SIGN_IN_URL: &str = "https://claude.ai/login";
+
 /// Whether the user explicitly consented to reading (and refreshing) Claude
 /// Code's own credentials. Upstream #2634/#2745: without consent the
 /// file/keyring sources stay closed and refreshed tokens are never rotated
@@ -1173,15 +1177,44 @@ fn record_auto_source(
 }
 
 fn claude_auto_fetch_error(failures: Vec<(&'static str, ProviderError)>) -> ProviderError {
+    let browser_sign_in = needs_browser_sign_in(&failures);
     let summary = failures
         .into_iter()
         .map(|(source, error)| format!("{source}: {error}"))
         .collect::<Vec<_>>()
         .join("; ");
+    let message = format!("Claude usage failed from all configured sources. {summary}");
+    if browser_sign_in {
+        return ProviderError::BrowserSignInRequired {
+            message: format!("{message} {}", browser_sign_in_hint()),
+            sign_in_url: CLAUDE_BROWSER_SIGN_IN_URL.to_string(),
+        };
+    }
+    ProviderError::Other(message)
+}
 
-    ProviderError::Other(format!(
-        "Claude usage failed from all configured sources. {summary}"
-    ))
+/// Issue #640 item 8: the OAuth usage endpoint refused with 429 (Claude Code
+/// stays signed in), no claude.ai browser cookies were readable, and the CLI
+/// probe failed as well. Until the rate limit lifts only a browser sign-in
+/// brings usage back, so callers get a typed signal instead of English text.
+fn needs_browser_sign_in(failures: &[(&'static str, ProviderError)]) -> bool {
+    let failed = |source: &str, matches: fn(&ProviderError) -> bool| {
+        failures
+            .iter()
+            .any(|(failed_source, error)| *failed_source == source && matches(error))
+    };
+    failed("OAuth", oauth::is_rate_limited_error)
+        && failed("Web", |error| matches!(error, ProviderError::NoCookies))
+        && failed("CLI", |_| true)
+}
+
+/// Appended to the Auto summary for [`needs_browser_sign_in`]. It must avoid
+/// the phrases [`last_good_failure_policy_for_error`] reacts to, so the
+/// desktop keeps the retention policy of the plain summary.
+fn browser_sign_in_hint() -> String {
+    format!(
+        "The OAuth usage endpoint is rate limited and no claude.ai browser session was found. Sign in at {CLAUDE_BROWSER_SIGN_IN_URL} in your browser, then refresh."
+    )
 }
 
 fn should_fallback_from_claude_cli_error(error: &ProviderError) -> bool {
@@ -2153,6 +2186,116 @@ Resets Dec 24 at 3:59pm (Europe/Paris)
             err.to_string(),
             "Claude usage failed from all configured sources. OAuth: OAuth error: token expired; Web: No cookies available for web API; CLI: Parse error: Empty output from Claude CLI"
         );
+    }
+
+    fn oauth_rate_limited() -> ProviderError {
+        ClaudeOAuthFetcher::rate_limited_error(Duration::from_secs(30))
+    }
+
+    #[test]
+    fn auto_fetch_error_asks_for_a_browser_sign_in_when_only_the_browser_can_help() {
+        // (CLI failure, retention policy of the plain summary)
+        let cases = [
+            (
+                ProviderError::Parse("Claude CLI did not return usage data".to_string()),
+                LastGoodFailurePolicy::Preserve,
+            ),
+            (
+                ProviderError::Other("Claude CLI failed: exit status 1".to_string()),
+                LastGoodFailurePolicy::Replace,
+            ),
+        ];
+        for (cli_failure, policy) in cases {
+            let err = claude_auto_fetch_error(vec![
+                ("Web", ProviderError::NoCookies),
+                ("OAuth", oauth_rate_limited()),
+                ("CLI", cli_failure),
+            ]);
+            let ProviderError::BrowserSignInRequired {
+                message,
+                sign_in_url,
+            } = &err
+            else {
+                panic!("expected a browser sign-in signal, got {err:?}");
+            };
+            assert_eq!(sign_in_url, CLAUDE_BROWSER_SIGN_IN_URL);
+            assert_eq!(err.to_string(), *message);
+            assert!(
+                message.starts_with(
+                    "Claude usage failed from all configured sources. Web: No cookies available for web API; OAuth: Transient OAuth error: Claude OAuth usage endpoint is rate limited."
+                ),
+                "{message}"
+            );
+            assert!(
+                message
+                    .ends_with("Sign in at https://claude.ai/login in your browser, then refresh."),
+                "{message}"
+            );
+            // ClaudeProvider::error_state_kind defers to this for every
+            // variant except a missing CLI.
+            assert_eq!(
+                err.state_kind(),
+                crate::core::ProviderStateKind::NeedsAuthentication
+            );
+            // The hint leaves the desktop retention policy unchanged.
+            let plain = message
+                .strip_suffix(browser_sign_in_hint().as_str())
+                .map(str::trim_end)
+                .expect("hint is appended");
+            assert_eq!(last_good_failure_policy_for_error(plain), policy);
+            assert_eq!(last_good_failure_policy_for_error(message), policy);
+        }
+    }
+
+    #[test]
+    fn auto_fetch_error_keeps_other_failure_mixes_untyped() {
+        let cli_failure =
+            || ProviderError::Parse("Claude CLI did not return usage data".to_string());
+        let mixes = [
+            // A browser session was there; the Web source failed differently.
+            vec![
+                ("Web", ProviderError::AuthRequired),
+                ("OAuth", oauth_rate_limited()),
+                ("CLI", cli_failure()),
+            ],
+            // Signed out of Claude Code, not rate limited.
+            vec![
+                ("Web", ProviderError::NoCookies),
+                (
+                    "OAuth",
+                    ProviderError::OAuth(
+                        "Claude OAuth credentials not found. Run `claude` to authenticate."
+                            .to_string(),
+                    ),
+                ),
+                ("CLI", cli_failure()),
+            ],
+            // Another transient OAuth failure.
+            vec![
+                ("Web", ProviderError::NoCookies),
+                (
+                    "OAuth",
+                    ProviderError::OAuthTransient(
+                        "Claude OAuth token expired and token refresh is cooling down after a failed attempt."
+                            .to_string(),
+                    ),
+                ),
+                ("CLI", cli_failure()),
+            ],
+            // The CLI was not tried.
+            vec![
+                ("Web", ProviderError::NoCookies),
+                ("OAuth", oauth_rate_limited()),
+            ],
+        ];
+        for failures in mixes {
+            let err = claude_auto_fetch_error(failures);
+            assert!(matches!(err, ProviderError::Other(_)), "{err:?}");
+            assert!(
+                !err.to_string().contains(CLAUDE_BROWSER_SIGN_IN_URL),
+                "{err}"
+            );
+        }
     }
 
     #[test]

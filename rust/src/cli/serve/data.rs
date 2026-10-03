@@ -12,6 +12,9 @@
 //! in [`ServeOperations`], so the next request joins it rather than starting
 //! another fetch. Upstream also serves the late result from a response cache;
 //! this port has none, which is why the timeout is off by default.
+//!
+//! `/usage` error rows carry `errorKind` (and `signInUrl` for a browser
+//! sign-in), like `usage --json`; see [`crate::cli::error_kind`].
 
 use std::time::Duration;
 
@@ -20,6 +23,9 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use crate::cli::cost_period::{cost_totals_json, rolling_window_days, stamp_period, window_days};
+use crate::cli::error_kind::{
+    ERROR_KIND_TIMEOUT, ERROR_KIND_UNKNOWN, error_row, provider_error_row,
+};
 use crate::cli::fetch_context::populate_api_region_from_settings;
 use crate::cli::usage::ProviderSelection;
 use crate::core::{CostScanOptions, FetchContext, ProviderId, SourceMode, instantiate_provider};
@@ -164,10 +170,7 @@ async fn fetch_usage_row(provider_id: ProviderId, ctx: FetchContext) -> Value {
             "usage": result.usage,
             "cost": result.cost,
         }),
-        Err(error) => json!({
-            "provider": provider_id.cli_name(),
-            "error": error.to_string(),
-        }),
+        Err(error) => provider_error_row(provider.as_ref(), &error),
     }
 }
 
@@ -198,11 +201,11 @@ where
 /// Row for a provider whose `/usage` fetch gave no value in time.
 fn usage_miss_row(provider_id: ProviderId, miss: OperationMiss) -> Value {
     let name = provider_id.cli_name();
-    let error = match miss {
-        OperationMiss::TimedOut => format!("{name} usage timed out"),
-        OperationMiss::Failed => format!("{name} usage failed"),
+    let (error, kind) = match miss {
+        OperationMiss::TimedOut => (format!("{name} usage timed out"), ERROR_KIND_TIMEOUT),
+        OperationMiss::Failed => (format!("{name} usage failed"), ERROR_KIND_UNKNOWN),
     };
-    json!({ "provider": name, "error": error })
+    error_row(provider_id, &error, kind, None)
 }
 
 pub(super) async fn cost_response(
@@ -445,7 +448,11 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({ "provider": "claude", "error": "claude usage timed out" }),
+                json!({
+                    "provider": "claude",
+                    "error": "claude usage timed out",
+                    "errorKind": "timeout",
+                }),
                 json!({ "provider": "codex", "usage": {} }),
                 json!({ "provider": "pi", "usage": {} }),
             ]
@@ -558,7 +565,7 @@ mod tests {
     fn miss_rows_name_the_provider_and_the_reason() {
         assert_eq!(
             usage_miss_row(ProviderId::Codex, OperationMiss::Failed),
-            json!({ "provider": "codex", "error": "codex usage failed" })
+            json!({ "provider": "codex", "error": "codex usage failed", "errorKind": "unknown" })
         );
         assert_eq!(
             cost_miss_row(ProviderId::Claude, OperationMiss::Failed),

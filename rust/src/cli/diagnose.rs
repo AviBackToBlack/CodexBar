@@ -399,7 +399,8 @@ fn error_category(err: &ProviderError) -> &'static str {
         | ProviderError::OAuth(_)
         | ProviderError::OAuthExpired(_)
         | ProviderError::OAuthRevoked(_)
-        | ProviderError::NoCookies => "auth",
+        | ProviderError::NoCookies
+        | ProviderError::BrowserSignInRequired { .. } => "auth",
         ProviderError::OAuthTransient(_) => "api",
         ProviderError::Network(_) | ProviderError::Timeout => "network",
         ProviderError::OwnedTransport { source, .. } => error_category(source),
@@ -429,6 +430,15 @@ fn safe_error_message(err: &ProviderError) -> String {
 mod tests {
     use super::*;
     use crate::core::{RateWindow, UsageSnapshot};
+
+    #[test]
+    fn browser_sign_in_failures_count_as_auth() {
+        let error = ProviderError::BrowserSignInRequired {
+            message: "Sign in at the provider page in your browser.".to_string(),
+            sign_in_url: "https://example.test/login".to_string(),
+        };
+        assert_eq!(error_category(&error), "auth");
+    }
 
     #[test]
     fn source_mode_names_are_stable() {

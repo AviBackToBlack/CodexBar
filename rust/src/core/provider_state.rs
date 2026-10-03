@@ -64,9 +64,9 @@ impl ProviderError {
             ProviderError::OAuthExpired(_) => ProviderStateKind::ExpiredSession,
             ProviderError::OAuth(_) => ProviderStateKind::NeedsAuthentication,
             ProviderError::OAuthTransient(_) => ProviderStateKind::Unknown,
-            ProviderError::AuthRequired | ProviderError::NoCookies => {
-                ProviderStateKind::NeedsAuthentication
-            }
+            ProviderError::AuthRequired
+            | ProviderError::NoCookies
+            | ProviderError::BrowserSignInRequired { .. } => ProviderStateKind::NeedsAuthentication,
             ProviderError::Network(_)
             | ProviderError::Timeout
             | ProviderError::Parse(_)
@@ -88,6 +88,14 @@ mod tests {
 
         assert_eq!(E::AuthRequired.state_kind(), K::NeedsAuthentication);
         assert_eq!(E::NoCookies.state_kind(), K::NeedsAuthentication);
+        assert_eq!(
+            E::BrowserSignInRequired {
+                message: "Sign in at the provider page in your browser.".into(),
+                sign_in_url: "https://example.test/login".into(),
+            }
+            .state_kind(),
+            K::NeedsAuthentication
+        );
         assert_eq!(
             E::OAuth("Claude OAuth credentials not found. Run `claude`.".into()).state_kind(),
             K::NeedsAuthentication
