@@ -97,6 +97,13 @@ mod platform {
         if !floatbar.is_visible().unwrap_or(false) {
             return;
         }
+        // Undo a move Windows made on its own once the display settles
+        // (issue #625); the moved bar then needs its native flags again.
+        if window::restore_user_placement(&floatbar) {
+            window::apply_no_activate(&floatbar);
+            window::apply_always_on_top(&floatbar);
+            return;
+        }
         if overlaps_taskbar(&floatbar) {
             window::apply_always_on_top(&floatbar);
         }
