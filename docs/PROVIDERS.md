@@ -56,7 +56,7 @@ organization.
 
 ## Cookie-backed providers
 
-Windows browser import: Chrome, Edge, Brave (DPAPI + AES-GCM), Firefox (SQLite).  
+Windows browser import: Chrome Stable, Beta, Dev, Canary, Chrome for Testing, Chromium, Edge, Brave (DPAPI + AES-GCM), and Firefox (SQLite). Chrome channels are detected separately and keep distinct import choices.
 Settings → **Providers** → provider detail → choose browser → Import.  
 Manual cookie header paste is the fallback (required under WSL for Chromium DPAPI).  
 Details: [COOKIES.md](./COOKIES.md).
