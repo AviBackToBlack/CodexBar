@@ -11,7 +11,8 @@ use crate::cli::serve::dashboard;
 use crate::cli::serve::dashboard::coordinator::{SnapshotArtifacts, SnapshotArtifactsBuildFn};
 use crate::cli::serve::dashboard::snapshot::{DashboardIdentity, SnapshotInput, build_snapshot};
 use crate::core::{
-    NamedRateWindow, ProviderFetchResult, ProviderInventoryItem, RateWindow, UsageSnapshot,
+    NamedRateWindow, ProviderFetchResult, ProviderInventoryItem, RateWindow,
+    ResetCreditsObservation, UsageSnapshot,
 };
 use crate::providers::codex::CodexApi;
 
@@ -203,9 +204,7 @@ fn renders_enabled_provider_health_and_codex_metrics_without_private_text() {
 #[test]
 fn reset_credits_export_count_and_only_future_expiry() {
     let result = ProviderFetchResult::new(usage(RateWindow::new(10.0)), "oauth")
-        .with_inventory_item(ProviderInventoryItem {
-            id: "reset-credits".into(),
-            title: "Sensitive card title".into(),
+        .with_reset_credits(ResetCreditsObservation {
             available_count: 2,
             next_expires_at: Some(at(5)),
         });
@@ -215,7 +214,6 @@ fn reset_credits_export_count_and_only_future_expiry() {
     assert!(
         body.contains("codexbar_reset_credits_next_expiry_timestamp_seconds{provider=\"codex\"}")
     );
-    assert!(!body.contains("Sensitive card title"));
     let expired = render_at(&snapshot, at(6)).unwrap();
     assert_eq!(
         samples(
@@ -226,13 +224,12 @@ fn reset_credits_export_count_and_only_future_expiry() {
         0
     );
 
-    let empty = ProviderFetchResult::new(usage(RateWindow::new(10.0)), "oauth")
-        .with_inventory_item(ProviderInventoryItem {
-            id: "reset-credits".into(),
-            title: "Reset credits".into(),
+    let empty = ProviderFetchResult::new(usage(RateWindow::new(10.0)), "oauth").with_reset_credits(
+        ResetCreditsObservation {
             available_count: 0,
             next_expires_at: Some(at(5)),
-        });
+        },
+    );
     let empty_body = render_at(
         &metrics_snapshot(vec![provider("codex", Ok(empty))], HashMap::new()),
         at(2),
@@ -263,6 +260,23 @@ fn reset_credits_export_count_and_only_future_expiry() {
     )
     .unwrap();
     assert!(unknown.contains("codexbar_reset_credits_available{provider=\"codex\"} -1\n"));
+
+    // Display inventory rows are never a metrics source, so their titles
+    // cannot reach the export either.
+    let display_only = ProviderFetchResult::new(usage(RateWindow::new(10.0)), "oauth")
+        .with_inventory_item(ProviderInventoryItem {
+            id: "reset-credits".into(),
+            title: "Sensitive card title".into(),
+            available_count: 4,
+            next_expires_at: Some(at(5)),
+        });
+    let display_body = render_at(
+        &metrics_snapshot(vec![provider("codex", Ok(display_only))], HashMap::new()),
+        at(2),
+    )
+    .unwrap();
+    assert!(display_body.contains("codexbar_reset_credits_available{provider=\"codex\"} -1\n"));
+    assert!(!display_body.contains("Sensitive card title"));
 }
 
 #[test]

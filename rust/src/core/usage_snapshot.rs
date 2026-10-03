@@ -157,6 +157,19 @@ pub struct ProviderInventoryItem {
     pub next_expires_at: Option<DateTime<Utc>>,
 }
 
+/// Latest reset-credit inventory observation, kept for monitoring exports.
+///
+/// Unlike [`ProviderInventoryItem`] this is never rendered: a provider that
+/// already shows reset credits in its own rows must not gain a second row,
+/// and an exhausted inventory (`available_count == 0`) stays distinct from
+/// no observation at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResetCreditsObservation {
+    pub available_count: u32,
+    /// Soonest expiry among the available credits.
+    pub next_expires_at: Option<DateTime<Utc>>,
+}
+
 fn named_rate_window_usage_known_default() -> bool {
     true
 }
@@ -710,6 +723,12 @@ pub struct ProviderFetchResult {
     #[serde(skip)]
     pub inventory: Vec<ProviderInventoryItem>,
 
+    /// Reset-credit observation for monitoring exports (`serve` metrics).
+    /// Transient like [`Self::inventory`], but never rendered and never sent
+    /// across the frontend bridge.
+    #[serde(skip)]
+    pub reset_credits: Option<ResetCreditsObservation>,
+
     /// Transient provider-specific detail rows for display only. They are not
     /// serialized by the core result; use [`Self::display_details`] for an
     /// explicit surface projection.
@@ -751,6 +770,7 @@ impl ProviderFetchResult {
             wayfinder_usage: None,
             open_ai_api_usage: None,
             inventory: Vec::new(),
+            reset_credits: None,
             display_details: Vec::new(),
             source_label: source_label.into(),
             has_successful_claude_cli_quota: false,
@@ -810,6 +830,12 @@ impl ProviderFetchResult {
         self.inventory.push(item);
         self
     }
+
+    /// Record the reset-credit observation behind monitoring exports.
+    pub fn with_reset_credits(mut self, observation: ResetCreditsObservation) -> Self {
+        self.reset_credits = Some(observation);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -846,6 +872,29 @@ mod tests {
 
         let decoded: ProviderFetchResult = serde_json::from_value(encoded).unwrap();
         assert!(decoded.inventory.is_empty());
+    }
+
+    #[test]
+    fn fetch_result_reset_credits_are_transient_and_not_displayed() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        let expiry = DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap();
+        let result =
+            ProviderFetchResult::new(usage, "oauth").with_reset_credits(ResetCreditsObservation {
+                available_count: 0,
+                next_expires_at: Some(expiry),
+            });
+
+        assert!(result.inventory.is_empty());
+        assert_eq!(
+            result.reset_credits.map(|credits| credits.available_count),
+            Some(0)
+        );
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert!(encoded.get("reset_credits").is_none());
+        assert!(encoded.get("resetCredits").is_none());
+
+        let decoded: ProviderFetchResult = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.reset_credits.is_none());
     }
 
     #[test]

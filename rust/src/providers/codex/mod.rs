@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use std::os::windows::process::CommandExt;
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderInventoryItem,
-    ProviderMetadata, SourceMode,
+    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
+    ResetCreditsObservation, SourceMode,
 };
 
 pub use api::CodexApi;
@@ -69,10 +69,11 @@ fn fetch_result(
     if let Some(account_identity) = account_identity {
         result = result.with_account_identity(account_identity);
     }
+    // Reset credits are already shown through the informational
+    // `reset-credits` window; the observation only feeds monitoring exports,
+    // so it stays off the display inventory.
     if let Some(credits) = reset_credits {
-        result = result.with_inventory_item(ProviderInventoryItem {
-            id: "reset-credits".to_string(),
-            title: "Reset credits".to_string(),
+        result = result.with_reset_credits(ResetCreditsObservation {
             available_count: credits.available_count,
             next_expires_at: api::next_available_reset_credit_expiry(
                 &credits.credits,
@@ -232,6 +233,50 @@ mod pat_strategy_tests {
             provider.last_good_failure_policy_for_error(&ProviderError::AuthRequired),
             LastGoodFailurePolicy::Replace
         );
+    }
+}
+
+#[cfg(test)]
+mod reset_credit_result_tests {
+    use super::*;
+    use crate::core::{RateWindow, UsageSnapshot};
+
+    fn credits(body: &str) -> api::ResetCredits {
+        serde_json::from_str(body).expect("reset credits fixture")
+    }
+
+    #[test]
+    fn reset_credits_feed_monitoring_without_a_display_inventory_row() {
+        let expiry = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+        let available = credits(&format!(
+            r#"{{"available_count":1,"credits":[{{"status":"available","expires_at":"{expiry}"}}]}}"#
+        ));
+        let usage = UsageSnapshot::new(RateWindow::new(10.0));
+        let result = fetch_result(usage.clone(), None, "oauth", None, Some(&available));
+        assert!(result.inventory.is_empty());
+        let observation = result.reset_credits.expect("observation");
+        assert_eq!(observation.available_count, 1);
+        assert_eq!(
+            observation.next_expires_at.map(|at| at.to_rfc3339()),
+            chrono::DateTime::parse_from_rfc3339(&expiry)
+                .ok()
+                .map(|at| at.with_timezone(&chrono::Utc).to_rfc3339())
+        );
+
+        let exhausted = credits(r#"{"available_count":0,"credits":[]}"#);
+        let result = fetch_result(usage.clone(), None, "oauth", None, Some(&exhausted));
+        assert!(result.inventory.is_empty());
+        assert_eq!(
+            result.reset_credits,
+            Some(ResetCreditsObservation {
+                available_count: 0,
+                next_expires_at: None,
+            })
+        );
+
+        let unknown = fetch_result(usage, None, "pat", None, None);
+        assert!(unknown.inventory.is_empty());
+        assert!(unknown.reset_credits.is_none());
     }
 }
 

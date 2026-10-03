@@ -89,22 +89,14 @@ impl MetricsSnapshot {
                         }),
                         reset_credits_available: (id == ProviderId::Codex).then(|| {
                             result
-                                .inventory
-                                .iter()
-                                .find(|item| item.id == "reset-credits")
-                                .map(|item| i64::from(item.available_count))
-                                .unwrap_or(-1)
+                                .reset_credits
+                                .map_or(-1, |credits| i64::from(credits.available_count))
                         }),
                         reset_credits_next_expiry: (id == ProviderId::Codex)
-                            .then(|| {
-                                result
-                                    .inventory
-                                    .iter()
-                                    .find(|item| item.id == "reset-credits")
-                            })
+                            .then_some(result.reset_credits)
                             .flatten()
-                            .filter(|item| item.available_count > 0)
-                            .and_then(|item| item.next_expires_at)
+                            .filter(|credits| credits.available_count > 0)
+                            .and_then(|credits| credits.next_expires_at)
                             .filter(|expiry| *expiry > input.generated_at),
                         cost_today_usd,
                         cost_last_30_days_usd,
