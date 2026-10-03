@@ -79,7 +79,10 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          gh api --method DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/ci:run" --silent
+          # The event's label list can be stale; a label already removed is fine.
+          if ! gh api --method DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/ci:run" --silent 2>err.txt; then
+            grep -q "Label does not exist\|HTTP 404" err.txt || { cat err.txt; exit 1; }
+          fi
           echo "New commits on a fork PR: ci:run removed. Re-add it after reviewing the new head." >> "$GITHUB_STEP_SUMMARY"
 
   cleanup:
