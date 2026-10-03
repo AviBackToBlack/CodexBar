@@ -22,6 +22,8 @@ pub(in crate::cli::serve::metrics) struct ProviderMetrics {
     pub(in crate::cli::serve::metrics) up: bool,
     pub(in crate::cli::serve::metrics) updated_at: Option<DateTime<Utc>>,
     pub(in crate::cli::serve::metrics) codex_quota: Option<CodexQuotaMetrics>,
+    pub(in crate::cli::serve::metrics) reset_credits_available: Option<i64>,
+    pub(in crate::cli::serve::metrics) reset_credits_next_expiry: Option<DateTime<Utc>>,
     pub(in crate::cli::serve::metrics) cost_today_usd: Option<f64>,
     pub(in crate::cli::serve::metrics) cost_last_30_days_usd: Option<f64>,
 }
@@ -85,6 +87,25 @@ impl MetricsSnapshot {
                             }),
                             code_review: result.usage.code_review_window().and_then(quota_metric),
                         }),
+                        reset_credits_available: (id == ProviderId::Codex).then(|| {
+                            result
+                                .inventory
+                                .iter()
+                                .find(|item| item.id == "reset-credits")
+                                .map(|item| i64::from(item.available_count))
+                                .unwrap_or(-1)
+                        }),
+                        reset_credits_next_expiry: (id == ProviderId::Codex)
+                            .then(|| {
+                                result
+                                    .inventory
+                                    .iter()
+                                    .find(|item| item.id == "reset-credits")
+                            })
+                            .flatten()
+                            .filter(|item| item.available_count > 0)
+                            .and_then(|item| item.next_expires_at)
+                            .filter(|expiry| *expiry > input.generated_at),
                         cost_today_usd,
                         cost_last_30_days_usd,
                     },
@@ -93,6 +114,8 @@ impl MetricsSnapshot {
                         up: false,
                         updated_at: None,
                         codex_quota: None,
+                        reset_credits_available: None,
+                        reset_credits_next_expiry: None,
                         cost_today_usd,
                         cost_last_30_days_usd,
                     },

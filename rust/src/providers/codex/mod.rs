@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use std::os::windows::process::CommandExt;
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    SourceMode,
+    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderInventoryItem,
+    ProviderMetadata, SourceMode,
 };
 
 pub use api::CodexApi;
@@ -51,6 +51,7 @@ fn fetch_result(
     cost: Option<crate::core::CostSnapshot>,
     source: &str,
     account_identity: Option<String>,
+    reset_credits: Option<&api::ResetCredits>,
 ) -> ProviderFetchResult {
     let account_email = usage.account_email.clone();
     let mut result = ProviderFetchResult::new(usage, source);
@@ -67,6 +68,17 @@ fn fetch_result(
     }
     if let Some(account_identity) = account_identity {
         result = result.with_account_identity(account_identity);
+    }
+    if let Some(credits) = reset_credits {
+        result = result.with_inventory_item(ProviderInventoryItem {
+            id: "reset-credits".to_string(),
+            title: "Reset credits".to_string(),
+            available_count: credits.available_count,
+            next_expires_at: api::next_available_reset_credit_expiry(
+                &credits.credits,
+                chrono::Utc::now(),
+            ),
+        });
     }
     result
 }
@@ -127,7 +139,7 @@ impl Provider for CodexProvider {
             let version = detect_codex_version();
             match self.api.fetch_usage_pat(version.as_deref()).await {
                 Ok((usage, cost, account_identity)) => {
-                    return Ok(fetch_result(usage, cost, "pat", account_identity));
+                    return Ok(fetch_result(usage, cost, "pat", account_identity, None));
                 }
                 Err(error) if pat_allows_auto_fallback(&error) => {
                     tracing::debug!("Codex PAT unavailable in Auto; trying OAuth: {error}");
@@ -136,10 +148,14 @@ impl Provider for CodexProvider {
             }
         }
 
-        match self.api.fetch_usage().await {
-            Ok((usage, cost, account_identity)) => {
-                Ok(fetch_result(usage, cost, "oauth", account_identity))
-            }
+        match self.api.fetch_usage_with_reset_credits().await {
+            Ok((usage, cost, account_identity, reset_credits)) => Ok(fetch_result(
+                usage,
+                cost,
+                "oauth",
+                account_identity,
+                reset_credits.as_ref(),
+            )),
             Err(error) => {
                 tracing::warn!("Codex API fetch failed: {error}");
                 Err(error)

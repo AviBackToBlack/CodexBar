@@ -113,6 +113,8 @@ curl.exe -H "Authorization: Bearer $env:CODEXBAR_DASHBOARD_TOKEN" http://127.0.0
 
 The metrics contract exports collection health for every enabled, known provider. The only provider label is its bounded canonical CLI slug, for example `codexbar_provider_up{provider="claude"}`; disabled providers are absent, and an ordinary provider fetch failure does not suppress healthy provider series. Quota semantics are currently exported only for Codex through fixed `session`, `weekly`, `monthly`, and `code_review` metric families. Used and remaining values are ratios from `0` to `1`, with no dynamic window label. Available local Codex cost estimates are also exported.
 
+Codex OAuth reset credits are exposed as `codexbar_reset_credits_available{provider="codex"}` (`0` exhausted, `-1` unavailable or PAT) and, when present, `codexbar_reset_credits_next_expiry_timestamp_seconds{provider="codex"}`. Successful and unavailable reset-credit observations are cached for ten minutes. See [Prometheus examples](prometheus/README.zh-CN.md) for a Chinese Grafana dashboard, scrape settings, and alert rules.
+
 Unknown, informational, non-finite, and dynamic additional-limit values are omitted instead of being inferred or replaced with sentinels. Account identity, display labels, source names, free-form provider errors, and version strings are not exposed. Consumers should alert on provider health, snapshot staleness, and quota values together.
 
 ### Config
