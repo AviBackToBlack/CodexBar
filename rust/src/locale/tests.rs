@@ -464,10 +464,7 @@ fn test_brazilian_portuguese_preserves_placeholders_and_status_spacing() {
         " (Erro)"
     );
     assert_eq!(
-        get_text(
-            Language::PortugueseBrazil,
-            LocaleKey::TrayCreditsRemaining
-        ),
+        get_text(Language::PortugueseBrazil, LocaleKey::TrayCreditsRemaining),
         "Créditos restantes {}%"
     );
     assert_eq!(
