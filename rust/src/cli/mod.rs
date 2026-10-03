@@ -18,6 +18,7 @@ pub mod cost;
 mod cost_period;
 pub mod dashboard;
 pub mod diagnose;
+mod error_kind;
 mod fetch_context;
 pub mod guard;
 pub mod hooks;

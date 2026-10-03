@@ -24,6 +24,8 @@ Implementation: `dirs::config_dir()/CodexBar/...` via `Settings::settings_path()
 
 Desktop UI and CLI share these stores. Prefer the Settings window for day-to-day toggles; use `codexbar config` for scripts/CI.
 
+A CLI process can use another settings file through `CODEXBAR_CONFIG`; the API key, manual cookie and token account stores then sit beside that file. The desktop app ignores the variable. See [CLI.md](./CLI.md#separate-config-file-codexbar_config).
+
 ## What lives where (conceptual)
 
 Aligned with upstream *ideas*, mapped to this port:
@@ -32,7 +34,7 @@ Aligned with upstream *ideas*, mapped to this port:
 - **Manual cookie headers** → `manual_cookies.json` (and/or settings fields depending on provider path)
 - **API keys** → `api_keys.json` / keyring helpers where used
 - **Token accounts** → `token-accounts.json`
-- **Browser auto cookies** → extracted at runtime from Chrome/Edge/Brave/Firefox profiles (see [COOKIES.md](./COOKIES.md)); not a substitute for committing secrets into git
+- **Browser auto cookies** → extracted at runtime from Chrome (any channel)/Chromium/Edge/Brave/Firefox profiles (see [COOKIES.md](./COOKIES.md)); not a substitute for committing secrets into git
 
 Do not commit real `settings.json` / key files into the repo.
 

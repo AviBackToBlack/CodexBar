@@ -6,6 +6,7 @@
 //! shell only needs to call into the small public API exported here.
 
 mod commands;
+mod placement;
 mod topmost_guard;
 mod window;
 
@@ -53,7 +54,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                 let style = Settings::load().float_bar_style;
                 window::recover_onto_primary(window, &style)
             } else {
-                window::remember_geometry(window);
+                window::track_move(window);
                 false
             };
             if let Some(floatbar) = window.app_handle().get_webview_window(FLOATBAR_LABEL) {
@@ -63,9 +64,10 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                 window::apply_always_on_top(&floatbar);
             }
         }
-        tauri::WindowEvent::CloseRequested { .. } => window::remember_geometry(window),
+        tauri::WindowEvent::CloseRequested { .. } => window::remember_user_geometry(window),
         tauri::WindowEvent::Destroyed => {
             topmost_guard::set_active(false);
+            placement::with_tracker(placement::PlacementTracker::reset);
         }
         _ => {}
     }

@@ -64,6 +64,8 @@ nul
 /.local/
 # Docs children ignored generally; ADRs are product docs and stay trackable
 /docs/*
+!/docs/prometheus/
+!/docs/grafana/
 !/docs/adr/
 /docs/adr/*
 !/docs/adr/*.md

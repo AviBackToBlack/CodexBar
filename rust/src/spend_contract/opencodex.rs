@@ -198,6 +198,7 @@ fn aggregate_with_pricing(
 
     let mut conversations = HashSet::new();
     let mut token_mix = SpendTokenMix::default();
+    let mut token_total: Option<u64> = None;
     let mut coverage = CostCoverageCounts::default();
     let mut activity: BTreeMap<(u8, u8), u32> = BTreeMap::new();
     let mut models: HashMap<String, ModelAccumulator> = HashMap::new();
@@ -225,6 +226,10 @@ fn aggregate_with_pricing(
             add_optional(token_mix.cache_creation_tokens, entry.cache_creation_tokens);
         token_mix.reasoning_tokens =
             add_optional(token_mix.reasoning_tokens, entry.reasoning_tokens);
+        // Same per-entry basis and saturation as the daily and model totals below.
+        if let Some(total) = entry.resolved_total_tokens() {
+            token_total = Some(token_total.unwrap_or(0).saturating_add(total));
+        }
 
         let pricing = RowPricing::resolve(entry, custom);
         let cost = pricing.cost(entry, &pricing_snapshot);
@@ -347,6 +352,7 @@ fn aggregate_with_pricing(
         known_cost_usd: saw_known_cost.then_some(known_cost),
         provenance,
         token_mix,
+        token_total,
         coverage,
         models: model_rows,
         daily: daily

@@ -94,6 +94,14 @@ pub(in crate::cli::serve::metrics) const METRIC_DEFINITIONS: &[(&str, &str)] = &
         "Available local Codex cost today in US dollars.",
     ),
     (
+        "codexbar_reset_credits_available",
+        "Available Codex reset credits; -1 means unavailable or unsupported.",
+    ),
+    (
+        "codexbar_reset_credits_next_expiry_timestamp_seconds",
+        "Unix timestamp of the earliest expiry among available Codex reset credits.",
+    ),
+    (
         "codexbar_cost_last_30_days_usd",
         "Available local Codex cost over the last 30 days in US dollars.",
     ),

@@ -146,7 +146,104 @@ fn all_accounts_conflicts_with_explicit_account() {
         account: Some("work".to_string()),
         ..Default::default()
     };
-    assert!(UsageCommand::from_args(args).is_err());
+    assert!(UsageCommand::from_args_with(args, || panic!("settings must not be read")).is_err());
+}
+
+fn no_settings_read() -> Vec<ProviderId> {
+    panic!("an explicit --provider must not read the enabled providers")
+}
+
+#[test]
+fn enabled_default_mirrors_upstream_provider_selection() {
+    use ProviderId::{Claude, Codex, Cursor, Gemini};
+
+    assert_eq!(
+        ProviderSelection::for_enabled(Vec::new()),
+        ProviderSelection::Custom(Vec::new())
+    );
+    assert_eq!(
+        ProviderSelection::for_enabled(vec![Cursor]),
+        ProviderSelection::Single(Cursor)
+    );
+    // Exactly the primary pair is `Both`, in either display order.
+    for pair in [vec![Codex, Claude], vec![Claude, Codex]] {
+        let selection = ProviderSelection::for_enabled(pair);
+        assert_eq!(selection, ProviderSelection::Both);
+        assert_eq!(selection.as_list(), vec![Codex, Claude]);
+    }
+    // Any other set keeps the enabled display order.
+    assert_eq!(
+        ProviderSelection::for_enabled(vec![Gemini, Codex]).as_list(),
+        vec![Gemini, Codex]
+    );
+    assert_eq!(
+        ProviderSelection::for_enabled(vec![Claude, Cursor, Codex]).as_list(),
+        vec![Claude, Cursor, Codex]
+    );
+}
+
+#[test]
+fn explicit_provider_never_reads_enabled_providers() {
+    assert_eq!(
+        ProviderSelection::from_arg_or_enabled(Some("codex"), no_settings_read).unwrap(),
+        ProviderSelection::Single(ProviderId::Codex)
+    );
+    assert_eq!(
+        ProviderSelection::from_arg_or_enabled(Some("ALL"), no_settings_read).unwrap(),
+        ProviderSelection::All
+    );
+    assert_eq!(
+        ProviderSelection::from_arg_or_enabled(Some("both"), no_settings_read).unwrap(),
+        ProviderSelection::Both
+    );
+    assert!(
+        ProviderSelection::from_arg_or_enabled(Some("not-a-provider"), no_settings_read).is_err()
+    );
+    // `cost` keeps its own default.
+    assert_eq!(
+        ProviderSelection::from_arg(None).unwrap(),
+        ProviderSelection::Single(ProviderId::Claude)
+    );
+}
+
+#[test]
+fn plain_usage_queries_the_enabled_providers() {
+    let command = UsageCommand::from_args_with(UsageArgs::default(), || {
+        vec![ProviderId::Claude, ProviderId::Cursor]
+    })
+    .unwrap();
+    assert_eq!(
+        command.providers,
+        vec![ProviderId::Claude, ProviderId::Cursor]
+    );
+
+    let command = UsageCommand::from_args_with(UsageArgs::default(), Vec::new).unwrap();
+    assert!(command.providers.is_empty());
+
+    let explicit = UsageArgs {
+        provider: Some("codex".to_string()),
+        ..Default::default()
+    };
+    let command = UsageCommand::from_args_with(explicit, no_settings_read).unwrap();
+    assert_eq!(command.providers, vec![ProviderId::Codex]);
+}
+
+#[test]
+fn account_requires_one_provider_including_the_enabled_default() {
+    let with_account = || UsageArgs {
+        account: Some("work".to_string()),
+        ..Default::default()
+    };
+    let error = UsageCommand::from_args_with(with_account(), || {
+        vec![ProviderId::Codex, ProviderId::Claude]
+    })
+    .err()
+    .expect("several enabled providers cannot take --account");
+    assert!(error.to_string().contains("single --provider"), "{error}");
+
+    let command = UsageCommand::from_args_with(with_account(), || vec![ProviderId::Codex]).unwrap();
+    assert_eq!(command.providers, vec![ProviderId::Codex]);
+    assert_eq!(command.account.as_deref(), Some("work"));
 }
 
 #[test]

@@ -47,6 +47,13 @@ impl Default for AccountState {
     }
 }
 
+impl AccountState {
+    /// Whether a delayed reset candidate waits for revalidation.
+    pub(super) fn has_delayed_candidate(&self) -> bool {
+        self.candidate.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CreditInventory {

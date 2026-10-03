@@ -97,6 +97,43 @@ fn aggregate_preserves_zero_cost_authoritative_provenance() {
     assert_eq!(estimated.provenance, CostProvenance::ListPriceEstimate);
 }
 
+// Regression (PR #611 review): cache_read is part of input for imports, and
+// an authoritative `totalTokens` must not be re-derived. The window total
+// must use the same per-entry totals as the model and daily rows.
+#[test]
+fn aggregate_window_total_matches_model_and_daily_totals() {
+    let now = DateTime::parse_from_rfc3339("2026-08-19T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let authoritative = entry("openai", "gpt-5");
+    let mut derived = entry("openai", "gpt-5.6-sol");
+    derived.request_id = "derived".to_string();
+    derived.input_tokens = Some(50);
+    derived.output_tokens = Some(3);
+    derived.cache_read_tokens = Some(8);
+    derived.cache_creation_tokens = Some(2);
+    derived.total_tokens = None;
+
+    let source = aggregate(
+        vec![authoritative, derived],
+        now,
+        30,
+        &CustomPricing::default(),
+    )
+    .expect("source");
+
+    // 105 (authoritative) + 50 + 3 + 2 (cache_read is inside input).
+    assert_eq!(source.token_total, Some(160));
+    let model_total: u64 = source.models.iter().map(|row| row.total_tokens).sum();
+    let daily_total: u64 = source
+        .daily
+        .iter()
+        .filter_map(|point| point.total_tokens)
+        .sum();
+    assert_eq!(model_total, 160);
+    assert_eq!(daily_total, 160);
+}
+
 fn entry(provider: &str, model: &str) -> OpenCodexEntry {
     OpenCodexEntry {
         request_id: format!("{provider}:{model}"),

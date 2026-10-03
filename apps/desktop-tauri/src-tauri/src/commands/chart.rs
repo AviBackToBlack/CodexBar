@@ -404,7 +404,7 @@ fn local_usage_summary_from_cost_summary(
     period: CostReportingPeriod,
     period_summary: Option<&CostSummary>,
 ) -> Option<ProviderLocalUsageSummary> {
-    let thirty_tokens = total_tokens(summary);
+    let thirty_tokens = total_tokens(provider_id, summary);
     let has_usage = summary.sessions_count > 0
         || summary.total_cost_usd > 0.0
         || thirty_tokens > 0
@@ -414,10 +414,10 @@ fn local_usage_summary_from_cost_summary(
         thirty_day_cost: non_zero_f64(summary.total_cost_usd),
         thirty_day_tokens: non_zero_u64(thirty_tokens),
         period_cost: period_summary.and_then(|s| non_zero_f64(s.total_cost_usd)),
-        period_tokens: period_summary.and_then(|s| non_zero_u64(total_tokens(s))),
+        period_tokens: period_summary.and_then(|s| non_zero_u64(total_tokens(provider_id, s))),
         reporting_period: period.raw(),
         latest_tokens: None,
-        top_model: top_model(summary),
+        top_model: top_model(provider_id, summary),
         estimate_note: localized_estimate_note(provider_id, locale::current_language()),
         token_cost_updated_at_ms: current_unix_ms(),
         // The note sits under the selected-period totals, so count that window.
@@ -496,8 +496,8 @@ fn load_local_usage_summary_with_unknown_models(
         unknown_models.extend(period_summary.unknown_models.iter().cloned());
     }
 
-    let thirty_day_tokens = total_tokens(&thirty_day);
-    let latest_tokens = total_tokens(&today);
+    let thirty_day_tokens = total_tokens(provider_id, &thirty_day);
+    let latest_tokens = total_tokens(provider_id, &today);
     let has_usage = thirty_day.sessions_count > 0
         || thirty_day.total_cost_usd > 0.0
         || thirty_day_tokens > 0
@@ -517,10 +517,10 @@ fn load_local_usage_summary_with_unknown_models(
                 .and_then(|s| non_zero_f64(s.total_cost_usd)),
             period_tokens: period_summary
                 .as_ref()
-                .and_then(|s| non_zero_u64(total_tokens(s))),
+                .and_then(|s| non_zero_u64(total_tokens(provider_id, s))),
             reporting_period: period.raw(),
             latest_tokens: non_zero_u64(latest_tokens),
-            top_model: top_model(&thirty_day),
+            top_model: top_model(provider_id, &thirty_day),
             estimate_note: localized_estimate_note(provider_id, lang),
             token_cost_updated_at_ms: current_unix_ms(),
             incomplete_request_count: period_summary
@@ -800,8 +800,8 @@ fn scan_local_cost(
     }
 }
 
-fn total_tokens(summary: &CostSummary) -> u64 {
-    summary.input_tokens + summary.output_tokens
+fn total_tokens(provider_id: &str, summary: &CostSummary) -> u64 {
+    summary.total_tokens_for_provider(provider_id)
 }
 
 fn non_zero_f64(value: f64) -> Option<f64> {
@@ -816,11 +816,11 @@ fn non_zero_u32(value: u32) -> Option<u32> {
     (value > 0).then_some(value)
 }
 
-fn top_model(summary: &CostSummary) -> Option<String> {
+fn top_model(provider_id: &str, summary: &CostSummary) -> Option<String> {
     summary
         .by_model_tokens
         .iter()
-        .max_by_key(|(_, counts)| counts.total())
+        .max_by_key(|(_, counts)| counts.total_for_provider(provider_id))
         .map(|(model, _)| model.clone())
         .or_else(|| {
             summary

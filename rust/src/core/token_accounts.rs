@@ -751,10 +751,9 @@ impl TokenAccountStore {
         Self { file_path: path }
     }
 
-    /// Get the default storage path
+    /// Get the default storage path (beside a `CODEXBAR_CONFIG` settings file).
     pub fn default_path() -> PathBuf {
-        dirs::config_dir()
-            .map(|dir| dir.join("CodexBar"))
+        crate::settings::config_store_dir()
             .unwrap_or_else(|| {
                 dirs::home_dir()
                     .unwrap_or_else(|| PathBuf::from("."))

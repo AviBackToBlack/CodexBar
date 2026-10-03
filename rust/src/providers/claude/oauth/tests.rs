@@ -1,6 +1,6 @@
 use super::{
     ClaudeOAuthCredentials, ClaudeOAuthFetcher, OAuthUsageResponse, UsageWindow,
-    credential_identity,
+    credential_identity, is_rate_limited_error,
 };
 use crate::core::ProviderError;
 use base64::Engine;
@@ -408,6 +408,22 @@ fn rate_limited_error_preserves_credentials_language() {
     assert!(matches!(error, ProviderError::OAuthTransient(_)));
     assert!(message.contains("rate limited"));
     assert!(message.contains("credentials were preserved"));
+}
+
+#[test]
+fn only_the_rate_limit_refusal_counts_as_rate_limited() {
+    let refusal = ClaudeOAuthFetcher::rate_limited_error(Duration::from_secs(5));
+    assert!(is_rate_limited_error(&refusal));
+
+    let same_text_other_variant = ProviderError::OAuth(match refusal {
+        ProviderError::OAuthTransient(message) => message,
+        other => panic!("unexpected {other:?}"),
+    });
+    assert!(!is_rate_limited_error(&same_text_other_variant));
+    assert!(!is_rate_limited_error(&ProviderError::OAuthTransient(
+        "Claude OAuth token expired and token refresh is cooling down after a failed attempt."
+            .to_string()
+    )));
 }
 
 #[test]

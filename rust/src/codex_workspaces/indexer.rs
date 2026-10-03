@@ -1,6 +1,6 @@
 //! Scan Codex rollout JSONL + read-only catalog → project usage snapshot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -167,6 +167,29 @@ impl CodexWorkspacesIndex {
 
         let mut files = list_session_files(&scope.sessions_root, &range);
         files.extend(list_session_files(&scope.archived_sessions_root, &range));
+        // Codex archives a thread by moving its rollout into the flat
+        // `archived_sessions` folder, and older builds kept rollouts flat in
+        // the sessions root (upstream `listCodexSessionFilesFlat`). A flat
+        // file named like one already listed is a copy of that session, so
+        // it is skipped and the session is counted once.
+        let mut names: HashSet<_> = files
+            .iter()
+            .filter_map(|path| path.file_name().map(ToOwned::to_owned))
+            .collect();
+        for path in list_flat_session_files(&scope.sessions_root, &range)
+            .into_iter()
+            .chain(list_flat_session_files(
+                &scope.archived_sessions_root,
+                &range,
+            ))
+        {
+            if path
+                .file_name()
+                .is_some_and(|name| names.insert(name.to_owned()))
+            {
+                files.push(path);
+            }
+        }
         files.sort();
         files.dedup();
 
@@ -550,6 +573,12 @@ fn list_session_files(root: &Path, range: &CostUsageDayRange) -> Vec<PathBuf> {
     JsonlScanner::list_codex_session_files(root, &range.scan_since_key, &range.scan_until_key)
 }
 
+/// Rollouts kept directly in `root`; a missing folder lists nothing.
+fn list_flat_session_files(root: &Path, range: &CostUsageDayRange) -> Vec<PathBuf> {
+    JsonlScanner::list_codex_flat_session_files(root, &range.scan_since_key, &range.scan_until_key)
+        .unwrap_or_default()
+}
+
 fn read_catalog_status(db_path: &Path) -> SourceStatus {
     if !db_path.exists() {
         return SourceStatus::CatalogMissing;
@@ -843,6 +872,65 @@ mod tests {
         // Cached load works.
         let cached = index.load_cached_snapshot().unwrap().expect("cached");
         assert_eq!(cached.indexed_file_count, 2);
+    }
+
+    #[test]
+    fn archived_and_flat_rollouts_are_indexed_once() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("codex");
+        let sessions = home.join("sessions");
+        let archived = home.join("archived_sessions");
+        fs::create_dir_all(&archived).unwrap();
+        let day = Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let parts: Vec<&str> = day.split('-').collect();
+        let dated_dir = sessions.join(parts[0]).join(parts[1]).join(parts[2]);
+        let project = tmp.path().join("proj");
+        fs::create_dir_all(&project).unwrap();
+        for (name, input, output) in [
+            ("sess-dated.jsonl", 1000, 10),
+            ("sess-archived.jsonl", 200, 20),
+            ("sess-legacy.jsonl", 30, 3),
+        ] {
+            write_session(
+                &sessions,
+                &day,
+                name,
+                &project.to_string_lossy(),
+                "gpt-5",
+                input,
+                output,
+            );
+        }
+        // Codex archives a thread by moving its rollout into the flat
+        // archive; older builds kept rollouts flat in the sessions root.
+        fs::rename(
+            dated_dir.join("sess-archived.jsonl"),
+            archived.join("sess-archived.jsonl"),
+        )
+        .unwrap();
+        fs::rename(
+            dated_dir.join("sess-legacy.jsonl"),
+            sessions.join("sess-legacy.jsonl"),
+        )
+        .unwrap();
+        // An archived copy of a dated rollout is not counted twice.
+        fs::copy(
+            dated_dir.join("sess-dated.jsonl"),
+            archived.join("sess-dated.jsonl"),
+        )
+        .unwrap();
+
+        let snap = CodexWorkspacesIndex::new(30)
+            .with_codex_home(&home)
+            .with_sidecar_path(tmp.path().join("sidecar.sqlite"))
+            .load_snapshot(true, |_| {})
+            .expect("snapshot");
+
+        assert_eq!(snap.indexed_file_count, 3);
+        assert_eq!(snap.total.input_tokens, 1230);
+        assert_eq!(snap.total.output_tokens, 33);
+        let sessions_indexed: u32 = snap.projects.iter().map(|p| p.session_count).sum();
+        assert_eq!(sessions_indexed, 3);
     }
 
     #[test]

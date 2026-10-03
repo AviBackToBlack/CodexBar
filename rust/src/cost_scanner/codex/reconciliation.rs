@@ -153,7 +153,8 @@ pub(super) fn missing_codex_cache_paths(
             let in_scanned_date = scanned_date_dirs
                 .iter()
                 .any(|date_dir| path.starts_with(date_dir));
-            in_scanned_root && in_scanned_date && !path.exists()
+            let in_scanned_flat_dir = is_flat_codex_path_in_scan_window(path, sessions_dirs, range);
+            ((in_scanned_root && in_scanned_date) || in_scanned_flat_dir) && !path.exists()
         })
         .cloned()
         .collect()

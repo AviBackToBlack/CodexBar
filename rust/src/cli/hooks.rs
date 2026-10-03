@@ -401,7 +401,8 @@ fn hook_refresh_failure_status(error: &ProviderError) -> String {
         | ProviderError::NoCookies
         | ProviderError::OAuth(_)
         | ProviderError::OAuthExpired(_)
-        | ProviderError::OAuthRevoked(_) => "auth_required".into(),
+        | ProviderError::OAuthRevoked(_)
+        | ProviderError::BrowserSignInRequired { .. } => "auth_required".into(),
         ProviderError::OAuthTransient(_) => "rate_limited".into(),
         ProviderError::Timeout => "timeout".into(),
         ProviderError::Network(err) => {
@@ -661,6 +662,15 @@ fn print_json<T: Serialize>(value: &T, pretty: bool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_sign_in_failures_report_auth_required() {
+        let error = ProviderError::BrowserSignInRequired {
+            message: "Sign in at the provider page in your browser.".to_string(),
+            sign_in_url: "https://example.test/login".to_string(),
+        };
+        assert_eq!(hook_refresh_failure_status(&error), "auth_required");
+    }
 
     #[test]
     fn parses_event_names() {

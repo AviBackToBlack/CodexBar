@@ -2,6 +2,7 @@ use super::*;
 use crate::core::{CodexForkAccountingState, CodexSessionLineage, CodexSessionMetadata};
 
 mod cache_days;
+mod flat_sources;
 mod fork_resume;
 mod logical_target;
 mod pending_range;
@@ -9,6 +10,10 @@ mod priority_trace;
 mod reconciliation;
 mod scan;
 use cache_days::rebuild_cache_days;
+use flat_sources::{
+    CodexFlatListing, earliest_flat_codex_day, is_flat_codex_path_in_scan_window,
+    relocate_moved_codex_rollouts,
+};
 use fork_resume::CodexForkResume;
 use logical_target::*;
 use pending_range::{
@@ -146,6 +151,9 @@ fn is_codex_path_in_scan_window(
     sessions_dirs: &[PathBuf],
     range: &CostUsageDayRange,
 ) -> bool {
+    if is_flat_codex_path_in_scan_window(path, sessions_dirs, range) {
+        return true;
+    }
     sessions_dirs.iter().any(|sessions_dir| {
         codex_scan_dates(range).into_iter().any(|date| {
             let date_dir = sessions_dir
@@ -241,12 +249,17 @@ impl CostScanner {
         ambient_codex_trace_database_path(std::env::var("CODEX_HOME").ok(), dirs::home_dir())
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "candidate discovery carries the shared scan state"
+    )]
     fn collect_codex_candidates(
         &self,
         sessions_dirs: &[PathBuf],
         range: &CostUsageDayRange,
         cache: &CostUsageCache,
         planner: &CodexLineagePlanner,
+        flat_listing: &CodexFlatListing,
         cancel: Option<&AtomicBool>,
         stats: &mut CostScanStats,
     ) -> (Vec<CodexScanCandidate>, bool) {
@@ -320,6 +333,27 @@ impl CostScanner {
                     });
                 }
             }
+        }
+
+        // Archived and legacy flat rollouts, listed once per pass.
+        discovery_complete &= flat_listing.complete;
+        for (path, mtime_unix_ms) in &flat_listing.files {
+            if is_cancelled(cancel) {
+                return (candidates, false);
+            }
+            let path_key = path.to_string_lossy().to_string();
+            if !seen.insert(path_key.clone()) {
+                continue;
+            }
+            if cached_codex_file_is_complete_for_range(cache, planner, &path_key, range) {
+                stats.files_seen = stats.files_seen.saturating_add(1);
+                stats.files_skipped = stats.files_skipped.saturating_add(1);
+                continue;
+            }
+            candidates.push(CodexScanCandidate {
+                path: path.clone(),
+                mtime_unix_ms: *mtime_unix_ms,
+            });
         }
 
         // Persisted paths are retried even if their directory partition was not

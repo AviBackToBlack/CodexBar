@@ -1,0 +1,101 @@
+groups:
+  - name: win-codexbar-codex
+    rules:
+      - alert: CodexBarExporterDown
+        expr: up{job="codexbar"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CodexBar 节点无法抓取"
+          description: "{{ $labels.instance }} 连续 10 分钟无法抓取，请检查服务、网络和 Bearer Token。"
+
+      - alert: CodexBarCollectionStale
+        expr: codexbar_snapshot_stale{job="codexbar"} == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CodexBar 采集数据过期"
+          description: "{{ $labels.instance }} 的最近一次采集已超过过期阈值。"
+
+      - alert: CodexBarCollectionUnavailable
+        expr: codexbar_up{job="codexbar"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CodexBar 尚无可导出的采集数据"
+          description: "{{ $labels.instance }} 的 exporter 可抓取，但持续没有成功采集数据。"
+
+      - alert: CodexBarCodexFetchFailed
+        expr: codexbar_provider_up{job="codexbar",provider="codex"} == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Codex 用量查询失败"
+          description: "{{ $labels.instance }} 连续 10 分钟无法取得 Codex 用量。"
+
+      - alert: CodexBarCodexQuotaMissing
+        expr: |
+          (codexbar_provider_up{job="codexbar",provider="codex"} == 1)
+          unless on (job, instance, provider)
+          (codexbar_quota_weekly_remaining_ratio{job="codexbar",provider="codex"})
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Codex 周额度数据缺失"
+          description: "{{ $labels.instance }} 的用量查询成功，但周额度指标持续缺失。"
+
+      - alert: CodexBarCodexWeeklyLow
+        expr: |
+          (codexbar_quota_weekly_remaining_ratio{job="codexbar",provider="codex"} <= 0.2)
+          and on (job, instance, provider)
+          (codexbar_quota_weekly_remaining_ratio{job="codexbar",provider="codex"} > 0.05)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Codex 周剩余额度低于 20%"
+          description: "{{ $labels.instance }} 当前周剩余额度为 {{ $value | humanizePercentage }}。"
+
+      - alert: CodexBarCodexWeeklyCritical
+        expr: codexbar_quota_weekly_remaining_ratio{job="codexbar",provider="codex"} <= 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Codex 周剩余额度低于 5%"
+          description: "{{ $labels.instance }} 当前周额度即将耗尽。"
+
+      - alert: CodexBarResetCreditsExhausted
+        expr: codexbar_reset_credits_available{job="codexbar",provider="codex"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Codex 重置卡已用完"
+          description: "{{ $labels.instance }} 当前没有可用重置卡。"
+
+      - alert: CodexBarResetCreditsUnavailable
+        expr: codexbar_reset_credits_available{job="codexbar",provider="codex"} == -1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Codex 重置卡数量无法获取"
+          description: "{{ $labels.instance }} 处于 PAT 模式，或重置卡接口暂不可用。"
+
+      - alert: CodexBarResetCreditExpiringSoon
+        expr: |
+          (codexbar_reset_credits_next_expiry_timestamp_seconds{job="codexbar",provider="codex"} - time() < 86400)
+          and on (job, instance, provider)
+          (codexbar_reset_credits_available{job="codexbar",provider="codex"} > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Codex 重置卡即将到期"
+          description: "{{ $labels.instance }} 最早到期的可用重置卡将在 24 小时内到期。"

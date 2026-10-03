@@ -5,6 +5,9 @@
 
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl};
 
+use std::time::Instant;
+
+use super::placement::{self, MonitorLayout, MoveKind};
 use crate::geometry_store;
 
 pub const FLOATBAR_LABEL: &str = "floatbar";
@@ -139,8 +142,8 @@ pub(super) fn is_off_all_monitors<R: tauri::Runtime, M: WindowGeometry<R>>(windo
     !intersects_any_monitor(position, size, &monitors)
 }
 
-/// Recover: unminimize if needed, place on the primary work area using
-/// `style` for top/bottom, and persist the recovered geometry. Callers must
+/// Recover: unminimize if needed and place on the primary work area using
+/// `style` for top/bottom. The position is not persisted. Callers must
 /// supply style (settings stay out of this module).
 pub(super) fn recover_onto_primary<R: tauri::Runtime, M: WindowGeometry<R>>(
     window: &M,
@@ -181,13 +184,10 @@ pub(super) fn recover_onto_primary<R: tauri::Runtime, M: WindowGeometry<R>>(
     {
         let _ = window.restore_without_activation();
     }
-    if window.set_physical_position(target).is_err() {
-        return false;
-    }
-    // Atomic: persist recovered geometry here so event handlers never need
-    // a synthetic Moved to re-save, and never persist the old off-screen pos.
-    remember_geometry(window);
-    true
+    // Not persisted: the recovery spot is a stand-in. The stored geometry
+    // keeps the user's placement so it comes back when its display returns
+    // (issue #625); the next user drag or close stores whatever is current.
+    window.set_physical_position(target).is_ok()
 }
 
 /// Move a FloatBar that no longer intersects an active monitor onto the
@@ -310,6 +310,12 @@ pub fn show(
     }
 
     let _ = ensure_visible_on_active_monitor(&win, style);
+    // Wherever the bar opened is the placement to keep across display
+    // changes until the user drags it.
+    if let (Ok(position), Ok(monitors)) = (win.outer_position(), win.available_monitors()) {
+        let layout = MonitorLayout::from_monitors(&monitors);
+        placement::with_tracker(|tracker| tracker.record_user(layout, position, Instant::now()));
+    }
 
     apply_opacity(&win, opacity);
     apply_click_through(&win, click_through);
@@ -326,7 +332,8 @@ pub fn hide(app: &tauri::AppHandle) -> Result<(), String> {
     super::topmost_guard::set_active(false);
     if let Some(window) = app.get_webview_window(FLOATBAR_LABEL) {
         // Persist position before closing so it reopens in place.
-        remember_geometry(&window);
+        remember_user_geometry(&window);
+        placement::with_tracker(placement::PlacementTracker::reset);
         if let Err(error) = window.close() {
             super::topmost_guard::set_active(true);
             return Err(error.to_string());
@@ -370,6 +377,66 @@ pub fn remember_geometry<R: tauri::Runtime, M: WindowGeometry<R>>(window: &M) {
             height: Some((size.height as f64 / scale).round() as u32),
         },
     );
+}
+
+/// Handle a `Moved`/`Resized` event for a bar that is on screen: persist the
+/// position only when the user dragged the bar there. A move Windows made on
+/// its own (display change, sleep/wake, Explorer restart) is not persisted,
+/// so the user placement survives it (issue #625).
+pub(super) fn track_move<R: tauri::Runtime, M: WindowGeometry<R>>(window: &M) {
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(monitors) = window.available_monitors() else {
+        remember_geometry(window);
+        return;
+    };
+    let layout = MonitorLayout::from_monitors(&monitors);
+    let pointer_down = placement::pointer_button_down();
+    let kind = placement::with_tracker(|tracker| {
+        tracker.classify_move(layout, position, pointer_down, Instant::now())
+    });
+    if kind == MoveKind::User {
+        remember_geometry(window);
+    }
+}
+
+/// Persist the current geometry unless the bar sits where Windows moved it
+/// rather than where the user placed it.
+pub(super) fn remember_user_geometry<R: tauri::Runtime, M: WindowGeometry<R>>(window: &M) {
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    if placement::with_tracker(|tracker| tracker.is_user_position(position)) {
+        remember_geometry(window);
+    }
+}
+
+/// Move a bar that Windows displaced back to the user placement once the
+/// display layout is the one it was placed on and has settled. Returns `true`
+/// when the bar was moved.
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "the restore runs from the Windows-only topmost guard poll"
+    )
+)]
+pub(super) fn restore_user_placement<R: tauri::Runtime, M: WindowGeometry<R>>(window: &M) -> bool {
+    if window.is_minimized().unwrap_or(false) {
+        return false;
+    }
+    let (Ok(position), Ok(monitors)) = (window.outer_position(), window.available_monitors())
+    else {
+        return false;
+    };
+    if monitors.is_empty() {
+        return false;
+    }
+    let layout = MonitorLayout::from_monitors(&monitors);
+    let target =
+        placement::with_tracker(|tracker| tracker.restore_target(layout, position, Instant::now()));
+    target.is_some_and(|target| window.set_physical_position(target).is_ok())
 }
 
 /// Subset of `tauri::WebviewWindow` / `tauri::Window` used by

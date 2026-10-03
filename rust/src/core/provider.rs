@@ -717,6 +717,15 @@ pub enum ProviderError {
     #[error("No cookies available for web API")]
     NoCookies,
 
+    /// Usage needs a provider web session that only a browser sign-in can
+    /// restore. `sign_in_url` is the page to open; CLI JSON error rows carry
+    /// it as `signInUrl` next to `errorKind: "browserSignInRequired"`.
+    #[error("{message}")]
+    BrowserSignInRequired {
+        message: String,
+        sign_in_url: String,
+    },
+
     #[error("{0}")]
     Other(String),
 

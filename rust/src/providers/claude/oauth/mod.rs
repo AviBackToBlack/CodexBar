@@ -147,6 +147,18 @@ pub struct ExtraUsage {
     pub currency: Option<String>,
 }
 
+/// Start of the error raised while the OAuth usage endpoint refuses requests
+/// with 429. The credentials stay valid.
+const RATE_LIMITED_PREFIX: &str = "Claude OAuth usage endpoint is rate limited.";
+
+/// Whether `error` is the OAuth usage endpoint's rate-limit refusal.
+pub(super) fn is_rate_limited_error(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::OAuthTransient(message) if message.starts_with(RATE_LIMITED_PREFIX)
+    )
+}
+
 /// Claude OAuth fetcher
 pub struct ClaudeOAuthFetcher {
     client: Client,
@@ -621,9 +633,9 @@ impl ClaudeOAuthFetcher {
         Self::DEFAULT_RATE_LIMIT_BACKOFF
     }
 
-    fn rate_limited_error(duration: Duration) -> ProviderError {
+    pub(super) fn rate_limited_error(duration: Duration) -> ProviderError {
         ProviderError::OAuthTransient(format!(
-            "Claude OAuth usage endpoint is rate limited. Retrying in about {}s; credentials were preserved.",
+            "{RATE_LIMITED_PREFIX} Retrying in about {}s; credentials were preserved.",
             duration.as_secs().max(1)
         ))
     }

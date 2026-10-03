@@ -192,7 +192,13 @@ fn scan_pi_daily_from_roots(
                     result.unpriced_days.insert(day.clone());
                 }
                 *result.costs.entry(day.clone()).or_insert(0.0) += entry.cost;
-                let tokens = entry.input.saturating_add(entry.output);
+                // Pi reports cache reads and writes outside `input`, so the day
+                // total adds them (same rule as the standalone Pi window total).
+                let tokens = entry
+                    .input
+                    .saturating_add(entry.output)
+                    .saturating_add(entry.cache_read)
+                    .saturating_add(entry.cache_create);
                 let total = result.tokens.entry(day.clone()).or_insert(0);
                 *total = total.saturating_add(tokens);
             });
@@ -977,6 +983,34 @@ mod tests {
         assert!(scan.history_coverage_established);
         assert_eq!(scan.tokens.values().sum::<u64>(), 132);
         assert_eq!(scan.tokens.len(), 1);
+    }
+
+    #[test]
+    fn daily_tokens_count_cache_like_the_window_total() {
+        let dir = tempdir().unwrap();
+        let sessions = dir.path().join("agent").join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let codex = r#"{"id":"cached-codex","role":"assistant","provider":"openai-codex","model":"gpt-5","timestamp":"2026-07-20T12:00:00Z","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":5}}"#;
+        let claude = r#"{"id":"cached-claude","role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","timestamp":"2026-07-20T13:00:00Z","usage":{"input":40,"output":4,"cacheRead":300,"cacheWrite":30}}"#;
+        std::fs::write(
+            sessions.join("cached.jsonl"),
+            format!("{codex}\n{claude}\n"),
+        )
+        .unwrap();
+        let cutoff = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let scan = scan_pi_daily_from_roots(cutoff, None, vec![sessions.clone()]);
+        assert!(scan.history_coverage_established);
+        let daily_total = scan.tokens.values().sum::<u64>();
+        assert_eq!(daily_total, 135 + 374);
+
+        let mut summary = CostSummary::default();
+        let mut seen = HashSet::new();
+        let evidence = scan_roots_into(&mut summary, cutoff, None, &mut seen, vec![sessions], None);
+        assert!(evidence.complete);
+        assert_eq!(summary.total_tokens_for_provider("pi"), daily_total);
     }
 
     #[test]

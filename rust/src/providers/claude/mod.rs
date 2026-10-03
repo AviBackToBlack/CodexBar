@@ -105,6 +105,10 @@ pub const CLOUDFLARE_CHALLENGE_MESSAGE: &str = concat!(
     "(Usage credits balance will be unavailable), or try a different network."
 );
 
+/// Page that signs the browser in to claude.ai, restoring the session the Web
+/// source reads (Issue #640 item 8).
+pub const CLAUDE_BROWSER_SIGN_IN_URL: &str = "https://claude.ai/login";
+
 /// Whether the user explicitly consented to reading (and refreshing) Claude
 /// Code's own credentials. Upstream #2634/#2745: without consent the
 /// file/keyring sources stay closed and refreshed tokens are never rotated
@@ -176,6 +180,163 @@ fn claude_plan_label(tier: &str) -> String {
 }
 
 const CLAUDE_PROBE_SESSION_ID_FILE: &str = ".codexbar-session-id";
+const CLAUDE_PROBE_LOCK_FILE: &str = ".codexbar-probe.lock";
+const CLAUDE_PROBE_CACHE_FILE: &str = ".codexbar-usage-cache.json";
+/// How long a second codexbar process waits for a running probe to finish.
+const CLAUDE_PROBE_LOCK_WAIT: Duration = Duration::from_secs(30);
+/// Every codexbar process (the `serve` daemon, one-off `usage` calls from the
+/// companion) launches its own Claude CLI for a probe. The interactive
+/// `/usage` screen costs 6-10 s of CPU each time, so a recent successful
+/// probe output is shared across processes for this long.
+const CLAUDE_PROBE_CACHE_TTL: Duration = Duration::from_secs(45);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ClaudeProbeCache {
+    captured_at_unix: u64,
+    /// `claude_login_fingerprint` of the login the screen belongs to.
+    #[serde(default)]
+    login: String,
+    output: String,
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn load_cached_probe_output(probe_dir: &std::path::Path, login: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(probe_dir.join(CLAUDE_PROBE_CACHE_FILE)).ok()?;
+    let cache: ClaudeProbeCache = serde_json::from_str(&raw).ok()?;
+    let age = unix_now_secs().saturating_sub(cache.captured_at_unix);
+    if login.is_empty()
+        || cache.login != login
+        || age > CLAUDE_PROBE_CACHE_TTL.as_secs()
+        || cache.output.trim().is_empty()
+    {
+        return None;
+    }
+    tracing::debug!(age_secs = age, "Reusing recent Claude CLI probe output");
+    Some(cache.output)
+}
+
+fn store_cached_probe_output(probe_dir: &std::path::Path, login: &str, output: &str) {
+    let cache = ClaudeProbeCache {
+        captured_at_unix: unix_now_secs(),
+        login: login.to_string(),
+        output: output.to_string(),
+    };
+    // Atomic, because other processes read the cache without the probe lock.
+    let stored = serde_json::to_vec(&cache)
+        .map_err(anyhow::Error::from)
+        .and_then(|json| {
+            crate::atomic_file::write_atomic(&probe_dir.join(CLAUDE_PROBE_CACHE_FILE), &json)
+        });
+    if let Err(err) = stored {
+        tracing::debug!(error = %err, "failed to persist Claude probe cache");
+    }
+}
+
+/// Identifies the Claude login a probe runs under without reading any
+/// credential: the location, size and modification time of Claude Code's
+/// `.credentials.json`, which every login, token refresh and account switch
+/// rewrites. Without a credentials file a probe screen is never shared.
+fn claude_login_fingerprint() -> Option<String> {
+    let credentials = accounts::config_dir().ok()?.join(".credentials.json");
+    login_fingerprint_at(&credentials)
+}
+
+fn login_fingerprint_at(credentials: &std::path::Path) -> Option<String> {
+    let metadata = std::fs::metadata(credentials).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let identity = format!(
+        "{}|{}|{}",
+        credentials.display(),
+        metadata.len(),
+        modified.as_nanos()
+    );
+    Some(crate::core::sha256_hex(identity.as_bytes()))
+}
+
+/// The probe screen as it may appear in a log: secrets and email addresses
+/// (the screen can show the signed-in account) are masked.
+fn redacted_probe_screen(visible: &str) -> String {
+    let redacted = crate::core::SecretRedactor::redact(visible);
+    crate::core::PersonalInfoRedactor::redact_emails_in_text(Some(&redacted), true)
+        .unwrap_or(redacted)
+}
+
+/// Only a parseable usage screen is worth sharing; errors are retried live.
+fn claude_cli_output_is_shareable(output: &str) -> bool {
+    claude_cli_error_from_output(output).is_none()
+        && ClaudeProvider::new().parse_cli_output(output).is_ok()
+}
+
+/// Cross-process guard around the Claude PTY probe. Claude Code refuses to
+/// start a session whose `--session-id` is already running ("Session ID …
+/// is already in use"), so two codexbar processes (for example the
+/// `serve` daemon and a one-off `usage` call) must not probe concurrently.
+struct ClaudeProbeLock(std::fs::File);
+
+impl ClaudeProbeLock {
+    /// Wait for the probe lock. `Ok(None)` means locking is unsupported here
+    /// and the probe runs unlocked. A probe still running elsewhere after the
+    /// wait is an error: probing alongside it would reuse its session id.
+    fn acquire(probe_dir: &std::path::Path) -> Result<Option<Self>, ProviderError> {
+        Self::acquire_within(probe_dir, CLAUDE_PROBE_LOCK_WAIT)
+    }
+
+    fn acquire_within(
+        probe_dir: &std::path::Path,
+        wait: Duration,
+    ) -> Result<Option<Self>, ProviderError> {
+        let path = probe_dir.join(CLAUDE_PROBE_LOCK_FILE);
+        let file = match std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::debug!(error = %err, "Claude probe lock file unavailable; continuing unlocked");
+                return Ok(None);
+            }
+        };
+        let deadline = Instant::now() + wait;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Some(Self(file))),
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(std::fs::TryLockError::Error(err)) => {
+                    tracing::debug!(error = %err, "Claude probe lock unavailable; continuing unlocked");
+                    return Ok(None);
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(ProviderError::Other(
+                    "Timed out waiting for another CodexBar process to finish its Claude CLI \
+                     usage probe."
+                        .to_string(),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+impl Drop for ClaudeProbeLock {
+    fn drop(&mut self) {
+        // Best-effort unlock; closing the handle releases it anyway.
+        let _unlocked = self.0.unlock();
+    }
+}
 
 fn claude_usage_probe_dir() -> Result<std::path::PathBuf, ProviderError> {
     let base = dirs::data_local_dir()
@@ -223,6 +384,82 @@ fn cleanup_probe_session_jsonl(probe_dir: &std::path::Path) {
             let _removed = std::fs::remove_file(&path);
         }
     }
+    cleanup_probe_transcript(probe_dir);
+}
+
+/// Claude stores the transcript for a working directory under
+/// `<config dir>/projects/<sanitized cwd>/<session-id>.jsonl`, where the
+/// config dir is `CLAUDE_CONFIG_DIR` or `~/.claude`. Remove the probe session
+/// transcripts there, otherwise the fixed `--session-id` fails with "already
+/// in use" on the next run.
+fn cleanup_probe_transcript(probe_dir: &std::path::Path) {
+    let Ok(config_dir) = accounts::config_dir() else {
+        return;
+    };
+    cleanup_probe_transcripts_in(&config_dir.join("projects"), probe_dir);
+}
+
+fn cleanup_probe_transcripts_in(projects_root: &std::path::Path, probe_dir: &std::path::Path) {
+    let project_dir = projects_root.join(claude_project_dir_name(probe_dir));
+    let Ok(entries) = std::fs::read_dir(&project_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+        if is_file && path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            // Best-effort cleanup: a locked transcript just stays.
+            let _removed = std::fs::remove_file(&path);
+        }
+    }
+    // Succeeds only when nothing else is left in the probe's project dir.
+    let _removed = std::fs::remove_dir(&project_dir);
+}
+
+/// Longest project directory name Claude Code writes before it truncates the
+/// name and appends a hash of the full path.
+const CLAUDE_PROJECT_DIR_NAME_MAX: usize = 200;
+
+/// Claude Code's project directory name for a working directory: every UTF-16
+/// code unit that is not an ASCII letter or digit becomes `-`
+/// (`C:\Users\x` -> `C--Users-x`), and long names are cut to 200 characters
+/// plus `-<base36 hash of the path>`. (Claude Code also NFC-normalizes the
+/// path first; Windows paths are normally NFC already.)
+fn claude_project_dir_name(dir: &std::path::Path) -> String {
+    let path = dir.to_string_lossy();
+    let sanitized: String = path
+        .encode_utf16()
+        .map(|unit| match u8::try_from(unit) {
+            Ok(byte) if byte.is_ascii_alphanumeric() => char::from(byte),
+            _ => '-',
+        })
+        .collect();
+    if sanitized.len() <= CLAUDE_PROJECT_DIR_NAME_MAX {
+        return sanitized;
+    }
+    format!(
+        "{}-{}",
+        &sanitized[..CLAUDE_PROJECT_DIR_NAME_MAX],
+        javascript_hash_base36(&path)
+    )
+}
+
+/// `Math.abs(hash).toString(36)` of the JavaScript string hash
+/// `hash = (hash << 5) - hash + charCode`, kept in 32 bits.
+fn javascript_hash_base36(text: &str) -> String {
+    let hash = text.encode_utf16().fold(0i32, |hash, unit| {
+        hash.wrapping_mul(31).wrapping_add(i32::from(unit))
+    });
+    let mut magnitude = i64::from(hash).unsigned_abs();
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit((magnitude % 36) as u32, 36).unwrap_or('0'));
+        magnitude /= 36;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
 }
 
 /// Arguments shared by every Claude CLI `/usage` probe.
@@ -257,7 +494,32 @@ struct ClaudePtyProbeOptions {
     script_char_delay_secs: f64,
     script_line_delay_secs: f64,
     send_on_substring: Option<(&'static str, &'static str)>,
+    /// Re-type the script at these offsets while no done marker is visible.
+    script_retry_delays_secs: &'static [f64],
+    script_done_substrings: &'static [&'static str],
+    script_echo_substrings: &'static [&'static str],
+    /// Idle window after the done marker appeared (trailing output only).
+    idle_timeout_after_done_secs: Option<f64>,
+    /// Reuse a recent usage screen another process stored, and share this
+    /// one (the `/usage` probe only, never the trust preflight).
+    share_output: bool,
 }
+
+/// Offsets (seconds after launch) at which `/usage` is re-sent when Claude's
+/// input widget was not ready for the first attempt. Claude Code needs roughly
+/// 1-5 s to mount its prompt on Windows, and keystrokes before that are lost.
+const CLAUDE_USAGE_RETRY_DELAYS_SECS: &[f64] = &[6.0, 9.5, 14.0];
+/// Output markers that prove `/usage` opened (limits view or activity stats).
+const CLAUDE_USAGE_DONE_MARKERS: &[&str] = &[
+    "current session",
+    "current week",
+    "total duration",
+    "favorite model:",
+    "total tokens:",
+];
+/// The typed command as Claude echoes it into its prompt line. While this is
+/// visible the first attempt is still being processed, so do not type again.
+const CLAUDE_USAGE_ECHO_MARKERS: &[&str] = &["❯ /usage", "> /usage", "/usage show session cost"];
 
 async fn run_claude_usage_pty_probe(
     claude_path: std::path::PathBuf,
@@ -268,12 +530,17 @@ async fn run_claude_usage_pty_probe(
         working_directory,
         ClaudePtyProbeOptions {
             script: "/usage",
-            timeout_secs: 20.0,
+            timeout_secs: 24.0,
             idle_timeout_secs: Some(6.0),
             initial_delay_secs: 3.0,
             script_char_delay_secs: 0.04,
             script_line_delay_secs: 0.0,
             send_on_substring: None,
+            script_retry_delays_secs: CLAUDE_USAGE_RETRY_DELAYS_SECS,
+            script_done_substrings: CLAUDE_USAGE_DONE_MARKERS,
+            script_echo_substrings: CLAUDE_USAGE_ECHO_MARKERS,
+            idle_timeout_after_done_secs: Some(1.5),
+            share_output: true,
         },
     )
     .await
@@ -294,6 +561,11 @@ async fn run_claude_trust_preflight(
             script_char_delay_secs: 0.0,
             script_line_delay_secs: 0.0,
             send_on_substring: Some(("Enter", "\n/exit\n")),
+            script_retry_delays_secs: &[],
+            script_done_substrings: &[],
+            script_echo_substrings: &[],
+            idle_timeout_after_done_secs: None,
+            share_output: false,
         },
     )
     .await
@@ -311,6 +583,11 @@ async fn fetch_claude_cli_usage_text(
     claude_path: std::path::PathBuf,
 ) -> Result<String, ProviderError> {
     let probe_dir = claude_usage_probe_dir()?;
+    if let Some(login) = claude_login_fingerprint()
+        && let Some(cached) = load_cached_probe_output(&probe_dir, &login)
+    {
+        return Ok(cached);
+    }
     let combined = run_claude_usage_pty_probe(claude_path.clone(), probe_dir.clone()).await?;
 
     rerun_claude_usage_after_trust_prompt(claude_path, probe_dir, combined).await
@@ -401,35 +678,88 @@ async fn run_claude_pty_probe(
         // Keep ownership in the worker: cancelling the async refresh does not
         // stop spawn_blocking or its CLI process from rotating credentials.
         let _account_operation = accounts::CREDENTIAL_OPERATION.blocking_lock();
-        cleanup_probe_session_jsonl(&working_directory);
-        let session_id = load_or_create_probe_session_id(&working_directory);
-        let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());
+        let login: Option<&dyn Fn() -> Option<String>> =
+            probe.share_output.then_some(&claude_login_fingerprint);
+        run_locked_probe(&working_directory, login, || {
+            cleanup_probe_session_jsonl(&working_directory);
+            let session_id = load_or_create_probe_session_id(&working_directory);
+            let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());
 
-        let mut options = TtyCommandOptions::new()
-            .with_timeout(probe.timeout_secs)
-            .with_initial_delay(probe.initial_delay_secs)
-            .with_script_char_delay(probe.script_char_delay_secs)
-            .with_script_line_delay(probe.script_line_delay_secs)
-            .with_working_directory(working_directory)
-            .with_extra_args(claude_probe_launch_args(&session_id));
-        if let Some(idle) = probe.idle_timeout_secs {
-            options = options.with_idle_timeout(idle);
-        }
-        if let Some((trigger, keys)) = probe.send_on_substring {
-            options = options.with_send_on_substring(trigger, keys);
-        }
-        options.env = env.into();
+            let mut options = TtyCommandOptions::new()
+                .with_timeout(probe.timeout_secs)
+                .with_initial_delay(probe.initial_delay_secs)
+                .with_script_char_delay(probe.script_char_delay_secs)
+                .with_script_line_delay(probe.script_line_delay_secs)
+                .with_working_directory(working_directory.clone())
+                .with_extra_args(claude_probe_launch_args(&session_id));
+            if let Some(idle) = probe.idle_timeout_secs {
+                options = options.with_idle_timeout(idle);
+            }
+            if let Some(idle) = probe.idle_timeout_after_done_secs {
+                options = options.with_idle_timeout_after_done(idle);
+            }
+            if let Some((trigger, keys)) = probe.send_on_substring {
+                options = options.with_send_on_substring(trigger, keys);
+            }
+            if !probe.script_retry_delays_secs.is_empty() {
+                options = options.with_script_retries(
+                    probe.script_retry_delays_secs.to_vec(),
+                    probe
+                        .script_done_substrings
+                        .iter()
+                        .map(|marker| (*marker).to_string())
+                        .collect(),
+                    probe
+                        .script_echo_substrings
+                        .iter()
+                        .map(|marker| (*marker).to_string())
+                        .collect(),
+                );
+            }
+            options.env = env.into();
 
-        TtyCommandRunner::new()
-            .run(&claude_path.to_string_lossy(), probe.script, options)
-            .map(|result| result.text)
+            TtyCommandRunner::new()
+                .run(&claude_path.to_string_lossy(), probe.script, options)
+                .map(|result| result.text)
+                .map_err(claude_tty_error)
+        })
     })
     .await
     .map_err(|e| ProviderError::Other(format!("Claude CLI probe failed: {}", e)))?
-    .map_err(|e| match e {
+}
+
+/// Run one probe under the cross-process probe lock. `login` is set when the
+/// screen may be shared and identifies the Claude login it belongs to: a
+/// fresh screen another process stored for that login while this one waited
+/// is reused, and a parseable screen is stored for the others unless the
+/// login changed while the probe ran.
+fn run_locked_probe(
+    probe_dir: &std::path::Path,
+    login: Option<&dyn Fn() -> Option<String>>,
+    probe: impl FnOnce() -> Result<String, ProviderError>,
+) -> Result<String, ProviderError> {
+    let _probe_lock = ClaudeProbeLock::acquire(probe_dir)?;
+    let before = login.and_then(|login| login());
+    if let Some(before) = &before
+        && let Some(cached) = load_cached_probe_output(probe_dir, before)
+    {
+        return Ok(cached);
+    }
+    let output = probe()?;
+    if let (Some(before), Some(login)) = (&before, login)
+        && login().as_ref() == Some(before)
+        && claude_cli_output_is_shareable(&output)
+    {
+        store_cached_probe_output(probe_dir, before, &output);
+    }
+    Ok(output)
+}
+
+fn claude_tty_error(error: crate::cli::tty_runner::TtyCommandError) -> ProviderError {
+    match error {
         crate::cli::tty_runner::TtyCommandError::TimedOut => ProviderError::Timeout,
         other => ProviderError::Other(format!("Claude CLI failed: {}", other)),
-    })
+    }
 }
 
 fn last_good_failure_policy_for_error(error: &str) -> LastGoodFailurePolicy {
@@ -676,6 +1006,9 @@ impl ClaudeProvider {
         let combined = fetch_claude_cli_usage_text(claude_path).await?;
         // Replay cursor redraws once; rendering is idempotent on rendered text.
         let visible = cli_screen::render(&combined, true);
+        if tracing::enabled!(tracing::Level::TRACE) {
+            tracing::trace!(output = %redacted_probe_screen(&visible), "Claude CLI probe output");
+        }
 
         if let Some(error) = claude_cli_error_from_output(&visible) {
             return Err(error);
@@ -705,7 +1038,11 @@ impl ClaudeProvider {
             ));
         }
 
-        if is_cli_activity_stats_response(&clean_lower) && !has_plan_limit_section(&clean_lower) {
+        // Newer Claude versions print local activity stats (cost, duration,
+        // cache tokens) below the plan limits; only stats without any limit
+        // section are rejected.
+        let activity_stats = is_cli_activity_stats_response(&clean_lower);
+        if activity_stats && !has_plan_limit_section(&clean_lower) {
             return Err(ProviderError::Other(
                 "Claude CLI /usage opened, but this Claude version returned local activity stats instead of plan limit percentages. Use Auto, OAuth, or Web mode for Claude limits.".to_string(),
             ));
@@ -727,8 +1064,9 @@ impl ClaudeProvider {
             weekly_percent = Some(weekly_pct);
         }
 
-        // Fallback: collect all percentages in order
-        if session_percent.is_none() {
+        // Fallback: collect all percentages in order. Activity stats carry
+        // their own percentages, which must never be read as plan limits.
+        if session_percent.is_none() && !activity_stats {
             let all_percents = extract_all_percents(&clean);
             if !all_percents.is_empty() {
                 session_percent = Some(all_percents[0]);
@@ -839,15 +1177,44 @@ fn record_auto_source(
 }
 
 fn claude_auto_fetch_error(failures: Vec<(&'static str, ProviderError)>) -> ProviderError {
+    let browser_sign_in = needs_browser_sign_in(&failures);
     let summary = failures
         .into_iter()
         .map(|(source, error)| format!("{source}: {error}"))
         .collect::<Vec<_>>()
         .join("; ");
+    let message = format!("Claude usage failed from all configured sources. {summary}");
+    if browser_sign_in {
+        return ProviderError::BrowserSignInRequired {
+            message: format!("{message} {}", browser_sign_in_hint()),
+            sign_in_url: CLAUDE_BROWSER_SIGN_IN_URL.to_string(),
+        };
+    }
+    ProviderError::Other(message)
+}
 
-    ProviderError::Other(format!(
-        "Claude usage failed from all configured sources. {summary}"
-    ))
+/// Issue #640 item 8: the OAuth usage endpoint refused with 429 (Claude Code
+/// stays signed in), no claude.ai browser cookies were readable, and the CLI
+/// probe failed as well. Until the rate limit lifts only a browser sign-in
+/// brings usage back, so callers get a typed signal instead of English text.
+fn needs_browser_sign_in(failures: &[(&'static str, ProviderError)]) -> bool {
+    let failed = |source: &str, matches: fn(&ProviderError) -> bool| {
+        failures
+            .iter()
+            .any(|(failed_source, error)| *failed_source == source && matches(error))
+    };
+    failed("OAuth", oauth::is_rate_limited_error)
+        && failed("Web", |error| matches!(error, ProviderError::NoCookies))
+        && failed("CLI", |_| true)
+}
+
+/// Appended to the Auto summary for [`needs_browser_sign_in`]. It must avoid
+/// the phrases [`last_good_failure_policy_for_error`] reacts to, so the
+/// desktop keeps the retention policy of the plain summary.
+fn browser_sign_in_hint() -> String {
+    format!(
+        "The OAuth usage endpoint is rate limited and no claude.ai browser session was found. Sign in at {CLAUDE_BROWSER_SIGN_IN_URL} in your browser, then refresh."
+    )
 }
 
 fn should_fallback_from_claude_cli_error(error: &ProviderError) -> bool {
@@ -1204,6 +1571,181 @@ mod tests {
 
     use super::*;
 
+    const LOGIN_A: &str = "login-a";
+
+    fn login_a() -> Option<String> {
+        Some(LOGIN_A.to_string())
+    }
+
+    #[test]
+    fn probe_cache_roundtrip_and_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+        store_cached_probe_output(dir.path(), LOGIN_A, "Current session 12% used");
+        assert_eq!(
+            load_cached_probe_output(dir.path(), LOGIN_A).as_deref(),
+            Some("Current session 12% used")
+        );
+        let stale = ClaudeProbeCache {
+            captured_at_unix: unix_now_secs() - CLAUDE_PROBE_CACHE_TTL.as_secs() - 5,
+            login: LOGIN_A.to_string(),
+            output: "Current session 12% used".to_string(),
+        };
+        std::fs::write(
+            dir.path().join(CLAUDE_PROBE_CACHE_FILE),
+            serde_json::to_string(&stale).unwrap(),
+        )
+        .unwrap();
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+    }
+
+    #[test]
+    fn probe_cache_is_never_shared_with_another_login() {
+        let dir = tempfile::tempdir().unwrap();
+        store_cached_probe_output(dir.path(), LOGIN_A, "Current session 12% used");
+        assert!(load_cached_probe_output(dir.path(), "login-b").is_none());
+
+        // Written before screens were scoped to a login.
+        let unscoped = format!(
+            r#"{{"captured_at_unix":{},"output":"Current session 12% used"}}"#,
+            unix_now_secs()
+        );
+        std::fs::write(dir.path().join(CLAUDE_PROBE_CACHE_FILE), unscoped).unwrap();
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+        assert!(load_cached_probe_output(dir.path(), "").is_none());
+    }
+
+    #[test]
+    fn login_fingerprint_follows_credential_rewrites_without_reading_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = dir.path().join(".credentials.json");
+        assert_eq!(login_fingerprint_at(&credentials), None);
+
+        std::fs::write(&credentials, "{}").unwrap();
+        let first = login_fingerprint_at(&credentials).expect("fingerprint");
+        assert_eq!(login_fingerprint_at(&credentials).as_ref(), Some(&first));
+        assert!(!first.contains(".credentials"), "only a digest is stored");
+
+        std::fs::write(&credentials, r#"{"another":"login"}"#).unwrap();
+        assert_ne!(login_fingerprint_at(&credentials), Some(first));
+    }
+
+    const SHAREABLE_USAGE_SCREEN: &str = "Current session\n\
+        ████████▌ 17% used\n\
+        Resets 12pm (America/Bogota)\n";
+
+    #[test]
+    fn locked_probe_reuses_a_screen_stored_while_it_waited() {
+        let dir = tempfile::tempdir().unwrap();
+        store_cached_probe_output(dir.path(), LOGIN_A, SHAREABLE_USAGE_SCREEN);
+
+        let output = run_locked_probe(dir.path(), Some(&login_a), || {
+            panic!("a fresh shared screen must not launch another probe")
+        })
+        .unwrap();
+        assert_eq!(output, SHAREABLE_USAGE_SCREEN);
+    }
+
+    #[test]
+    fn locked_probe_shares_only_parseable_usage_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = run_locked_probe(dir.path(), Some(&login_a), || {
+            Ok("Not logged in".to_string())
+        });
+        assert_eq!(output.unwrap(), "Not logged in");
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+
+        let output = run_locked_probe(dir.path(), Some(&login_a), || {
+            Ok(SHAREABLE_USAGE_SCREEN.into())
+        });
+        assert_eq!(output.unwrap(), SHAREABLE_USAGE_SCREEN);
+        assert_eq!(
+            load_cached_probe_output(dir.path(), LOGIN_A).as_deref(),
+            Some(SHAREABLE_USAGE_SCREEN)
+        );
+        assert!(
+            !dir.path()
+                .read_dir()
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().contains(".tmp-")),
+            "the atomic write left no staging file behind"
+        );
+    }
+
+    #[test]
+    fn locked_probe_keeps_a_screen_private_when_the_login_changed_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = std::cell::Cell::new(0);
+        let switching_login = || {
+            calls.set(calls.get() + 1);
+            Some(format!("login-{}", calls.get()))
+        };
+        let output = run_locked_probe(dir.path(), Some(&switching_login), || {
+            Ok(SHAREABLE_USAGE_SCREEN.into())
+        });
+        assert_eq!(output.unwrap(), SHAREABLE_USAGE_SCREEN);
+        assert_eq!(calls.get(), 2, "the login is read before and after");
+        assert!(load_cached_probe_output(dir.path(), "login-1").is_none());
+        assert!(load_cached_probe_output(dir.path(), "login-2").is_none());
+
+        let no_login = || None;
+        run_locked_probe(dir.path(), Some(&no_login), || {
+            Ok(SHAREABLE_USAGE_SCREEN.into())
+        })
+        .unwrap();
+        assert!(!dir.path().join(CLAUDE_PROBE_CACHE_FILE).exists());
+    }
+
+    #[test]
+    fn unshared_probe_neither_reuses_nor_stores_screens() {
+        let dir = tempfile::tempdir().unwrap();
+        store_cached_probe_output(dir.path(), LOGIN_A, SHAREABLE_USAGE_SCREEN);
+        let output = run_locked_probe(dir.path(), None, || Ok("trust preflight".into()));
+        assert_eq!(output.unwrap(), "trust preflight");
+
+        let other = tempfile::tempdir().unwrap();
+        run_locked_probe(other.path(), None, || Ok(SHAREABLE_USAGE_SCREEN.into())).unwrap();
+        assert!(!other.path().join(CLAUDE_PROBE_CACHE_FILE).exists());
+    }
+
+    #[test]
+    fn logged_probe_screen_masks_account_email_and_secrets() {
+        let screen = "Login: someone@example.com (Claude Max)\n\
+                      access_token=abcdef0123456789 sk-ant-abcdefgh12345678\n\
+                      Current session 12% used";
+        let logged = redacted_probe_screen(screen);
+        assert!(!logged.contains("someone@example.com"), "{logged}");
+        assert!(!logged.contains("abcdef0123456789"), "{logged}");
+        assert!(!logged.contains("sk-ant-abcdefgh12345678"), "{logged}");
+        assert!(logged.contains("Current session 12% used"));
+    }
+
+    #[test]
+    fn probe_lock_wait_expiry_fails_instead_of_probing_alongside() {
+        let dir = tempfile::tempdir().unwrap();
+        let held = ClaudeProbeLock::acquire_within(dir.path(), Duration::ZERO)
+            .expect("first lock")
+            .expect("file locking is supported");
+
+        let error = match ClaudeProbeLock::acquire_within(dir.path(), Duration::from_millis(300)) {
+            Ok(lock) => panic!("second lock acquired while held: {}", lock.is_some()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("Timed out waiting"), "{error}");
+        assert_eq!(
+            last_good_failure_policy_for_error(&error.to_string()),
+            LastGoodFailurePolicy::Preserve
+        );
+
+        drop(held);
+        assert!(
+            ClaudeProbeLock::acquire_within(dir.path(), Duration::ZERO)
+                .expect("lock after release")
+                .is_some()
+        );
+    }
+
     #[test]
     fn passive_probe_env_disables_autoupdater_and_color() {
         let env = claude_passive_probe_env(HashMap::new());
@@ -1254,6 +1796,69 @@ mod tests {
         cleanup_probe_session_jsonl(dir.path());
         assert!(!jsonl.exists());
         assert!(dir.path().join("keep.txt").exists());
+    }
+
+    #[test]
+    fn probe_project_dir_name_matches_claude_code() {
+        use std::path::Path;
+        assert_eq!(
+            claude_project_dir_name(Path::new(
+                r"C:\Users\user\AppData\Local\CodexBar\claude-usage-probe"
+            )),
+            "C--Users-user-AppData-Local-CodexBar-claude-usage-probe"
+        );
+        assert_eq!(
+            claude_project_dir_name(Path::new("/Users/me/Library/Application Support/x")),
+            "-Users-me-Library-Application-Support-x"
+        );
+        // One dash per UTF-16 code unit, so two for a character outside the BMP.
+        assert_eq!(
+            claude_project_dir_name(Path::new("C:\\Users\\J\u{f6}rg\u{1F600}\\probe")),
+            "C--Users-J-rg---probe"
+        );
+        // Reference values from Claude Code's JavaScript implementation.
+        let long = format!(
+            r"C:\Users\user\AppData\Local\{}claude-usage-probe",
+            r"deep\".repeat(40)
+        );
+        assert_eq!(
+            claude_project_dir_name(Path::new(&long)),
+            format!(
+                "C--Users-user-AppData-Local-{}de-ttzy4x",
+                "deep-".repeat(34)
+            )
+        );
+        assert_eq!(javascript_hash_base36("hello"), "1n1e4y");
+        assert_eq!(javascript_hash_base36(""), "0");
+    }
+
+    #[test]
+    fn probe_transcript_cleanup_stays_inside_the_probe_project() {
+        use std::path::Path;
+        let projects = tempfile::tempdir().unwrap();
+        let other = projects.path().join("C--work-repo");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("session.jsonl"), "{}").unwrap();
+
+        let busy_probe = Path::new(r"C:\Users\user\AppData\Local\CodexBar\busy-probe");
+        let busy = projects.path().join(claude_project_dir_name(busy_probe));
+        std::fs::create_dir_all(busy.join("folder.jsonl")).unwrap();
+        std::fs::write(busy.join("session.jsonl"), "{}").unwrap();
+        std::fs::write(busy.join("notes.txt"), "x").unwrap();
+        cleanup_probe_transcripts_in(projects.path(), busy_probe);
+        assert!(!busy.join("session.jsonl").exists());
+        assert!(busy.join("notes.txt").exists());
+        assert!(busy.join("folder.jsonl").is_dir(), "only files are removed");
+
+        let probe = Path::new(r"C:\Users\user\AppData\Local\CodexBar\claude-usage-probe");
+        let project = projects.path().join(claude_project_dir_name(probe));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("a.jsonl"), "{}").unwrap();
+        std::fs::write(project.join("b.jsonl"), "{}").unwrap();
+        cleanup_probe_transcripts_in(projects.path(), probe);
+        assert!(!project.exists(), "an emptied probe project dir is removed");
+
+        assert!(other.join("session.jsonl").exists(), "other projects stay");
     }
 
     #[test]
@@ -1583,6 +2188,116 @@ Resets Dec 24 at 3:59pm (Europe/Paris)
         );
     }
 
+    fn oauth_rate_limited() -> ProviderError {
+        ClaudeOAuthFetcher::rate_limited_error(Duration::from_secs(30))
+    }
+
+    #[test]
+    fn auto_fetch_error_asks_for_a_browser_sign_in_when_only_the_browser_can_help() {
+        // (CLI failure, retention policy of the plain summary)
+        let cases = [
+            (
+                ProviderError::Parse("Claude CLI did not return usage data".to_string()),
+                LastGoodFailurePolicy::Preserve,
+            ),
+            (
+                ProviderError::Other("Claude CLI failed: exit status 1".to_string()),
+                LastGoodFailurePolicy::Replace,
+            ),
+        ];
+        for (cli_failure, policy) in cases {
+            let err = claude_auto_fetch_error(vec![
+                ("Web", ProviderError::NoCookies),
+                ("OAuth", oauth_rate_limited()),
+                ("CLI", cli_failure),
+            ]);
+            let ProviderError::BrowserSignInRequired {
+                message,
+                sign_in_url,
+            } = &err
+            else {
+                panic!("expected a browser sign-in signal, got {err:?}");
+            };
+            assert_eq!(sign_in_url, CLAUDE_BROWSER_SIGN_IN_URL);
+            assert_eq!(err.to_string(), *message);
+            assert!(
+                message.starts_with(
+                    "Claude usage failed from all configured sources. Web: No cookies available for web API; OAuth: Transient OAuth error: Claude OAuth usage endpoint is rate limited."
+                ),
+                "{message}"
+            );
+            assert!(
+                message
+                    .ends_with("Sign in at https://claude.ai/login in your browser, then refresh."),
+                "{message}"
+            );
+            // ClaudeProvider::error_state_kind defers to this for every
+            // variant except a missing CLI.
+            assert_eq!(
+                err.state_kind(),
+                crate::core::ProviderStateKind::NeedsAuthentication
+            );
+            // The hint leaves the desktop retention policy unchanged.
+            let plain = message
+                .strip_suffix(browser_sign_in_hint().as_str())
+                .map(str::trim_end)
+                .expect("hint is appended");
+            assert_eq!(last_good_failure_policy_for_error(plain), policy);
+            assert_eq!(last_good_failure_policy_for_error(message), policy);
+        }
+    }
+
+    #[test]
+    fn auto_fetch_error_keeps_other_failure_mixes_untyped() {
+        let cli_failure =
+            || ProviderError::Parse("Claude CLI did not return usage data".to_string());
+        let mixes = [
+            // A browser session was there; the Web source failed differently.
+            vec![
+                ("Web", ProviderError::AuthRequired),
+                ("OAuth", oauth_rate_limited()),
+                ("CLI", cli_failure()),
+            ],
+            // Signed out of Claude Code, not rate limited.
+            vec![
+                ("Web", ProviderError::NoCookies),
+                (
+                    "OAuth",
+                    ProviderError::OAuth(
+                        "Claude OAuth credentials not found. Run `claude` to authenticate."
+                            .to_string(),
+                    ),
+                ),
+                ("CLI", cli_failure()),
+            ],
+            // Another transient OAuth failure.
+            vec![
+                ("Web", ProviderError::NoCookies),
+                (
+                    "OAuth",
+                    ProviderError::OAuthTransient(
+                        "Claude OAuth token expired and token refresh is cooling down after a failed attempt."
+                            .to_string(),
+                    ),
+                ),
+                ("CLI", cli_failure()),
+            ],
+            // The CLI was not tried.
+            vec![
+                ("Web", ProviderError::NoCookies),
+                ("OAuth", oauth_rate_limited()),
+            ],
+        ];
+        for failures in mixes {
+            let err = claude_auto_fetch_error(failures);
+            assert!(matches!(err, ProviderError::Other(_)), "{err:?}");
+            assert!(
+                !err.to_string().contains(CLAUDE_BROWSER_SIGN_IN_URL),
+                "{err}"
+            );
+        }
+    }
+
     #[test]
     fn transient_transport_failure_stops_auto_fallback_and_preserves_last_good() {
         let provider = ClaudeProvider::new();
@@ -1677,6 +2392,44 @@ Active days: 2/10              Longest streak: 1 day
             .expect_err("should reject ANSI-spaced local activity stats");
 
         assert!(matches!(err, ProviderError::Other(_)));
+    }
+
+    #[test]
+    fn accepts_plan_limits_followed_by_activity_stats() {
+        // Claude Code 2.1.27x on Windows prints the exit summary (cost,
+        // duration, cache tokens) after the /usage view when the probe ends.
+        let provider = ClaudeProvider::new();
+        let output = r#"
+❯ /usage
+
+Status   Config   Usage   Stats
+
+Current session
+███████░░░░░░░░░░░░░░░░░░░░░░ 19% used
+Resets 3pm (Europe/Berlin)
+
+Current week (all models)
+█████████░░░░░░░░░░░░░░░░░░░░ 31% used
+Resets Sep 19, 4pm (Europe/Berlin)
+
+Total cost:            $0.0000
+Total duration (API):  0s
+Usage:                 0 input, 0 output, 0 cache read
+"#;
+
+        let result = provider
+            .parse_cli_output(output)
+            .expect("plan limits should win over trailing activity stats");
+
+        assert_eq!(result.usage.primary.used_percent, 19.0);
+        assert_eq!(
+            result
+                .usage
+                .secondary
+                .as_ref()
+                .map(|window| window.used_percent),
+            Some(31.0)
+        );
     }
 
     // ── Upstream 0.50.1 #2516: revoked vs missing OAuth ────────────────────────

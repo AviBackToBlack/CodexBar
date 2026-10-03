@@ -171,6 +171,68 @@ impl JsonlScanner {
         files
     }
 
+    /// Session files kept directly in `dir` rather than in a `YYYY/MM/DD`
+    /// partition (upstream `listCodexSessionFilesFlat`): Codex's flat
+    /// `archived_sessions` folder and legacy rollouts in a sessions root.
+    /// A file whose name carries a date outside the scan keys is skipped; a
+    /// name without a date is kept, so its events decide. Hidden files and
+    /// directories are ignored.
+    pub(crate) fn list_codex_flat_session_files(
+        dir: &Path,
+        scan_since_key: &str,
+        scan_until_key: &str,
+    ) -> std::io::Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        for entry in fs::read_dir(dir)?.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let path = entry.path();
+            if !path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+            {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with('.')
+                && Self::codex_flat_name_in_range(&name, scan_since_key, scan_until_key)
+            {
+                files.push(path);
+            }
+        }
+        Ok(files)
+    }
+
+    /// Whether a flat session file name stays in the scan keys: true when the
+    /// name carries no date.
+    pub(crate) fn codex_flat_name_in_range(
+        name: &str,
+        scan_since_key: &str,
+        scan_until_key: &str,
+    ) -> bool {
+        Self::codex_filename_day_key(name)
+            .is_none_or(|day| CostUsageDayRange::is_in_range(day, scan_since_key, scan_until_key))
+    }
+
+    /// The first `YYYY-MM-DD` run in a session file name (upstream
+    /// `dayKeyFromFilename`), e.g. `2025-10-03` in
+    /// `rollout-2025-10-03T10-00-00-<uuid>.jsonl`.
+    pub(crate) fn codex_filename_day_key(name: &str) -> Option<&str> {
+        let bytes = name.as_bytes();
+        (0..bytes.len().saturating_sub(9)).find_map(|start| {
+            let shaped = bytes[start..start + 10]
+                .iter()
+                .enumerate()
+                .all(|(offset, byte)| match offset {
+                    4 | 7 => *byte == b'-',
+                    _ => byte.is_ascii_digit(),
+                });
+            shaped.then(|| name.get(start..start + 10)).flatten()
+        })
+    }
+
     /// Read only a bounded prefix until the first authoritative `session_meta`
     /// row is found. Fork decisions must not require parsing the child usage
     /// stream before a safe parent baseline is selected.

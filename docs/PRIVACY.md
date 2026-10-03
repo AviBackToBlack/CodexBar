@@ -64,10 +64,11 @@ Deleting these folders removes every trace the app wrote, including secrets.
 ### Browser cookies
 
 If — and only if — you opt in per provider, the app reads cookies for that
-provider's domain from your local Chrome, Edge, Brave, or Firefox profile
-(Chromium cookies are decrypted locally with your user DPAPI key; Firefox
-cookies are read from its SQLite store). Cookies are used only to call that
-provider's own web endpoints for usage data. See [COOKIES.md](COOKIES.md).
+provider's domain from your local Chrome (any channel), Chromium, Edge, Brave,
+or Firefox profile (Chromium cookies are decrypted locally with your user
+DPAPI key; Firefox cookies are read from its SQLite store). Cookies are used
+only to call that provider's own web endpoints for usage data. See
+[COOKIES.md](COOKIES.md).
 
 ## Network endpoints the app contacts
 

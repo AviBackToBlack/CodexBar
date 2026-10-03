@@ -60,6 +60,7 @@ fn validate_serve_args_accepts_loopback_without_token() {
         port: 8080,
         host: "localhost".into(),
         refresh_interval: 60,
+        request_timeout: 0.0,
         dashboard_token: None,
         metrics: false,
         allow_plain_http: false,
@@ -77,6 +78,7 @@ fn validate_serve_args_rejects_lan_without_token() {
         port: 8080,
         host: "0.0.0.0".into(),
         refresh_interval: 60,
+        request_timeout: 0.0,
         dashboard_token: None,
         metrics: false,
         allow_plain_http: true,
@@ -93,6 +95,7 @@ fn validate_serve_args_rejects_lan_without_allow_plain_http() {
         port: 8080,
         host: "192.168.0.2".into(),
         refresh_interval: 60,
+        request_timeout: 0.0,
         dashboard_token: Some("tok".into()),
         metrics: true,
         allow_plain_http: false,
@@ -101,6 +104,72 @@ fn validate_serve_args_rejects_lan_without_allow_plain_http() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("allow-plain-http"));
+}
+
+fn loopback_args(request_timeout: f64) -> ServeArgs {
+    ServeArgs {
+        port: 8080,
+        host: "127.0.0.1".into(),
+        refresh_interval: 60,
+        request_timeout,
+        dashboard_token: None,
+        metrics: false,
+        allow_plain_http: false,
+        identity: None,
+    }
+}
+
+#[test]
+fn request_timeout_is_off_by_default_and_capped_at_one_day() {
+    #[derive(clap::Parser)]
+    struct Wrapper {
+        #[command(flatten)]
+        args: ServeArgs,
+    }
+    let parse = |argv: &[&str]| {
+        <Wrapper as clap::Parser>::try_parse_from(
+            std::iter::once("serve").chain(argv.iter().copied()),
+        )
+        .map(|wrapper| wrapper.args.request_timeout)
+    };
+    assert_eq!(parse(&[]).unwrap(), 0.0);
+    assert_eq!(parse(&["--request-timeout", "2.5"]).unwrap(), 2.5);
+    assert_eq!(parse(&["--request-timeout", "-1"]).unwrap(), -1.0);
+    assert!(parse(&["--request-timeout", "soon"]).is_err());
+
+    let timeout = |secs: f64| validate_serve_args(&loopback_args(secs)).map(|c| c.request_timeout);
+    assert_eq!(timeout(0.0).unwrap(), None, "0 waits for every provider");
+    assert_eq!(timeout(30.0).unwrap(), Some(Duration::from_secs(30)));
+    assert_eq!(timeout(0.25).unwrap(), Some(Duration::from_millis(250)));
+    assert_eq!(
+        timeout(1.0e9).unwrap(),
+        Some(Duration::from_secs(86_400)),
+        "clamped to one day"
+    );
+    for invalid in [-1.0, f64::NAN, f64::INFINITY] {
+        let err = timeout(invalid).unwrap_err().to_string();
+        assert_eq!(err, "--request-timeout must be zero or greater.");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn data_routes_answer_504_after_the_request_deadline() {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let response = within_request_deadline(Some(deadline), std::future::pending::<String>()).await;
+    assert!(
+        response.starts_with("HTTP/1.1 504 Gateway Timeout\r\n"),
+        "{response}"
+    );
+    assert!(response.ends_with("\r\n\r\n{\"error\":\"request timed out\"}"));
+
+    let finished = within_request_deadline(Some(deadline), async { "done".to_string() }).await;
+    assert_eq!(finished, "done");
+    let unbounded = within_request_deadline(None, async {
+        tokio::time::sleep(Duration::from_secs(3_600)).await;
+        "late".to_string()
+    })
+    .await;
+    assert_eq!(unbounded, "late", "no deadline waits for the route");
 }
 
 #[test]
@@ -161,6 +230,8 @@ fn head_test_config(budget: Duration, token: Option<&str>) -> ServeConfig {
         head_read_budget: budget,
         identity: Some(DashboardIdentity::Redacted),
         dashboard: None,
+        request_timeout: None,
+        operations: data::DataOperations::default(),
     }
 }
 
@@ -1006,4 +1077,26 @@ async fn request_roundtrip_dashboard(request: &[u8], config: ServeConfig) -> Str
     drop(client);
     server_task.await.unwrap().unwrap();
     String::from_utf8_lossy(&response).into_owned()
+}
+
+#[test]
+fn usage_route_without_provider_follows_enabled_providers() {
+    use crate::cli::usage::ProviderSelection;
+    use crate::core::ProviderId;
+
+    let enabled = || vec![ProviderId::Codex, ProviderId::Cursor];
+    for absent in [None, Some("")] {
+        assert_eq!(
+            data::usage_selection(absent, enabled).unwrap(),
+            ProviderSelection::Custom(vec![ProviderId::Codex, ProviderId::Cursor])
+        );
+    }
+    assert_eq!(
+        data::usage_selection(Some("claude"), || panic!(
+            "explicit provider reads no settings"
+        ))
+        .unwrap(),
+        ProviderSelection::Single(ProviderId::Claude)
+    );
+    assert!(data::usage_selection(Some("nope"), enabled).is_err());
 }

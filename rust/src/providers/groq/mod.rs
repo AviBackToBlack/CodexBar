@@ -1,6 +1,9 @@
 //! GroqCloud provider implementation.
 //!
-//! Fetches Enterprise Prometheus metrics from Groq's metrics API.
+//! Fetches Enterprise Prometheus metrics from Groq's metrics API
+//! (`https://api.groq.com/v1/metrics/prometheus/api/v1/query`). Standard
+//! (non-Enterprise) keys get HTTP 404 there, which is reported as a plan
+//! requirement instead of a raw status.
 
 use async_trait::async_trait;
 use reqwest::{Client, Url};
@@ -11,7 +14,10 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
-const GROQ_API_BASE: &str = "https://api.groq.com/openai/v1";
+const GROQ_API_BASE: &str = "https://api.groq.com/v1";
+const GROQ_METRICS_QUERY_PATH: [&str; 5] = ["metrics", "prometheus", "api", "v1", "query"];
+const GROQ_ENTERPRISE_REQUIRED: &str = "Groq usage metrics require a Groq Enterprise plan. \
+     The Prometheus metrics API returned 404 Not Found for this API key.";
 const GROQ_CREDENTIAL_TARGET: &str = "codexbar-groq";
 
 #[derive(Debug, Deserialize)]
@@ -84,30 +90,45 @@ impl GroqProvider {
         }
     }
 
-    async fn fetch_api(&self, api_key: &str) -> Result<UsageSnapshot, ProviderError> {
+    async fn fetch_api(&self, base: &Url, api_key: &str) -> Result<UsageSnapshot, ProviderError> {
+        let endpoint = metrics_query_url(base)?;
         let metrics = GroqMetrics {
             request_rate_per_second: self
-                .query_scalar(api_key, "sum(model_project_id_status_code:requests:rate5m)")
+                .query_scalar(
+                    &endpoint,
+                    api_key,
+                    "sum(model_project_id_status_code:requests:rate5m)",
+                )
                 .await?,
             input_token_rate_per_second: self
-                .query_scalar(api_key, "sum(model_project_id:tokens_in:rate5m)")
+                .query_scalar(&endpoint, api_key, "sum(model_project_id:tokens_in:rate5m)")
                 .await?,
             output_token_rate_per_second: self
-                .query_scalar(api_key, "sum(model_project_id:tokens_out:rate5m)")
+                .query_scalar(
+                    &endpoint,
+                    api_key,
+                    "sum(model_project_id:tokens_out:rate5m)",
+                )
                 .await?,
             prompt_cache_hit_rate_per_second: self
-                .query_scalar(api_key, "sum(model_project_id:prompt_cache_hits:rate5m)")
+                .query_scalar(
+                    &endpoint,
+                    api_key,
+                    "sum(model_project_id:prompt_cache_hits:rate5m)",
+                )
                 .await?,
         };
 
         Ok(snapshot_from_metrics(&metrics))
     }
 
-    async fn query_scalar(&self, api_key: &str, query: &str) -> Result<f64, ProviderError> {
-        let base = api_base_url()
-            .join("metrics/prometheus/api/v1/query")
-            .map_err(|e| ProviderError::Other(format!("Invalid Groq metrics URL: {e}")))?;
-        let mut url = base;
+    async fn query_scalar(
+        &self,
+        endpoint: &Url,
+        api_key: &str,
+        query: &str,
+    ) -> Result<f64, ProviderError> {
+        let mut url = endpoint.clone();
         url.query_pairs_mut().append_pair("query", query);
 
         let response = self
@@ -122,6 +143,11 @@ impl GroqProvider {
             || response.status() == reqwest::StatusCode::FORBIDDEN
         {
             return Err(ProviderError::AuthRequired);
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            // Groq serves Prometheus metrics only to Enterprise organizations;
+            // standard keys get 404 here (console.groq.com/docs/prometheus-metrics).
+            return Err(ProviderError::Other(GROQ_ENTERPRISE_REQUIRED.to_string()));
         }
         if !response.status().is_success() {
             return Err(ProviderError::Other(format!(
@@ -163,7 +189,7 @@ impl Provider for GroqProvider {
                     &["GROQ_API_KEY"],
                 )?;
                 Ok(ProviderFetchResult::new(
-                    self.fetch_api(&api_key).await?,
+                    self.fetch_api(&api_base_url(), &api_key).await?,
                     "api",
                 ))
             }
@@ -183,6 +209,21 @@ fn api_base_url() -> Url {
         .ok()
         .and_then(|raw| crate::providers::validated_https_url(&raw, "Groq API").ok())
         .unwrap_or_else(|| Url::parse(GROQ_API_BASE).expect("static Groq URL is valid"))
+}
+
+/// Append the Prometheus query path to the API base as path segments.
+/// `Url::join` would drop the base's last segment when it has no trailing
+/// slash (`.../v1` + `metrics/...` -> `.../metrics/...`), which is how the
+/// request used to miss Groq's documented `/v1/metrics/prometheus` route.
+fn metrics_query_url(base: &Url) -> Result<Url, ProviderError> {
+    let mut url = base.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    url.path_segments_mut()
+        .map_err(|()| ProviderError::Other("Invalid Groq metrics URL".to_string()))?
+        .pop_if_empty()
+        .extend(GROQ_METRICS_QUERY_PATH);
+    Ok(url)
 }
 
 fn parse_scalar(data: &[u8]) -> Result<f64, ProviderError> {
@@ -305,6 +346,120 @@ mod tests {
         .unwrap();
 
         assert_eq!(value, 3.75);
+    }
+
+    #[test]
+    fn metrics_url_keeps_the_documented_v1_prefix() {
+        let default = metrics_query_url(&Url::parse(GROQ_API_BASE).unwrap()).unwrap();
+        assert_eq!(
+            default.as_str(),
+            "https://api.groq.com/v1/metrics/prometheus/api/v1/query"
+        );
+        for base in [
+            "https://gateway.example.test/groq/v1",
+            "https://gateway.example.test/groq/v1/",
+            "https://gateway.example.test/groq/v1?ignored=1#frag",
+        ] {
+            assert_eq!(
+                metrics_query_url(&Url::parse(base).unwrap())
+                    .unwrap()
+                    .as_str(),
+                "https://gateway.example.test/groq/v1/metrics/prometheus/api/v1/query",
+                "{base}"
+            );
+        }
+    }
+
+    const KEY: &str = "gsk_test_key";
+
+    async fn fetch_against(server: &mockito::ServerGuard) -> Result<UsageSnapshot, ProviderError> {
+        let base = Url::parse(&format!("{}/v1", server.url())).unwrap();
+        GroqProvider::new().fetch_api(&base, KEY).await
+    }
+
+    #[tokio::test]
+    async fn queries_the_documented_prometheus_route() {
+        let mut server = mockito::Server::new_async().await;
+        let mut mocks = Vec::new();
+        for (query, value) in [
+            ("sum(model_project_id_status_code:requests:rate5m)", "2"),
+            ("sum(model_project_id:tokens_in:rate5m)", "10"),
+            ("sum(model_project_id:tokens_out:rate5m)", "5"),
+            ("sum(model_project_id:prompt_cache_hits:rate5m)", "0.5"),
+        ] {
+            let body = format!(
+                r#"{{"status":"success","data":{{"resultType":"vector","result":[{{"metric":{{}},"value":[1710000000,"{value}"]}}]}}}}"#
+            );
+            mocks.push(
+                server
+                    .mock("GET", "/v1/metrics/prometheus/api/v1/query")
+                    .match_query(mockito::Matcher::UrlEncoded("query".into(), query.into()))
+                    .match_header("authorization", format!("Bearer {KEY}").as_str())
+                    .with_status(200)
+                    .with_header("content-type", "application/json")
+                    .with_body(body)
+                    .expect(1)
+                    .create_async()
+                    .await,
+            );
+        }
+
+        let snapshot = fetch_against(&server).await.unwrap();
+
+        for mock in &mocks {
+            mock.assert_async().await;
+        }
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("120 req/min")
+        );
+        assert_eq!(
+            snapshot
+                .secondary
+                .as_ref()
+                .and_then(|w| w.reset_description.as_deref()),
+            Some("900 tok/min")
+        );
+    }
+
+    #[tokio::test]
+    async fn non_enterprise_404_explains_the_plan_requirement() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/v1/metrics/prometheus/api/v1/query")
+            .match_query(mockito::Matcher::Any)
+            .with_status(404)
+            .with_body(
+                r#"{"error":{"message":"Unknown request URL","type":"invalid_request_error"}}"#,
+            )
+            .create_async()
+            .await;
+
+        let error = fetch_against(&server).await.unwrap_err();
+
+        let ProviderError::Other(message) = &error else {
+            panic!("expected a plan message, got {error:?}");
+        };
+        assert!(message.contains("Enterprise plan"), "{message}");
+        assert!(message.contains("404"), "{message}");
+        assert!(!message.contains("Unknown request URL"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn unauthorized_key_still_asks_for_authentication() {
+        for status in [401, 403] {
+            let mut server = mockito::Server::new_async().await;
+            let _mock = server
+                .mock("GET", "/v1/metrics/prometheus/api/v1/query")
+                .match_query(mockito::Matcher::Any)
+                .with_status(status)
+                .create_async()
+                .await;
+
+            let error = fetch_against(&server).await.unwrap_err();
+
+            assert!(matches!(error, ProviderError::AuthRequired), "{status}");
+        }
     }
 
     #[test]
