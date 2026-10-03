@@ -155,6 +155,15 @@ impl CodexApi {
         let first_fetch_started = Instant::now();
         let (first_usage, first_cost, first_credits) =
             self.fetch_usage_once(&creds, &base_url).await?;
+        let first_credits = self
+            .initial_reset_credits(
+                &creds,
+                &base_url,
+                first_fetch_started,
+                first_credits,
+                state.has_delayed_candidate(),
+            )
+            .await;
         let mut displayed_credits = first_credits.clone();
         let observed_at = Utc::now();
         let first_inventory = weekly_reset::inventory(first_credits.as_ref(), observed_at);
@@ -374,6 +383,25 @@ impl CodexApi {
         cache.loaded_at = Some(Instant::now());
         cache.confirmation_failure_at = None;
         cache.value.clone()
+    }
+
+    /// Reset credits for the initial weekly-reset decision. A pending delayed
+    /// candidate is revalidated against the current inventory, which must be
+    /// observed after the candidate was stored: the ten-minute cache can still
+    /// hold the very observation that created it, so that case reads fresh.
+    async fn initial_reset_credits(
+        &self,
+        creds: &CodexCredentials,
+        base_url: &str,
+        started: Instant,
+        observed: Option<ResetCredits>,
+        candidate_pending: bool,
+    ) -> Option<ResetCredits> {
+        if !candidate_pending {
+            return observed;
+        }
+        self.fresh_reset_credits_for_confirmation(creds, base_url, started)
+            .await
     }
 
     async fn fresh_reset_credits_for_confirmation(
@@ -1966,6 +1994,55 @@ mod tests {
             .unwrap();
         assert_eq!(confirmation.available_count, 0);
         confirmation_response.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn pending_delayed_candidate_revalidates_with_a_fresh_credit_observation() {
+        let mut server = mockito::Server::new_async().await;
+        let candidate_observation = server
+            .mock("GET", "/wham/rate-limit-reset-credits")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"available_count":2,"credits":[]}"#)
+            .create_async()
+            .await;
+        let home = write_codex_home(&server.url());
+        let api = CodexApi::new().with_codex_home(home.path());
+        let creds = api.load_credentials().await.unwrap();
+        let base = server.url();
+        let cached = api
+            .fetch_rate_limit_reset_credits_cached(&creds, &base)
+            .await;
+        candidate_observation.assert_async().await;
+        candidate_observation.remove_async().await;
+
+        // A later refresh: the ten-minute cache still holds the observation
+        // that created the candidate.
+        let started = Instant::now();
+        let changed = server
+            .mock("GET", "/wham/rate-limit-reset-credits")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"available_count":1,"credits":[]}"#)
+            .create_async()
+            .await;
+        let without_candidate = api
+            .initial_reset_credits(&creds, &base, started, cached.clone(), false)
+            .await;
+        assert_eq!(
+            without_candidate.map(|credits| credits.available_count),
+            Some(2)
+        );
+        let with_candidate = api
+            .initial_reset_credits(&creds, &base, started, cached, true)
+            .await;
+        assert_eq!(
+            with_candidate.map(|credits| credits.available_count),
+            Some(1)
+        );
+        changed.assert_async().await;
     }
 
     #[tokio::test]
