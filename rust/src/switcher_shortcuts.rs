@@ -5,8 +5,8 @@
 //! `ctrl+shift+right`; `none` disables an action. The grammar is upstream's
 //! with one Windows difference: `cmd` is accepted as an alias for `ctrl` and
 //! normalized to `ctrl`, so documents exported from macOS stay portable.
-//! Windows reserves `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w` (tray and
-//! pop-out commands).
+//! Windows reserves `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w` (Refresh, Quit,
+//! Settings and window close).
 //!
 //! The frontend mirrors this module in `src/lib/switcherShortcuts.ts`; the
 //! two must stay in step.

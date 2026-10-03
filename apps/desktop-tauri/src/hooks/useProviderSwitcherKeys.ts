@@ -10,9 +10,9 @@ const EDITABLE_SELECTOR =
 const DRAGGING_SELECTOR = ".provider-grid__item--dragging";
 
 /**
- * Provider-switcher keyboard navigation shared by the tray flyout and the
- * pop-out window. `providerIds` must be the list the grid displays, in
- * display order. Keys are ignored while focus is in a text field, select or
+ * Provider-switcher keyboard navigation for the tray flyout (the retired
+ * pop-out layout no longer has a surface). `providerIds` must be the list the
+ * grid displays, in display order. Keys are ignored while focus is in a text field, select or
  * slider (the zoom slider uses the arrow keys) or while a grid drag is active.
  */
 export function useProviderSwitcherKeys({

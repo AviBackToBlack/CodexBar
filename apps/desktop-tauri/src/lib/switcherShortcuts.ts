@@ -6,7 +6,7 @@
  * Grammar is upstream's, with one Windows difference: `cmd` is accepted as an
  * alias for `ctrl` and normalized to `ctrl`, so documents exported from macOS
  * stay portable. Windows reserves `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w`
- * (the tray/pop-out commands). `alt+f4` and `alt+tab` need no entry: F4 and
+ * (Refresh, Quit, Settings and window close). `alt+f4` and `alt+tab` need no entry: F4 and
  * Tab are outside the grammar, so they are rejected as invalid.
  *
  * The backend validates the stored map with the same rules

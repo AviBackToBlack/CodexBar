@@ -74,7 +74,7 @@ $env:CODEXBAR_PROOF_MODE = "settings:menu"
 
 ## Provider switcher keys
 
-The tray flyout and the pop-out window switch providers from the keyboard (ported from upstream 0.67.0; the shortcuts are menu-local, not global hotkeys):
+The tray flyout switches providers from the keyboard (ported from upstream 0.67.0; the shortcuts are menu-local, not global hotkeys):
 
 | Action | Default key |
 |--------|-------------|
@@ -97,7 +97,7 @@ Rules (upstream grammar, validated by `rust/src/switcher_shortcuts.rs` and mirro
 
 - Actions: `previous`, `next`, `select1` ... `select9`. Unknown actions are rejected.
 - A shortcut is optional `ctrl`, `alt`, `shift` modifiers plus one key: `left`, `right`, `,`, a letter or a digit. `cmd` is accepted as an alias for `ctrl`, so shortcuts copied from macOS stay valid.
-- Letters, digits and `,` need `ctrl` or `alt`. `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w` are reserved for the tray and pop-out commands.
+- Letters, digits and `,` need `ctrl` or `alt`. `ctrl+r`, `ctrl+q`, `ctrl+,` and `ctrl+w` are reserved (Refresh, Quit, Settings and window close).
 - Two actions cannot share a shortcut. `none` disables an action and frees its key.
 - An invalid stored map is ignored on load (defaults apply) and logged as a warning; it never blocks the rest of the settings.
 
