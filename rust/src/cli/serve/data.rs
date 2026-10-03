@@ -14,7 +14,8 @@
 //! this port has none, which is why the timeout is off by default.
 //!
 //! `/usage` error rows carry `errorKind` (and `signInUrl` for a browser
-//! sign-in), like `usage --json`; see [`crate::cli::error_kind`].
+//! sign-in), like `usage --json`; see [`crate::cli::error_kind`]. `/cost`
+//! timeout and failure rows carry `errorKind` too.
 
 use std::time::Duration;
 
@@ -266,11 +267,11 @@ where
 /// Row for a provider whose `/cost` scan gave no value in time.
 fn cost_miss_row(provider_id: ProviderId, miss: OperationMiss) -> Value {
     let name = provider_id.cli_name();
-    let error = match miss {
-        OperationMiss::TimedOut => format!("{name} cost refresh timed out"),
-        OperationMiss::Failed => format!("{name} cost refresh failed"),
+    let (error, kind) = match miss {
+        OperationMiss::TimedOut => (format!("{name} cost refresh timed out"), ERROR_KIND_TIMEOUT),
+        OperationMiss::Failed => (format!("{name} cost refresh failed"), ERROR_KIND_UNKNOWN),
     };
-    json!({ "provider": name, "error": error })
+    error_row(provider_id, &error, kind, None)
 }
 
 /// One provider's `/cost` row. The scans read local history synchronously,
@@ -514,7 +515,11 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({ "provider": "codex", "error": "codex cost refresh timed out" }),
+                json!({
+                    "provider": "codex",
+                    "error": "codex cost refresh timed out",
+                    "errorKind": "timeout",
+                }),
                 json!({ "provider": "claude", "usage": {} }),
                 json!({ "provider": "pi", "usage": {} }),
             ]
@@ -552,9 +557,21 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({ "provider": "codex", "error": "codex cost refresh timed out" }),
-                json!({ "provider": "claude", "error": "claude cost refresh timed out" }),
-                json!({ "provider": "pi", "error": "pi cost refresh timed out" }),
+                json!({
+                    "provider": "codex",
+                    "error": "codex cost refresh timed out",
+                    "errorKind": "timeout",
+                }),
+                json!({
+                    "provider": "claude",
+                    "error": "claude cost refresh timed out",
+                    "errorKind": "timeout",
+                }),
+                json!({
+                    "provider": "pi",
+                    "error": "pi cost refresh timed out",
+                    "errorKind": "timeout",
+                }),
             ]
         );
         assert_eq!(*scans.lock().unwrap(), vec!["codex", "claude"]);
@@ -569,7 +586,11 @@ mod tests {
         );
         assert_eq!(
             cost_miss_row(ProviderId::Claude, OperationMiss::Failed),
-            json!({ "provider": "claude", "error": "claude cost refresh failed" })
+            json!({
+                "provider": "claude",
+                "error": "claude cost refresh failed",
+                "errorKind": "unknown",
+            })
         );
     }
 
