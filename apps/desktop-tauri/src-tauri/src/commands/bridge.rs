@@ -1177,6 +1177,26 @@ mod tests {
     }
 
     #[test]
+    fn credit_balance_detail_crosses_the_bridge_and_is_not_a_reset_phrase() {
+        let rw = RateWindow::with_details(25.0, None, None, Some("750 / 1000 credits left".into()))
+            .with_description_as_detail();
+        let window = RateWindowSnapshot::from_rate_window(&rw);
+
+        assert!(window.description_is_detail);
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("750 / 1000 credits left")
+        );
+        let json = serde_json::to_value(&window).unwrap();
+        assert_eq!(json["descriptionIsDetail"], true);
+        assert_eq!(compact_tray_status_label(&window, Language::English), "25%");
+
+        let plain = RateWindowSnapshot::from_rate_window(&RateWindow::new(10.0));
+        let json = serde_json::to_value(&plain).unwrap();
+        assert_eq!(json["descriptionIsDetail"], false);
+    }
+
+    #[test]
     fn japanese_tray_status_label_has_no_english_reset_text() {
         use codexbar::settings::Language;
 

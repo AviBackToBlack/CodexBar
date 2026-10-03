@@ -74,6 +74,17 @@ bundled-credit quota from the session token.
   again and refresh.
 - Manual mode needs a freshly pasted Cookie header from a signed-in
   `venice.ai` request; an old header fails with the expired-session message.
+### Raycast credits
+
+Raycast reads the unofficial `frontend_api/current_user/ai_credits` route of
+`www.raycast.com` with the `__raycast_session` and `csrf_token` cookies only.
+Auto imports those cookies from Chrome (all profiles, exact `www.raycast.com`
+host first); Windows Chrome App-Bound Encryption can block automatic import, in
+which case paste a Cookie header under Manual. A manual header is pinned and
+never falls back to a browser, and Off makes no request. When the response has
+a positive allowance and a known balance the provider shows one "credits left"
+meter with the renewal date; otherwise it shows the balance and total as detail
+rows. Top-up packages and credit details are not fetched.
 
 ### Replicate billing
 

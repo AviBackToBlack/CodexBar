@@ -730,3 +730,6 @@ ProviderAccentColor = Color de acento
 ProviderAccentColorHelper = Anula el color de marca usado en barras de uso y gráficos. Introduce un color hexadecimal como #FF5733.
 ProviderAccentColorReset = Restablecer predeterminado
 ProviderAccentColorInvalid = Color hexadecimal no válido. Usa el formato #RRGGBB, por ejemplo #FF5733.
+ProviderRaycastAutoImportHelp = Importa automáticamente desde Chrome la sesión iniciada en www.raycast.com.
+ProviderRaycastManualCookieHelp = Pega un encabezado Cookie de www.raycast.com/settings.
+ProviderRaycastCookiesDisabled = Las cookies de Raycast están desactivadas.

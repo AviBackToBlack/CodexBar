@@ -224,6 +224,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "notion" => ProviderId::Notion,
         "grok" => ProviderId::Grok,
         "replicate" => ProviderId::Replicate,
+        "raycast" => ProviderId::Raycast,
         "helmcode" => ProviderId::Helmcode,
         "typesafe" => ProviderId::TypeSafe,
         "hyper" => ProviderId::Hyper,
@@ -831,6 +832,32 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 "",
                 "Paste a Cookie header from https://replicate.com/account/billing.",
                 None,
+            ),
+        ],
+        "raycast" => vec![
+            cookie_option(
+                lang,
+                "auto",
+                locale::get_text(lang, locale::LocaleKey::ProviderRaycastAutoImportHelp),
+                "",
+                None,
+            ),
+            cookie_option(
+                lang,
+                "manual",
+                "",
+                locale::get_text(lang, locale::LocaleKey::ProviderRaycastManualCookieHelp),
+                None,
+            ),
+            cookie_option(
+                lang,
+                "off",
+                "",
+                "",
+                Some(
+                    locale::get_text(lang, locale::LocaleKey::ProviderRaycastCookiesDisabled)
+                        .as_str(),
+                ),
             ),
         ],
         "helmcode" => vec![

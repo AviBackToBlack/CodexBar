@@ -344,7 +344,9 @@ describe("FloatBar", () => {
     const { container } = renderFloatBar(bootstrap({ floatBarShowResetInline: true }));
     await waitFor(() => {
       const pill = container.querySelector(".floatbar__pill");
-      expect(pill?.getAttribute("title")).toBe("Claude: 13% used");
+      expect(pill?.getAttribute("title")).toBe(
+        "Claude: 13% used\n34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+      );
       expect(container.querySelector(".floatbar__reset")).toBeNull();
     });
   });

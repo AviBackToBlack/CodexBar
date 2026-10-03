@@ -74,6 +74,7 @@ menu-bar layout.
 - Provider charts: show recent Codex and Claude quota-window history with explicit account scope and estimated-boundary markers; historical data remains display-only.
 - Grok: Settings and tray **Add account** flow matching Codex/Claude — isolated `grok login --oauth`, save current CLI login, switch, and remove without logging out the active session.
 - Replicate: cookie-authenticated monthly spend and optional prepaid credit balance from the billing page, with user and organization account isolation.
+- Raycast: read monthly AI credits from the signed-in `www.raycast.com` session (Chrome auto-import or a pasted Cookie header), showing credits left, plan, and renewal date. Off makes no request and a manual header never falls back to a browser.
 - DeepSeek: show reported per-model spend in the provider details while preserving the billing currency, reporting period, zero values, and incomplete-total safeguards.
 - CLI: show provider-supplied history in usage text with its source period, known zero, and cost provenance (reported, estimated, or includes estimates), plus input-plus-output token totals for OpenRouter Activity.
 

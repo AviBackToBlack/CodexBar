@@ -935,3 +935,6 @@ UsageSpendModelsPeriodCaption = Local model history for: { "{}" }.
 UsageSpendProjectsPeriodCaption = Ranked Codex local project spend for: { "{}" }
 BurndownChartTitle = Usage remaining
 BurndownChartAriaLabel = Recorded remaining quota burndown
+ProviderRaycastAutoImportHelp = Automatically imports the signed-in www.raycast.com session from Chrome.
+ProviderRaycastManualCookieHelp = Paste a Cookie header from www.raycast.com/settings.
+ProviderRaycastCookiesDisabled = Raycast cookies are disabled.

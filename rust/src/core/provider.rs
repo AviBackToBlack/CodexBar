@@ -101,6 +101,7 @@ pub enum ProviderId {
     LLMMan,
     DevPass,
     XKiro,
+    Raycast,
 }
 
 impl ProviderId {
@@ -194,6 +195,7 @@ impl ProviderId {
             ProviderId::LLMMan,
             ProviderId::DevPass,
             ProviderId::XKiro,
+            ProviderId::Raycast,
         ]
     }
 
@@ -248,6 +250,7 @@ impl ProviderId {
             ProviderId::LLMMan => "llmman",
             ProviderId::DevPass => "devpass",
             ProviderId::XKiro => "xkiro",
+            ProviderId::Raycast => "raycast",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -342,6 +345,7 @@ impl ProviderId {
             ProviderId::LLMMan => "llmman",
             ProviderId::DevPass => "DevPass",
             ProviderId::XKiro => "xKiro",
+            ProviderId::Raycast => "Raycast",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -425,6 +429,7 @@ impl ProviderId {
             ProviderId::LongCat => Some("longcat.chat"),
             ProviderId::Replicate => Some("replicate.com"),
             ProviderId::AtlasCloud => None,
+            ProviderId::Raycast => Some("www.raycast.com"),
             // Token-based providers (don't use cookies)
             ProviderId::Copilot => None,
             ProviderId::Zai => None,
@@ -598,6 +603,7 @@ impl ProviderId {
             "notion" | "notion-ai" | "notionai" | "notion ai" => Some(ProviderId::Notion),
             "replicate" | "r8" => Some(ProviderId::Replicate),
             "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
+            "raycast" | "raycast-ai" => Some(ProviderId::Raycast),
             _ => None,
         }
     }
@@ -1247,6 +1253,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::LLMMan => "#6CC5B0",
         ProviderId::DevPass => "#2563EB",
         ProviderId::XKiro => "#52C99B",
+        ProviderId::Raycast => "#FF6363",
     }
 }
 
@@ -1261,7 +1268,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 87);
+        assert_eq!(all.len(), 88);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1329,6 +1336,7 @@ mod tests {
         assert!(all.contains(&ProviderId::LLMMan));
         assert!(all.contains(&ProviderId::DevPass));
         assert!(all.contains(&ProviderId::XKiro));
+        assert!(all.contains(&ProviderId::Raycast));
     }
 
     #[test]

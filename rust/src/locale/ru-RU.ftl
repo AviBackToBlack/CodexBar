@@ -775,3 +775,6 @@ ProviderAccentColor = Акцентный цвет
 ProviderAccentColorHelper = Переопределите фирменный цвет для полос использованя и графиков. Введите HEX-цвет, например #FF5733.
 ProviderAccentColorReset = Сбросить по умолчанию
 ProviderAccentColorInvalid = Недопустимый HEX-цвет. Используйте формат #RRGGBB, например #FF5733.
+ProviderRaycastAutoImportHelp = Автоматически импортирует сеанс www.raycast.com, открытый в Chrome.
+ProviderRaycastManualCookieHelp = Вставьте заголовок Cookie со страницы www.raycast.com/settings.
+ProviderRaycastCookiesDisabled = Файлы cookie Raycast отключены.
