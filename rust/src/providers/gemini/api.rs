@@ -242,34 +242,76 @@ impl GeminiApi {
     /// `gemini-cli-core/dist` tree, so scan the bundle chunks for the OAuth
     /// client constants instead.
     fn bundled_cli_oauth_credentials(base_dir: &Path) -> Option<OAuthClientCredentials> {
-        let bundle_roots = [
-            base_dir
-                .join("..")
-                .join("node_modules")
-                .join("@google")
-                .join("gemini-cli")
-                .join("bundle"),
-            base_dir
-                .join("node_modules")
-                .join("@google")
-                .join("gemini-cli")
-                .join("bundle"),
-        ];
-        for bundle_dir in bundle_roots {
-            let Ok(entries) = std::fs::read_dir(&bundle_dir) else {
-                continue;
-            };
-            let mut chunks: Vec<PathBuf> = entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
-                .collect();
-            chunks.sort();
-            if let Some(creds) = Self::oauth_credentials_from_candidates(chunks) {
-                return Some(creds);
-            }
+        Self::bundle_dir_candidates(base_dir)
+            .into_iter()
+            .find_map(|bundle_dir| Self::oauth_credentials_from_bundle_dir(&bundle_dir))
+    }
+
+    /// Bundle directories that belong to the `gemini` binary in `base_dir`.
+    fn bundle_dir_candidates(base_dir: &Path) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        // Unix installs symlink `bin/gemini` to `.../@google/gemini-cli/bundle/gemini.js`,
+        // so the canonical binary already sits inside the bundle directory.
+        if Self::is_gemini_cli_bundle_dir(base_dir) {
+            dirs.push(base_dir.to_path_buf());
         }
-        None
+        // Unix npm or Bun prefix: {bin}/../node_modules
+        dirs.push(Self::gemini_cli_bundle_dir(
+            &base_dir.join("..").join("node_modules"),
+        ));
+        // Windows npm: %APPDATA%\npm\gemini.cmd next to node_modules
+        dirs.push(Self::gemini_cli_bundle_dir(&base_dir.join("node_modules")));
+        // Unix npm prefix: {prefix}/bin -> {prefix}/lib/node_modules
+        dirs.push(Self::gemini_cli_bundle_dir(
+            &base_dir.join("..").join("lib").join("node_modules"),
+        ));
+        // Homebrew: {bin}/../libexec/lib/node_modules
+        dirs.push(Self::gemini_cli_bundle_dir(
+            &base_dir
+                .join("..")
+                .join("libexec")
+                .join("lib")
+                .join("node_modules"),
+        ));
+        dirs
+    }
+
+    fn gemini_cli_bundle_dir(node_modules: &Path) -> PathBuf {
+        node_modules
+            .join("@google")
+            .join("gemini-cli")
+            .join("bundle")
+    }
+
+    /// Only a `bundle` directory of the `@google/gemini-cli` package is
+    /// scanned, never JavaScript next to an unrelated `gemini` binary.
+    fn is_gemini_cli_bundle_dir(dir: &Path) -> bool {
+        let names: Vec<_> = dir
+            .components()
+            .rev()
+            .take(3)
+            .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect();
+        names == ["bundle", "gemini-cli", "@google"]
+    }
+
+    fn oauth_credentials_from_bundle_dir(bundle_dir: &Path) -> Option<OAuthClientCredentials> {
+        let entries = std::fs::read_dir(bundle_dir).ok()?;
+        let mut chunks: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
+            .collect();
+        chunks.sort();
+        Self::oauth_credentials_from_candidates(chunks)
+    }
+
+    /// Legacy `gemini-cli-core/dist` file or current bundle under one global
+    /// `node_modules` directory.
+    fn node_modules_oauth_credentials(node_modules: &Path) -> Option<OAuthClientCredentials> {
+        Self::try_extract_oauth_from_js(&node_modules.join(Self::oauth_subpath())).or_else(|| {
+            Self::oauth_credentials_from_bundle_dir(&Self::gemini_cli_bundle_dir(node_modules))
+        })
     }
 
     fn oauth_credentials_from_candidates<I>(candidates: I) -> Option<OAuthClientCredentials>
@@ -328,23 +370,9 @@ impl GeminiApi {
 
     #[cfg(windows)]
     fn platform_oauth_credentials() -> Option<OAuthClientCredentials> {
-        #[cfg(windows)]
-        if let Some(appdata) = dirs::data_dir() {
-            let npm_path = appdata
-                .join("npm")
-                .join("node_modules")
-                .join("@google")
-                .join("gemini-cli-core")
-                .join("dist")
-                .join("src")
-                .join("code_assist")
-                .join("oauth2.js");
-            if let Some(creds) = Self::try_extract_oauth_from_js(&npm_path) {
-                return Some(creds);
-            }
-        }
-
-        None
+        // %APPDATA%\npm\node_modules, used when `gemini` is not on PATH.
+        let appdata = dirs::data_dir()?;
+        Self::node_modules_oauth_credentials(&appdata.join("npm").join("node_modules"))
     }
 
     #[cfg(not(windows))]
@@ -380,18 +408,20 @@ impl GeminiApi {
         }
 
         let entries = std::fs::read_dir(fnm_versions).ok()?;
-        let candidates = entries
+        let mut installations: Vec<PathBuf> = entries
             .flatten()
-            .map(|entry| {
-                entry
-                    .path()
-                    .join("installation")
-                    .join("lib")
-                    .join("node_modules")
-            })
-            .map(|node_modules| node_modules.join(Self::oauth_subpath()));
+            .map(|entry| entry.path().join("installation"))
+            .collect();
+        installations.sort();
 
-        Self::oauth_credentials_from_candidates(candidates)
+        // Global packages live in `lib/node_modules` on Unix and directly in
+        // `node_modules` on Windows.
+        installations.iter().find_map(|installation| {
+            Self::node_modules_oauth_credentials(&installation.join("lib").join("node_modules"))
+                .or_else(|| {
+                    Self::node_modules_oauth_credentials(&installation.join("node_modules"))
+                })
+        })
     }
 
     fn oauth_credentials_from_env() -> Result<OAuthClientCredentials, ProviderError> {
@@ -745,6 +775,80 @@ mod tests {
             .expect("bundle chunks should be scanned");
         assert_eq!(creds.client_id, "id-123.apps.googleusercontent.com");
         assert_eq!(creds.client_secret, "secret-xyz");
+    }
+
+    const BUNDLE_CHUNK_WITH_CONSTANTS: &str = r#"var OAUTH_CLIENT_ID = "id-456.apps.googleusercontent.com"; var OAUTH_CLIENT_SECRET = "secret-abc";"#;
+
+    fn write_gemini_bundle(node_modules: &Path) -> PathBuf {
+        let bundle = node_modules
+            .join("@google")
+            .join("gemini-cli")
+            .join("bundle");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("gemini.js"), "import './chunk-A.js';").unwrap();
+        std::fs::write(bundle.join("chunk-A.js"), BUNDLE_CHUNK_WITH_CONSTANTS).unwrap();
+        bundle
+    }
+
+    #[test]
+    fn symlinked_binary_inside_bundle_yields_oauth_client_credentials() {
+        // Unix npm/Homebrew: bin/gemini canonicalizes to .../gemini-cli/bundle/gemini.js.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = write_gemini_bundle(&dir.path().join("lib").join("node_modules"));
+
+        let creds = GeminiApi::bundled_cli_oauth_credentials(&bundle)
+            .expect("the bundle that holds the binary should be scanned");
+        assert_eq!(creds.client_id, "id-456.apps.googleusercontent.com");
+        assert_eq!(creds.client_secret, "secret-abc");
+    }
+
+    #[test]
+    fn unrelated_bundle_directory_is_not_scanned() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = dir.path().join("other-tool").join("bundle");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("chunk.js"), BUNDLE_CHUNK_WITH_CONSTANTS).unwrap();
+
+        assert!(GeminiApi::bundled_cli_oauth_credentials(&other).is_none());
+    }
+
+    #[test]
+    fn npm_global_node_modules_bundle_yields_oauth_client_credentials() {
+        // %APPDATA%\npm\node_modules fallback when `gemini` is not on PATH.
+        let dir = tempfile::tempdir().unwrap();
+        let node_modules = dir.path().join("npm").join("node_modules");
+        write_gemini_bundle(&node_modules);
+
+        let creds = GeminiApi::node_modules_oauth_credentials(&node_modules)
+            .expect("bundle under the npm global node_modules should be scanned");
+        assert_eq!(creds.client_secret, "secret-abc");
+    }
+
+    #[test]
+    fn fnm_windows_and_unix_layouts_yield_bundle_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let versions = dir.path().join("node-versions");
+        // Windows fnm keeps global packages directly under installation\node_modules.
+        write_gemini_bundle(
+            &versions
+                .join("v22.0.0")
+                .join("installation")
+                .join("node_modules"),
+        );
+        let creds = GeminiApi::fnm_oauth_credentials_from(&versions)
+            .expect("Windows fnm layout should be scanned");
+        assert_eq!(creds.client_id, "id-456.apps.googleusercontent.com");
+
+        let unix_dir = tempfile::tempdir().unwrap();
+        let unix_versions = unix_dir.path().join("node-versions");
+        write_gemini_bundle(
+            &unix_versions
+                .join("v22.0.0")
+                .join("installation")
+                .join("lib")
+                .join("node_modules"),
+        );
+        assert!(GeminiApi::fnm_oauth_credentials_from(&unix_versions).is_some());
     }
 
     #[test]
