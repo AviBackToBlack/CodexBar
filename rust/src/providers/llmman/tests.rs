@@ -119,6 +119,10 @@ fn node_fixture_maps_memory_and_models() {
         primary.reset_description.as_deref(),
         Some("10.0 GB of 40.0 GB")
     );
+    assert!(
+        primary.description_is_detail,
+        "memory text is a detail line, not reset wording"
+    );
     assert_eq!(result.usage.login_method.as_deref(), Some("Local daemon"));
 
     assert_eq!(row(&result, "loaded").value(), "2 · 10.0 GB");

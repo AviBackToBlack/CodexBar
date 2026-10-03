@@ -302,7 +302,7 @@ fn build_result(node: &Node, version: Option<String>, has_key: bool) -> Provider
             format_size(in_use),
             format_size(node.memory)
         ));
-        window
+        window.with_description_as_detail()
     } else {
         RateWindow::informational("Memory limit not reported")
     };
