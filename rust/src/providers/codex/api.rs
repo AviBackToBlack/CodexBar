@@ -333,10 +333,16 @@ impl CodexApi {
         creds: &CodexCredentials,
         base_url: &str,
     ) -> Arc<AsyncMutex<ResetCreditsCache>> {
+        // The Codex home is part of the scope: two homes never share an
+        // observation, even when they hold the same account and token.
         let auth_path = self.get_auth_path();
+        let home = weekly_reset::scope_key(None, &auth_path);
         let account = weekly_reset::scope_key(creds.account_id.as_deref(), &auth_path);
         let token = weekly_reset::scope_key(Some(&creds.access_token), &auth_path);
-        let key = format!("{}|{account}|{token}", base_url.trim_end_matches('/'));
+        let key = format!(
+            "{}|{home}|{account}|{token}",
+            base_url.trim_end_matches('/')
+        );
         let cache = RESET_CREDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let mut cache = cache
             .lock()
@@ -1861,6 +1867,51 @@ mod tests {
             3
         );
         rotated.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn reset_credit_cache_is_scoped_to_the_codex_home() {
+        // Same base URL, account and token, different Codex homes: each home
+        // makes its own observation instead of reading the other's.
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+        let first = server
+            .mock("GET", "/wham/rate-limit-reset-credits")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"available_count":2,"credits":[]}"#)
+            .create_async()
+            .await;
+        let first_home = write_codex_home(&base);
+        let first_api = CodexApi::new().with_codex_home(first_home.path());
+        let first_creds = first_api.load_credentials().await.unwrap();
+        let first_count = first_api
+            .fetch_rate_limit_reset_credits_cached(&first_creds, &base)
+            .await
+            .map(|credits| credits.available_count);
+        assert_eq!(first_count, Some(2));
+        first.assert_async().await;
+        first.remove_async().await;
+
+        let second = server
+            .mock("GET", "/wham/rate-limit-reset-credits")
+            .expect(1)
+            .with_status(503)
+            .create_async()
+            .await;
+        let second_home = write_codex_home(&base);
+        let second_api = CodexApi::new().with_codex_home(second_home.path());
+        let second_creds = second_api.load_credentials().await.unwrap();
+        assert_eq!(first_creds.access_token, second_creds.access_token);
+        assert_eq!(first_creds.account_id, second_creds.account_id);
+        assert!(
+            second_api
+                .fetch_rate_limit_reset_credits_cached(&second_creds, &base)
+                .await
+                .is_none()
+        );
+        second.assert_async().await;
     }
 
     #[tokio::test]
