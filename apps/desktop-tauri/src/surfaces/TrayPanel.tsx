@@ -18,6 +18,7 @@ import {
   TRAY_SCALE_STEP,
   useTrayPanelController,
 } from "../hooks/useTrayPanelController";
+import { useStayAwakeStatus } from "../hooks/useStayAwakeStatus";
 import MenuCard from "../components/MenuCard";
 import MenuSurface, { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
@@ -56,6 +57,7 @@ const HAS_STATUS_PAGE = new Set([
  * 2. Detail: click a provider in grid → show only that provider's card
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
+  const stayAwakeHeld = useStayAwakeStatus();
   const {
     t,
     settings,
@@ -156,6 +158,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     : null;
   const canSwitchClaudeAccount =
     selectedProvider !== null && hasSuccessfulClaudeCliQuota(selectedProvider);
+  const stayAwakeStatus = stayAwakeHeld ? (
+    <p className="menu-surface__hint" role="status">
+      {t("TrayStayAwakeActive")}
+    </p>
+  ) : null;
 
   if (sorted.length === 0) {
     return (
@@ -166,6 +173,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           footerRows={footerRows}
           style={{ zoom: trayScale }}
         >
+          {stayAwakeStatus}
           {settings.agentSessionsEnabled && <AgentSessions />}
           <MenuEmpty
             isLoading={isRefreshing && !hasCachedData}
@@ -185,6 +193,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         footerRows={footerRows}
         style={{ zoom: trayScale }}
       >
+        {stayAwakeStatus}
         {settings.agentSessionsEnabled && <AgentSessions />}
         <ProviderGrid
           providers={expectsDenseOverview ? denseTrayProviders : sorted}

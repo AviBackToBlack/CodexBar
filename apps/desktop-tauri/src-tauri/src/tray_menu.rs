@@ -82,6 +82,14 @@ impl TrayMenuEntry {
     }
 }
 
+/// Live app state the menu mirrors beyond the provider catalog.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct MenuState {
+    pub(crate) float_bar_enabled: bool,
+    /// Stay Awake currently holds an idle-sleep prevention.
+    pub(crate) stay_awake_held: bool,
+}
+
 #[cfg(test)]
 pub(crate) fn build_tray_menu(
     providers: &[ProviderCatalogEntry],
@@ -92,7 +100,7 @@ pub(crate) fn build_tray_menu(
         providers,
         status_labels,
         enabled_providers,
-        false,
+        MenuState::default(),
         Language::English,
     )
 }
@@ -101,7 +109,7 @@ pub(crate) fn build_tray_menu_with(
     providers: &[ProviderCatalogEntry],
     status_labels: &[(String, String)],
     enabled_providers: &HashSet<String>,
-    float_bar_enabled: bool,
+    state: MenuState,
     lang: Language,
 ) -> Vec<TrayMenuEntry> {
     let mut menu: Vec<TrayMenuEntry> = Vec::new();
@@ -111,7 +119,13 @@ pub(crate) fn build_tray_menu_with(
     for (id, label) in status_labels {
         menu.push(TrayMenuEntry::status_row(format!("status_{id}"), label));
     }
-    if !status_labels.is_empty() {
+    if state.stay_awake_held {
+        menu.push(TrayMenuEntry::status_row(
+            "stay_awake_active",
+            text(LocaleKey::TrayStayAwakeActive),
+        ));
+    }
+    if !status_labels.is_empty() || state.stay_awake_held {
         menu.push(TrayMenuEntry::separator());
     }
 
@@ -126,7 +140,7 @@ pub(crate) fn build_tray_menu_with(
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
         text(LocaleKey::TrayShowFloatBar),
-        float_bar_enabled,
+        state.float_bar_enabled,
     ));
     menu.push(TrayMenuEntry::separator());
 
@@ -245,7 +259,10 @@ mod tests {
             &sample_provider_catalog(),
             &[],
             &both_enabled(),
-            /* float_bar_enabled = */ true,
+            MenuState {
+                float_bar_enabled: true,
+                ..MenuState::default()
+            },
             Language::English,
         );
         let toggle = menu_on
@@ -259,7 +276,7 @@ mod tests {
             &sample_provider_catalog(),
             &[],
             &both_enabled(),
-            /* float_bar_enabled = */ false,
+            MenuState::default(),
             Language::English,
         );
         let toggle = menu_off
@@ -275,7 +292,7 @@ mod tests {
             &sample_provider_catalog(),
             &[],
             &both_enabled(),
-            false,
+            MenuState::default(),
             Language::Japanese,
         );
         fn label_for<'a>(menu: &'a [TrayMenuEntry], id: &'a str) -> &'a str {
@@ -316,5 +333,28 @@ mod tests {
         assert!(menu[1].disabled);
         // Third item should be a separator.
         assert!(menu[2].is_separator);
+    }
+
+    #[test]
+    fn stay_awake_row_appears_only_while_held() {
+        let build = |stay_awake_held| {
+            build_tray_menu_with(
+                &sample_provider_catalog(),
+                &[],
+                &both_enabled(),
+                MenuState {
+                    stay_awake_held,
+                    ..MenuState::default()
+                },
+                Language::English,
+            )
+        };
+        assert!(!menu_contains(&build(false), "stay_awake_active"));
+
+        let held = build(true);
+        assert_eq!(held[0].id.as_deref(), Some("stay_awake_active"));
+        assert_eq!(held[0].label, "Stay Awake: local agent session is live");
+        assert!(held[0].disabled);
+        assert!(held[1].is_separator);
     }
 }

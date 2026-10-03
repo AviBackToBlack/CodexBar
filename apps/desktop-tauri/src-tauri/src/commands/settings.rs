@@ -47,6 +47,7 @@ pub struct SettingsUpdate {
     pub global_shortcut: Option<String>,
     pub codex_custom_sessions_dirs: Option<Vec<String>>,
     pub agent_sessions_enabled: Option<bool>,
+    pub stay_awake_enabled: Option<bool>,
     pub agent_session_ssh_hosts: Option<Vec<String>>,
     pub hooks_enabled: Option<bool>,
     pub http_proxy_enabled: Option<bool>,
@@ -362,6 +363,9 @@ impl SettingsUpdate {
         if let Some(v) = self.agent_sessions_enabled {
             settings.agent_sessions_enabled = v;
         }
+        if let Some(v) = self.stay_awake_enabled {
+            settings.stay_awake_enabled = v;
+        }
         if let Some(v) = self.agent_session_ssh_hosts.clone() {
             settings.agent_session_ssh_hosts =
                 codexbar::agent_sessions::RemoteSessionFetcher::sanitized_hosts(&v);
@@ -556,6 +560,7 @@ pub async fn update_settings(
         patch.codex_custom_sessions_dirs.is_some() || patch.cost_reporting_period.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
+    let stay_awake_changed = patch.stay_awake_enabled.is_some();
     let tray_promotion_changed = patch.changes_tray_promotion();
     let tray_panel_always_on_top_changed = patch.tray_panel_always_on_top.is_some();
     let previous_promoted = settings.promote_tray_icon;
@@ -583,6 +588,9 @@ pub async fn update_settings(
     }
 
     crate::floatbar::after_settings_saved(&app, &float_bar_patch, &settings, notify_float_bar);
+    if stay_awake_changed {
+        crate::stay_awake::settings_changed(&app, settings.stay_awake_enabled);
+    }
     if rebuild_tray_menu {
         crate::tray_bridge::rebuild_tray_menu(&app);
     }

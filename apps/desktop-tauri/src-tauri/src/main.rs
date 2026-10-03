@@ -14,6 +14,7 @@ mod proof_harness;
 mod shell;
 mod shortcut_bridge;
 mod state;
+mod stay_awake;
 mod surface;
 mod surface_target;
 mod tray_accounts;
@@ -197,6 +198,7 @@ fn main() {
             commands::get_provider_catalog,
             commands::get_settings_snapshot,
             commands::get_currency_rates,
+            stay_awake::get_stay_awake_status,
             commands::list_agent_sessions,
             commands::focus_agent_session,
             commands::update_settings,
@@ -328,6 +330,7 @@ fn main() {
             shortcut_bridge::register(app.handle());
             floatbar::install(app.handle());
             auto_refresh::install(app.handle().clone());
+            stay_awake::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {
                 powertoys::install(app.handle().clone());
             }
@@ -448,8 +451,13 @@ fn main() {
                 _ => {}
             }
         })
-        .run(context)
-        .expect("failed to run CodexBar desktop shell");
+        .build(context)
+        .expect("failed to build CodexBar desktop shell")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                stay_awake::shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

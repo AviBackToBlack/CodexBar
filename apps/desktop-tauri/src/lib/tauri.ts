@@ -92,6 +92,10 @@ export function getCurrencyRates(preferredCurrencyCode: string): Promise<Currenc
   return invoke<CurrencyRatesSnapshot>("get_currency_rates", { preferredCurrencyCode });
 }
 
+export function getStayAwakeStatus(): Promise<boolean> {
+  return invoke<boolean>("get_stay_awake_status");
+}
+
 export function updateSettings(
   patch: SettingsUpdate,
 ): Promise<SettingsSnapshot> {
