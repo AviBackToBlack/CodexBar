@@ -98,6 +98,7 @@ pub enum ProviderId {
     GitKraken,
     Bifrost,
     Aixy,
+    LLMMan,
 }
 
 impl ProviderId {
@@ -188,6 +189,7 @@ impl ProviderId {
             ProviderId::GitKraken,
             ProviderId::Bifrost,
             ProviderId::Aixy,
+            ProviderId::LLMMan,
         ]
     }
 
@@ -239,6 +241,7 @@ impl ProviderId {
             ProviderId::GitKraken => "gitkraken",
             ProviderId::Bifrost => "bifrost",
             ProviderId::Aixy => "aixy",
+            ProviderId::LLMMan => "llmman",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -330,6 +333,7 @@ impl ProviderId {
             ProviderId::GitKraken => "GitKraken AI",
             ProviderId::Bifrost => "Bifrost",
             ProviderId::Aixy => "Aixy",
+            ProviderId::LLMMan => "llmman",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -437,6 +441,7 @@ impl ProviderId {
             ProviderId::GitKraken => None,
             ProviderId::Bifrost => None,
             ProviderId::Aixy => None,
+            ProviderId::LLMMan => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -529,6 +534,7 @@ impl ProviderId {
             "gitkraken" | "gitkraken-ai" | "gitkraken ai" => Some(ProviderId::GitKraken),
             "bifrost" | "bifrost-gateway" | "bifrost gateway" => Some(ProviderId::Bifrost),
             "aixy" | "aixy-gateway" | "aixy gateway" => Some(ProviderId::Aixy),
+            "llmman" => Some(ProviderId::LLMMan),
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -1225,6 +1231,7 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::GitKraken => "#179287",
         ProviderId::Bifrost => "#33C09E",
         ProviderId::Aixy => "#123650",
+        ProviderId::LLMMan => "#6CC5B0",
     }
 }
 
@@ -1239,7 +1246,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 84);
+        assert_eq!(all.len(), 85);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1304,6 +1311,7 @@ mod tests {
         assert!(all.contains(&ProviderId::GitKraken));
         assert!(all.contains(&ProviderId::Bifrost));
         assert!(all.contains(&ProviderId::Aixy));
+        assert!(all.contains(&ProviderId::LLMMan));
     }
 
     #[test]

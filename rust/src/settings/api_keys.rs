@@ -562,6 +562,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: None,
         },
         ProviderConfigInfo {
+            id: ProviderId::LLMMan,
+            name: "llmman",
+            requires_api_key: false,
+            api_key_env_var: Some("LLMMAN_API_KEY + LLMMAN_HOST"),
+            api_key_help: Some(
+                "Optional: an open local daemon needs no key. Set the base URL in provider extras or LLMMAN_HOST (default http://127.0.0.1:17434).",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
+        },
+        ProviderConfigInfo {
             id: ProviderId::Poe,
             name: "Poe",
             requires_api_key: true,

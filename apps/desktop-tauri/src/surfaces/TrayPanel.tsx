@@ -39,7 +39,7 @@ const HAS_DASHBOARD = new Set([
   "mimo", "minimax", "mistral", "nanogpt", "notion", "ollama", "openaiapi",
   "opencode", "opencodego", "openrouter", "perplexity", "qoder", "codebuddy", "sakana", "stepfun",
   "t3chat", "venice", "vertexai", "warp", "windsurf",
-  "xai", "zai", "fireworks", "meta", "muse", "nous",
+  "xai", "zai", "fireworks", "meta", "muse", "nous", "llmman",
 ]);
 /** Provider IDs that have a status page URL in the backend */
 const HAS_STATUS_PAGE = new Set([

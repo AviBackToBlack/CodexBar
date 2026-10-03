@@ -125,6 +125,10 @@ fn provider_dashboard_url(id: ProviderId, settings: &Settings) -> Option<String>
                 .console_url()
                 .to_string(),
         ),
+        // The llmman dashboard is the configured daemon itself.
+        ProviderId::LLMMan => Some(codexbar::providers::llmman::dashboard_url(Some(
+            settings.workspace_id(id),
+        ))),
         _ => instantiate_provider(id)
             .metadata()
             .dashboard_url

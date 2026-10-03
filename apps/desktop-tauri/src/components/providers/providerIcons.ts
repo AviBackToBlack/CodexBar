@@ -39,6 +39,7 @@ import jetbrains from "./icons/ProviderIcon-jetbrains.svg?raw";
 import kilo from "./icons/ProviderIcon-kilo.svg?raw";
 import kimi from "./icons/ProviderIcon-kimi.svg?raw";
 import kiro from "./icons/ProviderIcon-kiro.svg?raw";
+import llmman from "./icons/ProviderIcon-llmman.svg?raw";
 import llmproxy from "./icons/ProviderIcon-llmproxy.svg?raw";
 import manus from "./icons/ProviderIcon-manus.svg?raw";
 import meta from "./icons/ProviderIcon-meta.svg?raw";
@@ -128,6 +129,7 @@ const RAW: Record<string, string> = {
   kilo: tint(kilo),
   kimi: tint(kimi),
   kiro: tint(kiro),
+  llmman: tint(llmman),
   llmproxy: tint(llmproxy),
   manus: tint(manus),
   meta: tint(meta),
@@ -203,6 +205,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   kimi:        { id: "kimi",        brandColor: "#fe603c", fallbackLetter: "☽", svgPath: RAW.kimi },
   kimik2:      { id: "kimik2",      brandColor: "#4c00ff", fallbackLetter: "☽", svgPath: RAW.kimi },
   kiro:        { id: "kiro",        brandColor: "#9046ff", fallbackLetter: "K", svgPath: RAW.kiro },
+  llmman:      { id: "llmman",      brandColor: "#6CC5B0", fallbackLetter: "L", svgPath: RAW.llmman },
   llmproxy:    { id: "llmproxy",    brandColor: "#4f46e5", fallbackLetter: "L", svgPath: RAW.llmproxy },
   minimax:     { id: "minimax",     brandColor: "#fe603c", fallbackLetter: "M", svgPath: RAW.minimax },
   mistral:     { id: "mistral",     brandColor: "#ff5229", fallbackLetter: "M", svgPath: RAW.mistral },

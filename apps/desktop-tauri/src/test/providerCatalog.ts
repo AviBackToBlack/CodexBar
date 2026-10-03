@@ -81,4 +81,5 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["gitkraken", "GitKraken AI"],
   ["bifrost", "Bifrost"],
   ["aixy", "Aixy"],
+  ["llmman", "llmman"],
 ];

@@ -16,10 +16,10 @@ use crate::providers::{
     DevinProvider, DoubaoProvider, ElevenLabsProvider, FactoryProvider, FireworksProvider,
     GeminiProvider, GitKrakenProvider, GrokProvider, GroqProvider, HelmcodeProvider,
     HuggingFaceProvider, HyperProvider, InfiniProvider, JetBrainsProvider, KiloProvider,
-    KimiK2Provider, KimiProvider, KiroProvider, LLMProxyProvider, LiteLLMProvider, LongCatProvider,
-    ManusProvider, MetaProvider, MiMoProvider, MiniMaxProvider, MistralProvider, MuseProvider,
-    NanoGPTProvider, NeuralwattProvider, NotionProvider, NousProvider, OllamaProvider,
-    OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider,
+    KimiK2Provider, KimiProvider, KiroProvider, LLMManProvider, LLMProxyProvider, LiteLLMProvider,
+    LongCatProvider, ManusProvider, MetaProvider, MiMoProvider, MiniMaxProvider, MistralProvider,
+    MuseProvider, NanoGPTProvider, NeuralwattProvider, NotionProvider, NousProvider,
+    OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider, OpenRouterProvider,
     PerplexityProvider, PiProvider, PoeProvider, QoderProvider, QwenCloudProvider,
     ReplicateProvider, SakanaProvider, StepFunProvider, Sub2ApiProvider, T3ChatProvider,
     TypeSafeProvider, V0Provider, VeniceProvider, VertexAIProvider, WarpProvider,
@@ -117,6 +117,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::GitKraken => Box::new(GitKrakenProvider::new()),
         ProviderId::Bifrost => Box::new(BifrostProvider::new()),
         ProviderId::Aixy => Box::new(AixyProvider::new()),
+        ProviderId::LLMMan => Box::new(LLMManProvider::new()),
     }
 }
 

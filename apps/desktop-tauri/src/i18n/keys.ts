@@ -918,6 +918,10 @@ export const ALL_LOCALE_KEYS = [
   "LlmProxyBaseUrlLabel",
   "LlmProxyBaseUrlPlaceholder",
   "LlmProxyBaseUrlHelp",
+  "LLMManApiTitle",
+  "LLMManBaseUrlLabel",
+  "LLMManBaseUrlPlaceholder",
+  "LLMManBaseUrlHelp",
 
   // Tray icon visibility (Windows 11 hidden-icons overflow)
   "PromoteTrayIconLabel",

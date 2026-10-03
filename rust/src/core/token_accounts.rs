@@ -426,7 +426,8 @@ impl TokenAccountSupport {
             | ProviderId::AtlasCloud
             | ProviderId::Hyper
             | ProviderId::GitKraken
-            | ProviderId::Bifrost => None,
+            | ProviderId::Bifrost
+            | ProviderId::LLMMan => None,
         }
     }
 
