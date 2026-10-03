@@ -10,6 +10,7 @@ import type {
 } from "../../../types/bridge";
 import type { TabProps } from "../settingsTabs";
 import FloatBarSettingsSection from "../../../floatbar/SettingsSection";
+import SwitcherShortcutsSection from "../SwitcherShortcutsSection";
 import { getTrayVisibilityStatus } from "../../../lib/tauri";
 
 export default function DisplayTab({
@@ -260,6 +261,10 @@ export default function DisplayTab({
           </Field>
         </div>
       </section>}
+
+      {mode === "menu" && (
+        <SwitcherShortcutsSection settings={settings} saving={saving} set={set} />
+      )}
 
       {mode === "menu" && (
         <FloatBarSettingsSection settings={settings} saving={saving} set={set} />

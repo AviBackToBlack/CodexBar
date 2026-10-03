@@ -100,6 +100,7 @@ describe("Language type", () => {
       autoDownloadUpdates: false,
       installUpdatesOnQuit: false,
       globalShortcut: "",
+      switcherShortcuts: {},
       codexCustomSessionsDirs: [],
       updateChannel: "stable",
       uiLanguage: "spanish",

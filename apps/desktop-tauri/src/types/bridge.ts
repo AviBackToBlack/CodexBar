@@ -210,6 +210,8 @@ export interface SettingsSnapshot {
   autoDownloadUpdates: boolean;
   installUpdatesOnQuit: boolean;
   globalShortcut: string;
+  /** Fully resolved action -> shortcut map (defaults overlaid by overrides). */
+  switcherShortcuts: Record<string, string>;
   /** Extra Codex home or sessions directories scanned for local cost estimates. */
   codexCustomSessionsDirs: string[];
   agentSessionsEnabled?: boolean;
@@ -339,6 +341,8 @@ export interface SettingsUpdate {
   autoDownloadUpdates?: boolean;
   installUpdatesOnQuit?: boolean;
   globalShortcut?: string;
+  /** Overrides only; replaces the stored map. `{}` restores the defaults. */
+  switcherShortcuts?: Record<string, string>;
   codexCustomSessionsDirs?: string[];
   agentSessionsEnabled?: boolean;
   stayAwakeEnabled?: boolean;

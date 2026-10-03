@@ -82,6 +82,65 @@ describe("useProviderSwitcherKeys", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("follows custom shortcuts instead of the defaults", () => {
+    const onSelect = vi.fn();
+    renderHook(() =>
+      useProviderSwitcherKeys({
+        providerIds: IDS,
+        selectedProviderId: null,
+        onSelect,
+        shortcuts: { next: "shift+right", previous: "none", select2: "alt+2" },
+      }),
+    );
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowLeft", code: "ArrowLeft" });
+    fireEvent.keyDown(window, { key: "2", code: "Digit2", ctrlKey: true });
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", shiftKey: true });
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+    fireEvent.keyDown(window, { key: "2", code: "Digit2", altKey: true });
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+    expect(onSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses updated shortcuts without reinstalling the key listener", () => {
+    const onSelect = vi.fn();
+    const { rerender } = renderHook(
+      ({ shortcuts }: { shortcuts: Record<string, string> }) =>
+        useProviderSwitcherKeys({
+          providerIds: IDS,
+          selectedProviderId: null,
+          onSelect,
+          shortcuts,
+        }),
+      { initialProps: { shortcuts: { next: "shift+right" } } },
+    );
+
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", shiftKey: true });
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+
+    rerender({ shortcuts: { next: "alt+2" } });
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(window, { key: "2", code: "Digit2", altKey: true });
+    expect(onSelect).toHaveBeenCalledTimes(2);
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+  });
+
+  it("falls back to the defaults for an invalid stored map", () => {
+    const onSelect = vi.fn();
+    renderHook(() =>
+      useProviderSwitcherKeys({
+        providerIds: IDS,
+        selectedProviderId: null,
+        onSelect,
+        shortcuts: { next: "left" },
+      }),
+    );
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight" });
+    expect(onSelect).toHaveBeenLastCalledWith("codex");
+  });
+
   it("stops listening after unmount", () => {
     const { onSelect, unmount } = setup(null);
     unmount();

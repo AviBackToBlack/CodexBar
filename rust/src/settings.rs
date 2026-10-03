@@ -12,7 +12,7 @@
 )]
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::core::ProviderId;
@@ -240,6 +240,12 @@ pub struct Settings {
     /// Global keyboard shortcut to open the menu (e.g., "Ctrl+Shift+U")
     #[serde(default = "default_global_shortcut")]
     pub global_shortcut: String,
+
+    /// Provider-switcher shortcut overrides (action -> shortcut, normalized).
+    /// Empty means every action uses its default; see
+    /// [`crate::switcher_shortcuts`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub switcher_shortcuts: BTreeMap<String, String>,
 
     /// Additional Codex home or sessions directories to include in local cost scans.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -609,6 +615,7 @@ impl Default for Settings {
             provider_metrics: HashMap::new(), // Empty = use Automatic for all
             provider_order: Vec::new(), // Empty = canonical ProviderId::all() order
             global_shortcut: default_global_shortcut(), // Ctrl+Shift+U by default
+            switcher_shortcuts: BTreeMap::new(),
             codex_custom_sessions_dirs: Vec::new(),
             agent_sessions_enabled: false,
             stay_awake_enabled: false,

@@ -5,8 +5,10 @@ import {
   SwitcherShortcutError,
   matchSwitcherAction,
   normalizeShortcut,
+  resolveSwitcherShortcuts,
   resolveSwitcherTarget,
   shortcutFromEvent,
+  switcherShortcutOverrides,
   validateSwitcherShortcuts,
   type SwitcherKeyEvent,
 } from "./switcherShortcuts";
@@ -136,8 +138,19 @@ describe("shortcutFromEvent", () => {
     expect(shortcutFromEvent(keyEvent({ key: "A", code: "KeyA", altKey: true }))).toBe("alt+a");
   });
 
+  it("uses the logical letter reported by the active keyboard layout", () => {
+    const event = keyEvent({ key: "z", code: "KeyY", ctrlKey: true });
+    expect(shortcutFromEvent(event)).toBe("ctrl+z");
+    expect(
+      matchSwitcherAction(event, validateSwitcherShortcuts({ select1: "ctrl+z" })),
+    ).toBe("select1");
+  });
+
   it("maps comma and numpad digits via key", () => {
     expect(shortcutFromEvent(keyEvent({ key: ",", code: "Comma", ctrlKey: true }))).toBe("ctrl+,");
+    expect(
+      shortcutFromEvent(keyEvent({ key: "<", code: "Comma", ctrlKey: true, shiftKey: true })),
+    ).toBe("ctrl+shift+,");
     expect(shortcutFromEvent(keyEvent({ key: "3", code: "Numpad3", ctrlKey: true }))).toBe("ctrl+3");
   });
 
@@ -169,6 +182,16 @@ describe("matchSwitcherAction", () => {
       matchSwitcherAction(keyEvent({ key: "ArrowRight", code: "ArrowRight", shiftKey: true }), mapping),
     ).toBe("next");
   });
+
+  it("matches shifted comma by its physical key code", () => {
+    const mapping = validateSwitcherShortcuts({ select1: "ctrl+shift+," });
+    expect(
+      matchSwitcherAction(
+        keyEvent({ key: "<", code: "Comma", ctrlKey: true, shiftKey: true }),
+        mapping,
+      ),
+    ).toBe("select1");
+  });
 });
 
 describe("resolveSwitcherTarget", () => {
@@ -195,5 +218,28 @@ describe("resolveSwitcherTarget", () => {
     expect(resolveSwitcherTarget("select2", ids, null)).toEqual({ providerId: "codex" });
     expect(resolveSwitcherTarget("select4", ids, null)).toEqual({ providerId: "gemini" });
     expect(resolveSwitcherTarget("select5", ids, null)).toBeNull();
+  });
+});
+
+describe("resolveSwitcherShortcuts", () => {
+  it("returns the defaults for a missing or invalid map", () => {
+    expect(resolveSwitcherShortcuts()).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+    expect(resolveSwitcherShortcuts({})).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+    expect(resolveSwitcherShortcuts({ next: "left" })).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+    expect(resolveSwitcherShortcuts({ bogus: "ctrl+1" })).toEqual(DEFAULT_SWITCHER_SHORTCUTS);
+  });
+
+  it("accepts the fully resolved map the backend sends", () => {
+    const stored = { ...DEFAULT_SWITCHER_SHORTCUTS, next: "none", select2: "ctrl+alt+2" };
+    expect(resolveSwitcherShortcuts(stored)).toEqual(stored);
+  });
+});
+
+describe("switcherShortcutOverrides", () => {
+  it("keeps only entries that differ from the defaults", () => {
+    expect(switcherShortcutOverrides(DEFAULT_SWITCHER_SHORTCUTS)).toEqual({});
+    expect(
+      switcherShortcutOverrides(validateSwitcherShortcuts({ next: "none", select2: "alt+2" })),
+    ).toEqual({ next: "none", select2: "alt+2" });
   });
 });

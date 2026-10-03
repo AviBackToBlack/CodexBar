@@ -348,6 +348,7 @@ export function useTrayPanelController(state: BootstrapState) {
     providerIds: gridProviderIds,
     selectedProviderId,
     onSelect: handleGridClick,
+    shortcuts: settings.switcherShortcuts,
   });
   const handleReorder = useCallback((orderedIds: string[]) => {
     void reorderProviders(orderedIds).catch(() => {});

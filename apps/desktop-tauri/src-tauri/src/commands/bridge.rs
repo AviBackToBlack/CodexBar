@@ -835,6 +835,7 @@ pub struct SettingsSnapshot {
     auto_download_updates: bool,
     install_updates_on_quit: bool,
     global_shortcut: String,
+    switcher_shortcuts: std::collections::BTreeMap<String, String>,
     codex_custom_sessions_dirs: Vec<String>,
     agent_sessions_enabled: bool,
     stay_awake_enabled: bool,
@@ -969,6 +970,9 @@ impl From<Settings> for SettingsSnapshot {
             update_channel: update_channel_label(settings.update_channel),
             auto_download_updates: settings.auto_download_updates,
             install_updates_on_quit: settings.install_updates_on_quit,
+            switcher_shortcuts: codexbar::switcher_shortcuts::resolve_or_default(
+                &settings.switcher_shortcuts,
+            ),
             global_shortcut: settings.global_shortcut,
             codex_custom_sessions_dirs: settings.codex_custom_sessions_dirs,
             agent_sessions_enabled: settings.agent_sessions_enabled,

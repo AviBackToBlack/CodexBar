@@ -83,6 +83,7 @@ const settings: SettingsSnapshot = {
   autoDownloadUpdates: false,
   installUpdatesOnQuit: false,
   globalShortcut: "",
+  switcherShortcuts: {},
   codexCustomSessionsDirs: [],
   updateChannel: "stable",
   uiLanguage: "english",
