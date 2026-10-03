@@ -12,9 +12,10 @@ use crate::codex_costs::codex_period_start;
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner, sha256_hex};
 
 use super::sidecar::{SidecarError, WorkspaceUsageSidecar};
+use super::thread_names::apply_session_names_and_ranking;
 use super::types::{
     CodexLocalProjectUsageSnapshot, CostEstimate, DailyPoint, Progress, ProgressPhase,
-    ProjectUsage, SessionUsage, SourceStatus, UsageTotals,
+    ProjectUsage, SessionUsage, SourceStatus, UsageTotals, untitled_session_label,
 };
 use super::{CHATS_DISPLAY_NAME, CHATS_PROJECT_ID};
 
@@ -39,10 +40,9 @@ pub struct CodexLocalDataScope {
 }
 
 impl CodexLocalDataScope {
-    /// `CODEX_HOME` → `CODEX_SQLITE_HOME` → `~/.codex`.
+    /// `CODEX_HOME` → `~/.codex`; the SQLite override is only for thread metadata.
     pub fn resolve() -> Option<Self> {
         let home = non_empty_env("CODEX_HOME")
-            .or_else(|| non_empty_env("CODEX_SQLITE_HOME"))
             .map(PathBuf::from)
             .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))?;
         Some(Self::from_home(home))
@@ -148,6 +148,11 @@ impl CodexWorkspacesIndex {
             match sidecar.load_latest_snapshot(scope.scope_signature(), self.history_days) {
                 Ok(Some(mut cached)) => {
                     cached.source_status = source_status;
+                    apply_session_names_and_ranking(
+                        &mut cached,
+                        &scope.codex_home,
+                        non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+                    );
                     return Ok(cached);
                 }
                 Ok(None) => {}
@@ -241,17 +246,12 @@ impl CodexWorkspacesIndex {
             .collect();
         daily.sort_by(|a, b| a.day.cmp(&b.day));
 
-        let mut sessions: Vec<SessionUsage> = session_buckets
+        let sessions: Vec<SessionUsage> = session_buckets
             .values()
             .map(SessionBucket::to_session_usage)
             .collect();
-        sessions.sort_by(|a, b| {
-            b.latest_activity
-                .cmp(&a.latest_activity)
-                .then_with(|| a.id.cmp(&b.id))
-        });
 
-        let snapshot = CodexLocalProjectUsageSnapshot {
+        let mut snapshot = CodexLocalProjectUsageSnapshot {
             updated_at: Utc::now(),
             history_days: self.history_days,
             scope_signature: scope.scope_signature().to_string(),
@@ -263,6 +263,11 @@ impl CodexWorkspacesIndex {
             daily,
             source_status,
         };
+        apply_session_names_and_ranking(
+            &mut snapshot,
+            &scope.codex_home,
+            non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+        );
 
         progress(Progress::phase(ProgressPhase::Saving));
         sidecar.publish_snapshot(&snapshot)?;
@@ -359,7 +364,7 @@ impl SessionBucket {
                 .title
                 .clone()
                 .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| "Local Codex chat".to_string()),
+                .unwrap_or_else(|| untitled_session_label(&self.id)),
             cwd: self.cwd.clone(),
             started_at: self.started_at,
             latest_activity: self.latest_activity,
@@ -412,11 +417,6 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 .into_iter()
                 .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
                 .map(|(m, _)| m);
-            let top_sessions = buckets
-                .iter()
-                .take(5)
-                .map(|b| b.to_session_usage())
-                .collect();
             ProjectUsage {
                 id: first.project_id.clone(),
                 display_name: first.project_display_name.clone(),
@@ -427,7 +427,7 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 session_count: buckets.len() as u32,
                 latest_activity: latest,
                 top_model,
-                top_sessions,
+                top_sessions: Vec::new(),
             }
         })
         .collect()
@@ -979,10 +979,7 @@ mod tests {
         snap.redact_for_privacy();
         assert_eq!(snap.projects[0].display_name, "Workspace");
         assert!(snap.projects[0].path.is_none());
-        assert_eq!(
-            snap.projects[0].top_sessions[0].display_title,
-            "Local Codex chat"
-        );
+        assert_eq!(snap.projects[0].top_sessions[0].display_title, "Session s1");
         assert!(snap.projects[0].top_sessions[0].cwd.is_none());
     }
 }

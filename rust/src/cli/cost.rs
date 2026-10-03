@@ -11,6 +11,7 @@ use super::usage::{OutputFormat, ProviderSelection};
 use crate::codex_costs::{
     CodexHostCostReport, CodexHostCostsArgs, CodexHostOutcome, run_codex_host_costs,
 };
+use crate::codex_workspaces::short_session_id;
 use crate::core::{CostScanOptions, ProviderId};
 use crate::cost_reporting_period::CostReportingPeriod;
 use crate::cost_scanner::{CostScanner, CostSummary};
@@ -524,23 +525,6 @@ fn print_codex_session_output(result: &CostResult, period: CostReportingPeriod) 
     println!("  Not a subscription bill or plan value · local usage × public API prices");
 }
 
-fn short_session_id(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= 12 {
-        return trimmed.to_string();
-    }
-    let prefix: String = trimmed.chars().take(4).collect();
-    let suffix: String = trimmed
-        .chars()
-        .rev()
-        .take(8)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{prefix}...{suffix}")
-}
-
 /// Print JSON output
 fn build_json_payloads(
     results: &[CostResult],
@@ -1002,12 +986,6 @@ mod tests {
     fn group_by_defaults_none_and_accepts_session() {
         assert_eq!(CostGroupBy::from_arg(None), CostGroupBy::None);
         assert_eq!(CostGroupBy::from_arg(Some("session")), CostGroupBy::Session);
-    }
-
-    #[test]
-    fn short_session_id_is_privacy_conscious() {
-        assert_eq!(short_session_id("abc"), "abc");
-        assert_eq!(short_session_id("1234567890abcdef"), "1234...90abcdef");
     }
 
     #[test]
