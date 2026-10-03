@@ -44,6 +44,16 @@ impl ProviderStateKind {
     pub const fn is_problem(self) -> bool {
         !matches!(self, ProviderStateKind::Ready)
     }
+
+    /// Whether this state means the account must sign in again. The only
+    /// states that qualify for credential-expiry alerts; quota, permission,
+    /// rate-limit and transport failures map elsewhere and never do.
+    pub const fn needs_sign_in(self) -> bool {
+        matches!(
+            self,
+            ProviderStateKind::NeedsAuthentication | ProviderStateKind::ExpiredSession
+        )
+    }
 }
 
 impl ProviderError {
@@ -136,6 +146,15 @@ mod tests {
         ] {
             assert!(kind.is_problem());
         }
+    }
+
+    #[test]
+    fn only_authentication_states_need_sign_in() {
+        assert!(ProviderStateKind::NeedsAuthentication.needs_sign_in());
+        assert!(ProviderStateKind::ExpiredSession.needs_sign_in());
+        assert!(!ProviderStateKind::Ready.needs_sign_in());
+        assert!(!ProviderStateKind::LocalRuntimeOffline.needs_sign_in());
+        assert!(!ProviderStateKind::Unknown.needs_sign_in());
     }
 
     #[test]

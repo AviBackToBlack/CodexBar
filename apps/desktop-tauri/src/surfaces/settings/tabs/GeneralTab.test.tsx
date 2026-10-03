@@ -63,6 +63,7 @@ const settings: SettingsSnapshot = {
   highUsageThreshold: 70,
   criticalUsageThreshold: 90,
   predictivePaceWarningEnabled: false,
+  credentialExpiryNotificationsEnabled: false,
   trayIconMode: "single",
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
@@ -176,6 +177,28 @@ describe("GeneralTab language picker", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "PredictivePaceWarnings" }));
 
     expect(set).toHaveBeenCalledWith({ predictivePaceWarningEnabled: true });
+  });
+
+  it("updates the credential expiry alert preference", () => {
+    const set = vi.fn();
+    render(
+      <GeneralTab
+        mode="notifications"
+        settings={settings}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    const toggle = screen.getByRole("checkbox", {
+      name: "CredentialExpiryNotifications",
+    });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(set).toHaveBeenCalledWith({
+      credentialExpiryNotificationsEnabled: true,
+    });
   });
 
   it("updates the low power mode preference", () => {

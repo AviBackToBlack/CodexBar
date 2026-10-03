@@ -674,6 +674,10 @@ PredictivePaceWarnings = 予測ペース警告
 PredictivePaceWarningsHelper = リセット前に Codex または Claude の使用量がなくなりそうなときに警告
 PredictivePaceWarningTitle = { "{}" } { "{}" } ペース警告
 PredictivePaceWarningBody = クレジットが { "{}" } 以内になくなる可能性
+CredentialExpiryNotifications = 認証情報の有効期限アラート
+CredentialExpiryNotificationsHelper = プロバイダーアカウントで再ログインが必要になったときに一度だけ通知
+CredentialExpiryTitle = { "{}" } の再ログインが必要です
+CredentialExpiryBody = CodexBarを開いてアカウントのエラーを確認し、再ログインしてください。
 ShowResetWhenExhausted = 使い切ったときリセット時刻を表示
 ShowResetWhenExhaustedHelper = 使い切った割合をライブのリセットカウントダウンに置き換え
 

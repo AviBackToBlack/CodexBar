@@ -25,6 +25,7 @@ pub struct SettingsUpdate {
     pub provider_usage_thresholds:
         Option<std::collections::HashMap<String, codexbar::settings::UsageThresholdOverride>>,
     pub predictive_pace_warning_enabled: Option<bool>,
+    pub credential_expiry_notifications_enabled: Option<bool>,
     pub show_pace: Option<bool>,
     pub tray_icon_mode: Option<String>,
     pub stacked_tray_top_provider: Option<String>,
@@ -333,6 +334,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.predictive_pace_warning_enabled {
             settings.predictive_pace_warning_enabled = v;
+        }
+        if let Some(v) = self.credential_expiry_notifications_enabled {
+            settings.credential_expiry_notifications_enabled = v;
         }
         if let Some(v) = self.show_pace {
             settings.show_pace = v;

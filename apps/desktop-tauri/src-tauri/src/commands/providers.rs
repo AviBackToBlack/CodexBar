@@ -1,3 +1,4 @@
+use super::credential_alerts::{self, FetchAttempt};
 use super::provider_refresh::{
     ProviderRefreshCompletion, ProviderRefreshReservation, complete_provider_refresh,
     reserve_provider_refresh,
@@ -612,6 +613,11 @@ async fn do_refresh_providers_with_policy(
     let settings = Settings::load();
     let enabled_ids = settings.get_enabled_provider_ids();
     let refresh_ids = scope.provider_ids(&settings, &enabled_ids);
+    if let Ok(mut guard) = state.lock() {
+        guard
+            .notification_manager
+            .retire_credential_episodes_except(&enabled_ids);
+    }
     if refresh_ids.is_empty() {
         return Ok(ProviderRefreshOutcome::Skipped {
             reason: ProviderRefreshSkipReason::NoEnabledProviders,
@@ -794,6 +800,8 @@ async fn refresh_provider(
     let (snapshot, account_identity, retention) =
         fetch_provider_snapshot(id, ctx, token_account_id).await;
     let fresh_snapshot = snapshot.error.is_none();
+    // Captured before last-good preservation can swap in a cached snapshot.
+    let fetch_attempt = FetchAttempt::of(&snapshot);
 
     let state = app.state::<Mutex<AppState>>();
     let published = if let Ok(mut guard) = state.lock() {
@@ -831,6 +839,23 @@ async fn refresh_provider(
                     .provider_cache_updated_at_by_provider
                     .insert(id, std::time::Instant::now());
             }
+            // Read consent after the fetch completes, so a toggle change made
+            // while the request was in flight takes effect for this outcome.
+            let credential_alerts = match fetch_attempt {
+                FetchAttempt::Failed(kind) if kind.needs_sign_in() => Some(
+                    codexbar::notifications::CredentialAlertPolicy::from_settings(&Settings::load()),
+                ),
+                _ => None,
+            };
+            credential_alerts::observe_attempt(
+                &mut guard.notification_manager,
+                credential_alerts,
+                id,
+                token_account_id,
+                fetch_attempt,
+                &snapshot,
+                cached.as_ref(),
+            );
             Some(snapshot)
         }
     } else {
@@ -1304,22 +1329,38 @@ fn dispatch_quota_hooks(
 
 /// Stable account discriminator for threshold/session toast dedupe.
 /// Prefer token-account id, then email, org, plan; empty for single-account lanes.
-fn quota_notification_account_identity(
+pub(super) fn quota_notification_account_identity(
     snapshot: &ProviderUsageSnapshot,
     token_account_id: Option<uuid::Uuid>,
 ) -> String {
     ProviderId::from_cli_name(&snapshot.provider_id)
         .map(|provider| {
-            WarningIdentity::new(
+            quota_notification_account_identity_for(
                 provider,
                 &snapshot.source_label,
                 snapshot.account_email.as_deref(),
                 snapshot.account_organization.as_deref(),
                 token_account_id,
             )
-            .threshold_key()
         })
         .unwrap_or_default()
+}
+
+pub(super) fn quota_notification_account_identity_for(
+    provider: ProviderId,
+    source_label: &str,
+    account_email: Option<&str>,
+    account_organization: Option<&str>,
+    token_account_id: Option<uuid::Uuid>,
+) -> String {
+    WarningIdentity::new(
+        provider,
+        source_label,
+        account_email,
+        account_organization,
+        token_account_id,
+    )
+    .threshold_key()
 }
 
 fn notify_predictive_pace(

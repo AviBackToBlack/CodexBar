@@ -79,6 +79,7 @@ describe("Language type", () => {
       highUsageThreshold: 70,
       criticalUsageThreshold: 90,
       predictivePaceWarningEnabled: false,
+      credentialExpiryNotificationsEnabled: false,
       trayIconMode: "single",
       switcherShowsIcons: true,
       menuBarShowsHighestUsage: true,
