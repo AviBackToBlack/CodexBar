@@ -32,7 +32,7 @@ Aligned with upstream *ideas*, mapped to this port:
 - **Manual cookie headers** → `manual_cookies.json` (and/or settings fields depending on provider path)
 - **API keys** → `api_keys.json` / keyring helpers where used
 - **Token accounts** → `token-accounts.json`
-- **Browser auto cookies** → extracted at runtime from Chrome/Edge/Brave/Firefox profiles (see [COOKIES.md](./COOKIES.md)); not a substitute for committing secrets into git
+- **Browser auto cookies** → extracted at runtime from Chrome (any channel)/Chromium/Edge/Brave/Firefox profiles (see [COOKIES.md](./COOKIES.md)); not a substitute for committing secrets into git
 
 Do not commit real `settings.json` / key files into the repo.
 
