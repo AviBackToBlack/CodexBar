@@ -94,7 +94,7 @@ if ($isMainPush) {
     # PR association without a populated event value (e.g. api trigger):
     # resolve the base from the public GitHub pulls API.
     try {
-        $prNumber = ''
+        $prNumber = Get-ForkMirrorPrNumber -Branch $Branch
         if ($PrUrl -match '/pull/(\d+)') { $prNumber = $Matches[1] }
         if ([string]::IsNullOrWhiteSpace($prNumber)) { throw 'PR number not available from pipeline values.' }
         if ([string]::IsNullOrWhiteSpace($env:CIRCLE_PROJECT_USERNAME) -or [string]::IsNullOrWhiteSpace($env:CIRCLE_PROJECT_REPONAME)) {
