@@ -208,7 +208,28 @@ fn api_base_url() -> Url {
     std::env::var("GROQ_API_URL")
         .ok()
         .and_then(|raw| crate::providers::validated_https_url(&raw, "Groq API").ok())
+        .map(migrate_legacy_api_base)
         .unwrap_or_else(|| Url::parse(GROQ_API_BASE).expect("static Groq URL is valid"))
+}
+
+/// Before 0.70.0 the default base was Groq's OpenAI-compatible root
+/// (`https://api.groq.com/openai/v1`), which has no metrics route. A
+/// `GROQ_API_URL` still set to that value is rewritten to the metrics base;
+/// other hosts (gateways, proxies) are left as configured.
+fn migrate_legacy_api_base(url: Url) -> Url {
+    let is_groq_host = url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.groq.com"));
+    let path = url.path().trim_end_matches('/');
+    if !is_groq_host || !path.eq_ignore_ascii_case("/openai/v1") {
+        return url;
+    }
+    tracing::warn!(
+        "GROQ_API_URL uses the legacy OpenAI-compatible Groq base; using {GROQ_API_BASE}"
+    );
+    let mut migrated = url;
+    migrated.set_path("/v1");
+    migrated
 }
 
 /// Append the Prometheus query path to the API base as path segments.
@@ -367,6 +388,30 @@ mod tests {
                 "https://gateway.example.test/groq/v1/metrics/prometheus/api/v1/query",
                 "{base}"
             );
+        }
+    }
+
+    #[test]
+    fn legacy_openai_compatible_base_migrates_to_the_metrics_base() {
+        for legacy in [
+            "https://api.groq.com/openai/v1",
+            "https://api.groq.com/openai/v1/",
+            "https://API.GROQ.COM/openai/v1",
+        ] {
+            let base = migrate_legacy_api_base(Url::parse(legacy).unwrap());
+            assert_eq!(
+                metrics_query_url(&base).unwrap().as_str(),
+                "https://api.groq.com/v1/metrics/prometheus/api/v1/query",
+                "{legacy}"
+            );
+        }
+        for kept in [
+            "https://api.groq.com/v1",
+            "https://gateway.example.test/openai/v1",
+            "https://api.groq.com/openai/v2",
+        ] {
+            let url = Url::parse(kept).unwrap();
+            assert_eq!(migrate_legacy_api_base(url.clone()), url, "{kept}");
         }
     }
 
