@@ -21,11 +21,13 @@ credential.
 The hosted PR check delegates to scripts/local-check.ps1 -Slice ci:
 
 ~~~powershell
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\circleci-pr.tests.ps1
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 pnpm --dir apps/desktop-tauri install --frozen-lockfile
 pnpm --dir apps/desktop-tauri run lint
+pnpm --dir apps/desktop-tauri run check:anti-slop
 pnpm --dir apps/desktop-tauri run test:anti-slop
 pnpm --dir apps/desktop-tauri test
 pnpm --dir apps/desktop-tauri run build
@@ -38,22 +40,23 @@ second tag trigger.
 
 ## Fork pull requests
 
-CircleCI GitHub App pipelines never fire for pull requests from forks. To
-build one:
+CircleCI GitHub App pipelines never fire for pull requests from forks, and
+this project does not trigger hosted CircleCI runs any other way (no API
+token). Validate a fork PR locally instead:
 
-1. Read the fork PR's diff. The build runs the contributor's code on CircleCI
-   with this project's environment variables.
-2. Add the `ci:run` label. .github/workflows/fork-ci-mirror.yml pushes
-   exactly that head commit to ci/pr-<number> in this repository.
-3. CircleCI builds the ci/pr-<number> push. The trigger gate in
-   scripts/circleci-pr-common.ps1 lets those branches through, and the
-   docs-only gate finds the PR base from the number. The check lands on the
-   same commit, so it shows on the fork PR.
-
-Any new push to the fork PR removes the label; re-add it after reviewing the
-new commits. Closing the PR removes the mirror branch. GITHUB_TOKEN cannot
-push commits that change .github/workflows/**, so the mirror fails for those
-PRs; review them by hand and use the manual Blacksmith workflow if needed.
+1. Read the whole diff first, including build.rs, Cargo and package
+   manifests, scripts and tests. Building and testing a fork runs its code.
+2. Run the check in a disposable, credential-free Windows environment, such
+   as Windows Sandbox or a throwaway VM. It must have no GitHub, CircleCI,
+   SignPath or provider logins, and no access to your profile. A worktree on
+   your own machine is not isolation.
+3. In that environment, fetch the head (`git fetch origin pull/<number>/head`),
+   check it out (`git checkout --detach FETCH_HEAD`), and run the commands
+   listed under "CircleCI validation" above one by one. Take the list from
+   main's copy of scripts/local-check.ps1, and don't run either copy of that
+   script; the fork can change its own.
+4. Post the result on the PR. The PR has no `ci/circleci: pr-check`, so a
+   maintainer merges it with an admin override.
 
 ## Code review
 

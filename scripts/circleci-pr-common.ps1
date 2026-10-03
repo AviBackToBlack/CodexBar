@@ -50,35 +50,19 @@ function Get-TriggerGateDecision {
     # every other branch push skips. CircleCI delivers same-repo PR builds
     # as branch pipelines, so PR association comes from the compile-time
     # GitHub App pipeline value pipeline.event.context.github.pr_url.
-    # GitHub App pipelines never fire for fork PRs, so the fork-ci-mirror
-    # workflow copies a maintainer-approved fork head to ci/pr-<number>;
-    # those pushes run the checks too.
     $isPr = -not [string]::IsNullOrWhiteSpace($PrUrl)
     $isMainPush = $Branch -in @('main', 'master')
-    $isForkMirror = -not [string]::IsNullOrWhiteSpace((Get-ForkMirrorPrNumber -Branch $Branch))
-    if (-not $isPr -and -not $isMainPush -and -not $isForkMirror) {
+    if (-not $isPr -and -not $isMainPush) {
         return [pscustomobject]@{
             Skip = $true
-            Reason = "Branch push to '$Branch' (not a PR, not main/master, not a ci/pr-<number> fork mirror): hosted pr-check skips."
+            Reason = "Branch push to '$Branch' (not a PR, not main/master): hosted pr-check skips."
         }
     }
 
     return [pscustomobject]@{
         Skip = $false
-        Reason = "Trigger gate passed (PR: $isPr, fork mirror: $isForkMirror, branch: '$Branch')."
+        Reason = "Trigger gate passed (PR: $isPr, branch: '$Branch')."
     }
-}
-
-<#
-.SYNOPSIS
-    PR number of a ci/pr-<number> fork-mirror branch, or '' for any other
-    branch. The fork-ci-mirror workflow is the only writer of these branches.
-#>
-function Get-ForkMirrorPrNumber {
-    param([AllowEmptyString()][string]$Branch)
-
-    if ($Branch -match '^ci/pr-([1-9]\d*)$') { return $Matches[1] }
-    return ''
 }
 
 <#
