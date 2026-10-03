@@ -17,7 +17,7 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{LazyLock, mpsc};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
@@ -442,6 +442,9 @@ impl TtyCommandRunner {
         pending_script_retries.sort();
         let mut next_script_retry = pending_script_retries.into_iter();
         let mut upcoming_script_retry = next_script_retry.next();
+        // The buffer only grows, so a done marker stays visible once it
+        // appeared: rescan only after new output, and never after a match.
+        let mut accepted = script_accepted(&buffer, options);
 
         let mut last_enter = Instant::now();
 
@@ -456,7 +459,7 @@ impl TtyCommandRunner {
             if !buffer.is_empty() {
                 let done_idle = options
                     .idle_timeout_after_done_secs
-                    .filter(|_| script_accepted(&buffer, options))
+                    .filter(|_| accepted)
                     .map(Duration::from_secs_f64);
                 let effective_idle = match (idle_timeout, done_idle) {
                     (Some(idle), Some(done)) => Some(idle.min(done)),
@@ -496,7 +499,9 @@ impl TtyCommandRunner {
             }
 
             // Read available output
+            let mut received_output = false;
             while let Ok(chunk) = rx.try_recv() {
+                received_output = true;
                 tracing::trace!(
                     elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                     bytes = chunk.len(),
@@ -564,13 +569,17 @@ impl TtyCommandRunner {
                 break;
             }
 
+            if received_output && !accepted {
+                accepted = script_accepted(&buffer, options);
+            }
+
             // Re-send the script while the target program has not shown that it
             // accepted the first attempt (input widget mounted late).
             if let Some(retry_at) = upcoming_script_retry
                 && start.elapsed() >= retry_at
             {
                 upcoming_script_retry = next_script_retry.next();
-                if !script_lines.is_empty() && !script_accepted(&buffer, options) {
+                if !script_lines.is_empty() && !accepted {
                     if script_echoed(&buffer, options) {
                         // Text arrived but Enter was swallowed: only confirm.
                         let _enter_written = write!(writer, "\r\n");
@@ -800,12 +809,16 @@ fn script_echoed(buffer: &str, options: &TtyCommandOptions) -> bool {
     contains_any_marker(buffer, &options.script_echo_substrings)
 }
 
+/// CSI sequences (colors, cursor moves) dropped before marker matching.
+static ANSI_CSI: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").ok());
+
 fn contains_any_marker(buffer: &str, markers: &[String]) -> bool {
     if markers.is_empty() {
         return false;
     }
-    let ansi = Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").ok();
-    let clean = ansi
+    let clean = ANSI_CSI
+        .as_ref()
         .map(|re| re.replace_all(buffer, "").to_string())
         .unwrap_or_else(|| buffer.to_string())
         .to_lowercase();
