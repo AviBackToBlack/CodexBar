@@ -21,11 +21,13 @@ credential.
 The hosted PR check delegates to scripts/local-check.ps1 -Slice ci:
 
 ~~~powershell
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\circleci-pr.tests.ps1
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 pnpm --dir apps/desktop-tauri install --frozen-lockfile
 pnpm --dir apps/desktop-tauri run lint
+pnpm --dir apps/desktop-tauri run check:anti-slop
 pnpm --dir apps/desktop-tauri run test:anti-slop
 pnpm --dir apps/desktop-tauri test
 pnpm --dir apps/desktop-tauri run build
@@ -48,10 +50,11 @@ token). Validate a fork PR locally instead:
    as Windows Sandbox or a throwaway VM. It must have no GitHub, CircleCI,
    SignPath or provider logins, and no access to your profile. A worktree on
    your own machine is not isolation.
-3. In that environment, fetch the head (`git fetch origin pull/<number>/head`)
-   and run the steps listed under "CircleCI validation" above, taken from
-   main's copy of scripts/local-check.ps1. Don't run the fork's own copy of
-   the script; the fork can change it.
+3. In that environment, fetch the head (`git fetch origin pull/<number>/head`),
+   check it out (`git checkout --detach FETCH_HEAD`), and run the commands
+   listed under "CircleCI validation" above one by one. Take the list from
+   main's copy of scripts/local-check.ps1, and don't run either copy of that
+   script; the fork can change its own.
 4. Post the result on the PR. The PR has no `ci/circleci: pr-check`, so a
    maintainer merges it with an admin override.
 
