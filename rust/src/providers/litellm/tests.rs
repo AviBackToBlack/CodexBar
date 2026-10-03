@@ -1,4 +1,4 @@
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json::{Value, json};
 
 use crate::core::RateWindow;
@@ -581,4 +581,372 @@ fn saved_base_url_uses_only_app_saved_key() {
     let (base, key) = resolve_base_and_key(&ctx).unwrap();
     assert_eq!(base, "https://litellm.example.com");
     assert_eq!(key, "sk-app");
+}
+
+// Spend-report fallback (upstream 0.65.0). Shape reported upstream in #3834;
+// identifiers and amounts are synthetic.
+const REPORT: &str = r#"[{"api_key":"synthetic-key-identifier","total_cost":1.25,
+    "total_input_tokens":1000,"total_output_tokens":100,
+    "model_details":[{"model":"example-model","total_cost":1.25,
+    "total_input_tokens":1000,"total_output_tokens":100}]},
+    {"api_key":"another-synthetic-identifier","total_cost":2.5}]"#;
+const KEY_QUERY: &str = "?start_date=2026-09-01&end_date=2026-09-21";
+
+fn sept_21() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-09-21T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+fn test_client() -> Client {
+    Client::builder().no_proxy().build().unwrap()
+}
+
+/// Serves `path` (under the `/proxy` prefix) with `status` and `body`,
+/// asserting the bearer key. `hits` is how many requests it must receive.
+async fn stub(
+    server: &mut mockito::ServerGuard,
+    path: &str,
+    status: usize,
+    body: &str,
+    hits: usize,
+) -> mockito::Mock {
+    let mock = server.mock("GET", path);
+    // A bare path would not match its own request once a query is added.
+    let mock = if path.contains('?') {
+        mock
+    } else {
+        mock.match_query(mockito::Matcher::Any)
+    };
+    mock.match_header("authorization", "Bearer fixture-key")
+        .match_header("accept", "application/json")
+        .with_status(status)
+        .with_body(body)
+        .expect(hits)
+        .create_async()
+        .await
+}
+
+/// Fetch through the real management-route builder, with the base path
+/// prefix `/proxy/v1` (the mock server is a loopback HTTP origin).
+async fn run(
+    server: &mockito::ServerGuard,
+    now: DateTime<Utc>,
+) -> Result<ProviderFetchResult, ProviderError> {
+    let base = format!("{}/proxy/v1", server.url());
+    fetch_key_usage(
+        &test_client(),
+        |path, query| management_url(&base, path, query),
+        "fixture-key",
+        now,
+    )
+    .await
+}
+
+#[test]
+fn management_url_keeps_path_prefix_and_strips_v1() {
+    for base in [
+        "https://proxy.example.com/proxy/v1/",
+        "https://proxy.example.com/proxy/v1",
+        "https://proxy.example.com/proxy/",
+        "https://proxy.example.com/proxy",
+    ] {
+        assert_eq!(
+            management_url(base, "key/spend/report", None)
+                .unwrap()
+                .as_str(),
+            "https://proxy.example.com/proxy/key/spend/report"
+        );
+    }
+    assert_eq!(
+        management_url("https://litellm.example.com", "key/info", None)
+            .unwrap()
+            .as_str(),
+        "https://litellm.example.com/key/info"
+    );
+    assert_eq!(
+        management_url("https://litellm.example.com/v1", "key/info", None)
+            .unwrap()
+            .as_str(),
+        "https://litellm.example.com/key/info"
+    );
+}
+
+#[test]
+fn sums_each_row_once_and_ignores_model_details() {
+    assert_eq!(spend_report::parse(REPORT.as_bytes()).unwrap(), 3.75);
+    assert_eq!(
+        spend_report::parse(br#"[{"total_cost":0}]"#).unwrap(),
+        0.0,
+        "an explicit zero spend is valid"
+    );
+}
+
+#[test]
+fn invalid_or_empty_reports_never_fabricate_zero_spend() {
+    for body in [
+        "[]",
+        "{}",
+        "null",
+        "not json",
+        "",
+        "[null]",
+        "[{}]",
+        r#"[{"total_cost":null}]"#,
+        r#"[{"total_cost":"1.25"}]"#,
+        r#"[{"total_cost":-1}]"#,
+        r#"[{"total_cost":1e309}]"#,
+        r#"[{"total_cost":1e308},{"total_cost":1e308}]"#,
+    ] {
+        match spend_report::parse(body.as_bytes()) {
+            Err(ProviderError::Parse(message)) => {
+                assert!(!message.contains("1.25"), "{body}: {message}");
+            }
+            other => panic!("{body}: expected a parse error, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn management_denial_falls_back_to_key_spend() {
+    for status in [401, 403, 404] {
+        let mut server = mockito::Server::new_async().await;
+        let info = stub(&mut server, "/proxy/key/info", status, "{}", 1).await;
+        let report = stub(
+            &mut server,
+            &format!("/proxy/key/spend/report{KEY_QUERY}"),
+            200,
+            REPORT,
+            1,
+        )
+        .await;
+        let user = stub(&mut server, "/proxy/user/spend/report", 200, REPORT, 0).await;
+
+        let result = run(&server, sept_21()).await.unwrap();
+
+        info.assert_async().await;
+        report.assert_async().await;
+        user.assert_async().await;
+        let period = "Key spend only (2026-09-01\u{2013}2026-09-21 UTC)";
+        let cost = result.cost.expect("spend is reported as a cost");
+        assert_eq!(cost.used, 3.75);
+        assert_eq!(cost.currency_code, "USD");
+        assert_eq!(cost.period, period);
+        assert_eq!(
+            (cost.limit, cost.resets_at, cost.balance),
+            (None, None, None)
+        );
+        let primary = &result.usage.primary;
+        assert!(primary.is_informational && !primary.usage_known);
+        assert_eq!(primary.reset_description.as_deref(), Some(period));
+        assert!(result.usage.secondary.is_none());
+        assert!(result.usage.extra_rate_windows.is_empty());
+        assert!(
+            result.usage.account_email.is_none() && result.usage.account_organization.is_none()
+        );
+        assert!(result.usage.login_method.is_none());
+    }
+}
+
+#[tokio::test]
+async fn unavailable_key_report_falls_back_to_user_spend() {
+    for status in [401, 403, 404] {
+        let mut server = mockito::Server::new_async().await;
+        stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+        let key = stub(
+            &mut server,
+            &format!("/proxy/key/spend/report{KEY_QUERY}"),
+            status,
+            "{}",
+            1,
+        )
+        .await;
+        let user = stub(
+            &mut server,
+            &format!("/proxy/user/spend/report{KEY_QUERY}"),
+            200,
+            REPORT,
+            1,
+        )
+        .await;
+
+        let result = run(&server, sept_21()).await.unwrap();
+
+        key.assert_async().await;
+        user.assert_async().await;
+        let cost = result.cost.unwrap();
+        assert_eq!(cost.used, 3.75);
+        assert_eq!(
+            cost.period,
+            "User spend only (2026-09-01\u{2013}2026-09-21 UTC)"
+        );
+        assert!(result.usage.account_email.is_none());
+    }
+}
+
+#[tokio::test]
+async fn zero_spend_is_valid_and_month_boundary_uses_utc() {
+    let mut server = mockito::Server::new_async().await;
+    stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+    let report = stub(
+        &mut server,
+        "/proxy/key/spend/report?start_date=2027-01-01&end_date=2027-01-01",
+        200,
+        r#"[{"total_cost":0}]"#,
+        1,
+    )
+    .await;
+    let now = DateTime::parse_from_rfc3339("2027-01-01T00:00:01Z")
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let cost = run(&server, now).await.unwrap().cost.unwrap();
+
+    report.assert_async().await;
+    assert_eq!(cost.used, 0.0);
+    assert_eq!(
+        cost.period,
+        "Key spend only (2027-01-01\u{2013}2027-01-01 UTC)"
+    );
+}
+
+#[tokio::test]
+async fn malformed_report_is_a_parse_error() {
+    let mut server = mockito::Server::new_async().await;
+    stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+    stub(
+        &mut server,
+        &format!("/proxy/key/spend/report{KEY_QUERY}"),
+        200,
+        "[]",
+        1,
+    )
+    .await;
+    assert!(matches!(
+        run(&server, sept_21()).await,
+        Err(ProviderError::Parse(_))
+    ));
+}
+
+#[tokio::test]
+async fn transport_failure_does_not_switch_report_scopes() {
+    let mut server = mockito::Server::new_async().await;
+    stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+    let user = stub(&mut server, "/proxy/user/spend/report", 200, REPORT, 0).await;
+    let base = server.url();
+    // Key report requests go to a closed port; the user report must not run.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let closed_port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let result = fetch_key_usage(
+        &test_client(),
+        |path, query| {
+            let origin = if path == "key/spend/report" {
+                format!("http://127.0.0.1:{closed_port}")
+            } else {
+                base.clone()
+            };
+            management_url(&format!("{origin}/proxy"), path, query)
+        },
+        "fixture-key",
+        sept_21(),
+    )
+    .await;
+    assert!(matches!(result, Err(ProviderError::Network(_))));
+    user.assert_async().await;
+}
+
+#[tokio::test]
+async fn other_failures_keep_their_class_and_never_echo_the_report() {
+    for status in [429, 500, 400] {
+        // A management failure other than 401/403/404 never tries a report.
+        let mut server = mockito::Server::new_async().await;
+        stub(&mut server, "/proxy/key/info", status, REPORT, 1).await;
+        let key = stub(&mut server, "/proxy/key/spend/report", 200, REPORT, 0).await;
+        let Err(ProviderError::Other(message)) = run(&server, sept_21()).await else {
+            panic!("expected an error for {status}");
+        };
+        assert!(message.contains(&status.to_string()), "{message}");
+        key.assert_async().await;
+
+        // The same statuses on the key report do not reach the user report.
+        let mut server = mockito::Server::new_async().await;
+        stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+        stub(
+            &mut server,
+            &format!("/proxy/key/spend/report{KEY_QUERY}"),
+            status,
+            REPORT,
+            1,
+        )
+        .await;
+        let user = stub(&mut server, "/proxy/user/spend/report", 200, REPORT, 0).await;
+        let Err(ProviderError::Other(message)) = run(&server, sept_21()).await else {
+            panic!("expected an error for {status}");
+        };
+        assert!(message.contains(&status.to_string()), "{message}");
+        assert!(!message.contains("synthetic-key-identifier"), "{message}");
+        user.assert_async().await;
+    }
+}
+
+#[tokio::test]
+async fn unavailable_user_report_surfaces_its_status_class() {
+    for (status, expect_auth) in [(401, true), (403, true), (404, false)] {
+        let mut server = mockito::Server::new_async().await;
+        stub(&mut server, "/proxy/key/info", 403, "{}", 1).await;
+        stub(
+            &mut server,
+            &format!("/proxy/key/spend/report{KEY_QUERY}"),
+            404,
+            "{}",
+            1,
+        )
+        .await;
+        stub(
+            &mut server,
+            &format!("/proxy/user/spend/report{KEY_QUERY}"),
+            status,
+            REPORT,
+            1,
+        )
+        .await;
+        match run(&server, sept_21()).await {
+            Err(ProviderError::AuthRequired) if expect_auth => {}
+            Err(ProviderError::Other(message)) if !expect_auth => {
+                assert!(message.contains("404"), "{message}");
+                assert!(!message.contains("synthetic-key-identifier"), "{message}");
+            }
+            other => panic!("status {status}: unexpected {other:?}"),
+        }
+    }
+}
+
+/// A readable `/key/info` keeps the budget flow (`/user/info` here) and
+/// never requests a spend report.
+#[tokio::test]
+async fn key_info_success_is_unchanged() {
+    let mut server = mockito::Server::new_async().await;
+    let info = stub(
+        &mut server,
+        "/proxy/key/info",
+        200,
+        r#"{"info":{"user_id":"user-1"}}"#,
+        1,
+    )
+    .await;
+    let user = stub(
+        &mut server,
+        "/proxy/user/info",
+        200,
+        r#"{"user_info":{"user_id":"user-1","spend":25.0,"max_budget":100.0}}"#,
+        1,
+    )
+    .await;
+    let report = stub(&mut server, "/proxy/key/spend/report", 200, REPORT, 0).await;
+    let result = run(&server, sept_21()).await.unwrap();
+    info.assert_async().await;
+    user.assert_async().await;
+    report.assert_async().await;
+    assert_eq!(result.usage.primary.used_percent, 25.0);
 }
