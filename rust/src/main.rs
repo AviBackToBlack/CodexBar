@@ -51,9 +51,16 @@ fn run(log_path: &Path) -> i32 {
 
     let cli = Cli::parse();
 
+    // Upstream parity: `CODEXBAR_CONFIG` points this CLI process at another
+    // settings file (the desktop shell never applies it).
+    let config_override = codexbar::settings::apply_config_path_env();
+
     if let Err(e) = logging::init(cli.verbose, cli.json_output) {
         eprintln!("Failed to initialize logging: {}", e);
         return exit_codes::UNEXPECTED_FAILURE;
+    }
+    if config_override.is_some() {
+        tracing::debug!("Using the settings file from CODEXBAR_CONFIG");
     }
 
     let rt = match Runtime::new() {

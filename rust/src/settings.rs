@@ -29,6 +29,7 @@ pub const CODEX_SPARK_USAGE_ITEM_IDS: [&str; 2] = [
 pub const CLAUDE_DAILY_ROUTINES_USAGE_ITEM_ID: &str = "metric:extra-claude-routines";
 
 mod api_keys;
+mod config_path;
 mod cost_time_zone;
 mod manual_cookies;
 mod provider_workspace;
@@ -37,6 +38,10 @@ mod status;
 mod types;
 
 pub use api_keys::*;
+pub use config_path::{
+    CONFIG_PATH_ENV, apply_config_path_env, config_store_dir, resolve_config_path,
+    settings_file_override,
+};
 pub use cost_time_zone::*;
 pub use manual_cookies::*;
 pub use provider_workspace::*;
@@ -656,9 +661,9 @@ pub fn normalize_overview_layout(value: &str) -> String {
 }
 
 impl Settings {
-    /// Get the settings file path
+    /// Get the settings file path (`CODEXBAR_CONFIG` when the CLI applied it).
     pub fn settings_path() -> Option<PathBuf> {
-        crate::logging::config_root().map(|p| p.join("settings.json"))
+        config_path::settings_file_for(settings_file_override(), crate::logging::config_root())
     }
 
     /// Load settings from disk
@@ -678,8 +683,10 @@ impl Settings {
         };
 
         // Sync autostart toggle with actual registry state and repair stale commands from older builds.
+        // A CLI run on a `CODEXBAR_CONFIG` file skips these desktop integrations, so it touches
+        // neither the Run key nor the default config root.
         #[cfg(target_os = "windows")]
-        {
+        if settings_file_override().is_none() {
             settings.start_at_login = Self::sync_start_at_login_registry();
             settings.apply_promote_tray_default_migration();
         }

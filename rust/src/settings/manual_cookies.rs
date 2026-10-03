@@ -15,9 +15,9 @@ pub struct ManualCookieEntry {
 }
 
 impl ManualCookies {
-    /// Get the cookies file path
+    /// Get the cookies file path (beside a `CODEXBAR_CONFIG` settings file).
     pub fn cookies_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join("manual_cookies.json"))
+        config_store_dir().map(|dir| dir.join("manual_cookies.json"))
     }
 
     /// Load manual cookies from disk

@@ -22,9 +22,9 @@ pub struct ApiKeyEntry {
 }
 
 impl ApiKeys {
-    /// Get the API keys file path
+    /// Get the API keys file path (beside a `CODEXBAR_CONFIG` settings file).
     pub fn keys_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join("api_keys.json"))
+        config_store_dir().map(|dir| dir.join("api_keys.json"))
     }
 
     /// Load API keys from disk

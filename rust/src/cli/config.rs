@@ -657,9 +657,16 @@ async fn show_paths() -> anyhow::Result<()> {
     };
     println!("  Token accounts: {}{}", token_path.display(), exists);
 
+    if crate::settings::settings_file_override().is_some() {
+        println!();
+        println!(
+            "Settings file from {}; the stores above sit beside it.",
+            crate::settings::CONFIG_PATH_ENV
+        );
+    }
+
     // Show config directory
-    if let Some(config_dir) = dirs::config_dir() {
-        let codexbar_dir = config_dir.join("CodexBar");
+    if let Some(codexbar_dir) = crate::settings::config_store_dir() {
         println!();
         println!("Config directory: {}", codexbar_dir.display());
     }
