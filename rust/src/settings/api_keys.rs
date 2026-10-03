@@ -462,6 +462,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://xkiro.com"),
         },
         ProviderConfigInfo {
+            id: ProviderId::Vercel,
+            name: "Vercel AI Gateway",
+            requires_api_key: true,
+            api_key_env_var: Some("AI_GATEWAY_API_KEY"),
+            api_key_help: Some(
+                "Add a Vercel AI Gateway API key to show the team's credit balance and lifetime spend.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::Doubao,
             name: "Doubao / Volcengine Ark",
             requires_api_key: true,

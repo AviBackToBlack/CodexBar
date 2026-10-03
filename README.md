@@ -81,6 +81,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Kiro | Cookies / CLI | Monthly Credits, Overage |
 | Vertex AI | gcloud OAuth | Cost |
 | v0 | API Key | Billing quota, API rate limits, on-demand balance |
+| Vercel AI Gateway | API Key | Team credit balance, lifetime spend |
 | Augment | Cookies | Credits |
 | OpenCode | Local Config | Usage |
 | Kimi | Cookies | 5h Rate, Weekly |

@@ -51,6 +51,7 @@ export const TEST_PROVIDER_CATALOG: Array<[string, string]> = [
   ["commandcode", "Command Code"],
   ["stepfun", "StepFun"],
   ["venice", "Venice"],
+  ["vercel", "Vercel AI Gateway"],
   ["openaiapi", "OpenAI API"],
   ["grok", "Grok"],
   ["elevenlabs", "ElevenLabs"],

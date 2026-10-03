@@ -430,7 +430,8 @@ impl TokenAccountSupport {
             | ProviderId::LLMMan
             | ProviderId::DevPass
             | ProviderId::XKiro
-            | ProviderId::Raycast => None,
+            | ProviderId::Raycast
+            | ProviderId::Vercel => None,
         }
     }
 

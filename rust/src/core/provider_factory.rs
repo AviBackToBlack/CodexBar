@@ -22,7 +22,7 @@ use crate::providers::{
     NousProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider,
     OpenRouterProvider, PerplexityProvider, PiProvider, PoeProvider, QoderProvider,
     QwenCloudProvider, RaycastProvider, ReplicateProvider, SakanaProvider, StepFunProvider,
-    Sub2ApiProvider, T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider,
+    Sub2ApiProvider, T3ChatProvider, TypeSafeProvider, V0Provider, VeniceProvider, VercelProvider,
     VertexAIProvider, WarpProvider, WayfinderProvider, WindsurfProvider, XKiroProvider,
     XaiProvider, ZaiProvider, ZedProvider, ZenMuxProvider, ZoomMateProvider,
 };
@@ -121,6 +121,7 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::DevPass => Box::new(DevPassProvider::new()),
         ProviderId::XKiro => Box::new(XKiroProvider::new()),
         ProviderId::Raycast => Box::new(RaycastProvider::new()),
+        ProviderId::Vercel => Box::new(VercelProvider::new()),
     }
 }
 

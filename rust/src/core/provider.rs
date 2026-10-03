@@ -102,6 +102,7 @@ pub enum ProviderId {
     DevPass,
     XKiro,
     Raycast,
+    Vercel,
 }
 
 impl ProviderId {
@@ -196,6 +197,7 @@ impl ProviderId {
             ProviderId::DevPass,
             ProviderId::XKiro,
             ProviderId::Raycast,
+            ProviderId::Vercel,
         ]
     }
 
@@ -251,6 +253,7 @@ impl ProviderId {
             ProviderId::DevPass => "devpass",
             ProviderId::XKiro => "xkiro",
             ProviderId::Raycast => "raycast",
+            ProviderId::Vercel => "vercel",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
@@ -346,6 +349,7 @@ impl ProviderId {
             ProviderId::DevPass => "DevPass",
             ProviderId::XKiro => "xKiro",
             ProviderId::Raycast => "Raycast",
+            ProviderId::Vercel => "Vercel AI Gateway",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
@@ -457,6 +461,7 @@ impl ProviderId {
             ProviderId::LLMMan => None,
             ProviderId::DevPass => None,
             ProviderId::XKiro => None,
+            ProviderId::Vercel => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
@@ -552,6 +557,9 @@ impl ProviderId {
             "llmman" => Some(ProviderId::LLMMan),
             "devpass" => Some(ProviderId::DevPass),
             "xkiro" | "x-kiro" => Some(ProviderId::XKiro),
+            "vercel" | "vercel-ai-gateway" | "vercel ai gateway" | "ai-gateway" | "ai gateway" => {
+                Some(ProviderId::Vercel)
+            }
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -1093,6 +1101,10 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("nous portal", ProviderId::Nous);
     map.insert("hermes", ProviderId::Nous);
     map.insert("x-kiro", ProviderId::XKiro);
+    map.insert("vercel-ai-gateway", ProviderId::Vercel);
+    map.insert("vercel ai gateway", ProviderId::Vercel);
+    map.insert("ai-gateway", ProviderId::Vercel);
+    map.insert("ai gateway", ProviderId::Vercel);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
     map.insert("muse-spark", ProviderId::Meta);
@@ -1254,6 +1266,8 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::DevPass => "#2563EB",
         ProviderId::XKiro => "#52C99B",
         ProviderId::Raycast => "#FF6363",
+        // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
+        ProviderId::Vercel => "#737373",
     }
 }
 
@@ -1268,7 +1282,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 88);
+        assert_eq!(all.len(), 89);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1337,6 +1351,7 @@ mod tests {
         assert!(all.contains(&ProviderId::DevPass));
         assert!(all.contains(&ProviderId::XKiro));
         assert!(all.contains(&ProviderId::Raycast));
+        assert!(all.contains(&ProviderId::Vercel));
     }
 
     #[test]
