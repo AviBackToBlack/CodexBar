@@ -356,6 +356,54 @@ pub(crate) fn validated_https_url(
     raw: &str,
     label: &str,
 ) -> Result<reqwest::Url, crate::core::ProviderError> {
+    validated_endpoint_url(raw, label, false)
+}
+
+/// Like [`validated_https_url`], but plain HTTP is also accepted for loopback,
+/// private-network (RFC1918, unique-local), link-local and `.local` hosts
+/// (upstream `https-or-private-network-http` endpoint policy).
+pub(crate) fn validated_https_or_private_http_url(
+    raw: &str,
+    label: &str,
+) -> Result<reqwest::Url, crate::core::ProviderError> {
+    validated_endpoint_url(raw, label, true)
+}
+
+/// Endpoint-policy host check for [`validated_https_or_private_http_url`].
+/// Stricter than [`is_private_network_host`] about `localhost` (no
+/// `*.localhost`) and also accepts `<label>.local` mDNS names.
+fn is_private_http_endpoint_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    // Upstream `isPrivateNetworkHost`: `localhost` exactly, or a non-empty
+    // label before `.local` once one trailing dot is dropped.
+    let hostname = host.strip_suffix('.').unwrap_or(&host);
+    if host == "localhost"
+        || hostname
+            .strip_suffix(".local")
+            .is_some_and(|label| !label.is_empty())
+    {
+        return true;
+    }
+    let ip_candidate = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&host);
+    match ip_candidate.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || (ip.segments()[0] & 0xfe00) == 0xfc00
+                || (ip.segments()[0] & 0xffc0) == 0xfe80
+        }
+        Err(_) => false,
+    }
+}
+
+fn validated_endpoint_url(
+    raw: &str,
+    label: &str,
+    allow_private_http: bool,
+) -> Result<reqwest::Url, crate::core::ProviderError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(crate::core::ProviderError::Other(format!(
@@ -381,14 +429,21 @@ pub(crate) fn validated_https_url(
     let host = url.host_str().ok_or_else(|| {
         crate::core::ProviderError::Other(format!("{label} URL must include a host"))
     })?;
-    if url.scheme() != "https"
+    let scheme_ok = url.scheme() == "https"
+        || (allow_private_http && url.scheme() == "http" && is_private_http_endpoint_host(host));
+    if !scheme_ok
         || !url.username().is_empty()
         || url.password().is_some()
         || host.contains('%')
         || host.chars().any(|c| c.is_control() || c.is_whitespace())
     {
+        let scheme_rule = if allow_private_http {
+            "HTTPS (or plain HTTP for loopback, private-network and .local hosts)"
+        } else {
+            "HTTPS"
+        };
         return Err(crate::core::ProviderError::Other(format!(
-            "{label} URL must use HTTPS without user info or encoded host tricks"
+            "{label} URL must use {scheme_rule} without user info or encoded host tricks"
         )));
     }
     Ok(url)
