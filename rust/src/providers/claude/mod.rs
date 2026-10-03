@@ -189,6 +189,9 @@ const CLAUDE_PROBE_CACHE_TTL: Duration = Duration::from_secs(45);
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ClaudeProbeCache {
     captured_at_unix: u64,
+    /// `claude_login_fingerprint` of the login the screen belongs to.
+    #[serde(default)]
+    login: String,
     output: String,
 }
 
@@ -199,20 +202,25 @@ fn unix_now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn load_cached_probe_output(probe_dir: &std::path::Path) -> Option<String> {
+fn load_cached_probe_output(probe_dir: &std::path::Path, login: &str) -> Option<String> {
     let raw = std::fs::read_to_string(probe_dir.join(CLAUDE_PROBE_CACHE_FILE)).ok()?;
     let cache: ClaudeProbeCache = serde_json::from_str(&raw).ok()?;
     let age = unix_now_secs().saturating_sub(cache.captured_at_unix);
-    if age > CLAUDE_PROBE_CACHE_TTL.as_secs() || cache.output.trim().is_empty() {
+    if login.is_empty()
+        || cache.login != login
+        || age > CLAUDE_PROBE_CACHE_TTL.as_secs()
+        || cache.output.trim().is_empty()
+    {
         return None;
     }
     tracing::debug!(age_secs = age, "Reusing recent Claude CLI probe output");
     Some(cache.output)
 }
 
-fn store_cached_probe_output(probe_dir: &std::path::Path, output: &str) {
+fn store_cached_probe_output(probe_dir: &std::path::Path, login: &str, output: &str) {
     let cache = ClaudeProbeCache {
         captured_at_unix: unix_now_secs(),
+        login: login.to_string(),
         output: output.to_string(),
     };
     // Atomic, because other processes read the cache without the probe lock.
@@ -224,6 +232,31 @@ fn store_cached_probe_output(probe_dir: &std::path::Path, output: &str) {
     if let Err(err) = stored {
         tracing::debug!(error = %err, "failed to persist Claude probe cache");
     }
+}
+
+/// Identifies the Claude login a probe runs under without reading any
+/// credential: the location, size and modification time of Claude Code's
+/// `.credentials.json`, which every login, token refresh and account switch
+/// rewrites. Without a credentials file a probe screen is never shared.
+fn claude_login_fingerprint() -> Option<String> {
+    let credentials = accounts::config_dir().ok()?.join(".credentials.json");
+    login_fingerprint_at(&credentials)
+}
+
+fn login_fingerprint_at(credentials: &std::path::Path) -> Option<String> {
+    let metadata = std::fs::metadata(credentials).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let identity = format!(
+        "{}|{}|{}",
+        credentials.display(),
+        metadata.len(),
+        modified.as_nanos()
+    );
+    Some(crate::core::sha256_hex(identity.as_bytes()))
 }
 
 /// Only a parseable usage screen is worth sharing; errors are retried live.
@@ -495,7 +528,9 @@ async fn fetch_claude_cli_usage_text(
     claude_path: std::path::PathBuf,
 ) -> Result<String, ProviderError> {
     let probe_dir = claude_usage_probe_dir()?;
-    if let Some(cached) = load_cached_probe_output(&probe_dir) {
+    if let Some(login) = claude_login_fingerprint()
+        && let Some(cached) = load_cached_probe_output(&probe_dir, &login)
+    {
         return Ok(cached);
     }
     let combined = run_claude_usage_pty_probe(claude_path.clone(), probe_dir.clone()).await?;
@@ -588,7 +623,9 @@ async fn run_claude_pty_probe(
         // Keep ownership in the worker: cancelling the async refresh does not
         // stop spawn_blocking or its CLI process from rotating credentials.
         let _account_operation = accounts::CREDENTIAL_OPERATION.blocking_lock();
-        run_locked_probe(&working_directory, probe.share_output, || {
+        let login: Option<&dyn Fn() -> Option<String>> =
+            probe.share_output.then_some(&claude_login_fingerprint);
+        run_locked_probe(&working_directory, login, || {
             cleanup_probe_session_jsonl(&working_directory);
             let session_id = load_or_create_probe_session_id(&working_directory);
             let env = claude_passive_probe_env(TtyCommandRunner::enriched_environment());
@@ -636,21 +673,29 @@ async fn run_claude_pty_probe(
     .map_err(|e| ProviderError::Other(format!("Claude CLI probe failed: {}", e)))?
 }
 
-/// Run one probe under the cross-process probe lock. With `share_output`, a
-/// fresh usage screen another process stored while this one waited is reused,
-/// and a parseable screen is stored for the others.
+/// Run one probe under the cross-process probe lock. `login` is set when the
+/// screen may be shared and identifies the Claude login it belongs to: a
+/// fresh screen another process stored for that login while this one waited
+/// is reused, and a parseable screen is stored for the others unless the
+/// login changed while the probe ran.
 fn run_locked_probe(
     probe_dir: &std::path::Path,
-    share_output: bool,
+    login: Option<&dyn Fn() -> Option<String>>,
     probe: impl FnOnce() -> Result<String, ProviderError>,
 ) -> Result<String, ProviderError> {
     let _probe_lock = ClaudeProbeLock::acquire(probe_dir)?;
-    if share_output && let Some(cached) = load_cached_probe_output(probe_dir) {
+    let before = login.and_then(|login| login());
+    if let Some(before) = &before
+        && let Some(cached) = load_cached_probe_output(probe_dir, before)
+    {
         return Ok(cached);
     }
     let output = probe()?;
-    if share_output && claude_cli_output_is_shareable(&output) {
-        store_cached_probe_output(probe_dir, &output);
+    if let (Some(before), Some(login)) = (&before, login)
+        && login().as_ref() == Some(before)
+        && claude_cli_output_is_shareable(&output)
+    {
+        store_cached_probe_output(probe_dir, before, &output);
     }
     Ok(output)
 }
@@ -1440,17 +1485,24 @@ mod tests {
 
     use super::*;
 
+    const LOGIN_A: &str = "login-a";
+
+    fn login_a() -> Option<String> {
+        Some(LOGIN_A.to_string())
+    }
+
     #[test]
     fn probe_cache_roundtrip_and_expiry() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(load_cached_probe_output(dir.path()).is_none());
-        store_cached_probe_output(dir.path(), "Current session 12% used");
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+        store_cached_probe_output(dir.path(), LOGIN_A, "Current session 12% used");
         assert_eq!(
-            load_cached_probe_output(dir.path()).as_deref(),
+            load_cached_probe_output(dir.path(), LOGIN_A).as_deref(),
             Some("Current session 12% used")
         );
         let stale = ClaudeProbeCache {
             captured_at_unix: unix_now_secs() - CLAUDE_PROBE_CACHE_TTL.as_secs() - 5,
+            login: LOGIN_A.to_string(),
             output: "Current session 12% used".to_string(),
         };
         std::fs::write(
@@ -1458,7 +1510,38 @@ mod tests {
             serde_json::to_string(&stale).unwrap(),
         )
         .unwrap();
-        assert!(load_cached_probe_output(dir.path()).is_none());
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+    }
+
+    #[test]
+    fn probe_cache_is_never_shared_with_another_login() {
+        let dir = tempfile::tempdir().unwrap();
+        store_cached_probe_output(dir.path(), LOGIN_A, "Current session 12% used");
+        assert!(load_cached_probe_output(dir.path(), "login-b").is_none());
+
+        // Written before screens were scoped to a login.
+        let unscoped = format!(
+            r#"{{"captured_at_unix":{},"output":"Current session 12% used"}}"#,
+            unix_now_secs()
+        );
+        std::fs::write(dir.path().join(CLAUDE_PROBE_CACHE_FILE), unscoped).unwrap();
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
+        assert!(load_cached_probe_output(dir.path(), "").is_none());
+    }
+
+    #[test]
+    fn login_fingerprint_follows_credential_rewrites_without_reading_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let credentials = dir.path().join(".credentials.json");
+        assert_eq!(login_fingerprint_at(&credentials), None);
+
+        std::fs::write(&credentials, "{}").unwrap();
+        let first = login_fingerprint_at(&credentials).expect("fingerprint");
+        assert_eq!(login_fingerprint_at(&credentials).as_ref(), Some(&first));
+        assert!(!first.contains(".credentials"), "only a digest is stored");
+
+        std::fs::write(&credentials, r#"{"another":"login"}"#).unwrap();
+        assert_ne!(login_fingerprint_at(&credentials), Some(first));
     }
 
     const SHAREABLE_USAGE_SCREEN: &str = "Current session\n\
@@ -1468,9 +1551,9 @@ mod tests {
     #[test]
     fn locked_probe_reuses_a_screen_stored_while_it_waited() {
         let dir = tempfile::tempdir().unwrap();
-        store_cached_probe_output(dir.path(), SHAREABLE_USAGE_SCREEN);
+        store_cached_probe_output(dir.path(), LOGIN_A, SHAREABLE_USAGE_SCREEN);
 
-        let output = run_locked_probe(dir.path(), true, || {
+        let output = run_locked_probe(dir.path(), Some(&login_a), || {
             panic!("a fresh shared screen must not launch another probe")
         })
         .unwrap();
@@ -1480,14 +1563,18 @@ mod tests {
     #[test]
     fn locked_probe_shares_only_parseable_usage_screens() {
         let dir = tempfile::tempdir().unwrap();
-        let output = run_locked_probe(dir.path(), true, || Ok("Not logged in".to_string()));
+        let output = run_locked_probe(dir.path(), Some(&login_a), || {
+            Ok("Not logged in".to_string())
+        });
         assert_eq!(output.unwrap(), "Not logged in");
-        assert!(load_cached_probe_output(dir.path()).is_none());
+        assert!(load_cached_probe_output(dir.path(), LOGIN_A).is_none());
 
-        let output = run_locked_probe(dir.path(), true, || Ok(SHAREABLE_USAGE_SCREEN.into()));
+        let output = run_locked_probe(dir.path(), Some(&login_a), || {
+            Ok(SHAREABLE_USAGE_SCREEN.into())
+        });
         assert_eq!(output.unwrap(), SHAREABLE_USAGE_SCREEN);
         assert_eq!(
-            load_cached_probe_output(dir.path()).as_deref(),
+            load_cached_probe_output(dir.path(), LOGIN_A).as_deref(),
             Some(SHAREABLE_USAGE_SCREEN)
         );
         assert!(
@@ -1501,15 +1588,39 @@ mod tests {
     }
 
     #[test]
+    fn locked_probe_keeps_a_screen_private_when_the_login_changed_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = std::cell::Cell::new(0);
+        let switching_login = || {
+            calls.set(calls.get() + 1);
+            Some(format!("login-{}", calls.get()))
+        };
+        let output = run_locked_probe(dir.path(), Some(&switching_login), || {
+            Ok(SHAREABLE_USAGE_SCREEN.into())
+        });
+        assert_eq!(output.unwrap(), SHAREABLE_USAGE_SCREEN);
+        assert_eq!(calls.get(), 2, "the login is read before and after");
+        assert!(load_cached_probe_output(dir.path(), "login-1").is_none());
+        assert!(load_cached_probe_output(dir.path(), "login-2").is_none());
+
+        let no_login = || None;
+        run_locked_probe(dir.path(), Some(&no_login), || {
+            Ok(SHAREABLE_USAGE_SCREEN.into())
+        })
+        .unwrap();
+        assert!(!dir.path().join(CLAUDE_PROBE_CACHE_FILE).exists());
+    }
+
+    #[test]
     fn unshared_probe_neither_reuses_nor_stores_screens() {
         let dir = tempfile::tempdir().unwrap();
-        store_cached_probe_output(dir.path(), SHAREABLE_USAGE_SCREEN);
-        let output = run_locked_probe(dir.path(), false, || Ok("trust preflight".into()));
+        store_cached_probe_output(dir.path(), LOGIN_A, SHAREABLE_USAGE_SCREEN);
+        let output = run_locked_probe(dir.path(), None, || Ok("trust preflight".into()));
         assert_eq!(output.unwrap(), "trust preflight");
 
         let other = tempfile::tempdir().unwrap();
-        run_locked_probe(other.path(), false, || Ok(SHAREABLE_USAGE_SCREEN.into())).unwrap();
-        assert!(load_cached_probe_output(other.path()).is_none());
+        run_locked_probe(other.path(), None, || Ok(SHAREABLE_USAGE_SCREEN.into())).unwrap();
+        assert!(!other.path().join(CLAUDE_PROBE_CACHE_FILE).exists());
     }
 
     #[test]
