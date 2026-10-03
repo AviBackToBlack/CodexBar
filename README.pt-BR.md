@@ -107,13 +107,13 @@ Consulte todas as alterações em [CHANGELOG.md](CHANGELOG.md).
 | Xiaomi MiMo | Cookies | Saldo, plano de tokens |
 | Doubao | Chave de API | Limites de requisição |
 | Command Code | Cookies | Créditos mensais, créditos comprados |
-| Crof | Chave de API | Créditos, cota de requisições |
 | StepFun | Token Oasis | 5h, semanal, atualização de token |
-| Venice | Chave de API | Saldo em USD / DIEM |
+| Venice | Chave de API / sessão web | Saldo em USD / DIEM, créditos incluídos (a sessão web expira em cerca de 60 s) |
 | OpenAI | API Admin / Chave de API | Uso, requisições, custo por projeto, saldo de créditos |
 | Grok | Cookies / auth.json | Cobrança |
 | Helmcode (também NaN Builders) | Cookies do navegador / cabeçalho Cookie manual | Cotas de tokens por modelo, janelas de renovação, saldo pré-pago do Helmcode |
 | Replicate | Cookies / contas de token | Gastos mensais, saldo de créditos |
+| Aixy | Chave de API / contas de token | Saldos de orçamento aplicáveis, uso da chave em 7 dias |
 | ElevenLabs | Chave de API | Créditos da assinatura, slots de voz |
 | Deepgram | Chave de API | Uso do projeto |
 | Groq | Chave de API | Métricas corporativas |
