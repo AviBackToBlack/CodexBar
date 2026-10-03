@@ -64,14 +64,23 @@ impl LossyProductUsage {
     /// Shares whose sum matches the raw (unclamped) credit percent from the
     /// same payload; anything else is dropped.
     pub(super) fn composing(self, credit_usage_percent: f64) -> Vec<GrokProductUsage> {
-        let products = self.0.unwrap_or_default();
-        let sum: f64 = products.iter().map(|entry| entry.used_percent).sum();
-        if products.is_empty() || (sum - credit_usage_percent).abs() > COMPOSITION_TOLERANCE_PERCENT
-        {
-            return Vec::new();
-        }
-        products
+        compose(self.0.unwrap_or_default(), credit_usage_percent)
     }
+}
+
+/// Shares whose sum matches the raw (unclamped) credit percent of the same
+/// payload; anything else, including an empty list, is dropped. Shared by the
+/// credits proxy and the grok.com gRPC-web answer (upstream
+/// `GrokProductUsage.composing`, v0.69.0).
+pub(super) fn compose(
+    products: Vec<GrokProductUsage>,
+    credit_usage_percent: f64,
+) -> Vec<GrokProductUsage> {
+    let sum: f64 = products.iter().map(|entry| entry.used_percent).sum();
+    if products.is_empty() || (sum - credit_usage_percent).abs() > COMPOSITION_TOLERANCE_PERCENT {
+        return Vec::new();
+    }
+    products
 }
 
 fn product_label(product: &str) -> &str {

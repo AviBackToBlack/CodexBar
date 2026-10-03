@@ -7,7 +7,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::read_length_field;
+use super::protobuf::{ProtobufField, looks_like_protobuf_payload};
 use crate::core::ProviderError;
 
 /// One unused SuperGrok usage-limit reset coupon. The token ID is retained
@@ -108,27 +108,15 @@ fn parse_reset_coupon_container(
     now: DateTime<Utc>,
     coupons: &mut Vec<GrokResetCoupon>,
 ) -> Result<(), ProviderError> {
-    let mut index = 0;
-    while index < data.len() {
-        let (field, wire, next) = super::read_key(data, index).ok_or_else(|| {
-            ProviderError::Parse("Grok reset-credit protobuf is malformed".to_string())
+    let fields = ProtobufField::fields(data).ok_or_else(|| {
+        ProviderError::Parse("Grok reset-credit protobuf is malformed".to_string())
+    })?;
+    for field in fields.iter().filter(|field| field.number == 10) {
+        let record = field.message().ok_or_else(|| {
+            ProviderError::Parse("Grok reset-credit record has an invalid wire type".to_string())
         })?;
-        index = next;
-        if field == 10 {
-            if wire != 2 {
-                return Err(ProviderError::Parse(
-                    "Grok reset-credit record has an invalid wire type".to_string(),
-                ));
-            }
-            let (start, end) = read_length_field(data, index, "record")?;
-            if let Some(coupon) = parse_reset_coupon(&data[start..end], now)? {
-                coupons.push(coupon);
-            }
-            index = end;
-        } else {
-            index = skip_field(data, index, wire).ok_or_else(|| {
-                ProviderError::Parse("Grok reset-credit protobuf is malformed".to_string())
-            })?;
+        if let Some(coupon) = parse_reset_coupon(record, now)? {
+            coupons.push(coupon);
         }
     }
     Ok(())
@@ -138,25 +126,21 @@ fn parse_reset_coupon(
     data: &[u8],
     now: DateTime<Utc>,
 ) -> Result<Option<GrokResetCoupon>, ProviderError> {
-    let mut index = 0;
+    let fields = ProtobufField::fields(data)
+        .ok_or_else(|| ProviderError::Parse("Grok reset-credit record is malformed".to_string()))?;
     let mut token_id = None;
     let mut granted_at = None;
     let mut expires_at = None;
-    while index < data.len() {
-        let (field, wire, next) = super::read_key(data, index).ok_or_else(|| {
-            ProviderError::Parse("Grok reset-credit record is malformed".to_string())
-        })?;
-        index = next;
-        match field {
+    for field in &fields {
+        match field.number {
             10 => {
-                if wire != 2 {
-                    return Err(ProviderError::Parse(
+                let bytes = field.message().ok_or_else(|| {
+                    ProviderError::Parse(
                         "Grok reset-credit token id has an invalid wire type".to_string(),
-                    ));
-                }
-                let (start, end) = read_length_field(data, index, "token id")?;
+                    )
+                })?;
                 token_id = Some(
-                    std::str::from_utf8(&data[start..end])
+                    std::str::from_utf8(bytes)
                         .map_err(|_| {
                             ProviderError::Parse(
                                 "Grok reset-credit token id is not UTF-8".to_string(),
@@ -164,28 +148,21 @@ fn parse_reset_coupon(
                         })?
                         .to_string(),
                 );
-                index = end;
             }
             20 | 30 => {
-                if wire != 2 {
-                    return Err(ProviderError::Parse(
+                let message = field.message().ok_or_else(|| {
+                    ProviderError::Parse(
                         "Grok reset-credit timestamp has an invalid wire type".to_string(),
-                    ));
-                }
-                let (start, end) = read_length_field(data, index, "timestamp")?;
-                let timestamp = parse_timestamp_message(&data[start..end])?;
-                if field == 20 {
+                    )
+                })?;
+                let timestamp = parse_timestamp_message(message)?;
+                if field.number == 20 {
                     granted_at = timestamp;
                 } else {
                     expires_at = timestamp;
                 }
-                index = end;
             }
-            _ => {
-                index = skip_field(data, index, wire).ok_or_else(|| {
-                    ProviderError::Parse("Grok reset-credit record is malformed".to_string())
-                })?;
-            }
+            _ => {}
         }
     }
 
@@ -204,55 +181,16 @@ fn parse_reset_coupon(
 
 /// Decode one embedded timestamp message (field 1 varint, Unix seconds).
 fn parse_timestamp_message(data: &[u8]) -> Result<Option<DateTime<Utc>>, ProviderError> {
-    let mut index = 0;
+    let fields = ProtobufField::fields(data).ok_or_else(|| {
+        ProviderError::Parse("Grok reset-credit timestamp is malformed".to_string())
+    })?;
     let mut seconds = None;
-    while index < data.len() {
-        let (field, wire, next) = super::read_key(data, index).ok_or_else(|| {
-            ProviderError::Parse("Grok reset-credit timestamp is malformed".to_string())
-        })?;
-        index = next;
-        if field == 1 {
-            if wire != 0 {
-                return Err(ProviderError::Parse(
-                    "Grok reset-credit timestamp seconds has an invalid wire type".to_string(),
-                ));
-            }
-            let (value, next) = super::read_varint(data, index).ok_or_else(|| {
-                ProviderError::Parse("Grok reset-credit timestamp seconds is malformed".to_string())
-            })?;
-            seconds = Some(value);
-            index = next;
-        } else {
-            index = skip_field(data, index, wire).ok_or_else(|| {
-                ProviderError::Parse("Grok reset-credit timestamp is malformed".to_string())
-            })?;
-        }
+    for field in fields.iter().filter(|field| field.number == 1) {
+        seconds = Some(field.varint().ok_or_else(|| {
+            ProviderError::Parse(
+                "Grok reset-credit timestamp seconds has an invalid wire type".to_string(),
+            )
+        })?);
     }
-    let Some(seconds) = seconds else {
-        return Ok(None);
-    };
-    Ok(super::unix_seconds_timestamp(seconds))
-}
-
-fn skip_field(data: &[u8], index: usize, wire: u64) -> Option<usize> {
-    match wire {
-        0 => super::read_varint(data, index).map(|(_, next)| next),
-        1 => index.checked_add(8).filter(|end| *end <= data.len()),
-        2 => {
-            let (len, start) = super::read_varint(data, index)?;
-            let len = usize::try_from(len).ok()?;
-            start.checked_add(len).filter(|end| *end <= data.len())
-        }
-        5 => index.checked_add(4).filter(|end| *end <= data.len()),
-        _ => None,
-    }
-}
-
-fn looks_like_protobuf_payload(data: &[u8]) -> bool {
-    let Some(&first) = data.first() else {
-        return false;
-    };
-    let field_number = first >> 3;
-    let wire_type = first & 0x07;
-    field_number > 0 && matches!(wire_type, 0 | 1 | 2 | 5)
+    Ok(seconds.and_then(super::unix_seconds_timestamp))
 }
