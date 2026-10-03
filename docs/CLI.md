@@ -28,22 +28,26 @@ codexbar config validate
 codexbar config dump
 ```
 
+Set `CODEXBAR_CONFIG` to run the CLI against another settings file; see [Separate config file](#separate-config-file-codexbar_config).
+
 ## Commands (current)
 
 Top-level (from `codexbar --help`):
 
 | Command | Purpose |
 |---------|---------|
-| `usage` | Print usage from enabled providers (default-style workflow; also global `-p` / `-f`) |
+| `usage` | Print usage from the enabled providers, or the ones passed with `-p` |
 | `cost` | Local token cost usage (Claude + Codex session scans; no web required for those) |
 | `guard` | Gate automation on remaining quota for one provider |
 | `diagnose` | Export safe provider diagnostics as JSON |
 | `sessions` | List or focus local / SSH agent sessions |
 | `serve` | HTTP JSON/dashboard server with optional Prometheus metrics |
+| `dashboard` | Emit a one-shot dashboard snapshot (JSON to stdout or `--output` file) |
 | `autostart` | Manage Windows boot auto-start |
 | `account` | Token accounts for providers |
-| `config` | validate / dump / providers / enable / disable / set-api-key / path |
+| `config` | validate / dump / providers / enable / disable / set-api-key / path / claude-code-credentials |
 | `hooks` | List, enable, disable, test, or watch external hooks |
+| `workspaces` | List local Codex project/workspace usage |
 
 ### Usage
 
@@ -55,7 +59,31 @@ codexbar usage --source auto   # auto | web | cli | oauth
 codexbar usage --brief
 ```
 
-Global-style flags (also on root help): `-p/--provider`, `-f/--format`, `--json`, `--pretty`, `--status`, `--all-accounts`, `--account`, `--no-credits`, `--source`, `--web-timeout`, `--brief`.
+These flags belong to `usage`: `-p/--provider`, `-f/--format` (`text`, `json` or `toon`), `--json`, `--pretty`, `--status`, `--all-accounts`, `--account`, `--no-credits`, `--no-color`, `--source`, `--web-timeout`, `--brief`. The root command takes only `-v/--verbose`, `--json-output` (JSON logs on stderr) and `--no-color`; `codexbar` without a subcommand prints a hint and exits with a usage error.
+
+Without `-p`, `usage` follows the providers enabled in settings, like upstream: exactly Codex and Claude are fetched as `both`, one enabled provider is a single fetch, and any other set keeps the display order. With nothing enabled, JSON and TOON print an empty list, and text explains how to enable a provider (`codexbar config enable <provider>`) or pass `--provider`. An explicit `-p` (a provider, `both` or `all`) never reads the enabled list. `--account` needs exactly one provider, including when the enabled list resolves to several. `cost` keeps its Claude default.
+
+**Error rows.** In JSON and TOON output a provider that fails becomes a row with `provider`, the human-readable `error`, and `errorKind`, so scripts can react without parsing the text:
+
+| `errorKind` | Meaning |
+|---|---|
+| `needsAuthentication` | Credentials are missing or were rejected; sign in again or add a key. |
+| `expiredSession` | The credentials worked but the session or token has expired. |
+| `localRuntimeOffline` | A local runtime the provider reads is not running, for example the Claude CLI is not installed. |
+| `browserSignInRequired` | Only a browser sign-in can bring usage back. The row adds `signInUrl`, the page to open. |
+| `timeout` | The fetch ran out of time. |
+| `unknown` | Anything else, including failures before the provider runs (account selection, stored keys). |
+
+The first three use the same names as the desktop's provider states. Claude reports `browserSignInRequired` (with `signInUrl` `https://claude.ai/login`) when its OAuth usage endpoint is rate limited, no claude.ai browser session was found, and the CLI probe failed too. Until the rate limit lifts, signing in to claude.ai in a browser is the only way back, and the `error` text says so.
+
+```json
+{
+  "provider": "claude",
+  "error": "Claude usage failed from all configured sources. ... Sign in at https://claude.ai/login in your browser, then refresh.",
+  "errorKind": "browserSignInRequired",
+  "signInUrl": "https://claude.ai/login"
+}
+```
 
 ### Cost
 
@@ -103,6 +131,14 @@ codexbar serve --port 8080
 
 Typical endpoints: `/health`, `/usage`, `/cost`, and `/dashboard/v1/snapshot`. Loopback default keeps local use simple; treat non-loopback as a threat-model choice because the token for protected requests crosses the network over HTTP.
 
+`/usage` without a `provider` query (or with an empty one) follows the enabled providers, like a plain `codexbar usage`; `/cost` still defaults to Claude. `/usage` fetches the selected providers concurrently, and its error rows carry the same `errorKind` (and `signInUrl`) as `usage --json`.
+
+```powershell
+codexbar serve --request-timeout 30
+```
+
+`--request-timeout <seconds>` bounds `/usage` and `/cost`. A provider still running after 0.8 of the timeout becomes a row such as `{"provider":"claude","error":"claude usage timed out","errorKind":"timeout"}` (`/cost`: `codex cost refresh timed out`), and a request that outlives the whole timeout answers `504` with `{"error":"request timed out"}`. The fetch behind a timed-out row keeps running: the next request for that provider joins it instead of starting another, and at most eight fetches or scans run at once. Finished results are not cached, so the first request after a fetch completes starts a new one. The default `0` waits for every provider. Upstream defaults to 30 seconds and serves the late result from a response cache; this port has no such cache, so the timeout is opt-in. Values are capped at 86400, and negative values are rejected with `--request-timeout must be zero or greater.`
+
 Pass `--metrics` to enable the Prometheus text endpoint at `/metrics`; it returns `404` when the flag is absent. The endpoint uses the same Host allowlist, Bearer token, snapshot cache, and single-flight collection as the dashboard snapshot. A scrape never waits for provider I/O: it returns the last successful snapshot while an expired value refreshes in the background, or `codexbar_up 0` until the first collection succeeds.
 
 ```powershell
@@ -121,13 +157,35 @@ Unknown, informational, non-finite, and dynamic additional-limit values are omit
 
 ```powershell
 codexbar config providers
+codexbar config providers --json --pretty
 codexbar config enable -p cursor
-codexbar config disable -p cursor
+codexbar config disable cursor --json
 printf '%s' $env:OPENROUTER_API_KEY | codexbar config set-api-key -p openrouter --stdin
+codexbar config claude-code-credentials status --json
 codexbar config validate
 ```
 
-`enable` / `disable` persist settings. `usage -p <id>` is a one-shot override and does not by itself toggle enabled state the same way.
+`enable` / `disable` persist settings. `usage -p <id>` is a one-shot override and does not by itself toggle enabled state the same way. `enable`, `disable` and `set-api-key` take the provider either as a positional name or as `-p/--provider`.
+
+`config providers`, `enable`, `disable` and `claude-code-credentials` accept `--format text|json`, `--json` and `--pretty`. Their JSON follows upstream:
+
+- `config providers`: one `{provider, displayName, enabled, defaultEnabled}` object per provider. The text lines are unchanged.
+- `config enable` / `config disable`: `{provider, displayName, enabled, configPath}`.
+- `config claude-code-credentials allow|deny|status`: `{allowed, configPath}`.
+
+`claude-code-credentials` controls whether CodexBar may read, and refresh, Claude Code's own OAuth credentials (`~/.claude/.credentials.json` or Windows Credential Manager). It is the same choice as the desktop setting and is off by default. While it is off, Claude Auto falls back to reduced-fidelity CLI usage. `allow` and `deny` save the choice, and `status` only reports it.
+
+#### Separate config file (`CODEXBAR_CONFIG`)
+
+```powershell
+$env:CODEXBAR_CONFIG = 'D:\isolated\codexbar\settings.json'
+codexbar config path
+codexbar usage --json
+```
+
+`CODEXBAR_CONFIG` names the settings file this CLI process uses instead of `%AppData%\Roaming\CodexBar\settings.json`. Surrounding whitespace is trimmed, an empty value is ignored, a leading `~` becomes your home directory, and a relative path is resolved from the current directory. Upstream keeps provider keys, cookies and token accounts in that one file; this port keeps them in separate stores, so `api_keys.json`, `manual_cookies.json` and `token-accounts.json` are read from and written to the same folder as the chosen file. Logs, caches and other app state stay in their default locations.
+
+Only the `codexbar` CLI reads the variable; the desktop app ignores it. A CLI run with the variable set also skips the desktop integrations that loading settings normally performs: it does not sync the start-at-login registry entry or run the tray-default migration. `config path` lists the resulting paths and notes when they come from `CODEXBAR_CONFIG`.
 
 ### Hooks
 
