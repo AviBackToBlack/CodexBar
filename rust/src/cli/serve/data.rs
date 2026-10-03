@@ -15,8 +15,19 @@ use crate::settings::Settings;
 
 use super::json_response;
 
+/// `/usage` provider selection. Upstream `serveProviderSelection`: an absent
+/// or empty `provider` query follows the enabled providers, like a plain
+/// `codexbar usage`; `enabled` runs only in that case.
+pub(super) fn usage_selection(
+    provider: Option<&str>,
+    enabled: impl FnOnce() -> Vec<ProviderId>,
+) -> anyhow::Result<ProviderSelection> {
+    ProviderSelection::from_arg_or_enabled(provider.filter(|raw| !raw.is_empty()), enabled)
+}
+
 pub async fn usage_response(provider: Option<&str>) -> String {
-    let selection = match ProviderSelection::from_arg(provider) {
+    let settings = Settings::load();
+    let selection = match usage_selection(provider, || settings.get_enabled_provider_ids()) {
         Ok(selection) => selection,
         Err(error) => {
             return json_response(400, json!({ "error": error.to_string() }));
@@ -42,7 +53,6 @@ pub async fn usage_response(provider: Option<&str>) -> String {
         // for the full completeness window.
         requires_optional_usage_completeness: false,
     };
-    let settings = Settings::load();
 
     let mut results = Vec::new();
     for provider_id in selection.as_list() {

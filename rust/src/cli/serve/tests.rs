@@ -1007,3 +1007,25 @@ async fn request_roundtrip_dashboard(request: &[u8], config: ServeConfig) -> Str
     server_task.await.unwrap().unwrap();
     String::from_utf8_lossy(&response).into_owned()
 }
+
+#[test]
+fn usage_route_without_provider_follows_enabled_providers() {
+    use crate::cli::usage::ProviderSelection;
+    use crate::core::ProviderId;
+
+    let enabled = || vec![ProviderId::Codex, ProviderId::Cursor];
+    for absent in [None, Some("")] {
+        assert_eq!(
+            data::usage_selection(absent, enabled).unwrap(),
+            ProviderSelection::Custom(vec![ProviderId::Codex, ProviderId::Cursor])
+        );
+    }
+    assert_eq!(
+        data::usage_selection(Some("claude"), || panic!(
+            "explicit provider reads no settings"
+        ))
+        .unwrap(),
+        ProviderSelection::Single(ProviderId::Claude)
+    );
+    assert!(data::usage_selection(Some("nope"), enabled).is_err());
+}
