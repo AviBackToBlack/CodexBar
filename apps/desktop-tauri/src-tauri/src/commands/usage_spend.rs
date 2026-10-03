@@ -652,6 +652,18 @@ fn build_usage_spend_summary(
                     cached_spend(cached_snapshot, period, now)
                 }
             }
+            "opencodego" => {
+                // Cost stays the provider's; recorded local tokens fill the token columns.
+                let mut spend = cached_spend(cached_snapshot, period, now);
+                let seven = CostScanner::new(7).scan_opencodego_usage_tokens_with_cancel(None);
+                let thirty = CostScanner::new(30).scan_opencodego_usage_tokens_with_cancel(None);
+                spend.period_tokens = selected_period_scan(period, &seven, &thirty, || {
+                    CostScanner::for_period(period).scan_opencodego_usage_tokens_with_cancel(None)
+                });
+                spend.seven_day_tokens = seven;
+                spend.thirty_day_tokens = thirty;
+                spend
+            }
             "cursor" => {
                 let seven = codexbar::providers::cursor::local_csv::summarize(7);
                 let thirty = codexbar::providers::cursor::local_csv::summarize(30);

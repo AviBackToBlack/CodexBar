@@ -822,25 +822,59 @@ impl CostScanner {
     ///
     /// Reads the local `opencode.db` and maps rows onto the shared `CostSummary`
     /// (`total_cost_usd`, `by_model`, `sessions_count`, period) so the chart's
-    /// local-usage summary treats OpenCode Go like Codex/Claude. No token counts
-    /// are available from the SQLite reader, so token fields stay zero.
-    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+    /// local-usage summary treats OpenCode Go like Codex/Claude. Recorded token
+    /// counts fill the token fields and `by_model_tokens` (costs stay the recorded
+    /// `cost`, never derived from tokens). Rows without usable tokens add nothing
+    /// to the sums, and `reasoning_tokens` stays `None` unless every row reports it.
+    fn scan_opencodego_model_cost_summary_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<opencodego_local::ModelCostSummary> {
         if is_cancelled(cancel) {
-            return CostSummary::default();
+            return None;
         }
         let now = Utc::now();
         let days = self.calendar_window(now, None).days;
-        let Some(local) = opencodego_local::model_cost_summary_scan(now, days) else {
+        opencodego_local::model_cost_summary_scan(now, days)
+    }
+
+    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let Some(local) = self.scan_opencodego_model_cost_summary_with_cancel(cancel) else {
             return CostSummary::default();
         };
+        let totals = local.tokens.to_model_token_counts().unwrap_or_default();
+        let by_model_tokens = local
+            .by_model_tokens
+            .iter()
+            .filter_map(|(model, sums)| {
+                sums.to_model_token_counts()
+                    .map(|counts| (model.clone(), counts))
+            })
+            .collect();
         CostSummary {
             total_cost_usd: local.total_cost_usd,
+            input_tokens: totals.input_tokens,
+            output_tokens: totals.output_tokens,
+            cached_tokens: totals.cached_tokens,
+            reasoning_tokens: totals.reasoning_tokens,
             by_model: local.by_model,
+            by_model_tokens,
             sessions_count: local.request_count,
             period_start: local.period_start,
             period_end: local.period_end,
             ..CostSummary::default()
         }
+    }
+
+    /// Return the exact local input + output token total for Usage & Spend.
+    /// `None` when any contributing row lacks usable input/output counts.
+    pub fn scan_opencodego_usage_tokens_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<u64> {
+        self.scan_opencodego_model_cost_summary_with_cancel(cancel)?
+            .tokens
+            .complete_input_output()
     }
 
     /// Existing Claude transcript roots: the profile root plus claude-swap
