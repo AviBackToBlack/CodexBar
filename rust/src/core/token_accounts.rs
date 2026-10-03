@@ -283,10 +283,10 @@ impl TokenAccountSupport {
             }),
             ProviderId::ClinePass => Some(TokenAccountSupport {
                 title: "API keys",
-                subtitle: "Store multiple ClinePass API keys.",
+                subtitle: "Store multiple ClinePass API keys. Without one, CodexBar reads your existing Cline session (run cline auth) without copying it.",
                 placeholder: "API key",
                 injection: TokenInjection::Environment {
-                    key: "CLINEPASS_API_KEY".to_string(),
+                    key: "CLINE_API_KEY".to_string(),
                 },
                 requires_manual_cookie_source: false,
                 cookie_name: None,

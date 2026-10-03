@@ -422,10 +422,10 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
         ProviderConfigInfo {
             id: ProviderId::ClinePass,
             name: "ClinePass",
-            requires_api_key: true,
-            api_key_env_var: Some("CLINEPASS_API_KEY"),
+            requires_api_key: false,
+            api_key_env_var: Some("CLINE_API_KEY"),
             api_key_help: Some(
-                "Get your API key from Cline / ClinePass. Also accepts CLINE_API_KEY.",
+                "Paste an API key, or run cline auth. Reads the existing Cline session without copying it. Also accepts CLINEPASS_API_KEY.",
             ),
             config_file_path: None,
             dashboard_url: Some("https://app.cline.bot/dashboard/subscription?personal=true"),
