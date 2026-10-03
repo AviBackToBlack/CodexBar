@@ -3,6 +3,7 @@ use crate::settings::{
     Language, ProviderConfig, ThemePreference, TrayIconMode, UsageThresholdOverride,
 };
 use serde_json::json;
+use std::collections::BTreeMap;
 
 fn document(preferences: Value) -> String {
     json!({ "version": 1, "preferences": preferences }).to_string()
@@ -63,6 +64,12 @@ fn customized_settings() -> Settings {
         float_bar_dark_text: true,
         float_bar_show_reset_inline: true,
         float_bar_show_cost: true,
+        cost_reporting_period: CostReportingPeriod::MonthToDate,
+        preferred_currency_code: "EUR".to_string(),
+        switcher_shortcuts: BTreeMap::from([
+            ("next".to_string(), "none".to_string()),
+            ("previous".to_string(), "alt+left".to_string()),
+        ]),
         ..Settings::default()
     };
     settings.enabled_providers = ["claude", "codex", "zai"].map(String::from).into();
@@ -99,6 +106,12 @@ fn secret_settings() -> Settings {
     settings.codex_custom_sessions_dirs = vec!["C:\\secret\\sessions".to_string()];
     settings.agent_session_ssh_hosts = vec!["secret-host.invalid".to_string()];
     settings.notification_sound_paths.high_usage = Some("C:\\secret\\ding.wav".to_string());
+    settings.cost_usage_bucket_time_zone = "Asia/Tokyo".to_string();
+    settings.stay_awake_enabled = true;
+    settings.credential_expiry_notifications_enabled = true;
+    settings.menu_bar_color_pace = true;
+    settings.stacked_tray_top_provider = Some("claude".to_string());
+    settings.stacked_tray_bottom_provider = Some("codex".to_string());
     settings
 }
 
@@ -123,6 +136,18 @@ fn round_trips_every_allowlisted_preference() {
     assert_eq!(again, exported);
     assert_eq!(target.window_scale_percent, 150);
     assert_eq!(target.ui_language, Language::Japanese);
+    assert_eq!(
+        target.cost_reporting_period,
+        CostReportingPeriod::MonthToDate
+    );
+    assert_eq!(target.preferred_currency_code, "EUR");
+    assert_eq!(
+        target
+            .switcher_shortcuts
+            .get("previous")
+            .map(String::as_str),
+        Some("alt+left")
+    );
     assert_eq!(
         target.enabled_providers,
         ["claude", "codex", "zai"].map(String::from).into()
@@ -316,6 +341,61 @@ fn rejection_matrix_names_the_offending_key() {
             json!({ "provider_usage_thresholds": { "codex": { "high": 150 } } }),
             "provider_usage_thresholds",
         ),
+        (
+            "stay awake",
+            json!({ "stay_awake_enabled": true }),
+            "stay_awake_enabled",
+        ),
+        (
+            "pinned cost zone",
+            json!({ "cost_usage_bucket_time_zone": "UTC" }),
+            "cost_usage_bucket_time_zone",
+        ),
+        (
+            "zero-day period",
+            json!({ "cost_reporting_period": "rolling:0" }),
+            "cost_reporting_period",
+        ),
+        (
+            "period over a year",
+            json!({ "cost_reporting_period": "rolling:400" }),
+            "cost_reporting_period",
+        ),
+        (
+            "unknown period",
+            json!({ "cost_reporting_period": "fortnight" }),
+            "cost_reporting_period",
+        ),
+        (
+            "unsupported currency",
+            json!({ "preferred_currency_code": "BTC" }),
+            "preferred_currency_code",
+        ),
+        (
+            "lowercase currency",
+            json!({ "preferred_currency_code": "eur" }),
+            "preferred_currency_code",
+        ),
+        (
+            "reserved switcher shortcut",
+            json!({ "switcher_shortcuts": { "next": "ctrl+r" } }),
+            "switcher_shortcuts",
+        ),
+        (
+            "duplicate switcher shortcut",
+            json!({ "switcher_shortcuts": { "previous": "right" } }),
+            "switcher_shortcuts",
+        ),
+        (
+            "unknown switcher action",
+            json!({ "switcher_shortcuts": { "jump": "ctrl+j" } }),
+            "switcher_shortcuts",
+        ),
+        (
+            "switcher shortcut as number",
+            json!({ "switcher_shortcuts": { "next": 3 } }),
+            "switcher_shortcuts",
+        ),
     ];
     for (name, preferences, key) in cases {
         assert_eq!(
@@ -399,11 +479,14 @@ fn null_restores_the_default() {
         "provider_metrics": null,
         "provider_order": null,
         "show_pace": null,
+        "cost_reporting_period": null,
+        "preferred_currency_code": null,
+        "switcher_shortcuts": null,
     }))
     .expect("nulls are valid")
     .apply_to(&mut settings)
     .expect("apply");
-    assert_eq!(applied, 7);
+    assert_eq!(applied, 10);
 
     let defaults = Settings::default();
     assert_eq!(settings.window_scale_percent, defaults.window_scale_percent);
@@ -413,6 +496,13 @@ fn null_restores_the_default() {
     assert!(settings.provider_metrics.is_empty());
     assert!(settings.provider_order.is_empty());
     assert!(settings.show_pace);
+    assert_eq!(
+        settings.cost_reporting_period,
+        defaults.cost_reporting_period
+    );
+    assert_eq!(settings.preferred_currency_code, "AUTO");
+    // Omitted from settings.json when empty, so null clears the overrides.
+    assert!(settings.switcher_shortcuts.is_empty());
     // Untouched preferences keep their customized values.
     assert_eq!(settings.tray_scale_percent, 120);
 }
@@ -470,6 +560,12 @@ fn export_never_contains_secrets_or_machine_state() {
         "http_proxy",
         "start_at_login",
         "global_shortcut",
+        "stay_awake",
+        "cost_usage_bucket_time_zone",
+        "Asia/Tokyo",
+        "stacked_tray",
+        "credential_expiry",
+        "menu_bar_color_pace",
     ] {
         assert!(!text.contains(secret), "export leaked `{secret}`");
     }

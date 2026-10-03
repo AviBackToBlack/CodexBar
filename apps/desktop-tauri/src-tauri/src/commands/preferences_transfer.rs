@@ -45,7 +45,8 @@ pub fn export_preferences(path: String) -> Result<usize, String> {
 ///
 /// Nothing is saved when the file is rejected. On success the same live
 /// updates as `update_settings` follow: locale, float bar, tray and dependent
-/// windows, plus a provider cache prune and refresh when the enabled set changed.
+/// windows, a local cost cache reset when the reporting period changed, plus a
+/// provider cache prune and refresh when the enabled set changed.
 #[tauri::command]
 pub async fn import_preferences(
     app: tauri::AppHandle,
@@ -55,12 +56,17 @@ pub async fn import_preferences(
     let document = PreferencesDocument::read_file(path).map_err(|error| error.to_string())?;
     let mut settings = Settings::load();
     let previous_language = settings.ui_language;
+    let previous_period = settings.cost_reporting_period;
     let previous_enabled = settings.get_enabled_provider_ids();
     let applied = document
         .apply_to(&mut settings)
         .map_err(|error| error.to_string())?;
     settings.save().map_err(|error| error.to_string())?;
     tracing::info!(applied, "imported portable preferences");
+    if settings.cost_reporting_period != previous_period {
+        // Cached local cost summaries cover the old period's window.
+        super::clear_provider_local_usage_cache();
+    }
 
     if settings.ui_language != previous_language {
         let _ = app.emit(events::LOCALE_CHANGED, language_label(settings.ui_language));

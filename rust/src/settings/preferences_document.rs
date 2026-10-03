@@ -23,6 +23,7 @@ use serde_json::{Map, Value};
 
 use super::{MetricPreference, Settings};
 use crate::core::ProviderId;
+use crate::cost_reporting_period::CostReportingPeriod;
 
 /// Current (and only) document version.
 pub const PREFERENCES_DOCUMENT_VERSION: u64 = 1;
@@ -92,6 +93,9 @@ const ALLOWED_PREFERENCES: &[(&str, Validator)] = &[
     ("float_bar_dark_text", typed::<bool>),
     ("float_bar_show_reset_inline", typed::<bool>),
     ("float_bar_show_cost", typed::<bool>),
+    ("cost_reporting_period", cost_reporting_period),
+    ("preferred_currency_code", preferred_currency_code),
+    ("switcher_shortcuts", switcher_shortcut_overrides),
 ];
 
 /// Every other `Settings` field. Secrets (`provider_configs` holds API
@@ -104,10 +108,12 @@ pub const EXCLUDED_KEYS: &[&str] = &[
     "http_proxy_url",
     "http_proxy_username",
     "http_proxy_password",
-    // Machine-specific paths and hosts.
+    // Machine-specific paths, hosts and state.
     "notification_sound_paths",
     "codex_custom_sessions_dirs",
     "agent_session_ssh_hosts",
+    // Pinned to this machine's zone on first launch; no settings control.
+    "cost_usage_bucket_time_zone",
     // Consent, autostart and other side-effect toggles.
     "start_at_login",
     "start_minimized",
@@ -124,6 +130,7 @@ pub const EXCLUDED_KEYS: &[&str] = &[
     "float_bar_click_through",
     "tray_panel_always_on_top",
     "promote_tray_icon",
+    "stay_awake_enabled",
     // Update settings.
     "update_channel",
     "auto_download_updates",
@@ -137,6 +144,11 @@ pub const EXCLUDED_KEYS: &[&str] = &[
     "weekly_progress_work_days",
     "alibaba_token_plan_region",
     "cost_summary_display_style",
+    // Kept out of the portable set, as upstream (0.70.0) keeps them.
+    "menu_bar_color_pace",
+    "stacked_tray_top_provider",
+    "stacked_tray_bottom_provider",
+    "credential_expiry_notifications_enabled",
     // No reader anywhere in the app.
     "merge_tray_icons",
 ];
@@ -167,6 +179,28 @@ fn percent(value: &Value) -> bool {
     value
         .as_f64()
         .is_some_and(|number| number.is_finite() && (0.0..=100.0).contains(&number))
+}
+
+/// `rolling:N` (1 to 365 days), `month-to-date` or `all`, as stored. The
+/// settings loader would quietly turn anything else into the default.
+fn cost_reporting_period(value: &Value) -> bool {
+    value.as_str().is_some_and(|raw| {
+        CostReportingPeriod::parse(raw).is_some_and(|period| period.raw() == raw)
+    })
+}
+
+/// `AUTO` or a supported currency code, as stored.
+fn preferred_currency_code(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|raw| crate::currency::normalize_preferred_currency(raw) == raw)
+}
+
+/// Action to shortcut overrides, validated like the Settings editor (unknown
+/// actions, reserved keys and duplicate assignments are rejected).
+fn switcher_shortcut_overrides(value: &Value) -> bool {
+    serde_json::from_value::<BTreeMap<String, String>>(value.clone())
+        .is_ok_and(|overrides| crate::switcher_shortcuts::normalize_overrides(&overrides).is_ok())
 }
 
 fn known_provider_ids() -> HashSet<&'static str> {
@@ -341,12 +375,15 @@ impl PreferencesDocument {
             ));
         };
         for (key, value) in &self.preferences {
-            let replacement = if value.is_null() {
-                defaults.get(key).cloned().ok_or_else(|| invalid(key))?
+            if !value.is_null() {
+                current.insert(key.clone(), value.clone());
+            } else if let Some(default) = defaults.get(key) {
+                current.insert(key.clone(), default.clone());
             } else {
-                value.clone()
-            };
-            current.insert(key.clone(), replacement);
+                // Fields serialized only when set (`switcher_shortcuts`)
+                // default by being absent.
+                current.remove(key);
+            }
         }
         // Re-read through the normal settings loader so clamping and
         // normalization match what `settings.json` gets on load.
