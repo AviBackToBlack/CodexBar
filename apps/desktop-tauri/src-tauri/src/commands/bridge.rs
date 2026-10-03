@@ -171,6 +171,10 @@ pub struct NamedRateWindowSnapshot {
     /// when the provider reports no real core quota window.
     #[serde(default)]
     pub fallback_lane: bool,
+    /// Provider-declared tray-icon lane this window stands in for when the
+    /// snapshot has no real core window in that lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_fallback: Option<codexbar::core::IconLane>,
 }
 
 /// Pace prediction snapshot for tray/bridge display.
@@ -495,6 +499,7 @@ impl ProviderUsageSnapshot {
                     window: RateWindowSnapshot::from_rate_window(&extra.window)
                         .with_quota_block(is_blocked, &blocked),
                     fallback_lane: extra.fallback_lane,
+                    icon_fallback: extra.icon_fallback,
                 })
                 .collect(),
             inventory: result

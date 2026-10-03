@@ -367,6 +367,24 @@ describe("MenuCard", () => {
     expect(document.querySelectorAll(".menu-metric")).toHaveLength(3);
   });
 
+  it("shows both Agent Plan lanes next to the informational placeholder in compact Overview", async () => {
+    const snapshot = provider(null, 0);
+    snapshot.primary = { ...rateWindow(0), isInformational: true, resetDescription: "No active 5h session" };
+    snapshot.extraRateWindows = [
+      { id: "doubao-agent-session", title: "5-hour", window: rateWindow(42, { windowMinutes: 300 }) },
+      { id: "doubao-agent-weekly", title: "Weekly", window: rateWindow(67, { windowMinutes: 10080 }) },
+    ];
+
+    renderCard(snapshot, { compactOverview: true });
+
+    // Compact Overview shows every quota row (upstream 0.62.0 #2616), so the
+    // placeholder no longer competes with the measured lanes for a row.
+    expect(await screen.findByText("58% left")).toBeInTheDocument();
+    expect(screen.getByText("33% left")).toBeInTheDocument();
+    expect(screen.getByText("No active 5h session")).toBeInTheDocument();
+    expect(document.querySelectorAll(".menu-metric")).toHaveLength(3);
+  });
+
   it("localizes Claude scoped weekly extra-window labels", async () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({ ClaudeScopedWeeklyLabel: "{} weekly" }));
     const snapshot = provider(null, 20);

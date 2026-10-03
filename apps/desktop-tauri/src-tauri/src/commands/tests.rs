@@ -1294,6 +1294,7 @@ fn usage_item_descriptors_keep_raw_ids_and_redact_titles() {
         title: "Credits owner@example.com".to_string(),
         window: snapshot.primary.clone(),
         fallback_lane: false,
+        icon_fallback: None,
     }];
 
     let mut settings = Settings {
