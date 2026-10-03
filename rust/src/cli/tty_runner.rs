@@ -340,8 +340,9 @@ impl TtyCommandRunner {
             .spawn_command(cmd)
             .map_err(|e| TtyCommandError::LaunchFailed(e.to_string()))?;
         drop(pair.slave);
+        let session_tree = SessionTree::contain(child.as_ref());
 
-        self.run_pty_session(pair.master, &mut child, script, &options)
+        self.run_pty_session(pair.master, &mut child, session_tree, script, &options)
     }
 
     /// Run an interactive session with the child process
@@ -349,6 +350,7 @@ impl TtyCommandRunner {
         &self,
         master: Box<dyn portable_pty::MasterPty + Send>,
         child: &mut Box<dyn portable_pty::Child + Send + Sync>,
+        session_tree: SessionTree,
         script: &str,
         options: &TtyCommandOptions,
     ) -> Result<TtyCommandResult, TtyCommandError> {
@@ -630,10 +632,7 @@ impl TtyCommandRunner {
             // that child alive, holding the PTY session and, for Claude, the
             // fixed --session-id ("already in use" on the next probe). Tear
             // down the whole tree first.
-            #[cfg(windows)]
-            if let Some(pid) = child.process_id() {
-                kill_process_tree(pid);
-            }
+            session_tree.terminate();
             // Best-effort kill; the process may have exited on its own.
             let _killed = child.kill();
             // Best-effort reap; the exit status is intentionally discarded.
@@ -762,17 +761,43 @@ fn write_script_lines(
     write_script_lines_impl(writer, script_lines, options)
 }
 
-/// Kill a process and all of its descendants (best effort, Windows only).
-#[cfg(windows)]
-fn kill_process_tree(pid: u32) {
-    let mut cmd = Command::new("taskkill.exe");
-    cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    // Best-effort; a process that already exited is fine.
-    let _status = cmd.status();
+/// The PTY child and every process it starts, held in a kill-on-close Job
+/// Object on Windows. The job closes when the session ends, so nothing the
+/// session started outlives it. Closing the job reaches only processes this
+/// session created; a parent-PID walk (`taskkill /T`) can also reach unrelated
+/// processes whose recorded parent PID was reused. Elsewhere, and when the
+/// child could not be contained, only the direct child is killed.
+struct SessionTree {
+    #[cfg(windows)]
+    job: Option<crate::managed_process::ProcessJob>,
+}
+
+impl SessionTree {
+    /// Contain a freshly spawned child; descendants it starts from now on
+    /// join the job automatically.
+    #[cfg(windows)]
+    fn contain(child: &(dyn portable_pty::Child + Send + Sync)) -> Self {
+        let job = child.as_raw_handle().and_then(|handle| {
+            crate::managed_process::ProcessJob::create("tty-session")
+                .and_then(|job| job.contain(handle).map(|()| job))
+                .inspect_err(|error| {
+                    tracing::debug!(%error, "tty session child could not be job-contained");
+                })
+                .ok()
+        });
+        Self { job }
+    }
+
+    #[cfg(not(windows))]
+    fn contain(_child: &(dyn portable_pty::Child + Send + Sync)) -> Self {
+        Self {}
+    }
+
+    /// Terminate every contained process (closing the kill-on-close job).
+    fn terminate(self) {
+        #[cfg(windows)]
+        drop(self.job);
+    }
 }
 
 fn write_script_lines_impl(
@@ -943,6 +968,91 @@ mod tests {
             elapsed >= Duration::from_secs_f64(2.8),
             "idle timeout fired {elapsed:?} after launch, inside the last retry's idle window"
         );
+    }
+
+    /// Ending the session ends every process the PTY child started (as with a
+    /// `claude.cmd` launcher and its `node` child), not only the child. The
+    /// grandchild runs on its own hidden console, so closing the pseudoconsole
+    /// does not end it; only the session's job does. It holds an exclusive
+    /// handle on a file, so its exit is observed through that handle instead
+    /// of a PID that could be reused.
+    #[cfg(windows)]
+    #[test]
+    fn session_end_terminates_processes_started_by_the_child() {
+        use base64::Engine as _;
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        fn encoded(command: &str) -> String {
+            let utf16: Vec<u8> = command
+                .encode_utf16()
+                .flat_map(|unit| unit.to_le_bytes())
+                .collect();
+            base64::engine::general_purpose::STANDARD.encode(utf16)
+        }
+        fn quoted(path: &std::path::Path) -> String {
+            format!("'{}'", path.display().to_string().replace('\'', "''"))
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let held = dir.path().join("held-by-grandchild.lock");
+        let ready = dir.path().join("grandchild-ready");
+        let grandchild = format!(
+            "$f = [IO.File]::Open({held}, 'OpenOrCreate', 'ReadWrite', 'None'); \
+             [IO.File]::WriteAllText({ready}, 'ready'); Start-Sleep -Seconds 30",
+            held = quoted(&held),
+            ready = quoted(&ready),
+        );
+        let child = format!(
+            "$psi = New-Object System.Diagnostics.ProcessStartInfo -ArgumentList \
+             'powershell.exe', '-NoLogo -NoProfile -NonInteractive -EncodedCommand {command}'; \
+             $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true; \
+             [void][System.Diagnostics.Process]::Start($psi); \
+             while (-not (Test-Path -LiteralPath {ready})) {{ Start-Sleep -Milliseconds 50 }}; \
+             Write-Output 'grandchild-holds-lock'; Start-Sleep -Seconds 30",
+            command = encoded(&grandchild),
+            ready = quoted(&ready),
+        );
+        let opts = TtyCommandOptions::new()
+            .with_timeout(30.0)
+            .with_initial_delay(0.2)
+            .with_stop_on_substring("grandchild-holds-lock")
+            .with_extra_args(
+                [
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    &encoded(&child),
+                ]
+                .map(String::from)
+                .to_vec(),
+            );
+
+        let result = TtyCommandRunner::new()
+            .run("powershell", "", opts)
+            .expect("pty command should run");
+        assert!(
+            result.text.contains("grandchild-holds-lock"),
+            "grandchild never started: {}",
+            result.text
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let exclusive = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(&held);
+            if exclusive.is_ok() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the grandchild still holds its file after the session ended"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]
