@@ -587,6 +587,10 @@ impl TtyCommandRunner {
                     } else {
                         write_script_lines(&mut writer, &script_lines, options);
                     }
+                    // As after the first attempt, the idle timer measures
+                    // silence after this input: a quiet screen must not end
+                    // the run before the remaining retries had their turn.
+                    last_output_time = Instant::now();
                 }
             }
 
@@ -903,6 +907,42 @@ mod tests {
 
         let result = result.expect("pty command should run");
         assert!(result.text.contains("CODEXBAR_PTY_OK"), "{}", result.text);
+    }
+
+    /// A retry is input like the first attempt: a child that stays silent
+    /// (here `ping` with its output discarded, which never reads or echoes
+    /// the typed text) must not hit the idle timeout before the last retry.
+    #[cfg(windows)]
+    #[test]
+    fn script_retry_restarts_the_idle_window() {
+        let runner = TtyCommandRunner::new();
+        let opts = TtyCommandOptions::new()
+            .with_timeout(8.0)
+            .with_idle_timeout(1.5)
+            .with_initial_delay(0.3)
+            .with_extra_args(
+                ["/d", "/c", "ping -n 10 127.0.0.1 >nul"]
+                    .map(String::from)
+                    .to_vec(),
+            )
+            .with_script_retries(
+                vec![0.8, 1.4],
+                vec!["marker that never appears".to_string()],
+                Vec::new(),
+            );
+
+        let started = Instant::now();
+        let result = runner.run("cmd", "x", opts);
+        let elapsed = started.elapsed();
+
+        let result = result.expect("silent pty command should still finish");
+        assert!(result.stopped_early, "the idle timeout should end the run");
+        // Without the restart the window closes 1.5 s after the first
+        // attempt (about 1.8 s); with it, no earlier than 1.4 s + 1.5 s.
+        assert!(
+            elapsed >= Duration::from_secs_f64(2.8),
+            "idle timeout fired {elapsed:?} after launch, inside the last retry's idle window"
+        );
     }
 
     #[test]
