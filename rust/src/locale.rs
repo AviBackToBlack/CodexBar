@@ -675,6 +675,8 @@ locale_keys! {
     UsageSpendRequests,
     UsageSpendTokens,
     UsageSpendKnownSubtotal,
+    IncompleteRequestsLabel,
+    IncompleteRequestsDetail,
     UsageSpendAllTimeHistory,
     UsageSpendCustomPricing,
     UsageSpendDailyLedger,

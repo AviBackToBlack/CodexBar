@@ -1,5 +1,7 @@
 import { BarChart } from "../../../../../components/charts/BarChart";
 import { providerCostColor } from "../../../../../components/charts/chartPalette";
+import { incompleteRequestsTooltip } from "../../../../../lib/incompleteRequests";
+import type { LocaleKey } from "../../../../../i18n/keys";
 import type { DailyCostPoint } from "../../../../../types/bridge";
 
 interface Props {
@@ -9,6 +11,7 @@ interface Props {
   providerId: string;
   animations: boolean;
   emptyMessage: string;
+  t: (key: LocaleKey) => string;
 }
 
 /**
@@ -23,9 +26,14 @@ export function CostHistoryChart({
   providerId,
   animations,
   emptyMessage,
+  t,
 }: Props) {
   const recent = data.slice(-30);
-  const points = recent.map((p) => ({ label: p.date, value: p.value }));
+  const points = recent.map((p) => ({
+    label: p.date,
+    value: p.value,
+    incompleteNote: incompleteRequestsTooltip(t, p.incompleteRequestCount) ?? undefined,
+  }));
   return (
     <div className="provider-detail-chart">
       <div className="provider-detail-chart__title">{title}</div>

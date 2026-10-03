@@ -429,6 +429,8 @@ export const ALL_LOCALE_KEYS = [
   "UsageSpendRequests",
   "UsageSpendTokens",
   "UsageSpendKnownSubtotal",
+  "IncompleteRequestsLabel",
+  "IncompleteRequestsDetail",
   "UsageSpendAllTimeHistory",
   "UsageSpendCustomPricing",
   "UsageSpendDailyLedger",

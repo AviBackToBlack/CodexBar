@@ -339,7 +339,11 @@ fn print_text_output(
             println!("  Local cost scanning not available for this provider");
             println!("  (Only Codex and Claude have local logs)");
         } else if result.summary.sessions_count == 0 {
-            if result.summary.known_zero {
+            if result.summary.incomplete_request_count > 0 {
+                // Only preliminary proxy rows exist: usage is unavailable, not $0.
+                println!("  No completed usage data found");
+                print_incomplete_note(result.summary.incomplete_request_count);
+            } else if result.summary.known_zero {
                 println!("  No usage in the selected period (scan complete)");
             } else {
                 println!("  No usage data found");
@@ -347,13 +351,17 @@ fn print_text_output(
             }
         } else {
             // Total cost
+            let incomplete_suffix = incomplete_suffix(result.summary.incomplete_request_count);
             if use_color {
                 println!(
-                    "  Total:    \x1b[32m{}\x1b[0m",
+                    "  Total:    \x1b[32m{}\x1b[0m{incomplete_suffix}",
                     result.summary.format_total()
                 );
             } else {
-                println!("  Total:    {}", result.summary.format_total());
+                println!(
+                    "  Total:    {}{incomplete_suffix}",
+                    result.summary.format_total()
+                );
             }
 
             // Token breakdown
@@ -366,6 +374,7 @@ fn print_text_output(
 
             // Sessions
             println!("  Sessions: {}", result.summary.sessions_count);
+            print_incomplete_note(result.summary.incomplete_request_count);
 
             // Cost by model
             if !result.summary.by_model.is_empty() {
@@ -412,6 +421,20 @@ fn print_text_output(
         if i < results.len() - 1 {
             println!();
         }
+    }
+}
+
+/// " · Incomplete" marker for totals that exclude preliminary Claude proxy
+/// rows (upstream 0.60.5 #3688).
+fn incomplete_suffix(count: u32) -> &'static str {
+    if count > 0 { " · Incomplete" } else { "" }
+}
+
+fn print_incomplete_note(count: u32) {
+    if count > 0 {
+        println!(
+            "  Incomplete: {count} requests lacked final usage and were excluded from tokens and cost."
+        );
     }
 }
 
@@ -572,6 +595,15 @@ fn build_json_payloads(
                     "period": {"start": r.summary.period_start.map(|d| d.to_string()), "end": r.summary.period_end.map(|d| d.to_string())},
                     "spendContract": spend_contract
                 });
+                // Only emitted when a scan excluded preliminary Claude proxy rows.
+                if r.summary.incomplete_request_count > 0
+                    && let Some(object) = payload.as_object_mut()
+                {
+                    object.insert(
+                        "incompleteRequestCount".to_string(),
+                        serde_json::json!(r.summary.incomplete_request_count),
+                    );
+                }
                 stamp_period(&mut payload, period);
                 payload
             }
@@ -695,6 +727,34 @@ mod tests {
         });
         let s = serde_json::to_string(&payload).unwrap();
         assert!(s.contains("null"), "non-codex A16 is null");
+    }
+
+    #[test]
+    fn json_output_emits_incomplete_request_count_only_when_positive() {
+        let make = |incomplete_request_count| CostResult {
+            provider: "claude".to_string(),
+            display_name: "Claude".to_string(),
+            summary: CostSummary {
+                incomplete_request_count,
+                ..CostSummary::default()
+            },
+            supported: true,
+            token_history: None,
+        };
+        let payloads = build_json_payloads(
+            &[make(3), make(0)],
+            CostReportingPeriod::Rolling(30),
+            30,
+            &Settings::default(),
+        );
+        assert_eq!(payloads[0]["incompleteRequestCount"], 3);
+        assert!(payloads[1].get("incompleteRequestCount").is_none());
+    }
+
+    #[test]
+    fn incomplete_suffix_marks_only_positive_counts() {
+        assert_eq!(incomplete_suffix(0), "");
+        assert_eq!(incomplete_suffix(2), " · Incomplete");
     }
 
     #[test]

@@ -25,10 +25,17 @@ fn scan_roots(roots: &[PathBuf]) -> (CostSummary, u32) {
     let mut pricing = ClaudeScanPricingResolver::default();
     let mut summary = CostSummary::default();
     let read_failures = scanner.walk_claude_roots(roots, &cutoff, None, &mut |path| {
-        let result =
-            scan_claude_file_with_pricing(path, &cutoff, &mut seen, None, &mut pricing, |row| {
+        let result = scan_claude_file_with_pricing(
+            path,
+            &cutoff,
+            &mut seen,
+            None,
+            &mut pricing,
+            &mut ClaudeIncompleteTracker::default(),
+            |row| {
                 assert!(add_claude_record_to_summary(&mut summary, row));
-            });
+            },
+        );
         assert!(result.is_complete(), "{result:?}");
     });
     (summary, read_failures)

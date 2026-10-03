@@ -458,6 +458,67 @@ fn excludes_preliminary_proxy_estimates_but_keeps_cache_aware_rows() {
 }
 
 #[test]
+fn claude_scan_counts_unreconciled_incomplete_requests_per_day_and_model() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("transcript.jsonl");
+    let now = Utc::now() - Duration::hours(1);
+    let ts = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let day = cost_bucket_zone().date(now).format("%Y-%m-%d").to_string();
+    let row = |request: &str, message: &str, stop: &str, usage: &str| {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","requestId":"{request}","message":{{"id":"{message}","model":"claude-sonnet-4-6","stop_reason":{stop},"usage":{usage}}}}}"#
+        )
+    };
+    let body = [
+        // Superseded: a completed row with the same key exists.
+        row("req_done", "msg_done", "null", r#"{"input_tokens":1000}"#),
+        row(
+            "req_done",
+            "msg_done",
+            r#""end_turn""#,
+            r#"{"input_tokens":1000,"output_tokens":50}"#,
+        ),
+        // Never completed, duplicated preliminary rows count once.
+        row("req_open", "msg_open", "null", r#"{"input_tokens":500}"#),
+        row("req_open", "msg_open", "null", r#"{"input_tokens":500}"#),
+    ]
+    .join("\n");
+    std::fs::write(&path, body).unwrap();
+
+    let cutoff = Utc::now() - Duration::days(1);
+    let mut seen = HashSet::new();
+    let mut pricing = ClaudeScanPricingResolver::default();
+    let mut tracker = ClaudeIncompleteTracker::default();
+    let mut summary = CostSummary::default();
+    let result = scan_claude_file_with_pricing(
+        &path,
+        &cutoff,
+        &mut seen,
+        None,
+        &mut pricing,
+        &mut tracker,
+        |record| assert!(add_claude_record_to_summary(&mut summary, record)),
+    );
+    assert_eq!(result.counted, 1);
+    assert!(
+        !result.is_complete(),
+        "preliminary rows keep coverage unknown"
+    );
+
+    let report = tracker.resolve(&seen);
+    report.apply_to(&mut summary);
+    assert_eq!(summary.incomplete_request_count, 1);
+    assert_eq!(
+        summary.incomplete_by_model.get("claude-sonnet-4-6"),
+        Some(&1)
+    );
+    assert_eq!(report.by_day.get(&day), Some(&1));
+    // Only the completed row contributes tokens.
+    assert_eq!(summary.input_tokens, 1000);
+    assert_eq!(summary.output_tokens, 50);
+}
+
+#[test]
 fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zero() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("transcript.jsonl");
@@ -472,6 +533,7 @@ fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zer
         &mut empty_seen,
         None,
         &mut empty_pricing,
+        &mut ClaudeIncompleteTracker::default(),
         |_| {},
     );
     let mut empty_summary = CostSummary::default();
@@ -488,6 +550,7 @@ fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zer
         &mut malformed_seen,
         None,
         &mut malformed_pricing,
+        &mut ClaudeIncompleteTracker::default(),
         |_| {},
     );
     assert_eq!(malformed_result.malformed_lines, 1);

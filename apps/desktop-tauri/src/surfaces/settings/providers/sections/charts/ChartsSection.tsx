@@ -170,6 +170,7 @@ export function ChartsSection({
             providerId={providerId}
             animations={animations}
             emptyMessage={emptyMsg}
+            t={t}
           />
         )}
         {current === "credits" && (

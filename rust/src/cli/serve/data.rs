@@ -109,22 +109,26 @@ pub async fn cost_response(provider: Option<&str>) -> String {
             ProviderId::Codex => (true, scanner.scan_codex(), None),
             ProviderId::Claude => {
                 let snapshot = scanner.scan_claude_chart_snapshot_with_cancel(None);
-                (true, snapshot.summary, Some(snapshot.daily_cost))
+                (
+                    true,
+                    snapshot.summary,
+                    Some((snapshot.daily_cost, snapshot.daily_incomplete)),
+                )
             }
             ProviderId::Pi => (true, scanner.scan_pi(), None),
             _ => (false, Default::default(), None),
         };
         if supported {
-            // Claude's snapshot derives the summary and chart rows in one
-            // transcript walk. Other providers use the shared daily-history
-            // path, capped at one year for All.
-            let daily = daily.unwrap_or_else(|| {
-                cost_scanner::get_daily_cost_history(
+            // Claude's snapshot derives the summary, chart rows and incomplete
+            // markers in one transcript walk. Other providers use the shared
+            // daily-history path, capped at one year for All.
+            let (daily_cost, daily_incomplete) = daily.unwrap_or_else(|| {
+                cost_scanner::get_daily_cost_and_incomplete_history(
                     provider_id.cli_name(),
                     rolling_window_days(period),
                 )
             });
-            let daily = daily_json(daily);
+            let daily = daily_json_with_incomplete(daily_cost, &daily_incomplete);
             let mut payload = json!({
                 "provider": provider_id.cli_name(),
                 "supported": true,
@@ -143,6 +147,15 @@ pub async fn cost_response(provider: Option<&str>) -> String {
                 "sessions_count": summary.sessions_count,
                 "by_model": summary.by_model,
             });
+            // Only emitted when a scan excluded preliminary Claude proxy rows.
+            if summary.incomplete_request_count > 0
+                && let Some(object) = payload.as_object_mut()
+            {
+                object.insert(
+                    "incompleteRequestCount".to_string(),
+                    json!(summary.incomplete_request_count),
+                );
+            }
             stamp_period(&mut payload, period);
             results.push(payload);
         } else {
@@ -157,11 +170,31 @@ pub async fn cost_response(provider: Option<&str>) -> String {
 }
 
 /// Dashboard-charts shape for one provider's daily spend: [{date, totalCost}].
+/// Days with incomplete Claude requests also carry `incompleteRequestCount`.
+#[cfg(test)]
 fn daily_json(daily: Vec<(String, Option<f64>)>) -> serde_json::Value {
+    daily_json_with_incomplete(daily, &[])
+}
+
+fn daily_json_with_incomplete(
+    daily: Vec<(String, Option<f64>)>,
+    incomplete: &[(String, u32)],
+) -> serde_json::Value {
     serde_json::Value::Array(
         daily
             .into_iter()
-            .map(|(date, cost_usd)| json!({ "date": date, "totalCost": cost_usd }))
+            .map(|(date, cost_usd)| {
+                let count = incomplete
+                    .iter()
+                    .find(|(day, _)| *day == date)
+                    .map(|(_, count)| *count)
+                    .filter(|count| *count > 0);
+                let mut row = json!({ "date": date, "totalCost": cost_usd });
+                if let (Some(count), Some(object)) = (count, row.as_object_mut()) {
+                    object.insert("incompleteRequestCount".to_string(), json!(count));
+                }
+                row
+            })
             .collect(),
     )
 }
@@ -172,12 +205,17 @@ mod tests {
 
     #[test]
     fn daily_array_shape_matches_dashboard_charts_contract() {
-        let daily = daily_json(vec![
-            ("2026-08-07".to_string(), Some(0.0)),
-            ("2026-08-08".to_string(), Some(4.25)),
-            ("2026-08-09".to_string(), None),
-        ]);
+        let daily = daily_json_with_incomplete(
+            vec![
+                ("2026-08-07".to_string(), Some(0.0)),
+                ("2026-08-08".to_string(), Some(4.25)),
+                ("2026-08-09".to_string(), None),
+            ],
+            &[("2026-08-09".to_string(), 2)],
+        );
         let rows = daily.as_array().unwrap();
+        assert!(rows[0].get("incompleteRequestCount").is_none());
+        assert_eq!(rows[2]["incompleteRequestCount"], 2);
         assert_eq!(rows[0]["date"], "2026-08-07");
         assert_eq!(rows[1]["totalCost"], 4.25);
         assert_eq!(rows[0]["totalCost"], 0.0);
