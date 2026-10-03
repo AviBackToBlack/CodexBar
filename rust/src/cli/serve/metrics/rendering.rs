@@ -107,6 +107,19 @@ pub(in crate::cli::serve::metrics) fn render_at(
                 QuotaMetricNames::CODE_REVIEW,
             )?;
         }
+        if let Some(count) = provider.reset_credits_available {
+            writer.sample("codexbar_reset_credits_available", &provider_labels, count)?;
+        }
+        if let Some(expiry) = provider
+            .reset_credits_next_expiry
+            .filter(|expiry| *expiry > now)
+        {
+            writer.sample(
+                "codexbar_reset_credits_next_expiry_timestamp_seconds",
+                &provider_labels,
+                expiry.timestamp(),
+            )?;
+        }
         if let Some(value) = provider.cost_today_usd {
             writer.sample_f64("codexbar_cost_today_usd", &provider_labels, value)?;
         }

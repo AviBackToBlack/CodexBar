@@ -86,12 +86,12 @@ describe("Codex account display labels", () => {
     expect(label).not.toContain("C:/private");
   });
 
-  it("redacts only the ambient account while preserving managed labels", () => {
+  it("redacts every account under hide personal info (ambient + managed)", () => {
     const system = account("11111111-1111-1111-1111-111111111111", "system");
     const managed = account("22222222-2222-2222-2222-222222222222", "managed");
     const accounts = [
       { ...system, source: "ambient" as const, nickname: "Private System Name" },
-      { ...managed, nickname: "Work" },
+      { ...managed, source: "managedByApp" as const, nickname: "Work" },
     ];
     const hidden = buildCodexAccountSurfaceLabels(
       accounts,
@@ -100,10 +100,15 @@ describe("Codex account display labels", () => {
       true,
       "Account",
     );
+    // Upstream 0.60.5 #3702 (141ecf642): every account is redacted, not only
+    // ambient ones — managed accounts get the generic label too.
     expect(hidden[system.id]).toBe("Account 1");
     expect(hidden[system.id]).not.toContain("@");
     expect(hidden[system.id]).not.toContain("Private System Name");
-    expect(hidden[managed.id]).toBe("same@example.com — Work");
+    expect(hidden[managed.id]).toBe("Account 2");
+    expect(hidden[managed.id]).not.toContain("@");
+    expect(hidden[managed.id]).not.toContain("Work");
+    expect(hidden[system.id]).not.toBe(hidden[managed.id]);
 
     const reordered = buildCodexAccountSurfaceLabels(
       [accounts[1], accounts[0]],
@@ -113,6 +118,7 @@ describe("Codex account display labels", () => {
       "Account",
     );
     expect(reordered[system.id]).toBe("Account 1");
+    expect(reordered[managed.id]).toBe("Account 2");
 
     const visible = buildCodexAccountSurfaceLabels(
       accounts,

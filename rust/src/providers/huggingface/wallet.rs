@@ -1,7 +1,9 @@
+use std::future::Future;
+
 use serde_json::Value;
 
 use super::IdentitySnapshot;
-use crate::core::ProviderError;
+use crate::core::{ProviderError, SourceMode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct WalletCandidate {
@@ -16,6 +18,25 @@ pub(super) fn matching_wallet_balance(
     let expected_user_id = identity?.user_id.as_deref()?;
     let candidate = candidate?;
     (candidate.user_id == expected_user_id).then_some(candidate.balance)
+}
+
+pub(super) async fn fetch_matching_wallet_balance<F, Fut>(
+    source_mode: SourceMode,
+    identity: Option<&IdentitySnapshot>,
+    load_candidate: F,
+) -> Option<f64>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Option<WalletCandidate>>,
+{
+    if source_mode != SourceMode::Auto
+        || identity
+            .and_then(|identity| identity.user_id.as_deref())
+            .is_none()
+    {
+        return None;
+    }
+    matching_wallet_balance(identity, load_candidate().await)
 }
 
 pub(super) fn parse_wallet_balance(html: &str) -> Result<f64, ProviderError> {
@@ -125,7 +146,32 @@ fn decode_html_entities(raw: &str) -> Result<String, ProviderError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use chrono::{DateTime, Duration, Utc};
+
     use super::*;
+    use crate::providers::huggingface::identity_cache::{IdentityCache, get_or_fetch_identity};
+
+    fn identity(user_id: Option<&str>) -> IdentitySnapshot {
+        IdentitySnapshot {
+            user_id: user_id.map(str::to_string),
+            name: Some("fixture".to_string()),
+            email: None,
+            plan: None,
+        }
+    }
+
+    fn candidate(user_id: &str, balance: f64) -> WalletCandidate {
+        WalletCandidate {
+            user_id: user_id.to_string(),
+            balance,
+        }
+    }
+
+    fn at(seconds: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp(seconds, 0).unwrap()
+    }
 
     #[test]
     fn candidate_is_attached_only_to_the_matching_token_identity() {
@@ -153,6 +199,94 @@ mod tests {
             None
         );
         assert_eq!(matching_wallet_balance(None, Some(candidate)), None);
+    }
+
+    #[tokio::test]
+    async fn wallet_loader_runs_only_for_auto_with_a_user_id() {
+        let calls = AtomicUsize::new(0);
+        let api_only_identity = identity(Some("user-a"));
+        assert_eq!(
+            fetch_matching_wallet_balance(SourceMode::OAuth, Some(&api_only_identity), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Some(candidate("user-a", 12.5)))
+            })
+            .await,
+            None
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+        let auto_identity = identity(Some("user-a"));
+        assert_eq!(
+            fetch_matching_wallet_balance(SourceMode::Auto, Some(&auto_identity), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Some(candidate("user-a", 12.5)))
+            })
+            .await,
+            Some(12.5)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let no_id_identity = identity(None);
+        assert_eq!(
+            fetch_matching_wallet_balance(SourceMode::Auto, Some(&no_id_identity), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Some(candidate("user-a", 12.5)))
+            })
+            .await,
+            None
+        );
+        assert_eq!(
+            fetch_matching_wallet_balance(SourceMode::Auto, None, || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Some(candidate("user-a", 12.5)))
+            })
+            .await,
+            None
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn wallet_loader_rejects_mismatched_browser_identity() {
+        let identity = identity(Some("api-user"));
+        let calls = AtomicUsize::new(0);
+        assert_eq!(
+            fetch_matching_wallet_balance(SourceMode::Auto, Some(&identity), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Some(candidate("browser-user", 40.0)))
+            })
+            .await,
+            None
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cached_identity_cannot_keep_wallet_after_browser_account_changes() {
+        let token = "fixture-token";
+        let now = at(1_800_000_000);
+        let cache = std::sync::Mutex::new(IdentityCache::default());
+        cache
+            .lock()
+            .unwrap()
+            .insert(token, identity(Some("api-user")), now);
+        let cached_identity =
+            get_or_fetch_identity(&cache, token, now + Duration::minutes(1), || async {
+                panic!("fresh identity should be served from cache")
+            })
+            .await
+            .unwrap();
+        let calls = AtomicUsize::new(0);
+
+        let balance =
+            fetch_matching_wallet_balance(SourceMode::Auto, Some(&cached_identity), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Some(candidate("new-browser-user", 40.0)))
+            })
+            .await;
+
+        assert_eq!(balance, None);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

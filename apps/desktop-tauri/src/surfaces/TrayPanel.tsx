@@ -2,6 +2,9 @@ import { Fragment, useEffect, useState, type CSSProperties } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot, UsageSpendSummary } from "../types/bridge";
 import type { LocaleKey } from "../i18n/keys";
+import { costPeriodLabel, costPeriodShortLabel } from "../lib/costPeriod";
+import { useCurrency } from "../hooks/CurrencyProvider";
+import { sumDisplayCurrencyAmounts } from "../lib/currency";
 import {
   beginFlyoutGesture,
   getUsageSpendSummary,
@@ -15,6 +18,7 @@ import {
   TRAY_SCALE_STEP,
   useTrayPanelController,
 } from "../hooks/useTrayPanelController";
+import { useStayAwakeStatus } from "../hooks/useStayAwakeStatus";
 import MenuCard from "../components/MenuCard";
 import MenuSurface, { MenuEmpty } from "../components/MenuSurface";
 import UpdateBanner from "../components/UpdateBanner";
@@ -28,15 +32,16 @@ import {
 
 /** Provider IDs that have a dashboard URL in the backend */
 const HAS_DASHBOARD = new Set([
-  "abacus", "alibaba", "alibabatokenplan", "amp", "augment",
+  "abacus", "alibaba", "alibabatokenplan", "amp", "atlascloud", "augment",
   "azureopenai", "bedrock", "claude", "codex", "codebuff",
-  "aiand", "commandcode", "copilot", "crof", "crossmodel", "cursor", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "zoommate",
+  "aiand", "aixy", "commandcode", "copilot", "crossmodel", "cursor", "deepgram", "deepinfra", "deepseek", "zenmux", "clinepass", "longcat", "neuralwatt", "zoommate",
   "doubao", "elevenlabs", "factory", "gemini", "grok", "groq",
   "infini", "jetbrains", "kilo", "kimi", "kimik2", "kiro", "manus", "replicate",
   "mimo", "minimax", "mistral", "nanogpt", "notion", "ollama", "openaiapi",
   "opencode", "opencodego", "openrouter", "perplexity", "qoder", "codebuddy", "sakana", "stepfun",
   "t3chat", "venice", "vertexai", "warp", "windsurf",
-  "xai", "zai", "fireworks", "meta", "muse", "nous",
+  "xai", "zai", "fireworks", "meta", "muse", "nous", "llmman", "devpass", "xkiro",
+  "raycast", "vercel",
 ]);
 /** Provider IDs that have a status page URL in the backend */
 const HAS_STATUS_PAGE = new Set([
@@ -52,6 +57,7 @@ const HAS_STATUS_PAGE = new Set([
  * 2. Detail: click a provider in grid → show only that provider's card
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
+  const stayAwakeHeld = useStayAwakeStatus();
   const {
     t,
     settings,
@@ -63,8 +69,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     trayScaleFillPercent,
     handleTrayScaleChange,
     sorted,
-    denseTrayProviders,
-    expectsDenseOverview,
+    gridProviders,
     selectedProviderId,
     gridExpanded,
     setGridExpanded,
@@ -152,6 +157,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     : null;
   const canSwitchClaudeAccount =
     selectedProvider !== null && hasSuccessfulClaudeCliQuota(selectedProvider);
+  const stayAwakeStatus = stayAwakeHeld ? (
+    <p className="menu-surface__hint" role="status">
+      {t("TrayStayAwakeActive")}
+    </p>
+  ) : null;
 
   if (sorted.length === 0) {
     return (
@@ -162,6 +172,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           footerRows={footerRows}
           style={{ zoom: trayScale }}
         >
+          {stayAwakeStatus}
           {settings.agentSessionsEnabled && <AgentSessions />}
           <MenuEmpty
             isLoading={isRefreshing && !hasCachedData}
@@ -181,9 +192,10 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         footerRows={footerRows}
         style={{ zoom: trayScale }}
       >
+        {stayAwakeStatus}
         {settings.agentSessionsEnabled && <AgentSessions />}
         <ProviderGrid
-          providers={expectsDenseOverview ? denseTrayProviders : sorted}
+          providers={gridProviders}
           selectedProviderId={selectedProviderId}
           showAsUsed={settings.showAsUsed}
           showProviderIcons={settings.switcherShowsIcons}
@@ -196,7 +208,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         />
         <div className="provider-grid__divider" />
         {selectedProviderId === null && (
-          <OverviewSpendSummary providerIds={sorted.map((provider) => provider.providerId)} t={t} />
+          <OverviewSpendSummary
+            providerIds={sorted.map((provider) => provider.providerId)}
+            period={settings.costReportingPeriod}
+            t={t}
+          />
         )}
         <div className="menu-stack">
           {useWideColumns
@@ -326,49 +342,70 @@ function TrayResizeHandles() {
   );
 }
 
-function OverviewSpendSummary({ providerIds, t }: { providerIds: string[]; t: (key: LocaleKey) => string }) {
+function OverviewSpendSummary({
+  providerIds,
+  period,
+  t,
+}: {
+  providerIds: string[];
+  /** Saved History window; a change rescans. Omitted means the backend default. */
+  period?: string;
+  t: (key: LocaleKey) => string;
+}) {
+  const { preferredCode, rates, format } = useCurrency();
   const [summary, setSummary] = useState<UsageSpendSummary | null>(null);
   const [shareError, setShareError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void getUsageSpendSummary({ historyDays: 30 })
+    // No explicit period: the backend resolves the saved History window.
+    void getUsageSpendSummary()
       .then((value) => { if (!cancelled) setSummary(value); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [providerIds.join("|")]);
+  }, [providerIds.join("|"), period]);
 
   // Overview consumes the same backend spend catalog as Usage & Spend. Do not
   // restrict accounting to whichever cards happen to be rendered in this tray.
   const overviewSummary = summary ? filterUsageSpendSummaryForOverview(summary) : null;
 
   if (!overviewSummary) return null;
+  // The summary names the History window its period columns cover.
+  const summaryPeriod = overviewSummary.reportingPeriod;
+  const title = t("OverviewSpendPeriodTitle").replace("{}", costPeriodShortLabel(summaryPeriod, t));
   const onShare = () => {
     setShareError(null);
     const error = shareUsageSpendPng(
       overviewSummary,
-      t("OverviewSpendTitle"),
+      title,
       `codexbar-overview-usage-${overviewSummary.reportingDay}.png`,
+      costPeriodLabel(summaryPeriod, t),
     );
     if (error) setShareError(t(error as LocaleKey));
   };
 
   const rows = overviewSummary.rows;
-  const summable = rows.filter((row) => (row.currency || "USD") === "USD");
-  const known = summable.filter((row) => row.thirtyDay != null && Number.isFinite(row.thirtyDay));
-  if (known.length === 0) return null;
-  const total = known.reduce((sum, row) => sum + (row.thirtyDay ?? 0), 0);
-  const partial = known.length < rows.length;
-  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+  const target = preferredCode.trim().toUpperCase() || "AUTO";
+  const aggregate = sumDisplayCurrencyAmounts(
+    rows.map((row) => ({ amount: row.periodCost, currency: row.currency || "USD" })),
+    target,
+    rates,
+  );
+  if (aggregate.total == null && aggregate.considered === 0) return null;
+  const partial = aggregate.included < aggregate.considered;
 
   return (
     <div className="provider-detail-section" style={{ margin: "8px 8px 10px", padding: "10px 12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-        <strong>{t("OverviewSpendTitle")}</strong>
-        <strong>{partial ? "~" : ""}{formatter.format(total)}</strong>
+        <strong>{title}</strong>
+        <strong>
+          {aggregate.total == null
+            ? "—"
+            : `${partial ? "~" : ""}${new Intl.NumberFormat(undefined, { style: "currency", currency: target === "AUTO" ? "USD" : target, maximumFractionDigits: 2 }).format(aggregate.total)}`}
+        </strong>
       </div>
       <div className="settings-section__caption" style={{ marginTop: 4 }}>
-        {known.length} of {rows.length} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
+        {aggregate.included} of {aggregate.considered} {t("OverviewSpendProviderCoverage")} · {t("OverviewSpendEstimate")}
       </div>
       <button
         type="button"

@@ -8,9 +8,14 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256, sha256_hex,
+    CostDailyPoint, CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256,
+    sha256_hex,
 };
+
+mod daily;
+
+use daily::{all_available_range, current_month_range, parse_daily_costs};
 
 const COST_EXPLORER_URL: &str = "https://ce.us-east-1.amazonaws.com";
 const COST_EXPLORER_TARGET: &str = "AWSInsightsIndexService.GetCostAndUsage";
@@ -251,7 +256,8 @@ impl BedrockProvider {
 
     fn credentials_from_profile(profile: &str) -> Result<AwsCredentials, ProviderError> {
         let aws = aws_cli_path()?;
-        let output = std::process::Command::new(&aws)
+        let mut command = std::process::Command::new(&aws);
+        command
             .args([
                 "configure",
                 "export-credentials",
@@ -260,7 +266,16 @@ impl BedrockProvider {
                 "--format",
                 "process",
             ])
-            .env_remove("AWS_PROFILE")
+            .env_remove("AWS_PROFILE");
+        // Runs during background refreshes: keep the CLI's console window
+        // hidden so it does not flash up or take focus.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = command
             .output()
             .map_err(|e| ProviderError::Other(format!("Failed to run AWS CLI: {e}")))?;
 
@@ -299,27 +314,59 @@ impl BedrockProvider {
         credentials: &AwsCredentials,
     ) -> Result<f64, ProviderError> {
         let (start_date, end_date) = current_month_range();
-        let mut total = 0.0;
+        let pages = self
+            .fetch_cost_pages(credentials, &start_date, &end_date, "MONTHLY")
+            .await?;
+        Ok(pages.iter().map(parse_bedrock_cost).sum())
+    }
+
+    /// Daily Bedrock spend over every month Cost Explorer exposes, so a
+    /// month-to-date or all-available selection can be answered from it.
+    async fn fetch_daily_spend(
+        &self,
+        credentials: &AwsCredentials,
+    ) -> Result<Vec<CostDailyPoint>, ProviderError> {
+        let (start_date, end_date) = all_available_range();
+        let pages = self
+            .fetch_cost_pages(credentials, &start_date, &end_date, "DAILY")
+            .await?;
+        Ok(parse_daily_costs(&pages))
+    }
+
+    async fn fetch_cost_pages(
+        &self,
+        credentials: &AwsCredentials,
+        start_date: &str,
+        end_date: &str,
+        granularity: &str,
+    ) -> Result<Vec<Value>, ProviderError> {
+        let mut pages = Vec::new();
+        let mut seen_tokens = std::collections::HashSet::new();
         let mut next_page_token: Option<String> = None;
 
         loop {
             let page = self
                 .fetch_cost_page(
                     credentials,
-                    &start_date,
-                    &end_date,
+                    start_date,
+                    end_date,
+                    granularity,
                     next_page_token.as_deref(),
                 )
                 .await?;
-            total += parse_bedrock_cost(&page);
             next_page_token = extract_next_page_token(&page);
+            pages.push(page);
 
-            if next_page_token.is_none() {
-                break;
+            match &next_page_token {
+                None => return Ok(pages),
+                Some(token) if !seen_tokens.insert(token.clone()) => {
+                    return Err(ProviderError::Parse(
+                        "Cost Explorer returned repeated NextPageToken".to_string(),
+                    ));
+                }
+                Some(_) => {}
             }
         }
-
-        Ok(total)
     }
 
     async fn fetch_claude_activity(
@@ -383,9 +430,10 @@ impl BedrockProvider {
         credentials: &AwsCredentials,
         start_date: &str,
         end_date: &str,
+        granularity: &str,
         next_page_token: Option<&str>,
     ) -> Result<Value, ProviderError> {
-        let body_bytes = cost_request_body(start_date, end_date, next_page_token)?;
+        let body_bytes = cost_request_body(start_date, end_date, granularity, next_page_token)?;
         let body_hash = sha256_hex(&body_bytes);
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
@@ -460,6 +508,10 @@ impl BedrockProvider {
         }
 
         let mut cost = CostSnapshot::new(spend, "USD", "Monthly");
+        match self.fetch_daily_spend(&credentials).await {
+            Ok(daily) => cost = cost.with_daily(daily),
+            Err(error) => tracing::debug!(%error, "Bedrock daily cost history unavailable"),
+        }
         if let Some(limit) = budget {
             cost = cost.with_limit(limit);
         }
@@ -527,6 +579,7 @@ impl Provider for BedrockProvider {
 fn cost_request_body(
     start_date: &str,
     end_date: &str,
+    granularity: &str,
     next_page_token: Option<&str>,
 ) -> Result<Vec<u8>, ProviderError> {
     let mut body = json!({
@@ -534,7 +587,7 @@ fn cost_request_body(
             "Start": start_date,
             "End": end_date,
         },
-        "Granularity": "MONTHLY",
+        "Granularity": granularity,
         "Metrics": ["UnblendedCost"],
         "GroupBy": [
             { "Type": "DIMENSION", "Key": "SERVICE" }
@@ -656,19 +709,6 @@ fn parse_aws_profile_credentials(stdout: &[u8]) -> Result<AwsCredentials, Provid
     })
 }
 
-fn current_month_range() -> (String, String) {
-    let now = Utc::now();
-    let start = Utc
-        .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
-        .single()
-        .unwrap_or(now);
-    let tomorrow = (now + Duration::days(1)).date_naive();
-    (
-        start.format("%Y-%m-%d").to_string(),
-        tomorrow.format("%Y-%m-%d").to_string(),
-    )
-}
-
 fn end_of_current_month() -> Option<chrono::DateTime<Utc>> {
     let now = Utc::now();
     let (year, month) = if now.month() == 12 {
@@ -679,18 +719,13 @@ fn end_of_current_month() -> Option<chrono::DateTime<Utc>> {
     Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0).single()
 }
 
-fn parse_bedrock_cost(page: &Value) -> f64 {
-    page.get("ResultsByTime")
+/// Amounts of the Bedrock service groups in one `ResultsByTime` entry.
+fn bedrock_group_amounts(result: &Value) -> impl Iterator<Item = f64> + '_ {
+    result
+        .get("Groups")
         .and_then(|v| v.as_array())
         .into_iter()
         .flatten()
-        .flat_map(|result| {
-            result
-                .get("Groups")
-                .and_then(|v| v.as_array())
-                .into_iter()
-                .flatten()
-        })
         .filter(|group| {
             group
                 .get("Keys")
@@ -707,6 +742,14 @@ fn parse_bedrock_cost(page: &Value) -> f64 {
                 .and_then(|v| v.as_str())
                 .and_then(|amount| amount.parse::<f64>().ok())
         })
+}
+
+fn parse_bedrock_cost(page: &Value) -> f64 {
+    page.get("ResultsByTime")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .flat_map(bedrock_group_amounts)
         .sum()
 }
 

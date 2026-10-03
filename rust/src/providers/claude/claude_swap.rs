@@ -181,6 +181,9 @@ pub struct ClaudeSwapAccountRow {
 pub struct ClaudeSwapAccountList {
     pub active_account_number: Option<u32>,
     pub accounts: Vec<ClaudeSwapAccountRow>,
+    /// Additive adapter capability (`supportsAccountSwitching`). Absent means
+    /// `true` for schema-v1 compatibility; read-only adapters report `false`.
+    pub supports_account_switching: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

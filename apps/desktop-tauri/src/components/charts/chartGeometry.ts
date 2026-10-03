@@ -3,22 +3,30 @@ export const DATE_EDGE_PADDING = 36;
 export const BAR_GAP = 2;
 export const PLOT_WIDTH = WIDTH - DATE_EDGE_PADDING * 2;
 export const AXIS_MAX_X = WIDTH / 2;
+const SCROLLABLE_BAR_WIDTH = 1.5;
 
 export function shouldRenderCenterMax(count: number): boolean {
   return count >= 3;
 }
 
-export function getBarWidth(count: number): number {
+export function getScrollableChartWidth(count: number): number {
   const barCount = Math.max(1, count);
-  return Math.max(1, (PLOT_WIDTH - (barCount - 1) * BAR_GAP) / barCount);
+  const plotWidth = barCount * SCROLLABLE_BAR_WIDTH + (barCount - 1) * BAR_GAP;
+  return Math.max(WIDTH, DATE_EDGE_PADDING * 2 + plotWidth);
 }
 
-export function getBarX(index: number, count: number): number {
-  return DATE_EDGE_PADDING + index * (getBarWidth(count) + BAR_GAP);
+export function getBarWidth(count: number, width = WIDTH): number {
+  const barCount = Math.max(1, count);
+  const plotWidth = width - DATE_EDGE_PADDING * 2;
+  return Math.max(1, (plotWidth - (barCount - 1) * BAR_GAP) / barCount);
 }
 
-export function getBarCenter(index: number, count: number): number {
-  return getBarX(index, count) + getBarWidth(count) / 2;
+export function getBarX(index: number, count: number, width = WIDTH): number {
+  return DATE_EDGE_PADDING + index * (getBarWidth(count, width) + BAR_GAP);
+}
+
+export function getBarCenter(index: number, count: number, width = WIDTH): number {
+  return getBarX(index, count, width) + getBarWidth(count, width) / 2;
 }
 
 export interface BarGeometry {
@@ -28,9 +36,9 @@ export interface BarGeometry {
   center: (index: number) => number;
 }
 
-export function getBarGeometry(count: number): BarGeometry {
-  const barWidth = getBarWidth(count);
-  const x = (index: number) => getBarX(index, count);
+export function getBarGeometry(count: number, width = WIDTH): BarGeometry {
+  const barWidth = getBarWidth(count, width);
+  const x = (index: number) => getBarX(index, count, width);
 
   return {
     barWidth,

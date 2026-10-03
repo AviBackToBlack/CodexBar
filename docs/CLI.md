@@ -28,22 +28,26 @@ codexbar config validate
 codexbar config dump
 ```
 
+Set `CODEXBAR_CONFIG` to run the CLI against another settings file; see [Separate config file](#separate-config-file-codexbar_config).
+
 ## Commands (current)
 
 Top-level (from `codexbar --help`):
 
 | Command | Purpose |
 |---------|---------|
-| `usage` | Print usage from enabled providers (default-style workflow; also global `-p` / `-f`) |
+| `usage` | Print usage from the enabled providers, or the ones passed with `-p` |
 | `cost` | Local token cost usage (Claude + Codex session scans; no web required for those) |
 | `guard` | Gate automation on remaining quota for one provider |
 | `diagnose` | Export safe provider diagnostics as JSON |
 | `sessions` | List or focus local / SSH agent sessions |
 | `serve` | HTTP JSON/dashboard server with optional Prometheus metrics |
+| `dashboard` | Emit a one-shot dashboard snapshot (JSON to stdout or `--output` file) |
 | `autostart` | Manage Windows boot auto-start |
 | `account` | Token accounts for providers |
-| `config` | validate / dump / providers / enable / disable / set-api-key / path |
+| `config` | validate / dump / providers / enable / disable / set-api-key / path / claude-code-credentials |
 | `hooks` | List, enable, disable, test, or watch external hooks |
+| `workspaces` | List local Codex project/workspace usage |
 
 ### Usage
 
@@ -55,7 +59,31 @@ codexbar usage --source auto   # auto | web | cli | oauth
 codexbar usage --brief
 ```
 
-Global-style flags (also on root help): `-p/--provider`, `-f/--format`, `--json`, `--pretty`, `--status`, `--all-accounts`, `--account`, `--no-credits`, `--source`, `--web-timeout`, `--brief`.
+These flags belong to `usage`: `-p/--provider`, `-f/--format` (`text`, `json` or `toon`), `--json`, `--pretty`, `--status`, `--all-accounts`, `--account`, `--no-credits`, `--no-color`, `--source`, `--web-timeout`, `--brief`. The root command takes only `-v/--verbose`, `--json-output` (JSON logs on stderr) and `--no-color`; `codexbar` without a subcommand prints a hint and exits with a usage error.
+
+Without `-p`, `usage` follows the providers enabled in settings, like upstream: exactly Codex and Claude are fetched as `both`, one enabled provider is a single fetch, and any other set keeps the display order. With nothing enabled, JSON and TOON print an empty list, and text explains how to enable a provider (`codexbar config enable <provider>`) or pass `--provider`. An explicit `-p` (a provider, `both` or `all`) never reads the enabled list. `--account` needs exactly one provider, including when the enabled list resolves to several. `cost` keeps its Claude default.
+
+**Error rows.** In JSON and TOON output a provider that fails becomes a row with `provider`, the human-readable `error`, and `errorKind`, so scripts can react without parsing the text:
+
+| `errorKind` | Meaning |
+|---|---|
+| `needsAuthentication` | Credentials are missing or were rejected; sign in again or add a key. |
+| `expiredSession` | The credentials worked but the session or token has expired. |
+| `localRuntimeOffline` | A local runtime the provider reads is not running, for example the Claude CLI is not installed. |
+| `browserSignInRequired` | Only a browser sign-in can bring usage back. The row adds `signInUrl`, the page to open. |
+| `timeout` | The fetch ran out of time. |
+| `unknown` | Anything else, including failures before the provider runs (account selection, stored keys). |
+
+The first three use the same names as the desktop's provider states. Claude reports `browserSignInRequired` (with `signInUrl` `https://claude.ai/login`) when its OAuth usage endpoint is rate limited, no claude.ai browser session was found, and the CLI probe failed too. Until the rate limit lifts, signing in to claude.ai in a browser is the only way back, and the `error` text says so.
+
+```json
+{
+  "provider": "claude",
+  "error": "Claude usage failed from all configured sources. ... Sign in at https://claude.ai/login in your browser, then refresh.",
+  "errorKind": "browserSignInRequired",
+  "signInUrl": "https://claude.ai/login"
+}
+```
 
 ### Cost
 
@@ -64,7 +92,19 @@ codexbar cost
 codexbar cost -p codex -f json --pretty
 codexbar cost -p codex --remote user@mac-host
 codexbar cost -p codex --format json --summary-only --provider-native-only --days 30
+codexbar cost --period month-to-date --json
+codexbar cost --period all --json
+codexbar cost --days 7 --json
 ```
+
+Claude/Codex costs come from local session logs. Antigravity reads supported local token history; known models receive API list-price estimates from the bundled price table or the models.dev pricing catalog, and unknown models stay unpriced rather than becoming a false `$0`. Antigravity's Gemini 3.1 Pro aliases (`gemini-pro-default`, `gemini-pro-agent`, and the `gemini-3.1-pro` effort tiers) price as `gemini-3.1-pro-preview`, the only catalogued Gemini 3.1 Pro row; the alias is provider-local and recorded model names stay unchanged. These estimates are not Antigravity charges or credit deductions. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
+
+Antigravity history that stopped short is never shown as exact. A scan whose decoded rows are trustworthy reports `tokensAreLowerBound` / `costIsLowerBound` (text: "at least N"); a scan cut off by a hard limit, or one whose sources contradict each other, is withheld and publishes no total. A later partial read does not replace an earlier complete read of the same window and roots within one process. Reading the history never waits on the network. When a recorded model has no known public price, the desktop Usage & Spend view and `serve /cost` start one bounded models.dev pricing refresh in the background and a later read picks up the new prices; `codexbar cost --provider antigravity --refresh` waits for that refresh and rescans, while a plain `codexbar cost` starts no download. The request carries no account identity or usage data, and a failure leaves the affected models unpriced. Empty or absent history never starts a pricing download.
+**Reporting period.** `--period month-to-date|all` selects the calendar month so far (midnight on the first of the month, in the machine's local zone, through today) or all available local history. `--days N` (1..=365) always selects a rolling window and wins over `--period`. With neither flag the saved `cost_reporting_period` in `settings.json` applies (`rolling:30`, `month-to-date` or `all`; 30 days when unset). Text headings show the period label (`Last 30 days`, `Month to date`, `All`, `Today`). JSON payloads add `reportingPeriod` (the raw value), `historyLabel`, and a `totals` object (`inputTokens`, `outputTokens`, `cachedTokens`, `reasoningTokens`, `totalTokens`, `totalCost`) for the selected window, and `days_scanned` is the resolved day count; the existing `cost`, `tokens`, and `sessions_count` fields keep their meaning. `totalTokens` follows each provider's token rule: Claude and Pi add cache reads and writes to input + output, while Codex input already includes cached input, so its total is input + output. `totals` is `null` when a scan found nothing without establishing a known zero.
+
+`--remote` and `--summary-only` keep the 1..=365 day protocol: month to date is sent as its current day count, and All is rejected unless you pass an explicit `--days N`. `--group-by session` lists the most recent 365 days at most when All is selected. All reads every available local log, including logs older than a year; missing or deleted logs cannot be recovered and incomplete scans stay marked incomplete.
+
+`serve` `/cost` reads the saved period on every request, so `days_scanned`, `totals`, the scanner windows and the `daily` chart rows follow it (`daily` covers at most the latest 365 days for All). The dashboard cost line, the dashboard snapshot, and the Prometheus gauge `codexbar_cost_last_30_days_usd` keep their 30-day meaning.
 
 Claude/Codex costs come from local session logs. Antigravity exposes local **token history only** through `cost`; dollar cost remains unknown rather than becoming a false `$0`. Other providers may differ; do not assume upstream Cursor dashboard cost behavior unless implemented in this tree.
 
@@ -91,6 +131,16 @@ codexbar serve --port 8080
 
 Typical endpoints: `/health`, `/usage`, `/cost`, and `/dashboard/v1/snapshot`. Loopback default keeps local use simple; treat non-loopback as a threat-model choice because the token for protected requests crosses the network over HTTP.
 
+The dashboard page at `/` has a "Usage display" control (Follow server, Used, Remaining). Follow server uses `host.usageBarsShowUsed` from the snapshot; the other two override it for this browser only, stored in `localStorage` under `codexbar.dashboard.usageDisplay`. Changing it re-renders the cached snapshot without refetching. Bar colour always follows consumption (70% used warns, 90% used is full), whichever value is shown.
+
+`/usage` without a `provider` query (or with an empty one) follows the enabled providers, like a plain `codexbar usage`; `/cost` still defaults to Claude. `/usage` fetches the selected providers concurrently, and its error rows carry the same `errorKind` (and `signInUrl`) as `usage --json`.
+
+```powershell
+codexbar serve --request-timeout 30
+```
+
+`--request-timeout <seconds>` bounds `/usage` and `/cost`. A provider still running after 0.8 of the timeout becomes a row such as `{"provider":"claude","error":"claude usage timed out","errorKind":"timeout"}` (`/cost`: `codex cost refresh timed out`), and a request that outlives the whole timeout answers `504` with `{"error":"request timed out"}`. The fetch behind a timed-out row keeps running: the next request for that provider joins it instead of starting another, and at most eight fetches or scans run at once. Finished results are not cached, so the first request after a fetch completes starts a new one. The default `0` waits for every provider. Upstream defaults to 30 seconds and serves the late result from a response cache; this port has no such cache, so the timeout is opt-in. Values are capped at 86400, and negative values are rejected with `--request-timeout must be zero or greater.`
+
 Pass `--metrics` to enable the Prometheus text endpoint at `/metrics`; it returns `404` when the flag is absent. The endpoint uses the same Host allowlist, Bearer token, snapshot cache, and single-flight collection as the dashboard snapshot. A scrape never waits for provider I/O: it returns the last successful snapshot while an expired value refreshes in the background, or `codexbar_up 0` until the first collection succeeds.
 
 ```powershell
@@ -101,19 +151,43 @@ curl.exe -H "Authorization: Bearer $env:CODEXBAR_DASHBOARD_TOKEN" http://127.0.0
 
 The metrics contract exports collection health for every enabled, known provider. The only provider label is its bounded canonical CLI slug, for example `codexbar_provider_up{provider="claude"}`; disabled providers are absent, and an ordinary provider fetch failure does not suppress healthy provider series. Quota semantics are currently exported only for Codex through fixed `session`, `weekly`, `monthly`, and `code_review` metric families. Used and remaining values are ratios from `0` to `1`, with no dynamic window label. Available local Codex cost estimates are also exported.
 
+Codex OAuth reset credits are exposed as `codexbar_reset_credits_available{provider="codex"}` (`0` exhausted, `-1` unavailable or PAT) and, when present, `codexbar_reset_credits_next_expiry_timestamp_seconds{provider="codex"}`. Successful and unavailable reset-credit observations are cached for ten minutes. See [Prometheus examples](prometheus/README.zh-CN.md) for a Chinese Grafana dashboard, scrape settings, and alert rules.
+
 Unknown, informational, non-finite, and dynamic additional-limit values are omitted instead of being inferred or replaced with sentinels. Account identity, display labels, source names, free-form provider errors, and version strings are not exposed. Consumers should alert on provider health, snapshot staleness, and quota values together.
 
 ### Config
 
 ```powershell
 codexbar config providers
+codexbar config providers --json --pretty
 codexbar config enable -p cursor
-codexbar config disable -p cursor
+codexbar config disable cursor --json
 printf '%s' $env:OPENROUTER_API_KEY | codexbar config set-api-key -p openrouter --stdin
+codexbar config claude-code-credentials status --json
 codexbar config validate
 ```
 
-`enable` / `disable` persist settings. `usage -p <id>` is a one-shot override and does not by itself toggle enabled state the same way.
+`enable` / `disable` persist settings. `usage -p <id>` is a one-shot override and does not by itself toggle enabled state the same way. `enable`, `disable` and `set-api-key` take the provider either as a positional name or as `-p/--provider`.
+
+`config providers`, `enable`, `disable` and `claude-code-credentials` accept `--format text|json`, `--json` and `--pretty`. Their JSON follows upstream:
+
+- `config providers`: one `{provider, displayName, enabled, defaultEnabled}` object per provider. The text lines are unchanged.
+- `config enable` / `config disable`: `{provider, displayName, enabled, configPath}`.
+- `config claude-code-credentials allow|deny|status`: `{allowed, configPath}`.
+
+`claude-code-credentials` controls whether CodexBar may read, and refresh, Claude Code's own OAuth credentials (`~/.claude/.credentials.json` or Windows Credential Manager). It is the same choice as the desktop setting and is off by default. While it is off, Claude Auto falls back to reduced-fidelity CLI usage. `allow` and `deny` save the choice, and `status` only reports it.
+
+#### Separate config file (`CODEXBAR_CONFIG`)
+
+```powershell
+$env:CODEXBAR_CONFIG = 'D:\isolated\codexbar\settings.json'
+codexbar config path
+codexbar usage --json
+```
+
+`CODEXBAR_CONFIG` names the settings file this CLI process uses instead of `%AppData%\Roaming\CodexBar\settings.json`. Surrounding whitespace is trimmed, an empty value is ignored, a leading `~` becomes your home directory, and a relative path is resolved from the current directory. Upstream keeps provider keys, cookies and token accounts in that one file; this port keeps them in separate stores, so `api_keys.json`, `manual_cookies.json` and `token-accounts.json` are read from and written to the same folder as the chosen file. Logs, caches and other app state stay in their default locations.
+
+Only the `codexbar` CLI reads the variable; the desktop app ignores it. A CLI run with the variable set also skips the desktop integrations that loading settings normally performs: it does not sync the start-at-login registry entry or run the tray-default migration. `config path` lists the resulting paths and notes when they come from `CODEXBAR_CONFIG`.
 
 ### Hooks
 

@@ -10,6 +10,7 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import { useCurrency } from "../hooks/CurrencyProvider";
 import { useLocale } from "../hooks/useLocale";
 import { useProviders } from "../hooks/useProviders";
 import {
@@ -19,7 +20,9 @@ import {
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
+import { costPeriodShortLabel } from "../lib/costPeriod";
 import { describeProviderState } from "../lib/providerState";
+import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
 import type {
   BootstrapState,
   ProviderLocalUsageSummary,
@@ -92,7 +95,10 @@ type FloatBarCostSummary = {
   providerId: string;
   displayName: string;
   todayCost: number | null;
-  thirtyDayCost: number | null;
+  /** Cost over the selected History window. */
+  periodCost: number | null;
+  /** Raw History window `periodCost` covers. */
+  period: string;
 };
 
 type FloatBarCostTarget = {
@@ -106,34 +112,30 @@ function providerCostKey(provider: ProviderUsageSnapshot): string {
 }
 
 function hasLocalCost(summary: ProviderLocalUsageSummary | null): summary is ProviderLocalUsageSummary {
-  return summary?.todayCost != null || summary?.thirtyDayCost != null;
-}
-
-function formatUsd(value: number | null): string | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  return `$${value.toFixed(2)}`;
+  return summary?.todayCost != null || summary?.periodCost != null;
 }
 
 function CostPill({
   summary,
   scale,
   todayLabel,
-  thirtyDayLabel,
+  periodLabel,
   estimateLabel,
 }: {
   summary: FloatBarCostSummary;
   scale: number;
   todayLabel: string;
-  thirtyDayLabel: string;
+  periodLabel: string;
   estimateLabel: string;
 }) {
-  const today = formatUsd(summary.todayCost);
-  const thirtyDay = formatUsd(summary.thirtyDayCost);
+  const { format } = useCurrency();
+  const today = summary.todayCost == null ? null : format(summary.todayCost, "USD");
+  const periodCost = summary.periodCost == null ? null : format(summary.periodCost, "USD");
   const iconSize = Math.round(10 * scale);
   const brand = getProviderIcon(summary.providerId).brandColor;
   const title = [
     today ? `${todayLabel} ${today}` : null,
-    thirtyDay ? `${thirtyDayLabel} ${thirtyDay}` : null,
+    periodCost ? `${periodLabel} ${periodCost}` : null,
   ]
     .filter(Boolean)
     .join(" / ");
@@ -159,13 +161,13 @@ function CostPill({
             </span>
           </span>
         )}
-        {thirtyDay && (
+        {periodCost && (
           <span className="floatbar__cost-item" data-tauri-drag-region>
             <span className="floatbar__cost-label" data-tauri-drag-region>
-              {thirtyDayLabel}
+              {periodLabel}
             </span>
             <span className="floatbar__cost-value" data-tauri-drag-region>
-              {thirtyDay}
+              {periodCost}
             </span>
           </span>
         )}
@@ -182,6 +184,11 @@ function CostPill({
  * Color follows usage: green default, amber when remaining drops below the
  * high-usage threshold, red when remaining is below the critical threshold
  * or the provider is exhausted.
+ *
+ * An informational metric (no budget set, a balance line, no active session)
+ * has no quota percentage. Like the tray card and the tray tooltip, the pill
+ * shows its text instead, keeps the neutral tone, and never turns that text
+ * into reset wording.
  */
 function ProviderPill({
   provider,
@@ -207,24 +214,34 @@ function ProviderPill({
   stateLabel: string;
 }) {
   const rateWindow = provider.selectedMetric;
+  const informational = rateWindow.isInformational === true;
   const remaining = Math.max(0, Math.min(100, rateWindow.remainingPercent));
   const used = Math.max(0, Math.min(100, rateWindow.usedPercent));
   const displayPercent = showAsUsed ? used : remaining;
   const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
   const state = describeProviderState(provider.errorState);
-  const exhausted = rateWindow.isExhausted || state.isProblem;
   let tone: "ok" | "warn" | "crit" = "ok";
-  if (exhausted || remaining <= critRemaining) tone = "crit";
-  else if (remaining <= highRemaining) tone = "warn";
+  if (state.isProblem) tone = "crit";
+  else if (!informational) {
+    if (rateWindow.isExhausted || remaining <= critRemaining) tone = "crit";
+    else if (remaining <= highRemaining) tone = "warn";
+  }
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = state.isProblem ? stateLabel : `${Math.round(displayPercent)}%`;
+  const infoText = rateWindow.resetDescription?.trim() || "—";
+  const label = state.isProblem
+    ? stateLabel
+    : informational
+      ? infoText
+      : `${Math.round(displayPercent)}%`;
   const resetText = useFormattedResetTime(
     rateWindow.resetsAt,
-    rateWindow.resetDescription,
+    informational ? null : resetDescriptionFallback(rateWindow),
     resetRelative,
   );
+  const detailText = windowDetailText(rateWindow);
   const resetSuffix = resetText ? `\n${resetText}` : "";
+  const detailSuffix = detailText ? `\n${detailText}` : "";
   const inlineReset = resetText
     ? inlineResetTime(resetText, rateWindow.resetsAt, resetRelative)
     : null;
@@ -237,7 +254,9 @@ function ProviderPill({
       title={
         state.isProblem
           ? `${provider.displayName}: ${stateLabel}`
-          : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`
+          : informational
+            ? `${provider.displayName}: ${infoText}${resetSuffix}`
+            : `${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}${detailSuffix}`
       }
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
@@ -382,7 +401,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
           providerId: target.providerId,
           displayName: target.displayName,
           todayCost: localUsage.todayCost,
-          thirtyDayCost: localUsage.thirtyDayCost,
+          periodCost: localUsage.periodCost,
+          period: localUsage.reportingPeriod,
         } satisfies FloatBarCostSummary;
       }),
     )
@@ -403,13 +423,14 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     return () => {
       cancelled = true;
     };
-  }, [visibleCostTargets]);
+    // A History window change re-reads the local usage summaries.
+  }, [visibleCostTargets, settings.costReportingPeriod]);
 
   const visibleCosts = visible
     .map((provider) => localCosts[providerCostKey(provider)])
     .filter((summary): summary is FloatBarCostSummary => Boolean(summary));
   const visibleCostValuesKey = visibleCosts
-    .map((summary) => `${summary.key}:${summary.todayCost ?? ""}:${summary.thirtyDayCost ?? ""}`)
+    .map((summary) => `${summary.key}:${summary.todayCost ?? ""}:${summary.period ?? ""}:${summary.periodCost ?? ""}`)
     .join("|");
   // Keep the native floatbar window fitted when late data/fonts/icons change layout.
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);
@@ -522,7 +543,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
               summary={summary}
               scale={scale}
               todayLabel={t("PanelToday")}
-              thirtyDayLabel={t("FloatBarThirtyDayShort")}
+              periodLabel={costPeriodShortLabel(summary.period, t)}
               estimateLabel={t("OverviewSpendEstimate")}
             />
           ))}

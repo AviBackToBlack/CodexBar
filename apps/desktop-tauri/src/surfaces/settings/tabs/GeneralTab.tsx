@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { playNotificationSound, quitApp } from "../../../lib/tauri";
+import { getAppInfo, playNotificationSound, quitApp } from "../../../lib/tauri";
+import type { AppInfoBridge } from "../../../types/bridge";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type {
   Language,
@@ -14,6 +15,7 @@ import type {
   UsageThresholdOverride,
 } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
+import { CURRENCY_PICKER_OPTIONS } from "../../../lib/currency";
 import type { TabProps } from "../settingsTabs";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
@@ -23,6 +25,7 @@ const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "japanese", display: "日本語" },
   { value: "korean", display: "한국어" },
   { value: "spanish", display: "Español" },
+  { value: "portuguesebrazil", display: "Português (Brasil)" },
   { value: "russian", display: "Русский" },
   { value: "turkish", display: "Türkçe" },
 ];
@@ -199,6 +202,14 @@ export default function GeneralTab({
       .catch(() => {}); // graceful fallback to static default
   }, []);
 
+  const [appVersion, setAppVersion] = useState<AppInfoBridge | null>(null);
+
+  useEffect(() => {
+    getAppInfo()
+      .then(setAppVersion)
+      .catch(() => {}); // version row degrades to absent, never blocks the tab
+  }, []);
+
   const handleTestSound = useCallback((event: NotificationSoundEvent) => {
     setSoundError(null);
     setPlayingSound(event);
@@ -264,6 +275,18 @@ export default function GeneralTab({
                 label: opt.display,
               }))}
               onChange={(v) => set({ uiLanguage: v as Language })}
+            />
+          </Field>
+          <Field label={t("PreferredCurrencyLabel")} description={t("PreferredCurrencyHelper")}>
+            <Select
+              value={settings.preferredCurrencyCode ?? "AUTO"}
+              disabled={saving}
+              ariaLabel={t("PreferredCurrencyLabel")}
+              options={[
+                { value: "AUTO", label: "AUTO" },
+                ...CURRENCY_PICKER_OPTIONS,
+              ]}
+              onChange={(value) => set({ preferredCurrencyCode: value })}
             />
           </Field>
         </div>
@@ -336,6 +359,18 @@ export default function GeneralTab({
               ariaLabel={t("PredictivePaceWarnings")}
               disabled={saving}
               onChange={(v) => set({ predictivePaceWarningEnabled: v })}
+            />
+          </Field>
+          <Field
+            label={t("CredentialExpiryNotifications")}
+            description={t("CredentialExpiryNotificationsHelper")}
+            leading
+          >
+            <Toggle
+              checked={settings.credentialExpiryNotificationsEnabled}
+              ariaLabel={t("CredentialExpiryNotifications")}
+              disabled={saving}
+              onChange={(v) => set({ credentialExpiryNotificationsEnabled: v })}
             />
           </Field>
           <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
@@ -576,6 +611,21 @@ export default function GeneralTab({
           </div>
         </div>
       </section>}
+
+      {/* ── Running version (upstream 0.64.0 #3806) ─────────────── */}
+      {mode === "general" && appVersion && (
+        <section className="settings-section">
+          <h3 className="settings-section__title">{t("Version")}</h3>
+          <div className="settings-section__group">
+            <Field label={appVersion.name}>
+              <span className="about-version">
+                {appVersion.version}
+                {appVersion.buildNumber !== "dev" && ` (${appVersion.buildNumber})`}
+              </span>
+            </Field>
+          </div>
+        </section>
+      )}
     </>
   );
 }

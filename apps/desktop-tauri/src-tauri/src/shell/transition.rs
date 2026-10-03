@@ -11,6 +11,7 @@ use crate::surface::{SurfaceMode, SurfaceTransition, WindowProperties};
 use crate::surface_target::SurfaceTarget;
 use crate::window_positioner::{self, PanelSize, Rect};
 
+use super::activation::Activation;
 use super::geometry::surface_panel_size;
 use super::position::default_surface_position;
 use super::window::{apply_window_layout, apply_window_properties, show_window};
@@ -75,11 +76,14 @@ pub(super) enum TransitionResolution {
     },
 }
 
+/// Move `main` to `mode`/`target`. `activation` says whether the surface may
+/// take focus once shown (see [`super::activation`]).
 pub fn transition_to_target(
     app: &AppHandle,
     mode: SurfaceMode,
     target: SurfaceTarget,
     position: Option<(i32, i32)>,
+    activation: Activation,
 ) -> Result<SurfaceMode, String> {
     apply_transition_request_with_strategy(
         app,
@@ -89,6 +93,7 @@ pub fn transition_to_target(
             position,
         },
         false,
+        activation,
     )
 }
 
@@ -96,14 +101,16 @@ fn apply_transition_request_with_strategy(
     app: &AppHandle,
     request: ShellTransitionRequest,
     force_same_mode_apply: bool,
+    activation: Activation,
 ) -> Result<SurfaceMode, String> {
-    apply_transition_request(app, request, force_same_mode_apply)
+    apply_transition_request(app, request, force_same_mode_apply, activation)
 }
 
 fn apply_transition_request(
     app: &AppHandle,
     request: ShellTransitionRequest,
     force_same_mode_apply: bool,
+    activation: Activation,
 ) -> Result<SurfaceMode, String> {
     let _transition_guard = SHELL_TRANSITION_SERIAL.lock().unwrap();
     let window = app
@@ -128,11 +135,17 @@ fn apply_transition_request(
     .or_else(|| preserved_visible_mode_change_position(&window, &resolution));
 
     match resolution {
-        TransitionResolution::ModeChange { transition, target } => {
-            apply_transition(app, &window, &transition, &previous, target, position)
-        }
+        TransitionResolution::ModeChange { transition, target } => apply_transition(
+            app,
+            &window,
+            &transition,
+            &previous,
+            target,
+            position,
+            activation,
+        ),
         TransitionResolution::SameModeRetarget { mode, target } => {
-            apply_same_mode_target_update(app, &window, mode, target, position)
+            apply_same_mode_target_update(app, &window, mode, target, position, activation)
         }
         TransitionResolution::SameModeReopen { mode, target } => {
             let transition = SurfaceTransition {
@@ -140,7 +153,15 @@ fn apply_transition_request(
                 to: mode,
                 properties: mode.window_properties(),
             };
-            apply_transition(app, &window, &transition, &previous, target, position)
+            apply_transition(
+                app,
+                &window,
+                &transition,
+                &previous,
+                target,
+                position,
+                activation,
+            )
         }
         TransitionResolution::Noop { mode } => Ok(mode),
     }
@@ -413,6 +434,7 @@ fn apply_same_mode_target_update(
     mode: SurfaceMode,
     target: SurfaceTarget,
     position: Option<(i32, i32)>,
+    activation: Activation,
 ) -> Result<SurfaceMode, String> {
     if let Some((x, y)) = position {
         let _ = window.set_position(os_position(window, x, y));
@@ -428,7 +450,7 @@ fn apply_same_mode_target_update(
         },
     )?;
     events::emit_surface_mode_changed(app, mode, mode, target);
-    if show_window(window).is_ok() && mode == SurfaceMode::TrayPanel {
+    if show_window(window, activation).is_ok() && mode == SurfaceMode::TrayPanel {
         mark_tray_panel_shown(app);
     }
     Ok(mode)
@@ -441,6 +463,7 @@ pub(super) fn apply_transition(
     previous: &SurfaceSnapshot,
     current_target: SurfaceTarget,
     position: Option<(i32, i32)>,
+    activation: Activation,
 ) -> Result<SurfaceMode, String> {
     if let Some((x, y)) = position {
         let _ = window.set_position(os_position(window, x, y));
@@ -468,7 +491,7 @@ pub(super) fn apply_transition(
             // ever target Hidden/PopOut/Settings, none of which defer their
             // own reveal.)
             if needs_show {
-                let _ = show_window(window);
+                let _ = show_window(window, activation);
             }
             clamp_current_window_to_work_area(window);
 
@@ -477,8 +500,10 @@ pub(super) fn apply_transition(
         Err(err) => {
             let recovery =
                 recovery_snapshot_for_failed_transition(transition, previous, &current_target);
+            // Putting the previous surface back is not something the user
+            // asked for, so it never takes focus.
             if let Err(recovery_err) = restore_recovery_surface(&recovery, |mode, properties| {
-                apply_window_properties(window, mode, properties)
+                apply_window_properties(window, mode, properties, Activation::Never)
             }) {
                 let hidden = hidden_surface_snapshot();
                 if let Err(hide_err) = window.hide().map_err(|e| e.to_string()) {

@@ -30,12 +30,23 @@ pub fn validate_provider_workspace_value(
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         }),
+        ProviderId::Muse => validate_id(trimmed, "Muse browser team ID", |value| {
+            value.chars().all(|c| c.is_ascii_digit())
+        }),
         ProviderId::Zed => validate_zed_url(trimmed),
         ProviderId::Xai => {
             if trimmed.contains('/') || trimmed == "." || trimmed == ".." {
                 return Err(
                     "The xAI team ID must be a single identifier without path separators"
                         .to_string(),
+                );
+            }
+            Ok(trimmed.to_string())
+        }
+        ProviderId::GitKraken => {
+            if trimmed.len() > 256 || !trimmed.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+                return Err(
+                    "GitKraken organization ID must be a single printable identifier".to_string(),
                 );
             }
             Ok(trimmed.to_string())
@@ -55,15 +66,32 @@ pub fn validate_provider_workspace_value(
                 Err("Helmcode tenant must be 'helmcode' or 'nanBuilders'".to_string())
             }
         }
-        ProviderId::LiteLLM => validate_token_endpoint(trimmed, "LiteLLM base URL", |_| true),
+        ProviderId::LiteLLM => validate_litellm_base_url(trimmed),
         ProviderId::Sub2Api => validate_sub2api_base_url(trimmed),
+        ProviderId::LLMProxy => validate_llmproxy_base_url(trimmed),
+        ProviderId::LLMMan => crate::providers::llmman::validated_llmman_base_url(trimmed)
+            .map_err(|err| err.to_string()),
         _ => Ok(trimmed.to_string()),
+    }
+}
+
+fn validate_litellm_base_url(raw: &str) -> Result<String, String> {
+    match crate::providers::litellm::validated_base_url(raw) {
+        Ok(url) => Ok(url.to_string().trim_end_matches('/').to_string()),
+        Err(err) => Err(err.to_string()),
     }
 }
 
 fn validate_sub2api_base_url(raw: &str) -> Result<String, String> {
     match crate::providers::sub2api::validated_sub2api_base_url(raw) {
         Ok(url) => Ok(url.to_string().trim_end_matches('/').to_string()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn validate_llmproxy_base_url(raw: &str) -> Result<String, String> {
+    match crate::providers::validated_https_or_private_http_url(raw, "LLM Proxy") {
+        Ok(url) => Ok(url.to_string()),
         Err(err) => Err(err.to_string()),
     }
 }
@@ -172,6 +200,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn muse_browser_team_id_is_digits_only() {
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Muse, " 424242424242 ").unwrap(),
+            "424242424242"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::Muse, "  ").unwrap(),
+            ""
+        );
+        for invalid in ["team-1", "12/34", "1 2", "-5", "1e3", "../1"] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::Muse, invalid).is_err(),
+                "{invalid} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn validates_workspace_ids_by_provider() {
         assert_eq!(
             validate_provider_workspace_value(ProviderId::OpenAIApi, " proj_abc-123 ").unwrap(),
@@ -192,10 +238,16 @@ mod tests {
             validate_provider_workspace_value(ProviderId::Devin, "https://api.devin.ai").is_err()
         );
         assert!(validate_provider_workspace_value(ProviderId::OpenCodeGo, "wrk_abc/123").is_err());
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::GitKraken, " org-123 ").unwrap(),
+            "org-123"
+        );
+        assert!(validate_provider_workspace_value(ProviderId::GitKraken, "org id").is_err());
+        assert!(validate_provider_workspace_value(ProviderId::GitKraken, "org\n123").is_err());
     }
 
     #[test]
-    fn validates_token_endpoint_hosts() {
+    fn validates_litellm_base_url_policy() {
         assert_eq!(
             validate_provider_workspace_value(
                 ProviderId::LiteLLM,
@@ -205,15 +257,82 @@ mod tests {
             "https://litellm.example.com/v1"
         );
         for value in [
-            "http://litellm.example.com",
-            "https://user@litellm.example.com",
-            "https://127.0.0.1",
+            "http://127.0.0.1:4000",
+            "http://10.0.0.5:4000",
+            "http://192.168.1.4",
+            "http://[::1]:4000",
+            "http://proxy.local:4000",
             "https://10.0.0.5",
-            "https://[::1]",
+        ] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::LiteLLM, value).is_ok(),
+                "rejected {value}"
+            );
+        }
+        for value in [
+            "http://litellm.example.com",
+            "http://8.8.8.8",
+            "https://user@litellm.example.com",
             "https://example.com%2f.evil.test",
         ] {
             assert!(
                 validate_provider_workspace_value(ProviderId::LiteLLM, value).is_err(),
+                "accepted {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_llmproxy_base_url() {
+        assert_eq!(
+            validate_provider_workspace_value(
+                ProviderId::LLMProxy,
+                " https://proxy.example.com/v1?team=a "
+            )
+            .unwrap(),
+            "https://proxy.example.com/v1?team=a"
+        );
+        assert!(
+            validate_provider_workspace_value(ProviderId::LLMProxy, "http://192.168.1.10:8000")
+                .is_ok()
+        );
+        assert!(
+            validate_provider_workspace_value(ProviderId::LLMProxy, "http://proxy.example.com")
+                .is_err()
+        );
+        assert!(
+            validate_provider_workspace_value(
+                ProviderId::LLMProxy,
+                "https://user:pass@proxy.example.com"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validates_and_normalizes_llmman_base_url() {
+        for (value, expected) in [
+            ("localhost", "http://localhost:17434"),
+            ("0.0.0.0:18000", "http://127.0.0.1:18000"),
+            ("https://llmman.example.com/", "https://llmman.example.com"),
+        ] {
+            assert_eq!(
+                validate_provider_workspace_value(ProviderId::LLMMan, value).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::LLMMan, "  ").unwrap(),
+            ""
+        );
+        for value in [
+            "http://public.example.com",
+            "http://user:password@127.0.0.1:17434",
+            "http://127.0.0.1:17434?probe=1",
+            "file:///tmp/llmman",
+        ] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::LLMMan, value).is_err(),
                 "accepted {value}"
             );
         }

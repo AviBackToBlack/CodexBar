@@ -11,7 +11,9 @@ pub mod codex_accounts;
 pub mod codex_cli;
 pub mod codex_workspaces;
 pub mod core;
+pub mod cost_reporting_period;
 pub mod cost_scanner;
+pub mod currency;
 pub mod host;
 pub mod locale;
 pub mod logging;
@@ -19,6 +21,8 @@ pub mod login;
 #[cfg(windows)]
 pub mod managed_process;
 pub mod notifications;
+pub mod power_assertion;
+pub mod process_environment;
 pub mod providers;
 pub mod secure_file;
 pub mod settings;
@@ -26,6 +30,7 @@ pub mod sound;
 pub mod spend_contract;
 
 pub mod status;
+pub mod switcher_shortcuts;
 pub mod tray;
 pub mod updater;
 pub mod wsl;

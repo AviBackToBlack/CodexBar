@@ -200,7 +200,7 @@ pub fn parse_timeout_secs(value: f64) -> Result<f64, &'static str> {
 pub fn resolve_guard_provider(raw: &str) -> Result<ProviderId, String> {
     match ProviderSelection::from_arg(Some(raw)) {
         Ok(ProviderSelection::Single(id)) => Ok(id),
-        Ok(ProviderSelection::Both | ProviderSelection::All) => {
+        Ok(ProviderSelection::Both | ProviderSelection::All | ProviderSelection::Custom(_)) => {
             Err("guard requires exactly one --provider.".to_string())
         }
         Err(e) => Err(e.to_string()),
@@ -318,13 +318,17 @@ async fn fetch_guard_outcome(
         manual_cookie_header: None,
         manual_cookie_missing: false,
         api_key: None,
+        token_account_kind: None,
+        token_account_isolated: false,
         workspace_id: None,
         seat_credit_entitlement: None,
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // Guard checks keep the short optional-join grace.
         requires_optional_usage_completeness: false,
+        optional_details_enabled: false,
     };
 
     match provider.fetch_usage(&ctx).await {

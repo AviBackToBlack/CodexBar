@@ -10,3 +10,6 @@ rust/src/agent_sessions/fixtures/** -text
 
 # Bash scripts must remain LF for Linux and WSL execution.
 *.sh text eol=lf
+
+# Upstream Claude PTY captures are byte-exact copies (they contain CR bytes); never EOL-convert them.
+rust/src/providers/fixtures/claude/*.ansi -text

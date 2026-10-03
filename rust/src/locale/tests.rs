@@ -80,6 +80,8 @@ fn test_japanese_menu_card_locale_values_are_translated() {
         (LocaleKey::DetailCostLimit, "上限"),
         (LocaleKey::DetailCostRemaining, "残り"),
         (LocaleKey::DetailCostBalance, "残高"),
+        (LocaleKey::AtlasCloudAvailableBalance, "利用可能残高"),
+        (LocaleKey::AtlasCloudBalance, "Atlas Cloud の残高"),
         (LocaleKey::DetailCostResets, "リセット"),
         (LocaleKey::DetailChartCost, "コスト（30日間）"),
         (LocaleKey::DetailChartCredits, "使用クレジット（30日間）"),
@@ -146,8 +148,6 @@ fn test_japanese_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelZoom, "ズーム"),
         (LocaleKey::PanelMenu, "メニュー"),
         (LocaleKey::PanelToday, "今日"),
-        (LocaleKey::PanelThirtyDayCost, "30日間のコスト"),
-        (LocaleKey::PanelThirtyDayTokens, "30日間のトークン"),
         (LocaleKey::PanelLatestTokens, "最新トークン"),
         (LocaleKey::PanelTopModelPrefix, "トップモデル"),
         (LocaleKey::PanelUsedSuffix, "使用済み"),
@@ -184,8 +184,6 @@ fn test_chinese_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelZoom, "缩放"),
         (LocaleKey::PanelMenu, "菜单"),
         (LocaleKey::PanelToday, "今日"),
-        (LocaleKey::PanelThirtyDayCost, "30天成本"),
-        (LocaleKey::PanelThirtyDayTokens, "30天令牌"),
         (LocaleKey::PanelLatestTokens, "最新令牌"),
         (LocaleKey::PanelTopModelPrefix, "热门模型"),
         (LocaleKey::PanelUsedSuffix, "已使用"),
@@ -220,8 +218,6 @@ fn test_korean_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelZoom, "확대/축소"),
         (LocaleKey::PanelMenu, "메뉴"),
         (LocaleKey::PanelToday, "오늘"),
-        (LocaleKey::PanelThirtyDayCost, "30일 비용"),
-        (LocaleKey::PanelThirtyDayTokens, "30일 토큰"),
         (LocaleKey::PanelLatestTokens, "최신 토큰"),
         (LocaleKey::PanelTopModelPrefix, "상위 모델"),
         (LocaleKey::PanelUsedSuffix, "사용됨"),
@@ -256,8 +252,6 @@ fn test_spanish_tray_panel_locale_values_are_translated() {
         (LocaleKey::PanelZoom, "Zoom"),
         (LocaleKey::PanelMenu, "Menú"),
         (LocaleKey::PanelToday, "Hoy"),
-        (LocaleKey::PanelThirtyDayCost, "Costo 30d"),
-        (LocaleKey::PanelThirtyDayTokens, "Tokens 30d"),
         (LocaleKey::PanelLatestTokens, "Últimos tokens"),
         (LocaleKey::PanelTopModelPrefix, "Modelo principal"),
         (LocaleKey::PanelUsedSuffix, "usado"),
@@ -323,6 +317,40 @@ fn test_locale_key_russian() {
 }
 
 #[test]
+fn provider_switcher_shortcut_strings_are_translated_in_design_locales() {
+    let keys = [
+        LocaleKey::SwitcherShortcutsTitle,
+        LocaleKey::SwitcherShortcutsHelper,
+        LocaleKey::SwitcherShortcutPrevious,
+        LocaleKey::SwitcherShortcutNext,
+        LocaleKey::SwitcherShortcutSelect,
+        LocaleKey::SwitcherShortcutNone,
+        LocaleKey::SwitcherShortcutRecordingHint,
+        LocaleKey::SwitcherShortcutReset,
+        LocaleKey::SwitcherShortcutErrorUnknown,
+        LocaleKey::SwitcherShortcutErrorDuplicate,
+        LocaleKey::SwitcherShortcutErrorReserved,
+        LocaleKey::SwitcherShortcutErrorInvalid,
+    ];
+    let languages = [
+        (Language::Spanish, "es-MX"),
+        (Language::Japanese, "ja-JP"),
+        (Language::Korean, "ko-KR"),
+        (Language::Russian, "ru-RU"),
+    ];
+
+    for (language, locale) in languages {
+        for key in keys {
+            assert_ne!(
+                get_text(language, key),
+                get_text(Language::English, key),
+                "{key:?} is falling back to English in {locale}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_locale_key_turkish() {
     assert_eq!(get_text(Language::Turkish, LocaleKey::TabGeneral), "Genel");
     assert_eq!(
@@ -370,6 +398,10 @@ fn test_locale_respects_language_setting() {
     let lang = Language::Spanish;
     assert_eq!(get_text(lang, LocaleKey::TabAbout), "Acerca de");
 
+    // Test that Brazilian Portuguese returns Portuguese strings
+    let lang = Language::PortugueseBrazil;
+    assert_eq!(get_text(lang, LocaleKey::TabAbout), "Sobre");
+
     // Test that Russian language returns Russian strings
     let lang = Language::Russian;
     assert_eq!(get_text(lang, LocaleKey::TabAbout), "О программе");
@@ -388,6 +420,7 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
         ("ja-JP", include_str!("ja-JP.ftl")),
         ("ko-KR", include_str!("ko-KR.ftl")),
         ("es-MX", include_str!("es-MX.ftl")),
+        ("pt-BR", include_str!("pt-BR.ftl")),
         ("ru-RU", include_str!("ru-RU.ftl")),
         ("tr-TR", include_str!("tr-TR.ftl")),
     ];
@@ -397,12 +430,31 @@ fn test_english_is_complete_and_other_languages_can_fallback() {
         .map(|(locale, resource)| (locale, resource_key_names(resource)))
         .collect();
     let locale_key_names: HashSet<&str> = LocaleKey::ALL.iter().map(|(_, name)| *name).collect();
+    let aixy_gateway_keys = ["AixyGatewayTitle", "AixyGatewayLabel", "AixyGatewayHelp"];
+    let credential_expiry_keys = [
+        "CredentialExpiryNotifications",
+        "CredentialExpiryNotificationsHelper",
+        "CredentialExpiryTitle",
+        "CredentialExpiryBody",
+    ];
 
     for (locale, keys) in &resource_keys {
+        for name in aixy_gateway_keys {
+            assert!(
+                keys.contains(name),
+                "missing Aixy gateway Fluent key {name} in {locale}"
+            );
+        }
         for name in keys {
             assert!(
                 locale_key_names.contains(name),
                 "unknown Fluent key {name} in {locale}"
+            );
+        }
+        for name in credential_expiry_keys {
+            assert!(
+                keys.contains(name),
+                "missing credential-expiry localization {name} in {locale}"
             );
         }
     }
@@ -444,6 +496,26 @@ fn test_fluent_preserves_literal_placeholders_and_status_spacing() {
     assert_eq!(
         get_text(Language::English, LocaleKey::RemainingAmount),
         "{:.2} remaining"
+    );
+    assert_eq!(
+        get_text(Language::English, LocaleKey::UsageSpendKnownSubtotal),
+        "≥{} known"
+    );
+}
+
+#[test]
+fn test_brazilian_portuguese_preserves_placeholders_and_status_spacing() {
+    assert_eq!(
+        get_text(Language::PortugueseBrazil, LocaleKey::TrayStatusError),
+        " (Erro)"
+    );
+    assert_eq!(
+        get_text(Language::PortugueseBrazil, LocaleKey::TrayCreditsRemaining),
+        "Créditos restantes {}%"
+    );
+    assert_eq!(
+        get_text(Language::PortugueseBrazil, LocaleKey::UsedPercent),
+        "{:.0}% usado"
     );
 }
 

@@ -4,6 +4,7 @@
 //! Requires API key for authentication
 
 mod activity;
+mod diagnostics;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -18,6 +19,8 @@ use crate::core::{
     CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
+use activity::ActivityReport;
+use diagnostics::{Degraded, Observations};
 
 /// OpenRouter API base URL — the bare `/api/v1` prefix, matching upstream
 /// (steipete/CodexBar `OpenRouterSettingsReader.apiURL`).
@@ -26,16 +29,33 @@ use crate::core::{
 /// The fork's original bug baked `/auth` into the base (`.../api/v1/auth`),
 /// which turned the credits call into `/api/v1/auth/credits` -> 404.
 const OPENROUTER_API_BASE: &str = "https://openrouter.ai/api/v1";
-const OPENROUTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-/// Optional key-quota enrichment joins on a one-second fast deadline
-/// (upstream 0.49.0 #2778) so a slow `/key` endpoint can never stall the
-/// refresh; degraded enrichment is logged and skipped, never fatal.
-const OPENROUTER_KEY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+/// Per-request deadline for `/credits`, `/key`, and Activity. Upstream
+/// `openrouter.js` (v0.61.0) gives each optional request four seconds; a
+/// degraded request is reported with a safe reason, never fatal on its own.
+const OPENROUTER_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 const OPENROUTER_ACTIVITY_URL: &str = "https://openrouter.ai/api/v1/activity";
 const OPENROUTER_MANAGEMENT_ENV: &str = "OPENROUTER_MANAGEMENT_API_KEY";
+/// Shown when no primary key resolves. The optional Management key field never
+/// substitutes for the primary key when selecting an account for quota/balance.
+const MISSING_API_KEY_MESSAGE: &str = "Enter a regular API key or a Management API key in the API key field, or set OPENROUTER_API_KEY. In Settings, the optional Management API key field does not replace it.";
 
 /// Windows Credential Manager target for OpenRouter API token
 const OPENROUTER_CREDENTIAL_TARGET: &str = "codexbar-openrouter";
+
+/// Statuses that mean the credential itself was rejected.
+const AUTH_REJECTED: &[reqwest::StatusCode] = &[
+    reqwest::StatusCode::UNAUTHORIZED,
+    reqwest::StatusCode::FORBIDDEN,
+];
+
+/// Snapshot one optional request for the display rows: the usable value, or
+/// the safe reason it degraded.
+fn observe<T, U>(result: &Result<T, Degraded>, value: impl FnOnce(&T) -> U) -> Result<U, String> {
+    match result {
+        Ok(ok) => Ok(value(ok)),
+        Err(degraded) => Err(degraded.reason.clone()),
+    }
+}
 
 /// OpenRouter /credits response
 #[derive(Debug, Clone, Deserialize)]
@@ -169,21 +189,11 @@ impl OpenRouterProvider {
             return Ok(key.to_string());
         }
 
-        match keyring::Entry::new(OPENROUTER_CREDENTIAL_TARGET, "api_token") {
-            Ok(entry) => match entry.get_password() {
-                Ok(token) => Ok(token),
-                Err(_) => std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                    ProviderError::NotInstalled(
-                        "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
-                    )
-                }),
-            },
-            Err(_) => std::env::var("OPENROUTER_API_KEY").map_err(|_| {
-                ProviderError::NotInstalled(
-                    "OpenRouter API key not found. Set in Preferences → Providers or OPENROUTER_API_KEY environment variable.".to_string(),
-                )
-            }),
-        }
+        keyring::Entry::new(OPENROUTER_CREDENTIAL_TARGET, "api_token")
+            .ok()
+            .and_then(|entry| entry.get_password().ok())
+            .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
+            .ok_or_else(|| ProviderError::NotInstalled(MISSING_API_KEY_MESSAGE.to_string()))
     }
 
     fn configured_management_key() -> Option<String> {
@@ -205,30 +215,33 @@ impl OpenRouterProvider {
     async fn fetch_usage_api(
         &self,
         ctx: &FetchContext,
-    ) -> Result<(UsageSnapshot, Option<CostSnapshot>), ProviderError> {
+    ) -> Result<ProviderFetchResult, ProviderError> {
         let api_key = Self::get_api_token(ctx.api_key.as_deref())?;
-        let client = Self::build_client(OPENROUTER_TIMEOUT)?;
+        let client = Self::build_client()?;
         // OpenRouter can reject the account-level `/credits` request while
         // still returning the selected key's current spend/quota from `/key`.
         // Fetch both independent sources together, then let the pure resolver
         // choose the stable primary/secondary lanes.
-        let (credits_result, key_data_result) = tokio::join!(
+        let (credits_result, key_result) = tokio::join!(
             Self::fetch_credits(&client, &api_key),
-            Self::fetch_key_data(&api_key),
+            Self::fetch_key_data(&client, &api_key),
         );
-        if let Err(error) = &credits_result {
-            tracing::debug!(error = %error, "OpenRouter credits endpoint degraded");
+        let credits_observed = observe(&credits_result, |credits| credits.data.clone());
+        let key_observed = observe(&key_result, Clone::clone);
+        if let Err(degraded) = &credits_result {
+            tracing::debug!(reason = %degraded.reason, "OpenRouter credits endpoint degraded");
         }
-        let key_data = match key_data_result {
+        let key_data = match key_result {
             Ok(key_data) => Some(key_data),
-            Err(error) => {
+            Err(degraded) => {
                 tracing::debug!(
-                    error = %error,
+                    reason = %degraded.reason,
                     "OpenRouter key endpoint degraded; preserving independent credits data"
                 );
                 None
             }
         };
+        let credits_result = credits_result.map_err(|degraded| degraded.error);
         let fallback_cost =
             Self::build_uncapped_cost(key_data.as_ref(), credits_result.as_ref().ok());
         let usage = Self::resolve_usage(credits_result, key_data.clone())?;
@@ -240,43 +253,64 @@ impl OpenRouterProvider {
                 .is_some_and(|key_data| key_data.is_management_key == Some(true))
                 .then_some(api_key.as_str())
         });
-        let activity_cost = match activity_key {
-            Some(key) => match Self::fetch_activity_cost(key).await {
-                Ok(cost) => Some(cost),
-                Err(error) => {
-                    tracing::debug!(
-                        error = %error,
-                        "OpenRouter management Activity degraded; preserving credits/quota"
-                    );
-                    None
-                }
-            },
+        let activity_result = match activity_key {
+            Some(key) => Some(Self::fetch_activity(&client, key).await),
+            None => None,
+        };
+        let activity_observed = match &activity_result {
+            Some(result) => observe(result, |report| report.summary),
+            None => Err(diagnostics::ACTIVITY_NOT_CONFIGURED.to_string()),
+        };
+        let activity_cost = match activity_result {
+            Some(Ok(report)) => Some(report.cost),
+            Some(Err(degraded)) => {
+                tracing::debug!(
+                    reason = %degraded.reason,
+                    "OpenRouter management Activity degraded; preserving credits/quota"
+                );
+                None
+            }
             None => None,
         };
 
-        Ok((usage, activity_cost.or(fallback_cost)))
+        let mut result = ProviderFetchResult::new(usage, "api");
+        if let Some(cost) = activity_cost.or(fallback_cost) {
+            result = result.with_cost(cost);
+        }
+        let details = diagnostics::build_display_details(&Observations {
+            credits: &credits_observed,
+            key: &key_observed,
+            activity: &activity_observed,
+        });
+        for detail in details {
+            result = result.with_display_detail(Some(detail));
+        }
+        Ok(result)
     }
 
-    async fn fetch_activity_cost(management_key: &str) -> Result<CostSnapshot, ProviderError> {
-        let client = Self::build_client(OPENROUTER_KEY_TIMEOUT)?;
+    async fn fetch_activity(
+        client: &reqwest::Client,
+        management_key: &str,
+    ) -> Result<ActivityReport, Degraded> {
         let now = Utc::now();
         let latest_completed = (now.date_naive() - chrono::Duration::days(1))
             .format("%Y-%m-%d")
             .to_string();
         let (history_result, latest_completed_result) = tokio::join!(
-            Self::fetch_activity_payload(&client, management_key, None),
-            Self::fetch_activity_payload(&client, management_key, Some(&latest_completed)),
+            Self::fetch_activity_payload(client, management_key, None),
+            Self::fetch_activity_payload(client, management_key, Some(&latest_completed)),
         );
         let history = history_result?;
         let latest_completed_payload = latest_completed_result?;
         activity::parse_activity_cost(&[history, latest_completed_payload], now)
+            .map_err(Degraded::invalid)
     }
 
     async fn fetch_activity_payload(
         client: &reqwest::Client,
         management_key: &str,
         date: Option<&str>,
-    ) -> Result<Value, ProviderError> {
+    ) -> Result<Value, Degraded> {
         let mut request = client
             .get(OPENROUTER_ACTIVITY_URL)
             .header("Authorization", format!("Bearer {management_key}"))
@@ -285,25 +319,23 @@ impl OpenRouterProvider {
             request = request.query(&[("date", date)]);
         }
         let response = request.send().await?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            || response.status() == reqwest::StatusCode::FORBIDDEN
-        {
-            return Err(ProviderError::AuthRequired);
+        let status = response.status();
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Err(Degraded::http("Activity", status, AUTH_REJECTED)
+                .with_reason(diagnostics::ACTIVITY_KEY_REQUIRED));
         }
-        if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "OpenRouter Activity request returned HTTP {}",
-                response.status()
-            )));
+        if !status.is_success() {
+            return Err(Degraded::http("Activity", status, AUTH_REJECTED));
         }
-        response.json::<Value>().await.map_err(|error| {
-            ProviderError::Parse(format!("Invalid OpenRouter Activity response: {error}"))
-        })
+        response
+            .json::<Value>()
+            .await
+            .map_err(|error| Degraded::body("Activity", error))
     }
 
-    fn build_client(timeout: std::time::Duration) -> Result<reqwest::Client, ProviderError> {
+    fn build_client() -> Result<reqwest::Client, ProviderError> {
         crate::core::credentialed_http_client_builder()
-            .timeout(timeout)
+            .timeout(OPENROUTER_REQUEST_TIMEOUT)
             .build()
             .map_err(|e| ProviderError::Other(e.to_string()))
     }
@@ -311,7 +343,7 @@ impl OpenRouterProvider {
     async fn fetch_credits(
         client: &reqwest::Client,
         api_key: &str,
-    ) -> Result<CreditsResponse, ProviderError> {
+    ) -> Result<CreditsResponse, Degraded> {
         let credits_url = format!("{}/credits", OPENROUTER_API_BASE);
         let resp = client
             .get(&credits_url)
@@ -320,21 +352,19 @@ impl OpenRouterProvider {
             .send()
             .await?;
 
-        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(ProviderError::AuthRequired);
-        }
-
         if !resp.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "OpenRouter credits request returned HTTP {}",
-                resp.status()
-            )));
+            return Err(Degraded::http(
+                "credits",
+                resp.status(),
+                &[reqwest::StatusCode::UNAUTHORIZED],
+            ));
         }
 
-        let response = resp.json::<CreditsResponse>().await.map_err(|error| {
-            ProviderError::Parse(format!("OpenRouter credits response was invalid: {error}"))
-        })?;
-        response.data.validate()?;
+        let response = resp
+            .json::<CreditsResponse>()
+            .await
+            .map_err(|error| Degraded::body("credits", error))?;
+        response.data.validate().map_err(Degraded::invalid)?;
         Ok(response)
     }
 
@@ -413,40 +443,25 @@ impl OpenRouterProvider {
         Some(usage)
     }
 
-    async fn fetch_key_data(api_key: &str) -> Result<KeyData, ProviderError> {
-        let key_client = Self::build_client(OPENROUTER_KEY_TIMEOUT)?;
-        let key_resp = Self::send_key_request(&key_client, api_key).await?;
-
-        if key_resp.status() == reqwest::StatusCode::UNAUTHORIZED
-            || key_resp.status() == reqwest::StatusCode::FORBIDDEN
-        {
-            return Err(ProviderError::AuthRequired);
-        }
-        if !key_resp.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "OpenRouter key request returned HTTP {}",
-                key_resp.status()
-            )));
-        }
-
-        let response = key_resp.json::<KeyResponse>().await.map_err(|error| {
-            ProviderError::Parse(format!("OpenRouter key response was invalid: {error}"))
-        })?;
-        response.data.validate()?;
-        Ok(response.data)
-    }
-
-    async fn send_key_request(
-        client: &reqwest::Client,
-        api_key: &str,
-    ) -> Result<reqwest::Response, reqwest::Error> {
+    async fn fetch_key_data(client: &reqwest::Client, api_key: &str) -> Result<KeyData, Degraded> {
         let key_url = format!("{}/key", OPENROUTER_API_BASE);
-        client
+        let key_resp = client
             .get(&key_url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Accept", "application/json")
             .send()
+            .await?;
+
+        if !key_resp.status().is_success() {
+            return Err(Degraded::http("key", key_resp.status(), AUTH_REJECTED));
+        }
+
+        let response = key_resp
+            .json::<KeyResponse>()
             .await
+            .map_err(|error| Degraded::body("key", error))?;
+        response.data.validate().map_err(Degraded::invalid)?;
+        Ok(response.data)
     }
 
     fn apply_key_lanes(usage: &mut UsageSnapshot, key_data: &KeyData, quota_suffix: &str) {
@@ -565,14 +580,7 @@ impl Provider for OpenRouterProvider {
         tracing::debug!("Fetching OpenRouter usage");
 
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::OAuth => {
-                let (usage, cost) = self.fetch_usage_api(ctx).await?;
-                let mut result = ProviderFetchResult::new(usage, "api");
-                if let Some(cost) = cost {
-                    result = result.with_cost(cost);
-                }
-                Ok(result)
-            }
+            SourceMode::Auto | SourceMode::OAuth => self.fetch_usage_api(ctx).await,
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
             }

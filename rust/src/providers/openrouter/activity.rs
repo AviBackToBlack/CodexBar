@@ -1,24 +1,60 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 use crate::core::{CostDailyPoint, CostSnapshot, ProviderError};
+use crate::spend_contract::CostProvenance;
 
 const MAX_ACTIVITY_ROWS: usize = 20_000;
 /// Distinct identity rows tracked for dedupe; bounds the `seen` map.
 const MAX_DISTINCT_ROWS: usize = 10_000;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
+/// Aggregate of the deduplicated, in-window Activity rows (upstream
+/// `activityDetails`: Tokens = prompt + completion, Requests, distinct Models).
+/// Reasoning tokens are validated but never added to `tokens` a second time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ActivitySummary {
+    pub(super) tokens: u64,
+    pub(super) requests: u64,
+    pub(super) models: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ActivityReport {
+    pub(super) cost: CostSnapshot,
+    pub(super) summary: ActivitySummary,
+}
+
+/// Add `amount` to `total`, rejecting aggregates beyond the JS safe-integer
+/// range like upstream (`Number.isSafeInteger`).
+fn checked_aggregate(total: &mut u64, amount: u64) -> Result<(), ProviderError> {
+    *total = total
+        .checked_add(amount)
+        .filter(|sum| *sum <= MAX_SAFE_INTEGER)
+        .ok_or_else(|| {
+            ProviderError::Parse(
+                "OpenRouter Activity aggregate must be within the safe integer range".into(),
+            )
+        })?;
+    Ok(())
+}
+
 pub(super) fn parse_activity_cost(
     payloads: &[Value],
     now: DateTime<Utc>,
-) -> Result<CostSnapshot, ProviderError> {
+) -> Result<ActivityReport, ProviderError> {
     let latest_completed = now.date_naive() - Duration::days(1);
     let cutoff = latest_completed - Duration::days(29);
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut daily: BTreeMap<String, f64> = BTreeMap::new();
     let mut total = 0.0;
+    let mut estimated_total = 0.0;
+    let mut tokens = 0u64;
+    let mut reasoning_tokens = 0u64;
+    let mut requests_total = 0u64;
+    let mut models: HashSet<String> = HashSet::new();
     let mut rows_seen = 0usize;
 
     for payload in payloads {
@@ -138,24 +174,53 @@ pub(super) fn parse_activity_cost(
                     "OpenRouter activity.data exceeds 10000 distinct rows".into(),
                 ));
             }
+            // Prompt plus completion only: reasoning tokens are a separate counter.
+            checked_aggregate(&mut tokens, prompt + completion)?;
+            checked_aggregate(&mut reasoning_tokens, reasoning)?;
+            checked_aggregate(&mut requests_total, requests)?;
+            if !model.is_empty() {
+                models.insert(model.to_string());
+            }
             total += cost;
+            estimated_total += estimated;
             *daily.entry(day.to_string()).or_default() += cost;
         }
     }
 
-    if !total.is_finite() {
+    if !total.is_finite() || !estimated_total.is_finite() {
         return Err(ProviderError::Parse(
             "OpenRouter Activity spend overflowed".into(),
         ));
     }
-    Ok(CostSnapshot::new(total, "USD", "Last 30 days (UTC)")
+    // Matches upstream's plugin snapshot mapper: any BYOK estimate makes the
+    // window estimated, or mixed when metered spend is also present.
+    let provenance = if estimated_total > 0.0 {
+        if total - estimated_total > 0.0 {
+            CostProvenance::Mixed
+        } else {
+            CostProvenance::ListPriceEstimate
+        }
+    } else {
+        CostProvenance::VendorMetered
+    };
+    let cost = CostSnapshot::new(total, "USD", "Last 30 days (UTC)")
+        .with_history_tokens(tokens)
+        .with_provenance(provenance)
         .with_daily(
             daily
                 .into_iter()
                 .map(|(day, amount)| CostDailyPoint { day, amount })
                 .collect(),
         )
-        .always_visible())
+        .always_visible();
+    Ok(ActivityReport {
+        cost,
+        summary: ActivitySummary {
+            tokens,
+            requests: requests_total,
+            models: models.len(),
+        },
+    })
 }
 
 fn normalize_activity_day(raw: &str) -> Option<&str> {
@@ -241,7 +306,19 @@ mod tests {
         let latest_completed = serde_json::json!({"data":[
             {"date":"2026-08-21","model":"m1","prompt_tokens":10,"completion_tokens":5,"reasoning_tokens":2,"requests":1,"usage":1.25,"byok_usage_inference":0.25}
         ]});
-        let cost = parse_activity_cost(&[history, latest_completed], now()).unwrap();
+        let report = parse_activity_cost(&[history, latest_completed], now()).unwrap();
+        let cost = report.cost;
+        // The CLI history line and the Activity tokens row read the same total.
+        assert_eq!(cost.history_tokens, Some(report.summary.tokens));
+        // The duplicated latest-completed row is counted once.
+        assert_eq!(
+            report.summary,
+            ActivitySummary {
+                tokens: 22,
+                requests: 2,
+                models: 2
+            }
+        );
         assert!((cost.used - 2.0).abs() < 1e-12);
         assert_eq!(cost.daily.len(), 2);
         assert_eq!(cost.period, "Last 30 days (UTC)");
@@ -254,10 +331,12 @@ mod tests {
              "completion_tokens":2,"reasoning_tokens":8,"requests":1,"usage":1.0}
         ]});
 
-        let cost = parse_activity_cost(&[payload], now()).unwrap();
+        let report = parse_activity_cost(&[payload], now()).unwrap();
 
-        assert_eq!(cost.used, 1.0);
-        assert_eq!(cost.daily.len(), 1);
+        assert_eq!(report.cost.used, 1.0);
+        assert_eq!(report.cost.daily.len(), 1);
+        // Tokens stay prompt + completion; reasoning is not added again.
+        assert_eq!(report.summary.tokens, 12);
     }
 
     #[test]
@@ -277,7 +356,7 @@ mod tests {
             {"date":"2026-07-22","model":"old","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":99.0},
             {"date":"2026-07-23","model":"in","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
         ]});
-        let cost = parse_activity_cost(&[payload], now()).unwrap();
+        let cost = parse_activity_cost(&[payload], now()).unwrap().cost;
         assert_eq!(cost.used, 1.0);
     }
 
@@ -287,7 +366,7 @@ mod tests {
             let payload = serde_json::json!({"data":[
                 {"date":date,"model":"m","prompt_tokens":10,"completion_tokens":5,"requests":1,"usage":1.0}
             ]});
-            let cost = parse_activity_cost(&[payload], now()).unwrap();
+            let cost = parse_activity_cost(&[payload], now()).unwrap().cost;
             assert_eq!(cost.daily.len(), 1);
             assert_eq!(cost.daily[0].day, "2026-08-21");
         }
@@ -313,5 +392,75 @@ mod tests {
         let error = parse_activity_cost(&[payload], now()).unwrap_err();
 
         assert!(error.to_string().contains("completed UTC day"));
+    }
+
+    #[test]
+    fn rows_without_a_model_do_not_count_as_models() {
+        let payload = serde_json::json!({"data":[
+            {"date":"2026-08-21","prompt_tokens":1,"completion_tokens":1,"requests":1,"usage":0.1},
+            {"date":"2026-08-21","model":"  ","endpoint_id":"e","prompt_tokens":1,"completion_tokens":1,"requests":1,"usage":0.1},
+            {"date":"2026-08-21","model_permaslug":"a/b","prompt_tokens":1,"completion_tokens":1,"requests":1,"usage":0.1}
+        ]});
+
+        let summary = parse_activity_cost(&[payload], now()).unwrap().summary;
+
+        assert_eq!(summary.models, 1);
+        assert_eq!(summary.requests, 3);
+    }
+
+    #[test]
+    fn aggregate_beyond_the_safe_integer_range_is_rejected() {
+        let big = MAX_SAFE_INTEGER / 2 + 1;
+        let payload = serde_json::json!({"data":[
+            {"date":"2026-08-21","model":"a","prompt_tokens":big,"completion_tokens":0,"requests":1,"usage":0.1},
+            {"date":"2026-08-20","model":"b","prompt_tokens":big,"completion_tokens":0,"requests":1,"usage":0.1}
+        ]});
+
+        let error = parse_activity_cost(&[payload], now()).unwrap_err();
+
+        assert!(error.to_string().contains("safe integer"));
+    }
+
+    #[test]
+    fn records_token_total_and_cost_provenance() {
+        use crate::spend_contract::CostProvenance;
+
+        let cases = [
+            (1.25, 0.0, CostProvenance::VendorMetered),
+            (0.0, 0.75, CostProvenance::ListPriceEstimate),
+            (1.25, 0.75, CostProvenance::Mixed),
+        ];
+        for (usage, byok, expected) in cases {
+            let history = serde_json::json!({"data":[
+                {"date":"2026-08-17","model":"m","prompt_tokens":10,"completion_tokens":5,
+                 "reasoning_tokens":2,"requests":1,"usage":usage,"byok_usage_inference":byok}
+            ]});
+            let cost = parse_activity_cost(&[history], now()).unwrap().cost;
+            assert_eq!(cost.history_tokens, Some(15));
+            assert_eq!(cost.provenance, Some(expected));
+            assert_eq!(cost.used, usage + byok);
+        }
+    }
+
+    #[test]
+    fn empty_activity_is_a_reported_zero_with_zero_tokens() {
+        use crate::spend_contract::CostProvenance;
+
+        let cost = parse_activity_cost(&[serde_json::json!({"data":[]})], now())
+            .unwrap()
+            .cost;
+        assert_eq!(cost.used, 0.0);
+        assert_eq!(cost.history_tokens, Some(0));
+        assert_eq!(cost.provenance, Some(CostProvenance::VendorMetered));
+    }
+
+    #[test]
+    fn duplicate_rows_do_not_double_count_tokens() {
+        let row = serde_json::json!({"date":"2026-08-21","model":"m","prompt_tokens":10,
+            "completion_tokens":5,"requests":1,"usage":1.0});
+        let history = serde_json::json!({"data":[row.clone()]});
+        let latest = serde_json::json!({"data":[row]});
+        let cost = parse_activity_cost(&[history, latest], now()).unwrap().cost;
+        assert_eq!(cost.history_tokens, Some(15));
     }
 }

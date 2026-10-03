@@ -9,9 +9,11 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+mod pricing;
 mod subscription;
 mod token_math;
 
+use pricing::{MistralPrice, PriceIndex};
 use subscription::{SubscriptionBudget, SubscriptionBudgets};
 
 use crate::core::{
@@ -27,10 +29,21 @@ const CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// `/subscription` render can never stall the refresh; degraded enrichment is
 /// logged and skipped, never fatal.
 const SUBSCRIPTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+/// Extra rate window holding the Vibe monthly plan allowance. The Monthly Plan
+/// menu bar metric selects it (upstream 0.70.0 #4072).
+pub const MONTHLY_PLAN_WINDOW_ID: &str = "mistral-monthly-plan";
+/// Picker label for the primary lane, the included API allowance (upstream
+/// `menuBarLayoutPrimaryLabel`).
+const INCLUDED_API_LABEL: &str = "Included API";
 
 #[derive(Debug, Deserialize)]
 struct BillingResponse {
     completion: Option<ModelUsageCategory>,
+    /// Le Chat consumption; counted like `completion`.
+    chat: Option<ModelUsageCategory>,
+    /// Vibe Code consumption; its `completion` counts like API completions.
+    #[serde(rename = "vibe_code")]
+    vibe_code: Option<VibeCodeCategory>,
     ocr: Option<ModelUsageCategory>,
     connectors: Option<ModelUsageCategory>,
     audio: Option<ModelUsageCategory>,
@@ -54,6 +67,11 @@ struct ModelUsageCategory {
 }
 
 #[derive(Debug, Deserialize)]
+struct VibeCodeCategory {
+    completion: Option<ModelUsageCategory>,
+}
+
+#[derive(Debug, Deserialize)]
 struct LibrariesUsageCategory {
     pages: Option<ModelUsageCategory>,
     tokens: Option<ModelUsageCategory>,
@@ -74,22 +92,19 @@ struct ModelUsageData {
 
 #[derive(Debug, Deserialize)]
 struct UsageEntry {
+    #[serde(rename = "event_type")]
+    event_type: Option<String>,
     #[serde(rename = "billing_metric")]
     billing_metric: Option<String>,
     #[serde(rename = "billing_group")]
     billing_group: Option<String>,
+    #[serde(rename = "api_zone")]
+    api_zone: Option<String>,
+    #[serde(rename = "service_tier")]
+    service_tier: Option<String>,
     value: Option<i64>,
     #[serde(rename = "value_paid")]
     value_paid: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MistralPrice {
-    #[serde(rename = "billing_metric")]
-    billing_metric: Option<String>,
-    #[serde(rename = "billing_group")]
-    billing_group: Option<String>,
-    price: Option<String>,
 }
 
 #[derive(Debug)]
@@ -278,12 +293,23 @@ impl MistralProvider {
     }
 
     fn summarize_billing(billing: BillingResponse) -> Result<MistralUsageSummary, ProviderError> {
-        let prices = Self::build_price_index(billing.prices.unwrap_or_default());
+        let prices = PriceIndex::new(billing.prices.unwrap_or_default());
         let mut total_cost = 0.0;
         let mut total_tokens = TokenCounts::default();
         let mut model_count = 0;
 
-        if let Some(models) = billing.completion.and_then(|c| c.models) {
+        // API, Le Chat, and Vibe Code completions share consumed-token and
+        // billed-cost accounting.
+        let token_categories = [
+            billing.completion,
+            billing.chat,
+            billing.vibe_code.and_then(|vibe| vibe.completion),
+        ];
+        for models in token_categories
+            .into_iter()
+            .flatten()
+            .filter_map(|category| category.models)
+        {
             model_count += models.len();
             for data in models.values() {
                 match Self::aggregate_model(data, &prices, AggregationMode::CostAndTokens)? {
@@ -369,7 +395,9 @@ impl MistralProvider {
             "No usage this month".to_string()
         };
 
-        let primary = RateWindow::with_details(0.0, None, reset_date, Some(cost_description));
+        // The description carries spend amounts, not reset wording.
+        let primary = RateWindow::with_details(0.0, None, reset_date, Some(cost_description))
+            .with_description_as_detail();
         let mut usage = UsageSnapshot::new(primary);
         if summary.model_count > 0 {
             usage = usage.with_login_method(format!("{} model(s)", summary.model_count));
@@ -394,11 +422,11 @@ impl MistralProvider {
         if let Some(budgets) = budgets {
             if let Some(api) = budgets.api {
                 usage.primary = Self::budget_window(&api);
-                usage.primary_label = Some("Included API".to_string());
+                usage.primary_label = Some(INCLUDED_API_LABEL.to_string());
             }
             if let Some(vibe) = budgets.vibe {
                 usage.extra_rate_windows.push(NamedRateWindow::new(
-                    "mistral-monthly-plan",
+                    MONTHLY_PLAN_WINDOW_ID,
                     "Monthly Plan",
                     Self::budget_window(&vibe),
                 ));
@@ -422,26 +450,12 @@ impl MistralProvider {
             budget.resets_at,
             Some(description),
         )
-    }
-
-    fn build_price_index(prices: Vec<MistralPrice>) -> HashMap<String, f64> {
-        prices
-            .into_iter()
-            .filter_map(|price| {
-                let metric = price.billing_metric?;
-                let group = price.billing_group?;
-                let value = price.price?.parse::<f64>().ok()?;
-                if !value.is_finite() {
-                    return None;
-                }
-                Some((format!("{metric}::{group}"), value))
-            })
-            .collect()
+        .with_description_as_detail()
     }
 
     fn aggregate_model(
         data: &ModelUsageData,
-        prices: &HashMap<String, f64>,
+        prices: &PriceIndex,
         mode: AggregationMode,
     ) -> Result<ModelAggregation, ProviderError> {
         let mut tokens = TokenCounts::default();
@@ -452,14 +466,16 @@ impl MistralProvider {
             (TokenKind::Cached, data.cached.as_deref()),
         ] {
             for entry in entries.unwrap_or_default() {
-                let units = entry.value_paid.or(entry.value).unwrap_or(0);
+                // Tokens count consumed units (plan-covered usage included);
+                // spend counts only billed units.
                 if matches!(mode, AggregationMode::CostAndTokens) {
-                    tokens.add_lane(units, kind)?;
+                    tokens.add_lane(entry.value.or(entry.value_paid).unwrap_or(0), kind)?;
                 }
-                if let (Some(metric), Some(group)) = (&entry.billing_metric, &entry.billing_group) {
-                    let entry_cost =
-                        (units as f64) * prices.get(&format!("{metric}::{group}")).unwrap_or(&0.0);
-                    Self::accumulate_finite_cost(entry_cost, &mut cost);
+                // Upstream 0.70.0 (#4076): priced by event type, API zone and
+                // service tier, not by metric and group alone.
+                if let Some(unit_price) = prices.unit_price(entry) {
+                    let billed_units = entry.value_paid.or(entry.value).unwrap_or(0);
+                    Self::accumulate_finite_cost(billed_units as f64 * unit_price, &mut cost);
                 }
             }
         }
@@ -469,10 +485,7 @@ impl MistralProvider {
         })
     }
 
-    fn aggregate_cost(
-        data: &ModelUsageData,
-        prices: &HashMap<String, f64>,
-    ) -> Result<f64, ProviderError> {
+    fn aggregate_cost(data: &ModelUsageData, prices: &PriceIndex) -> Result<f64, ProviderError> {
         match Self::aggregate_model(data, prices, AggregationMode::CostOnly)? {
             ModelAggregation::Cost(cost) => Ok(cost),
             ModelAggregation::CostAndTokens { .. } => {
@@ -550,6 +563,14 @@ impl Provider for MistralProvider {
     fn supports_web(&self) -> bool {
         true
     }
+
+    fn monthly_plan_window_id(&self) -> Option<&'static str> {
+        Some(MONTHLY_PLAN_WINDOW_ID)
+    }
+
+    fn menu_bar_primary_label(&self) -> Option<&'static str> {
+        Some(INCLUDED_API_LABEL)
+    }
 }
 
 #[cfg(test)]
@@ -602,6 +623,17 @@ mod tests {
     }
 
     #[test]
+    fn monthly_plan_metric_targets_the_published_vibe_window() {
+        let provider = MistralProvider::new();
+
+        assert_eq!(
+            provider.monthly_plan_window_id(),
+            Some("mistral-monthly-plan")
+        );
+        assert_eq!(provider.menu_bar_primary_label(), Some("Included API"));
+    }
+
+    #[test]
     fn attaches_subscription_allowances_without_replacing_billing_cost() {
         let summary = MistralUsageSummary {
             total_cost: 12.5,
@@ -639,6 +671,19 @@ mod tests {
             "mistral-monthly-plan"
         );
         assert_eq!(result.cost.as_ref().map(|cost| cost.used), Some(12.5));
+        assert!(result.usage.primary.description_is_detail);
+        assert!(
+            result.usage.extra_rate_windows[0]
+                .window
+                .description_is_detail
+        );
+        assert_eq!(
+            result.usage.extra_rate_windows[0]
+                .window
+                .reset_description
+                .as_deref(),
+            Some("10.00 EUR / 20.00 EUR · 10.00 EUR remaining")
+        );
     }
 
     #[test]
@@ -710,5 +755,124 @@ mod tests {
             MistralProvider::summarize_billing(billing),
             Err(ProviderError::Parse(message)) if message.contains("token count")
         ));
+    }
+
+    /// Model `fixture` priced at 0.25 per billed unit, wrapped for one category.
+    fn fixture_billing(category: &str, model: serde_json::Value) -> BillingResponse {
+        let models = serde_json::json!({ "models": { "fixture": model } });
+        let mut payload = serde_json::json!({
+            "prices": [{ "billing_metric": "fixture", "billing_group": "unit", "price": "0.25" }],
+        });
+        payload[category] = if category == "vibe_code" {
+            serde_json::json!({ "completion": models })
+        } else {
+            models
+        };
+        serde_json::from_value(payload).unwrap()
+    }
+
+    fn fixture_entry(value: Option<i64>, paid: Option<i64>) -> serde_json::Value {
+        let mut entry = serde_json::json!({ "billing_metric": "fixture", "billing_group": "unit" });
+        if let Some(value) = value {
+            entry["value"] = value.into();
+        }
+        if let Some(paid) = paid {
+            entry["value_paid"] = paid.into();
+        }
+        entry
+    }
+
+    #[test]
+    fn plan_covered_consumption_counts_tokens_separately_from_billed_spend() {
+        for category in ["completion", "chat", "vibe_code"] {
+            let billing = fixture_billing(
+                category,
+                serde_json::json!({
+                    "input": [fixture_entry(Some(1000), Some(0))],
+                    "output": [fixture_entry(Some(500), Some(200))],
+                    "cached": [fixture_entry(Some(300), Some(0))],
+                }),
+            );
+            let summary = MistralProvider::summarize_billing(billing).unwrap();
+            assert_eq!(summary.total_input_tokens, 1000, "{category}");
+            assert_eq!(summary.total_output_tokens, 500, "{category}");
+            assert_eq!(summary.total_cached_tokens, 300, "{category}");
+            assert_eq!(summary.model_count, 1, "{category}");
+            assert_eq!(summary.total_cost, 50.0, "{category}");
+        }
+    }
+
+    #[test]
+    fn missing_consumed_or_billed_units_use_the_available_count() {
+        for entry in [fixture_entry(Some(20), None), fixture_entry(None, Some(20))] {
+            let billing = fixture_billing("completion", serde_json::json!({ "input": [entry] }));
+            let summary = MistralProvider::summarize_billing(billing).unwrap();
+            assert_eq!(summary.total_input_tokens, 20);
+            assert_eq!(summary.total_cost, 5.0);
+        }
+    }
+
+    #[test]
+    fn categories_aggregate_together_and_count_each_model_entry_once() {
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "prices": [{ "billing_metric": "fixture", "billing_group": "unit", "price": "0.25" }],
+            "completion": { "models": { "a": { "input": [fixture_entry(Some(10), Some(10))] } } },
+            "chat": { "models": { "b": { "input": [fixture_entry(Some(20), Some(0))] } } },
+            "vibe_code": { "completion": { "models": {
+                "c": { "output": [fixture_entry(Some(30), Some(4))] }
+            } } },
+        }))
+        .unwrap();
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
+        assert_eq!(summary.total_input_tokens, 30);
+        assert_eq!(summary.total_output_tokens, 30);
+        assert_eq!(summary.model_count, 3);
+        assert_eq!(summary.total_cost, 3.5);
+    }
+
+    #[test]
+    fn cost_only_categories_do_not_sum_token_lanes() {
+        let entries = serde_json::json!({
+            "input": [fixture_entry(Some(i64::MAX), None), fixture_entry(Some(1), None)]
+        });
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "prices": [{ "billing_metric": "fixture", "billing_group": "unit", "price": "0.25" }],
+            "ocr": { "models": { "fixture": entries } },
+        }))
+        .unwrap();
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
+        assert_eq!(summary.total_input_tokens, 0);
+        assert_eq!(summary.model_count, 0);
+        assert!(summary.total_cost > 0.0);
+    }
+
+    #[test]
+    fn paid_zero_does_not_hide_an_unrepresentable_consumed_value() {
+        let entry = fixture_entry(Some(i64::MAX), Some(0));
+        let billing = fixture_billing(
+            "completion",
+            serde_json::json!({ "input": [entry.clone(), entry] }),
+        );
+        assert!(matches!(
+            MistralProvider::summarize_billing(billing),
+            Err(ProviderError::Parse(message)) if message.contains("token count")
+        ));
+    }
+
+    #[test]
+    fn consumed_totals_stay_checked_across_api_chat_and_vibe_categories() {
+        let big = serde_json::json!({ "input": [fixture_entry(Some(i64::MAX), None)] });
+        let one = serde_json::json!({ "input": [fixture_entry(Some(1), None)] });
+        for mut payload in [
+            serde_json::json!({ "chat": { "models": { "fixture": one } } }),
+            serde_json::json!({ "vibe_code": { "completion": { "models": { "fixture": one } } } }),
+        ] {
+            payload["completion"] = serde_json::json!({ "models": { "fixture": big } });
+            let billing: BillingResponse = serde_json::from_value(payload).unwrap();
+            assert!(matches!(
+                MistralProvider::summarize_billing(billing),
+                Err(ProviderError::Parse(message)) if message.contains("token count")
+            ));
+        }
     }
 }

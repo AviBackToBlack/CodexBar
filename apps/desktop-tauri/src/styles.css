@@ -95,26 +95,26 @@
   --chart-claude: rgb(204, 124, 94);
   --chart-codex: rgb(73, 163, 176);
   --chart-gemini: rgb(171, 135, 234);
-  --chart-cursor: rgb(0, 191, 165);
+  --chart-cursor: rgb(245, 78, 0);
   --chart-copilot: rgb(168, 85, 247);
   --chart-jetbrains: rgb(255, 51, 153);
   --chart-antigravity: rgb(96, 186, 126);
-  --chart-augment: rgb(99, 102, 241);
-  --chart-amp: rgb(220, 38, 38);
+  --chart-augment: rgb(26, 160, 73);
+  --chart-amp: rgb(243, 78, 63);
   --chart-factory: rgb(255, 107, 53);
   --chart-droid: rgb(255, 107, 53);
   --chart-kimi: rgb(254, 96, 60);
   --chart-kimik2: rgb(76, 0, 255);
-  --chart-kiro: rgb(255, 153, 0);
+  --chart-kiro: rgb(144, 70, 255);
   --chart-opencode: rgb(59, 130, 246);
   --chart-minimax: rgb(254, 96, 60);
   --chart-vertexai: rgb(66, 133, 244);
   --chart-zai: rgb(232, 90, 106);
   --chart-alibaba: rgb(255, 106, 0);
   --chart-nanogpt: rgb(104, 127, 161);
-  --chart-mistral: rgb(255, 80, 15);
-  --chart-codebuff: rgb(68, 255, 0);
-  --chart-deepseek: rgb(82, 125, 240);
+  --chart-mistral: rgb(255, 82, 41);
+  --chart-codebuff: rgb(0, 255, 149);
+  --chart-deepseek: rgb(77, 107, 254);
   --chart-windsurf: rgb(34, 197, 94);
   --chart-elevenlabs: rgb(17, 24, 39);
   --chart-deepgram: rgb(19, 239, 147);
@@ -2037,6 +2037,10 @@ body:has(.tray-panel-reveal) {
   font-weight: 600;
 }
 
+.provider-usage-bar__status {
+  color: var(--text-secondary);
+}
+
 .provider-usage-bar__track {
   height: 5px;
   border-radius: 3px;
@@ -2051,7 +2055,8 @@ body:has(.tray-panel-reveal) {
   transition: width 0.3s;
 }
 
-.provider-usage-bar__reset {
+.provider-usage-bar__reset,
+.provider-usage-bar__detail {
   font-size: 0.68rem;
   color: var(--text-muted);
 }
@@ -2543,6 +2548,10 @@ body:has(.tray-panel-reveal) {
   color: var(--provider-row-text-secondary);
 }
 
+.provider-detail-cookie-source__missing .credential-btn {
+  margin-top: 8px;
+}
+
 .provider-detail-select {
   appearance: none;
   background: var(--provider-row-bg);
@@ -2653,6 +2662,21 @@ body:has(.tray-panel-reveal) {
   width: 100%;
   max-width: 100%;
   height: auto;
+}
+
+.chart--scrollable {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.chart--scrollable .chart__svg {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: none;
+}
+
+.chart--scrollable .chart__axis {
+  flex: 0 0 auto;
 }
 
 .chart__axis {
@@ -3053,6 +3077,166 @@ body:has(.tray-panel-reveal) {
 .chart__tooltip-label {
   color: var(--provider-row-text-secondary);
   margin-right: 6px;
+}
+
+/* Selectable bars (OpenAI daily usage): keyboard focus ring on the active bar. */
+.chart__bar[role="option"] {
+  cursor: pointer;
+}
+
+.chart__bar[role="option"]:focus {
+  outline: none;
+}
+
+.chart__bar[role="option"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chart__bar[data-selected="true"] {
+  stroke: var(--text-primary);
+  stroke-width: 1;
+}
+
+/* ── OpenAI Admin API daily usage (tray card + Settings charts) ───── */
+
+.openai-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.openai-usage__tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.openai-usage__tab {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.openai-usage__tab:hover {
+  color: var(--text-primary);
+}
+
+.openai-usage__tab[data-active="true"] {
+  color: var(--text-primary);
+  border-color: var(--panel-border);
+  background: var(--provider-row-bg);
+}
+
+.openai-usage__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.openai-usage__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.openai-usage__hint {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.openai-usage__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.openai-usage__day {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.openai-usage__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.openai-usage__stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.openai-usage__stats dt {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.openai-usage__stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.openai-usage__list-title {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.openai-usage__list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.openai-usage__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.openai-usage__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.openai-usage__amount {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.openai-usage__list li.openai-usage__more {
+  color: var(--text-muted);
+}
+
+.openai-usage__footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--panel-border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.openai-usage__footer strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3533,7 +3717,9 @@ html:has(.menu-surface--tray) {
   max-width: 100%;
 }
 .menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset {
+.menu-surface--tray .menu-metric__reset,
+.menu-surface--tray .menu-metric__status,
+.menu-surface--tray .menu-metric__detail {
   font-size: 10px;
 }
 .menu-surface--tray .menu-metric__reserve {
@@ -4059,6 +4245,15 @@ html:has(.menu-surface--tray) {
   white-space: nowrap;
 }
 
+/* Detail-backed window description (for example spend amounts): its own
+   secondary line under the metric row, never reset wording. */
+.menu-metric__detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .menu-metric__reset {
   font-size: 11px;
   color: var(--text-secondary);
@@ -4082,6 +4277,17 @@ html:has(.menu-surface--tray) {
   font-size: 11px;
   font-weight: 600;
   color: var(--provider-status-error);
+}
+
+/* Upstream 0.69.0 #4091 status row: a window blocked by a longer exhausted
+   pool shows its title and one secondary footnote line instead of a bar. */
+.menu-metric__status {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .menu-metric__reserve {
   opacity: 0.7;
@@ -4765,6 +4971,53 @@ html:has(.menu-surface--tray) {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Recorded quota burndown (upstream 0.70.0 #4085) ─────────────── */
+.quota-burndown-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 2px;
+}
+.quota-burndown-chart svg {
+  width: 100%;
+  height: 76px;
+  overflow: visible;
+}
+.quota-burndown-chart__grid {
+  stroke: var(--usage-bar-track);
+  stroke-width: 1;
+}
+.quota-burndown-chart__ideal {
+  stroke: var(--text-secondary);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.quota-burndown-chart__observed {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.quota-burndown-chart__point {
+  fill: var(--accent);
+  vector-effect: non-scaling-stroke;
+}
+.quota-burndown-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+.quota-burndown-chart__caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-variant-numeric: tabular-nums;
+}
 .menu-metric__bar,
 .menu-card__pace-track {
   height: var(--bar-height);
@@ -4796,7 +5049,9 @@ html:has(.menu-surface--tray) {
 }
 
 .menu-metric__pct,
-.menu-metric__reset {
+.menu-metric__reset,
+.menu-metric__status,
+.menu-metric__detail {
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,
@@ -5385,6 +5640,23 @@ html:has(.menu-surface--tray) {
   font-size: var(--font-caption);
 }
 
+.usage-spend-daily {
+  margin-top: 20px;
+}
+
+.usage-spend-daily h4 {
+  margin: 0;
+}
+
+.usage-spend-daily__table {
+  overflow-x: auto;
+  margin-top: 10px;
+}
+
+.usage-spend-daily__toggle {
+  margin-top: 8px;
+}
+
 /* About update controls block */
 .about-update-controls {
   display: flex;
@@ -5739,31 +6011,6 @@ html:has(.menu-surface--tray) {
   font-size: 13px;
   background: var(--surface-elevated);
   color: inherit;
-}
-
-.accent-color-swatch-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: 12px;
-}
-
-.accent-color-swatch {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-}
-
-.accent-color-swatch-label {
-  color: var(--text-secondary);
-}
-
-.accent-color-swatch-value {
-  font-family: var(--font-mono, monospace);
-  color: var(--text-secondary);
 }
 
 /* ── Mistral monthly spend row (#2821, #2947) ──────────────────── */

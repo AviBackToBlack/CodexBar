@@ -8,6 +8,22 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// failure, truncate the owned temp sibling instead of deleting it so callers
 /// never need destructive cleanup.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    write_atomic_inner(path, bytes, false)
+}
+
+/// Atomic write for credential-bearing files.
+///
+/// Same publish contract as [`write_atomic`], but the staged sibling is created
+/// owner-only (mode `0600` on unix, set at creation and re-applied before any
+/// byte is written) so a secret is never readable by other users, neither in
+/// the staged file nor in the published one. On Windows the staged file
+/// inherits the protected per-user directory ACL, matching the previous
+/// behavior of `secure_file`.
+pub fn write_atomic_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    write_atomic_inner(path, bytes, true)
+}
+
+fn write_atomic_inner(path: &Path, bytes: &[u8], private: bool) -> anyhow::Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -26,10 +42,23 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     ));
     let temp = PathBuf::from(temp_name);
     let result = (|| -> anyhow::Result<()> {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp)?;
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            // Restore owner access even under a restrictive umask, before
+            // writing any bytes.
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        let _ = private;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);

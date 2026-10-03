@@ -5,8 +5,10 @@
 
 use chrono::{DateTime, Datelike, Duration, Utc, Weekday};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
+
+use super::quota_burndown::{self, PersistedPlanEntry as PersistedEntry};
 
 /// Canonical session window length (5 hours).
 pub const SESSION_WINDOW_MINUTES: u32 = 300;
@@ -600,6 +602,37 @@ impl SessionEquivalentHistoryStore {
         }
         out
     }
+
+    /// Merge persisted series into the in-process store for `scope`. Older
+    /// in-process observations win ties; the result stays sorted so the
+    /// estimator's chronological check keeps passing.
+    pub fn adopt_persisted(
+        &mut self,
+        scope: &ForecastScope,
+        persisted: &[quota_burndown::PersistedPlanSeries],
+    ) {
+        for series in persisted {
+            let entries: Vec<PlanUtilizationHistoryEntry> = series
+                .entries
+                .iter()
+                .filter_map(PersistedEntry::to_history)
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            let hist = self.by_scope.entry(scope.clone()).or_default();
+            let ring = quota_burndown::MAX_SERIES_SAMPLES;
+            match series.name.as_str() {
+                "session" => {
+                    merge_ring(&mut hist.session, entries, ring);
+                }
+                "weekly" => {
+                    merge_ring(&mut hist.weekly, entries, ring);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 fn push_ring(
@@ -609,9 +642,61 @@ fn push_ring(
 ) {
     buf.push(entry);
     if buf.len() > ring {
-        let drop_n = buf.len() - ring;
-        buf.drain(0..drop_n);
+        let drop = buf.len() - ring;
+        buf.drain(0..drop);
     }
+}
+
+/// Merge loaded entries into a ring buffer: append, sort, dedup, cap.
+fn merge_ring(
+    buf: &mut Vec<PlanUtilizationHistoryEntry>,
+    entries: Vec<PlanUtilizationHistoryEntry>,
+    ring: usize,
+) {
+    buf.extend(entries);
+    buf.sort_by(|left, right| {
+        left.captured_at
+            .cmp(&right.captured_at)
+            .then_with(|| left.used_percent.total_cmp(&right.used_percent))
+    });
+    buf.dedup();
+    if buf.len() > ring {
+        let drop = buf.len() - ring;
+        buf.drain(0..drop);
+    }
+}
+
+/// Load the persisted burndown history for one provider+account into the
+/// process-local store, so history survives a restart. Runs once per scope;
+/// later calls are cheap no-ops (the loaded marker is kept in the store).
+pub fn load_persisted_history(
+    provider_id: &str,
+    account_key: Option<&str>,
+) -> Vec<PlanUtilizationSeriesHistory> {
+    static LOADED: LazyLock<Mutex<HashSet<ForecastScope>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let scope = ForecastScope::new(provider_id, account_key);
+    if let Ok(guard) = LOADED.lock()
+        && guard.contains(&scope)
+    {
+        return global_history_store()
+            .lock()
+            .ok()
+            .map(|store| store.histories(&scope))
+            .unwrap_or_default();
+    }
+    let series = quota_burndown::load_persisted_series(provider_id, account_key);
+    if let Ok(mut loaded) = LOADED.lock() {
+        loaded.insert(scope.clone());
+    }
+    if let Ok(mut store) = global_history_store().lock() {
+        store.adopt_persisted(&scope, &series);
+    }
+    global_history_store()
+        .lock()
+        .ok()
+        .map(|store| store.histories(&scope))
+        .unwrap_or_default()
 }
 
 /// Global in-process history used by Claude/Codex snapshot refresh.
@@ -658,11 +743,69 @@ pub fn record_provider_windows(
     if let Ok(mut guard) = global_history_store().lock() {
         guard.record(
             &ForecastScope::new(provider_id, account_key),
-            Some(session_entry),
-            weekly_entry,
+            Some(session_entry.clone()),
+            weekly_entry.clone(),
             SessionEquivalentBurnEstimator::DEFAULT_SAMPLE_LIMIT,
         );
     }
+
+    // Best-effort persistence for the burndown chart (upstream #4085 keeps a
+    // durable store; a failed write only costs the chart, never the forecast).
+    if let Err(error) = quota_burndown::persist_recorded_windows(
+        provider_id,
+        account_key,
+        Some(&session_entry),
+        weekly_entry.as_ref(),
+        now,
+    ) {
+        tracing::debug!(%error, "quota burndown persistence failed");
+    }
+}
+
+/// Best-effort persistence of one recorded observation pair for the burndown
+/// chart. Failures are logged at debug level and never surface.
+pub fn persist_recorded_windows(
+    provider_id: &str,
+    account_key: Option<&str>,
+    session: Option<&PlanUtilizationHistoryEntry>,
+    weekly: Option<&PlanUtilizationHistoryEntry>,
+    _now: DateTime<Utc>,
+) -> Result<(), quota_burndown::QuotaBurndownStoreError> {
+    let config_root = match crate::logging::config_root() {
+        Some(root) => root,
+        None => return Ok(()),
+    };
+    let mut session_series = quota_burndown::PersistedPlanSeries {
+        name: "session".to_string(),
+        window_minutes: SESSION_WINDOW_MINUTES,
+        entries: Vec::new(),
+    };
+    if let Some(entry) = session {
+        session_series
+            .entries
+            .push(quota_burndown::PersistedPlanEntry::from_history(entry));
+    }
+    let mut weekly_series = quota_burndown::PersistedPlanSeries {
+        name: "weekly".to_string(),
+        window_minutes: WEEKLY_WINDOW_MINUTES,
+        entries: Vec::new(),
+    };
+    if let Some(entry) = weekly {
+        weekly_series
+            .entries
+            .push(quota_burndown::PersistedPlanEntry::from_history(entry));
+    }
+    let key = quota_burndown::persisted_account_key(account_key);
+    if key.is_empty() {
+        return Ok(());
+    }
+    quota_burndown::merge_and_persist_series(
+        &config_root,
+        provider_id,
+        &key,
+        vec![session_series, weekly_series],
+    )
+    .map(|_| ())
 }
 
 /// Last learned full-session burn estimate retained across idle refreshes.

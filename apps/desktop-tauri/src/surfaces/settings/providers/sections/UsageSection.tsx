@@ -5,10 +5,16 @@ import type {
   RateWindowSnapshot,
 } from "../../../../types/bridge";
 import { InventoryItemRow } from "../../../../components/InventoryRows";
-import { ProviderDisplayRow } from "../../../../components/ProviderDisplayRow";
+import {
+  groupProviderDisplayDetails,
+  ProviderDisplayRow,
+} from "../../../../components/ProviderDisplayRow";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
+import { useMonthlyLimitBlockNow } from "../../../../hooks/useMonthlyLimitBlockNow";
+import { isMonthlyLimitBlockActive } from "../../../../lib/monthlyLimitBlock";
 import { isUsageItemVisible } from "../../../../lib/usageItemVisibility";
+import { resetDescriptionFallback, windowDetailText } from "../../../../lib/usageWindows";
 
 interface Props {
   provider: ProviderDetail;
@@ -32,14 +38,14 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
   if (provider.session && isUsageItemVisible(provider.hiddenUsageItemIds, "primary")) {
     bars.push({
       key: "session",
-      label: t("ProviderSessionLabel"),
+      label: provider.primaryLabel || t("ProviderSessionLabel"),
       rate: provider.session,
     });
   }
   if (provider.weekly && isUsageItemVisible(provider.hiddenUsageItemIds, "secondary")) {
     bars.push({
       key: "weekly",
-      label: t("ProviderWeeklyLabel"),
+      label: provider.secondaryLabel || t("ProviderWeeklyLabel"),
       rate: provider.weekly,
     });
   }
@@ -68,8 +74,13 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
     });
   }
 
+  // Cached snapshots outlive the pool reset; re-check blocks on the clock.
+  const monthlyLimitBlockNow = useMonthlyLimitBlockNow(
+    bars.map((bar) => bar.rate.monthlyLimitBlock),
+  );
   const inventory = provider.inventory ?? [];
   const displayDetails = provider.displayDetails ?? [];
+  const displayDetailGroups = groupProviderDisplayDetails(displayDetails);
   if (bars.length === 0 && inventory.length === 0 && displayDetails.length === 0) {
     return null;
   }
@@ -82,6 +93,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
           key={b.key}
           label={b.label}
           rate={b.rate}
+          blocked={isMonthlyLimitBlockActive(b.rate.monthlyLimitBlock, monthlyLimitBlockNow)}
           resetTimeRelative={resetTimeRelative}
           t={t}
         />
@@ -94,14 +106,27 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
           lineClassName="provider-usage-inventory"
         />
       ))}
-      {displayDetails.map((detail) => (
-        <ProviderDisplayRow
-          key={detail.id}
-          detail={detail}
-          lineClassName="provider-usage-inventory"
-          trackClassName="provider-usage-bar__track"
-          fillClassName="provider-usage-bar__fill"
-        />
+      {displayDetailGroups.map((group) => (
+        <div key={group.id}>
+          {group.title && (
+            <div
+              className="provider-detail-field__label"
+              role="heading"
+              aria-level={5}
+            >
+              {group.title}
+            </div>
+          )}
+          {group.rows.map((detail) => (
+            <ProviderDisplayRow
+              key={detail.id}
+              detail={detail}
+              lineClassName="provider-usage-inventory"
+              trackClassName="provider-usage-bar__track"
+              fillClassName="provider-usage-bar__fill"
+            />
+          ))}
+        </div>
       ))}
     </section>
   );
@@ -110,22 +135,36 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
 function UsageBar({
   label,
   rate,
+  blocked,
   resetTimeRelative,
   t,
 }: {
   label: string;
   rate: RateWindowSnapshot;
+  blocked: boolean;
   resetTimeRelative: boolean;
   t: (key: LocaleKey) => string;
 }) {
   const usedPct = Number.isFinite(rate.usedPercent) ? Math.max(0, rate.usedPercent) : 0;
   const pct = Math.min(100, usedPct);
   const isInformational = rate.isInformational === true;
+  const detailText = windowDetailText(rate);
   const formattedReset = useFormattedResetTime(
-    rate.resetsAt,
-    rate.resetDescription,
+    blocked ? null : rate.resetsAt,
+    blocked ? null : resetDescriptionFallback(rate),
     resetTimeRelative,
   );
+  if (blocked) {
+    // Upstream 0.69.0 #4091 status row: title and status, no bar or reset.
+    return (
+      <div className="provider-usage-bar provider-usage-bar--blocked">
+        <div className="provider-usage-bar__header">
+          <span className="provider-usage-bar__label">{label}</span>
+          <span className="provider-usage-bar__status">{t("PanelBlockedByMonthlyLimit")}</span>
+        </div>
+      </div>
+    );
+  }
   const resetHint = formattedReset
     ? resetTimeRelative
       ? formattedReset
@@ -161,6 +200,7 @@ function UsageBar({
       {!isInformational && resetHint && (
         <span className="provider-usage-bar__reset">{resetHint}</span>
       )}
+      {detailText && <span className="provider-usage-bar__detail">{detailText}</span>}
     </div>
   );
 }

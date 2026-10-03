@@ -340,10 +340,11 @@ pub struct AgentSessionDiscovery {
 
 mod claude_desktop;
 mod focus;
+mod native_processes;
 mod parsers;
 pub mod pi_family;
 mod remote;
-pub use focus::focus_session;
+pub use focus::{focus_session, request_session_attention};
 
 struct CodexRollout {
     path: PathBuf,
@@ -543,7 +544,7 @@ impl LocalAgentSessionScanner {
         let pi_input = pi_family::PiFamilyScanInput {
             processes: &pi_processes,
             cwd_by_pid: std::collections::HashMap::new(),
-            environment: pi_family::PiFamilySessionScanner::scan_environment(),
+            environment: pi_family::PiFamilySessionScanner::scan_environment().into(),
             now,
             host: host.to_string(),
             config: self.config,

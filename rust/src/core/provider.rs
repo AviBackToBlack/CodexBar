@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use super::ProviderFetchResult;
+use super::last_good_owner::LastGoodOwner;
 use super::provider_state::ProviderStateKind;
 
 /// Unique identifier for a provider
@@ -55,7 +56,6 @@ pub enum ProviderId {
     MiMo,
     Doubao,
     CommandCode,
-    Crof,
     StepFun,
     Venice,
     OpenAIApi,
@@ -88,11 +88,21 @@ pub enum ProviderId {
     Notion,
     Xai,
     Fireworks,
+    AtlasCloud,
     #[serde(alias = "metaspark")]
     Meta,
     Muse,
     Replicate,
     Nous,
+    Hyper,
+    GitKraken,
+    Bifrost,
+    Aixy,
+    LLMMan,
+    DevPass,
+    XKiro,
+    Raycast,
+    Vercel,
 }
 
 impl ProviderId {
@@ -142,7 +152,6 @@ impl ProviderId {
             ProviderId::MiMo,
             ProviderId::Doubao,
             ProviderId::CommandCode,
-            ProviderId::Crof,
             ProviderId::StepFun,
             ProviderId::Venice,
             ProviderId::OpenAIApi,
@@ -175,10 +184,20 @@ impl ProviderId {
             ProviderId::Notion,
             ProviderId::Xai,
             ProviderId::Fireworks,
+            ProviderId::AtlasCloud,
             ProviderId::Meta,
             ProviderId::Muse,
             ProviderId::Replicate,
             ProviderId::Nous,
+            ProviderId::Hyper,
+            ProviderId::GitKraken,
+            ProviderId::Bifrost,
+            ProviderId::Aixy,
+            ProviderId::LLMMan,
+            ProviderId::DevPass,
+            ProviderId::XKiro,
+            ProviderId::Raycast,
+            ProviderId::Vercel,
         ]
     }
 
@@ -226,13 +245,21 @@ impl ProviderId {
             ProviderId::Meta => "meta",
             ProviderId::Muse => "muse",
             ProviderId::Nous => "nous",
+            ProviderId::Hyper => "hyper",
+            ProviderId::GitKraken => "gitkraken",
+            ProviderId::Bifrost => "bifrost",
+            ProviderId::Aixy => "aixy",
+            ProviderId::LLMMan => "llmman",
+            ProviderId::DevPass => "devpass",
+            ProviderId::XKiro => "xkiro",
+            ProviderId::Raycast => "raycast",
+            ProviderId::Vercel => "vercel",
             ProviderId::AiAnd => "aiand",
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
             ProviderId::MiMo => "mimo",
             ProviderId::Doubao => "doubao",
             ProviderId::CommandCode => "commandcode",
-            ProviderId::Crof => "crof",
             ProviderId::StepFun => "stepfun",
             ProviderId::Venice => "venice",
             ProviderId::OpenAIApi => "openaiapi",
@@ -265,6 +292,7 @@ impl ProviderId {
             ProviderId::Notion => "notion",
             ProviderId::Xai => "xai",
             ProviderId::Replicate => "replicate",
+            ProviderId::AtlasCloud => "atlascloud",
         }
     }
 
@@ -313,13 +341,21 @@ impl ProviderId {
             ProviderId::Meta => "Meta",
             ProviderId::Muse => "Muse Code",
             ProviderId::Nous => "Nous Portal",
+            ProviderId::Hyper => "Charm Hyper",
+            ProviderId::GitKraken => "GitKraken AI",
+            ProviderId::Bifrost => "Bifrost",
+            ProviderId::Aixy => "Aixy",
+            ProviderId::LLMMan => "llmman",
+            ProviderId::DevPass => "DevPass",
+            ProviderId::XKiro => "xKiro",
+            ProviderId::Raycast => "Raycast",
+            ProviderId::Vercel => "Vercel AI Gateway",
             ProviderId::AiAnd => "ai&",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
             ProviderId::MiMo => "Xiaomi MiMo",
             ProviderId::Doubao => "Doubao",
             ProviderId::CommandCode => "Command Code",
-            ProviderId::Crof => "Crof",
             ProviderId::StepFun => "StepFun",
             ProviderId::Venice => "Venice",
             ProviderId::OpenAIApi => "OpenAI API",
@@ -353,6 +389,7 @@ impl ProviderId {
             ProviderId::Notion => "Notion AI",
             ProviderId::Xai => "xAI",
             ProviderId::Replicate => "Replicate",
+            ProviderId::AtlasCloud => "Atlas Cloud",
         }
     }
 
@@ -395,6 +432,8 @@ impl ProviderId {
             ProviderId::Sakana => Some("console.sakana.ai"),
             ProviderId::LongCat => Some("longcat.chat"),
             ProviderId::Replicate => Some("replicate.com"),
+            ProviderId::AtlasCloud => None,
+            ProviderId::Raycast => Some("www.raycast.com"),
             // Token-based providers (don't use cookies)
             ProviderId::Copilot => None,
             ProviderId::Zai => None,
@@ -413,12 +452,19 @@ impl ProviderId {
             ProviderId::DeepInfra => None,
             ProviderId::Fireworks => None,
             ProviderId::Meta => None,
-            ProviderId::Muse => None,
+            ProviderId::Muse => Some("dev.meta.ai"),
             ProviderId::Nous => None,
+            ProviderId::Hyper => Some("hyper.charm.land"),
+            ProviderId::GitKraken => None,
+            ProviderId::Bifrost => None,
+            ProviderId::Aixy => None,
+            ProviderId::LLMMan => None,
+            ProviderId::DevPass => None,
+            ProviderId::XKiro => None,
+            ProviderId::Vercel => None,
             ProviderId::AiAnd => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
-            ProviderId::Crof => None,
             ProviderId::StepFun => None,
             ProviderId::OpenAIApi => None,
             ProviderId::ElevenLabs => None,
@@ -433,7 +479,7 @@ impl ProviderId {
             ProviderId::LiteLLM => None,
             ProviderId::Poe => None,
             ProviderId::Devin => None,
-            ProviderId::Zed => None,
+            ProviderId::Zed => Some("zed.dev"),
             ProviderId::CrossModel => None,
             ProviderId::Sub2Api => None,
             ProviderId::Wayfinder => None,
@@ -444,6 +490,15 @@ impl ProviderId {
             ProviderId::QwenCloud => Some("qwencloud.com"),
             ProviderId::Notion => Some("app.notion.com"),
             ProviderId::Xai => None,
+        }
+    }
+
+    /// Id of the longer pool that blocks this provider's shorter windows once
+    /// exhausted (upstream 0.69.0 #4091). See [`super::BlockedWindows`].
+    pub fn blocking_quota_window_id(&self) -> Option<&'static str> {
+        match self {
+            ProviderId::Kimi => Some(crate::providers::kimi::MONTHLY_WINDOW_ID),
+            _ => None,
         }
     }
 
@@ -495,6 +550,16 @@ impl ProviderId {
             "fireworks" | "fireworks-ai" | "fw" => Some(ProviderId::Fireworks),
             "muse" | "muse-code" | "muse code" => Some(ProviderId::Muse),
             "nous" | "nous-portal" | "nous portal" | "hermes" => Some(ProviderId::Nous),
+            "hyper" | "charm-hyper" | "charm hyper" => Some(ProviderId::Hyper),
+            "gitkraken" | "gitkraken-ai" | "gitkraken ai" => Some(ProviderId::GitKraken),
+            "bifrost" | "bifrost-gateway" | "bifrost gateway" => Some(ProviderId::Bifrost),
+            "aixy" | "aixy-gateway" | "aixy gateway" => Some(ProviderId::Aixy),
+            "llmman" => Some(ProviderId::LLMMan),
+            "devpass" => Some(ProviderId::DevPass),
+            "xkiro" | "x-kiro" => Some(ProviderId::XKiro),
+            "vercel" | "vercel-ai-gateway" | "vercel ai gateway" | "ai-gateway" | "ai gateway" => {
+                Some(ProviderId::Vercel)
+            }
             "meta" | "metaspark" | "meta-spark" | "muse-spark" | "musespark" | "muse spark"
             | "meta muse spark" => Some(ProviderId::Meta),
             "aiand" | "ai&" | "ai-and" | "ai and" => Some(ProviderId::AiAnd),
@@ -505,7 +570,6 @@ impl ProviderId {
             }
             "doubao" | "ark" | "volcengine" => Some(ProviderId::Doubao),
             "commandcode" | "command-code" | "command code" => Some(ProviderId::CommandCode),
-            "crof" => Some(ProviderId::Crof),
             "stepfun" | "step-fun" | "step fun" => Some(ProviderId::StepFun),
             "venice" => Some(ProviderId::Venice),
             "openaiapi" | "openai-api" | "openai api" | "openai-balance" => {
@@ -546,6 +610,8 @@ impl ProviderId {
             "zoommate" | "zoom-mate" | "zoom mate" => Some(ProviderId::ZoomMate),
             "notion" | "notion-ai" | "notionai" | "notion ai" => Some(ProviderId::Notion),
             "replicate" | "r8" => Some(ProviderId::Replicate),
+            "atlascloud" | "atlas-cloud" | "atlas cloud" => Some(ProviderId::AtlasCloud),
+            "raycast" | "raycast-ai" => Some(ProviderId::Raycast),
             _ => None,
         }
     }
@@ -651,8 +717,26 @@ pub enum ProviderError {
     #[error("No cookies available for web API")]
     NoCookies,
 
+    /// Usage needs a provider web session that only a browser sign-in can
+    /// restore. `sign_in_url` is the page to open; CLI JSON error rows carry
+    /// it as `signInUrl` next to `errorKind: "browserSignInRequired"`.
+    #[error("{message}")]
+    BrowserSignInRequired {
+        message: String,
+        sign_in_url: String,
+    },
+
     #[error("{0}")]
     Other(String),
+
+    /// A transport failure tagged with the session that produced it, so the
+    /// shell can retain a cached snapshot only for the same session. Build it
+    /// with [`ProviderError::with_failure_owner`].
+    #[error("{source}")]
+    OwnedTransport {
+        owner: Option<LastGoodOwner>,
+        source: Box<ProviderError>,
+    },
 }
 
 impl ProviderError {
@@ -664,6 +748,7 @@ impl ProviderError {
                 ReqwestFailureClass::Timeout | ReqwestFailureClass::Connect
             ),
             ProviderError::Timeout => true,
+            ProviderError::OwnedTransport { source, .. } => source.is_transport_failure(),
             _ => false,
         }
     }
@@ -746,13 +831,22 @@ pub struct FetchContext {
     /// Manual cookie header (for testing)
     pub manual_cookie_header: Option<String>,
 
-    /// The cookie source is manual and no cookie is stored. The provider
-    /// decides what this means; Replicate fails closed instead of importing a
-    /// browser account the user did not select.
+    /// The cookie source is manual and no cookie is stored, or (for providers
+    /// whose cookie source only scopes the session) cookies are off. The
+    /// provider decides what this means; Replicate fails closed instead of
+    /// importing a browser account the user did not select, and Charm Hyper
+    /// skips its session lane.
     pub manual_cookie_missing: bool,
 
     /// API key for providers that require authentication
     pub api_key: Option<String>,
+
+    /// Type of the explicitly selected labeled token account, if any.
+    pub token_account_kind: Option<super::TokenAccountKind>,
+
+    /// A selected account is an identity boundary: providers must not retry
+    /// another ambient credential or account after its credential fails.
+    pub token_account_isolated: bool,
 
     /// Optional provider workspace/project scope from persisted settings.
     pub workspace_id: Option<String>,
@@ -771,12 +865,23 @@ pub struct FetchContext {
     /// manual cookie source, etc.). Workspace overrides are checked separately.
     pub auto_prefer_web: bool,
 
+    /// The user chose automatic browser cookie import for a provider whose
+    /// cookies only enrich its API usage (`Provider::cookies_only_enrich_usage`).
+    /// False for the default manual-without-cookie state and for Off, so those
+    /// never read a browser.
+    pub browser_cookie_import: bool,
+
     /// Foreground usage reads (`codexbar usage`, `codexbar serve`) set this so
     /// providers join slow optional enrichment with the full optional-item
     /// timeout budget measured from task start; background/UI polls keep the
     /// short join grace instead (upstream 0.48.0
     /// `requiresOptionalUsageCompleteness`, #2583).
     pub requires_optional_usage_completeness: bool,
+
+    /// The user opted in to the requested provider's optional detail breakdown
+    /// (LiteLLM model activity, Claude workspace spend). Scoped to the provider
+    /// being fetched; false everywhere the setting is not consulted.
+    pub optional_details_enabled: bool,
 }
 
 impl Default for FetchContext {
@@ -789,12 +894,16 @@ impl Default for FetchContext {
             manual_cookie_header: None,
             manual_cookie_missing: false,
             api_key: None,
+            token_account_kind: None,
+            token_account_isolated: false,
             workspace_id: None,
             seat_credit_entitlement: None,
             api_region: None,
             gateway_url: None,
             auto_prefer_web: false,
+            browser_cookie_import: false,
             requires_optional_usage_completeness: false,
+            optional_details_enabled: false,
         }
     }
 }
@@ -860,6 +969,17 @@ pub trait Provider: Send + Sync {
         false
     }
 
+    /// Whether a selected token account leaves an `Auto` usage source as `Auto`.
+    ///
+    /// The shell normally maps a token account with an environment override to
+    /// the OAuth (API-only) lane. A provider whose `Auto` source adds an
+    /// optional extra on top of the API credential, such as the Hugging Face
+    /// prepaid wallet, opts in so the account token does not silently drop it.
+    /// An explicitly chosen non-Auto usage source still maps to OAuth.
+    fn token_account_preserves_auto_source(&self) -> bool {
+        false
+    }
+
     /// How the shell treats a manual cookie source with no cookie present.
     ///
     /// `Fallback` lets the shell remap to its generic browser-cookie attempt.
@@ -886,14 +1006,67 @@ pub trait Provider: Send + Sync {
 
     /// Whether Automatic metric selection is a dead end when the primary lane
     /// is informational and no secondary lane exists. Providers with
-    /// Automatic-only fallback lanes (seat credits) override this to `false`
-    /// so the fallback lane can still fill in.
+    /// Automatic-only fallback lanes (seat credits) or a named extra lane that
+    /// can be the only reported quota (Kimi's monthly pool) override this to
+    /// `false` so that lane can still fill in.
     fn automatic_metric_missing_core_is_terminal(&self) -> bool {
         true
     }
 
+    /// Whether Automatic metric selection shows the secondary lane whenever
+    /// neither core lane is exhausted, instead of the fuller lane. An
+    /// exhausted primary or secondary lane still wins, primary first.
+    fn automatic_metric_prefers_secondary_window(&self) -> bool {
+        false
+    }
+
+    /// Id of the extra rate window that holds this provider's monthly plan
+    /// allowance. The `MonthlyPlan` menu bar metric selects that window
+    /// (upstream 0.70.0 #4072). `None` means the provider offers no Monthly
+    /// Plan metric.
+    fn monthly_plan_window_id(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Label for the primary lane in the menu bar metric picker when the
+    /// lane is not a session window (upstream `menuBarLayoutPrimaryLabel`).
+    /// `None` keeps the generic session label.
+    fn menu_bar_primary_label(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Whether cookies only enrich an API-backed result instead of being a
+    /// usage source of their own. The shell then keeps the configured usage
+    /// source, forwards a manual cookie as-is, and reads a browser only when
+    /// the cookie source is Automatic (`FetchContext::browser_cookie_import`);
+    /// the default manual state with no cookie never triggers a browser read.
+    fn cookies_only_enrich_usage(&self) -> bool {
+        false
+    }
+
     /// Whether browser-cookie discovery/recovery is owned by the provider.
     fn owns_browser_cookie_resolution(&self) -> bool {
+        false
+    }
+
+    /// Whether the web lane is used only when the usage source is explicitly
+    /// `web`. A cookie domain otherwise lets the shell turn Auto into Web
+    /// (manual cookie present or browser import), which would replace a
+    /// provider's default non-web credential.
+    fn web_is_opt_in(&self) -> bool {
+        false
+    }
+
+    /// Whether the cookie source only scopes the browser session the
+    /// provider may use, leaving the selected usage source in charge of
+    /// routing.
+    ///
+    /// When true, the shell keeps the usage source for every cookie source:
+    /// `off` and a `manual` source without a stored cookie pass no header and
+    /// set [`FetchContext::manual_cookie_missing`], so the provider skips the
+    /// session and Auto can still use an API key. Otherwise the shell remaps
+    /// the source mode from the cookie source.
+    fn cookie_source_scopes_session_only(&self) -> bool {
         false
     }
 
@@ -958,6 +1131,11 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("nous-portal", ProviderId::Nous);
     map.insert("nous portal", ProviderId::Nous);
     map.insert("hermes", ProviderId::Nous);
+    map.insert("x-kiro", ProviderId::XKiro);
+    map.insert("vercel-ai-gateway", ProviderId::Vercel);
+    map.insert("vercel ai gateway", ProviderId::Vercel);
+    map.insert("ai-gateway", ProviderId::Vercel);
+    map.insert("ai gateway", ProviderId::Vercel);
     map.insert("metaspark", ProviderId::Meta);
     map.insert("meta-spark", ProviderId::Meta);
     map.insert("muse-spark", ProviderId::Meta);
@@ -1022,27 +1200,32 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
 }
 
 /// The shipped brand color (hex) for a provider, mirroring the frontend
-/// `PROVIDER_ICON_REGISTRY` in `providerIcons.ts`. Used as the default
-/// accent color before any per-provider override (#2972).
+/// `PROVIDER_ICON_REGISTRY` in `providerIcons.ts` and the `--chart-<id>`
+/// tokens in `styles.css` (`providerIcons.test.ts` checks both). Used as the
+/// default accent color before any per-provider override (#2972).
+///
+/// Upstream 0.70.0 audited the palette (#4075, `docs/provider-palette.md`).
+/// The 16 accents it adopted are pinned in the tests below; changing one
+/// must not materially reduce contrast on white or `#222222`.
 pub fn brand_color(id: ProviderId) -> &'static str {
     match id {
         ProviderId::Codex => "#49A3B0",
         ProviderId::Claude => "#CC7C5E",
         ProviderId::Pi => "#7C3AED",
-        ProviderId::Cursor => "#00BFA5",
+        ProviderId::Cursor => "#F54E00",
         ProviderId::Factory => "#FF6B35",
         ProviderId::Gemini => "#AB87EA",
         ProviderId::Antigravity => "#60BA7E",
         ProviderId::Copilot => "#A855F7",
         ProviderId::Zai => "#E85A6A",
         ProviderId::MiniMax => "#FE603C",
-        ProviderId::Kiro => "#FF9900",
+        ProviderId::Kiro => "#9046FF",
         ProviderId::VertexAI => "#4285F4",
-        ProviderId::Augment => "#6366F1",
+        ProviderId::Augment => "#1AA049",
         ProviderId::OpenCode => "#3B82F6",
         ProviderId::Kimi => "#FE603C",
         ProviderId::KimiK2 => "#4C00FF",
-        ProviderId::Amp => "#DC2626",
+        ProviderId::Amp => "#F34E3F",
         ProviderId::Warp => "#6366F1",
         ProviderId::Ollama => "#8B95B0",
         ProviderId::AzureOpenAI => "#0078D4",
@@ -1054,24 +1237,23 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::NanoGPT => "#687FA1",
         ProviderId::Infini => "#687FA1",
         ProviderId::Perplexity => "#1FB8CD",
-        ProviderId::Abacus => "#7C3AED",
-        ProviderId::Mistral => "#FF500F",
+        ProviderId::Abacus => "#814EE8",
+        ProviderId::Mistral => "#FF5229",
         ProviderId::OpenCodeGo => "#3B82F6",
         ProviderId::Kilo => "#5D87FF",
-        ProviderId::Bedrock => "#FF9900",
-        ProviderId::Codebuff => "#44FF00",
+        ProviderId::Bedrock => "#01A88D",
+        ProviderId::Codebuff => "#00FF95",
         ProviderId::CodeRabbit => "#FF5C35",
-        ProviderId::DeepSeek => "#527DF0",
+        ProviderId::DeepSeek => "#4D6BFE",
         ProviderId::DeepInfra => "#2A3275",
         ProviderId::AiAnd => "#E25C2B",
         ProviderId::Windsurf => "#22C55E",
         ProviderId::Manus => "#34322D",
         ProviderId::MiMo => "#FF6900",
         ProviderId::Doubao => "#2563EB",
-        ProviderId::CommandCode => "#44FF00",
-        ProviderId::Crof => "#7C3AED",
+        ProviderId::CommandCode => "#8C4EDD",
         ProviderId::StepFun => "#999999",
-        ProviderId::Venice => "#111827",
+        ProviderId::Venice => "#3C8FDD",
         ProviderId::OpenAIApi => "#10A37F",
         ProviderId::Grok => "#111827",
         ProviderId::ElevenLabs => "#111827",
@@ -1085,18 +1267,18 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Chutes => "#FF5C35",
         ProviderId::LiteLLM => "#0EA5E9",
         ProviderId::Poe => "#5D5FEF",
-        ProviderId::Devin => "#111827",
+        ProviderId::Devin => "#317CFF",
         ProviderId::Zed => "#084CCF",
         ProviderId::CrossModel => "#C084FC",
         ProviderId::Qoder => "#2563EB",
         ProviderId::CodeBuddy => "#0052D9",
         ProviderId::Sakana => "#0EA5E9",
-        ProviderId::Sub2Api => "#2DC6D8",
+        ProviderId::Sub2Api => "#14B8A6",
         ProviderId::Wayfinder => "#14B8A6",
         ProviderId::ZenMux => "#6C5CE7",
-        ProviderId::ClinePass => "#61A3FA",
-        ProviderId::LongCat => "#FFD100",
-        ProviderId::Neuralwatt => "#38D98C",
+        ProviderId::ClinePass => "#5487C8",
+        ProviderId::LongCat => "#29E154",
+        ProviderId::Neuralwatt => "#D55934",
         ProviderId::ZoomMate => "#0B5CFF",
         ProviderId::QwenCloud => "#615CED",
         ProviderId::Notion => "#337EA9",
@@ -1105,7 +1287,18 @@ pub fn brand_color(id: ProviderId) -> &'static str {
         ProviderId::Meta => "#0467DF",
         ProviderId::Muse => "#0668E1",
         ProviderId::Replicate => "#000000",
+        ProviderId::AtlasCloud => "#5975F5",
         ProviderId::Nous => "#D6A55C",
+        ProviderId::Hyper => "#FF60FF",
+        ProviderId::GitKraken => "#179287",
+        ProviderId::Bifrost => "#33C09E",
+        ProviderId::Aixy => "#123650",
+        ProviderId::LLMMan => "#6CC5B0",
+        ProviderId::DevPass => "#2563EB",
+        ProviderId::XKiro => "#52C99B",
+        ProviderId::Raycast => "#FF6363",
+        // Upstream uses white; a mid neutral keeps contrast on light and dark surfaces.
+        ProviderId::Vercel => "#737373",
     }
 }
 
@@ -1120,7 +1313,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 80);
+        assert_eq!(all.len(), 89);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Pi));
@@ -1145,7 +1338,6 @@ mod tests {
         assert!(all.contains(&ProviderId::MiMo));
         assert!(all.contains(&ProviderId::Doubao));
         assert!(all.contains(&ProviderId::CommandCode));
-        assert!(all.contains(&ProviderId::Crof));
         assert!(all.contains(&ProviderId::StepFun));
         assert!(all.contains(&ProviderId::Venice));
         assert!(all.contains(&ProviderId::OpenAIApi));
@@ -1181,6 +1373,16 @@ mod tests {
         assert!(all.contains(&ProviderId::Replicate));
         assert!(all.contains(&ProviderId::Muse));
         assert!(all.contains(&ProviderId::Nous));
+        assert!(all.contains(&ProviderId::AtlasCloud));
+        assert!(all.contains(&ProviderId::Hyper));
+        assert!(all.contains(&ProviderId::GitKraken));
+        assert!(all.contains(&ProviderId::Bifrost));
+        assert!(all.contains(&ProviderId::Aixy));
+        assert!(all.contains(&ProviderId::LLMMan));
+        assert!(all.contains(&ProviderId::DevPass));
+        assert!(all.contains(&ProviderId::XKiro));
+        assert!(all.contains(&ProviderId::Raycast));
+        assert!(all.contains(&ProviderId::Vercel));
     }
 
     #[test]
@@ -1258,6 +1460,7 @@ mod tests {
             Some(ProviderId::Antigravity)
         );
         assert_eq!(ProviderId::from_cli_name("zed"), Some(ProviderId::Zed));
+        assert_eq!(ProviderId::from_cli_name("crof"), None);
         assert_eq!(ProviderId::from_cli_name("unknown"), None);
         assert_eq!(
             ProviderId::from_cli_name("code-rabbit"),
@@ -1326,6 +1529,7 @@ mod tests {
             Some("aistudio.google.com")
         );
         assert_eq!(ProviderId::Kiro.cookie_domain(), Some("kiro.dev"));
+        assert_eq!(ProviderId::Zed.cookie_domain(), Some("zed.dev"));
         assert_eq!(ProviderId::Kimi.cookie_domain(), Some("kimi.moonshot.cn"));
         assert_eq!(ProviderId::OpenCode.cookie_domain(), Some("opencode.ai"));
         assert_eq!(ProviderId::Venice.cookie_domain(), Some("venice.ai"));
@@ -1450,7 +1654,7 @@ mod tests {
     fn test_provider_id_muse() {
         assert_eq!(ProviderId::Muse.cli_name(), "muse");
         assert_eq!(ProviderId::Muse.display_name(), "Muse Code");
-        assert_eq!(ProviderId::Muse.cookie_domain(), None);
+        assert_eq!(ProviderId::Muse.cookie_domain(), Some("dev.meta.ai"));
         assert_eq!(ProviderId::from_cli_name("muse"), Some(ProviderId::Muse));
         assert_eq!(
             ProviderId::from_cli_name("muse-code"),
@@ -1502,5 +1706,133 @@ mod tests {
             ProviderId::from_cli_name("supergrok"),
             Some(ProviderId::Grok)
         );
+    }
+
+    /// The 16 accents upstream 0.70.0 adopted in its palette audit (#4075),
+    /// each with the accent Windows shipped before this port.
+    const ADOPTED_ACCENTS: [(ProviderId, &str, &str); 16] = [
+        (ProviderId::Abacus, "#7C3AED", "#814EE8"),
+        (ProviderId::Amp, "#DC2626", "#F34E3F"),
+        (ProviderId::Augment, "#6366F1", "#1AA049"),
+        (ProviderId::Bedrock, "#FF9900", "#01A88D"),
+        (ProviderId::ClinePass, "#61A3FA", "#5487C8"),
+        (ProviderId::Codebuff, "#44FF00", "#00FF95"),
+        (ProviderId::CommandCode, "#44FF00", "#8C4EDD"),
+        (ProviderId::Cursor, "#00BFA5", "#F54E00"),
+        (ProviderId::DeepSeek, "#527DF0", "#4D6BFE"),
+        (ProviderId::Devin, "#111827", "#317CFF"),
+        (ProviderId::Kiro, "#FF9900", "#9046FF"),
+        (ProviderId::LongCat, "#FFD100", "#29E154"),
+        (ProviderId::Mistral, "#FF500F", "#FF5229"),
+        (ProviderId::Neuralwatt, "#38D98C", "#D55934"),
+        (ProviderId::Sub2Api, "#2DC6D8", "#14B8A6"),
+        (ProviderId::Venice, "#111827", "#3C8FDD"),
+    ];
+
+    /// Audited providers whose accent upstream kept, where the Windows accent
+    /// already equals upstream's final value. Chutes, Deepgram, Doubao, Groq,
+    /// Kilo, LiteLLM, Perplexity, Qoder, Sakana, T3 Chat and Warp keep older
+    /// Windows accents that differ from upstream; aligning them is out of
+    /// scope for the 0.70.0 port.
+    const RETAINED_ACCENTS: [(ProviderId, &str); 7] = [
+        (ProviderId::AiAnd, "#E25C2B"),
+        (ProviderId::Copilot, "#A855F7"),
+        (ProviderId::Fireworks, "#F25B1C"),
+        (ProviderId::JetBrains, "#FF3399"),
+        (ProviderId::Kimi, "#FE603C"),
+        (ProviderId::Notion, "#337EA9"),
+        (ProviderId::OpenCode, "#3B82F6"),
+    ];
+
+    /// WCAG relative luminance of a `#RRGGBB` color, as upstream's
+    /// `ProviderPaletteRegressionTests` computes it.
+    fn relative_luminance(hex: &str) -> f64 {
+        let digits = hex.strip_prefix('#').expect("hex color starts with #");
+        assert_eq!(digits.len(), 6, "{hex} is not #RRGGBB");
+        let linear = |offset: usize| {
+            let channel =
+                f64::from(u8::from_str_radix(&digits[offset..offset + 2], 16).expect("hex digits"))
+                    / 255.0;
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(0) + 0.7152 * linear(2) + 0.0722 * linear(4)
+    }
+
+    fn contrast_ratio(color: &str, background: &str) -> f64 {
+        let foreground = relative_luminance(color);
+        let backdrop = relative_luminance(background);
+        (foreground.max(backdrop) + 0.05) / (foreground.min(backdrop) + 0.05)
+    }
+
+    #[test]
+    fn contrast_ratio_matches_upstream_audit_values() {
+        // Rows of upstream docs/provider-palette.md, rounded to two decimals.
+        let rounded = |value: f64| (value * 100.0).round() / 100.0;
+        assert_eq!(rounded(contrast_ratio("#814EE8", "#FFFFFF")), 5.01);
+        assert_eq!(rounded(contrast_ratio("#814EE8", "#222222")), 3.17);
+        assert_eq!(rounded(contrast_ratio("#FF9900", "#FFFFFF")), 2.14);
+        assert_eq!(rounded(contrast_ratio("#01A88D", "#222222")), 5.29);
+        assert_eq!(rounded(contrast_ratio("#00FF95", "#FFFFFF")), 1.33);
+        assert_eq!(rounded(contrast_ratio("#FFFFFF", "#FFFFFF")), 1.0);
+    }
+
+    #[test]
+    fn adopted_upstream_palette_accents_are_pinned() {
+        for (id, _, adopted) in ADOPTED_ACCENTS {
+            assert_eq!(brand_color(id), adopted, "{id:?}");
+        }
+        for (id, retained) in RETAINED_ACCENTS {
+            assert_eq!(brand_color(id), retained, "{id:?}");
+        }
+    }
+
+    #[test]
+    fn adopted_palette_accents_do_not_materially_regress_contrast() {
+        // Upstream's controlled light and dark menu surfaces. A material
+        // regression falls below 3:1 while losing at least 0.5 of contrast
+        // against the accent Windows shipped before.
+        for (id, previous, _) in ADOPTED_ACCENTS {
+            for background in ["#FFFFFF", "#222222"] {
+                let current = contrast_ratio(brand_color(id), background);
+                let before = contrast_ratio(previous, background);
+                assert!(
+                    current >= 3.0 || before - current < 0.5,
+                    "{id:?} on {background}: {before:.2} -> {current:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn brand_colors_are_uppercase_hex() {
+        for id in ProviderId::all() {
+            let color = brand_color(*id);
+            assert!(
+                color.len() == 7
+                    && color.starts_with('#')
+                    && color[1..]
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || matches!(c, 'A'..='F')),
+                "{id:?} has {color}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_provider_id_xkiro() {
+        assert_eq!(ProviderId::XKiro.cli_name(), "xkiro");
+        assert_eq!(ProviderId::XKiro.display_name(), "xKiro");
+        assert_eq!(ProviderId::XKiro.cookie_domain(), None);
+        assert_eq!(ProviderId::from_cli_name("xkiro"), Some(ProviderId::XKiro));
+        assert_eq!(ProviderId::from_cli_name("x-kiro"), Some(ProviderId::XKiro));
+        assert_eq!(cli_name_map().get("xkiro"), Some(&ProviderId::XKiro));
+        assert_eq!(cli_name_map().get("x-kiro"), Some(&ProviderId::XKiro));
+        // xKiro is a separate provider from Kiro and shares none of its aliases.
+        assert_eq!(ProviderId::from_cli_name("kiro"), Some(ProviderId::Kiro));
+        assert_eq!(ProviderId::from_cli_name("aws"), Some(ProviderId::Kiro));
     }
 }

@@ -6,6 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
   getSettingsSnapshot: vi.fn(),
+  getStayAwakeStatus: vi.fn().mockResolvedValue(false),
   updateSettings: vi.fn(),
   getUpdateState: vi.fn(),
   checkForUpdates: vi.fn(),
@@ -141,10 +142,12 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     highUsageThreshold: 70,
     criticalUsageThreshold: 90,
     predictivePaceWarningEnabled: false,
+    credentialExpiryNotificationsEnabled: false,
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
     menuBarShowsPercent: false,
+    menuBarColorPace: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
@@ -157,6 +160,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     autoDownloadUpdates: false,
     installUpdatesOnQuit: false,
     globalShortcut: "Ctrl+Shift+U",
+    switcherShortcuts: {},
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",
@@ -319,6 +323,7 @@ describe("TrayPanel provider grid", () => {
   it("offers an Overview share snapshot using only included spend rows", async () => {
     tauriMocks.getUsageSpendSummary.mockResolvedValue({
       contract: {},
+      reportingPeriod: "rolling:30",
       reportingDay: "2026-09-19",
       dashboardTimezone: "UTC",
       rows: [
@@ -327,6 +332,8 @@ describe("TrayPanel provider grid", () => {
           displayName: "Codex",
           sevenDay: 1,
           thirtyDay: 2,
+          periodCost: 2,
+          periodTokens: null,
           currency: "USD",
           source: "local",
           includedInOverview: true,
@@ -336,9 +343,27 @@ describe("TrayPanel provider grid", () => {
           displayName: "Claude",
           sevenDay: 3,
           thirtyDay: 4,
+          periodCost: 4,
+          periodTokens: null,
           currency: "USD",
           source: "hidden",
           includedInOverview: false,
+        },
+        // A known subtotal is a partial estimate: counted for coverage, not in the total.
+        {
+          providerId: "antigravity",
+          displayName: "Antigravity",
+          sevenDay: null,
+          thirtyDay: null,
+          periodCost: null,
+          periodTokens: null,
+          thirtyDayEstimate: {
+            knownSubtotalUsd: 9,
+            coverage: { priced: 0, unpriced: 1, unmetered: 0, estimated: 1 },
+          },
+          currency: "USD",
+          source: "known subtotal",
+          includedInOverview: true,
         },
       ],
     });
@@ -346,7 +371,8 @@ describe("TrayPanel provider grid", () => {
     renderTrayPanel([provider("codex", "Codex", 35)]);
 
     expect(await screen.findByRole("button", { name: "UsageSpendShare" })).toBeInTheDocument();
-    expect(screen.getByText(/1 of 1 OverviewSpendProviderCoverage/)).toBeInTheDocument();
+    expect(screen.getByText("~$2.00")).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 OverviewSpendProviderCoverage/)).toBeInTheDocument();
   });
 
   it("dismisses the tray panel on unmodified Escape", async () => {
@@ -427,7 +453,9 @@ describe("TrayPanel provider grid", () => {
           PanelAllProviders: "すべてのプロバイダー",
           PanelAllProvidersShort: "すべて",
           PanelLatestTokens: "最新トークン",
-          PanelThirtyDayCost: "30日間のコスト",
+          CostPeriodShortDays: "{}日",
+          PanelPeriodCost: "{}間のコスト",
+          PanelPeriodTokens: "{}間のトークン",
           PanelTopModelPrefix: "トップモデル",
           PanelEstimatedFromLocalLogs: "ローカルログから推定",
           PanelZoom: "ズーム",
@@ -445,6 +473,9 @@ describe("TrayPanel provider grid", () => {
         todayCost: null,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
+        periodCost: 1.23,
+        periodTokens: 584_000,
+        reportingPeriod: "rolling:30",
         latestTokens: 1200,
         topModel: "gpt-5.5",
         estimateNote: "Estimated from local logs",
@@ -599,7 +630,7 @@ describe("TrayPanel provider grid", () => {
     ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
   });
 
-  it("keeps compact Overview limited to two quota rows when explicitly selected", async () => {
+  it("shows all quota rows in compact Overview when explicitly selected (0.62.0 #2616)", async () => {
     const { container } = renderTrayPanel(
       [providerWithThreeQuotaWindows("codex", "Codex")],
       { overviewLayout: "compact" },
@@ -609,7 +640,7 @@ describe("TrayPanel provider grid", () => {
       expect(container.querySelector(".menu-stack__item")).not.toBeNull();
     });
 
-    expect(container.querySelectorAll(".menu-metric")).toHaveLength(2);
+    expect(container.querySelectorAll(".menu-metric")).toHaveLength(3);
   });
 
   it("uses independent columns for a wide user-sized overview", async () => {

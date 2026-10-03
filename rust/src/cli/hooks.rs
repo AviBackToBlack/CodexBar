@@ -296,13 +296,17 @@ async fn hooks_watch_observation(
         manual_cookie_header: None,
         manual_cookie_missing: false,
         api_key: None,
+        token_account_kind: None,
+        token_account_isolated: false,
         workspace_id: (!workspace.is_empty()).then(|| workspace.to_string()),
         seat_credit_entitlement: settings.seat_credit_entitlement(provider_id),
         api_region: (!region.is_empty()).then(|| region.to_string()),
         gateway_url: (!gateway.is_empty()).then(|| gateway.to_string()),
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // Hook watches keep the short optional-join grace.
         requires_optional_usage_completeness: false,
+        optional_details_enabled: settings.optional_details_enabled(provider_id),
     };
 
     if ctx.api_key.is_none() {
@@ -397,7 +401,8 @@ fn hook_refresh_failure_status(error: &ProviderError) -> String {
         | ProviderError::NoCookies
         | ProviderError::OAuth(_)
         | ProviderError::OAuthExpired(_)
-        | ProviderError::OAuthRevoked(_) => "auth_required".into(),
+        | ProviderError::OAuthRevoked(_)
+        | ProviderError::BrowserSignInRequired { .. } => "auth_required".into(),
         ProviderError::OAuthTransient(_) => "rate_limited".into(),
         ProviderError::Timeout => "timeout".into(),
         ProviderError::Network(err) => {
@@ -409,6 +414,7 @@ fn hook_refresh_failure_status(error: &ProviderError) -> String {
                 "network_error".into()
             }
         }
+        ProviderError::OwnedTransport { source, .. } => hook_refresh_failure_status(source),
         ProviderError::NotInstalled(_) => "error".into(),
         ProviderError::Parse(_) | ProviderError::UnsupportedSource(_) | ProviderError::Other(_) => {
             "error".into()
@@ -656,6 +662,15 @@ fn print_json<T: Serialize>(value: &T, pretty: bool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_sign_in_failures_report_auth_required() {
+        let error = ProviderError::BrowserSignInRequired {
+            message: "Sign in at the provider page in your browser.".to_string(),
+            sign_in_url: "https://example.test/login".to_string(),
+        };
+        assert_eq!(hook_refresh_failure_status(&error), "auth_required");
+    }
 
     #[test]
     fn parses_event_names() {

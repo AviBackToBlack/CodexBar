@@ -2,6 +2,7 @@
 
 import type { DailyCostPoint, DailyUsageBreakdown } from "../types/bridge";
 import type { LocaleKey } from "../i18n/keys";
+import { incompleteRequestsTooltip } from "../lib/incompleteRequests";
 import {
   WIDTH,
   getBarCenter,
@@ -72,7 +73,12 @@ export function SimpleBarChart({
               rx={1}
             >
               <title>
-                {p.value == null ? p.date : `${p.date}: ${fmt(p.value)}`}
+                {[
+                  p.value == null ? p.date : `${p.date}: ${fmt(p.value)}`,
+                  incompleteRequestsTooltip(t, p.incompleteRequestCount),
+                ]
+                  .filter(Boolean)
+                  .join(" \u00b7 ")}
               </title>
             </rect>
           );

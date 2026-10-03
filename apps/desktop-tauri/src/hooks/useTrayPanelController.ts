@@ -16,6 +16,7 @@ import { useProviders } from "./useProviders";
 import { useSettings } from "./useSettings";
 import { useUpdateState } from "./useUpdateState";
 import { useLocale } from "./useLocale";
+import { useProviderSwitcherKeys } from "./useProviderSwitcherKeys";
 import { useSurfaceTarget } from "./useSurfaceMode";
 import { useTrayPanelLayout } from "./useTrayPanelLayout";
 import type { MenuFooterRow } from "../components/MenuSurface";
@@ -146,6 +147,10 @@ export function useTrayPanelController(state: BootstrapState) {
     if (!expectsDenseOverview) return sorted;
     return hydrateProviderSlots(denseProviderSlots, providersById);
   }, [denseProviderSlots, expectsDenseOverview, providersById, sorted]);
+
+  // What the switcher grid displays: the dense overview shows hydrated slots
+  // (with placeholders); everything else shows the sorted providers.
+  const gridProviders = expectsDenseOverview ? denseTrayProviders : sorted;
 
   useEffect(() => {
     setSelectedProviderId(initialProviderId);
@@ -335,6 +340,16 @@ export function useTrayPanelController(state: BootstrapState) {
     },
     [],
   );
+  const gridProviderIds = useMemo(
+    () => gridProviders.map((provider) => provider.providerId),
+    [gridProviders],
+  );
+  useProviderSwitcherKeys({
+    providerIds: gridProviderIds,
+    selectedProviderId,
+    onSelect: handleGridClick,
+    shortcuts: settings.switcherShortcuts,
+  });
   const handleReorder = useCallback((orderedIds: string[]) => {
     void reorderProviders(orderedIds).catch(() => {});
   }, []);
@@ -359,8 +374,7 @@ export function useTrayPanelController(state: BootstrapState) {
     trayScaleFillPercent,
     handleTrayScaleChange,
     sorted,
-    denseTrayProviders,
-    expectsDenseOverview,
+    gridProviders,
     selectedProviderId,
     gridExpanded,
     setGridExpanded,

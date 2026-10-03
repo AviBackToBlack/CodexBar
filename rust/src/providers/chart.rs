@@ -12,6 +12,7 @@ use crate::providers::claude::quota_history::{
     ClaudeQuotaHistoryOptions, ClaudeQuotaResetObservation, aggregate_claude_quota_windows,
 };
 use crate::providers::claude::reset_observations;
+use crate::providers::codex::reset_observations as codex_reset_observations;
 use chrono::{DateTime, Utc};
 use std::sync::atomic::AtomicBool;
 
@@ -19,6 +20,8 @@ use std::sync::atomic::AtomicBool;
 pub struct ProviderChartSnapshot {
     pub daily_cost: Vec<(String, Option<f64>)>,
     pub daily_tokens: Vec<(String, u64)>,
+    /// Claude incomplete proxy-request count per local day (upstream 0.60.5 #3688).
+    pub daily_incomplete: Vec<(String, u32)>,
     pub tokens_incomplete: bool,
     pub local_summary: Option<CostSummary>,
     pub quota_window_history: Option<QuotaWindowHistorySnapshot>,
@@ -121,6 +124,7 @@ fn build_claude_chart_snapshot(
     ProviderChartSnapshot {
         daily_cost: scan.daily_cost,
         daily_tokens: scan.daily_tokens,
+        daily_incomplete: scan.daily_incomplete,
         tokens_incomplete: !scan.summary.history_coverage_established,
         local_summary: Some(scan.summary),
         quota_window_history,
@@ -156,13 +160,50 @@ fn load_and_persist_reset_observations(
     }
 }
 
+/// Load the persisted Codex reset observations and record the live window's
+/// reset on this refresh (upstream 0.62.0 #3358). Read failures never break
+/// the chart: an error degrades to the previously stored observations.
+fn load_and_persist_codex_reset_observations(
+    live_window: &RateWindow,
+    now: DateTime<Utc>,
+) -> Vec<DateTime<Utc>> {
+    let Some(reset_at) = live_window.resets_at else {
+        return Vec::new();
+    };
+    let config_root = match dirs::config_dir().map(|root| root.join("CodexBar")) {
+        Some(root) => root,
+        None => return Vec::new(),
+    };
+    let scope = codex_reset_observations::CODEX_ACCOUNT_SCOPE;
+    match codex_reset_observations::merge_and_persist_reset_observation(
+        &config_root,
+        scope,
+        reset_at,
+        now,
+    ) {
+        Ok(result) => result
+            .observations
+            .iter()
+            .map(|observation| observation.resets_at)
+            .collect(),
+        Err(_) => codex_reset_observations::load_reset_observations(&config_root, scope)
+            .unwrap_or_default()
+            .iter()
+            .map(|observation| observation.resets_at)
+            .collect(),
+    }
+}
+
 fn build_codex_quota_history(
     account_scope: Option<&str>,
     live_window: Option<&RateWindow>,
 ) -> Option<QuotaWindowHistorySnapshot> {
     let live_window = live_window?;
     let cache = JsonlScanner::load_cache(ProviderId::Codex, None);
-    let windows = codex_quota_windows_from_cache(&cache, Some(live_window), &[], Utc::now(), 4);
+    let now = Utc::now();
+    let observed_next_resets = load_and_persist_codex_reset_observations(live_window, now);
+    let windows =
+        codex_quota_windows_from_cache(&cache, Some(live_window), &observed_next_resets, now, 4);
     if windows.is_empty() {
         return None;
     }

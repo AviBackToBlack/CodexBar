@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn local_history_total_requires_complete_scan_and_pricing() {
+    let priced = LocalCostEstimate {
+        known_subtotal_usd: Some(1.25),
+        coverage: CostCoverageCounts {
+            estimated: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let partial_history = LocalTokenHistorySummary {
+        total_tokens: 100,
+        session_count: 1,
+        coverage: LocalHistoryCoverage::Partial,
+        cost_estimate: priced.clone(),
+        ..Default::default()
+    };
+    assert_eq!(partial_history.total_usd(), None);
+    assert_eq!(partial_history.cost_estimate.known_subtotal_usd, Some(1.25));
+
+    let mixed_pricing = LocalTokenHistorySummary {
+        total_tokens: 100,
+        session_count: 1,
+        coverage: LocalHistoryCoverage::Complete,
+        cost_estimate: LocalCostEstimate {
+            known_subtotal_usd: Some(1.25),
+            coverage: CostCoverageCounts {
+                estimated: 1,
+                unpriced: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(mixed_pricing.total_usd(), None);
+    assert_eq!(mixed_pricing.cost_estimate.known_subtotal_usd, Some(1.25));
+
+    let complete = LocalTokenHistorySummary {
+        total_tokens: 100,
+        session_count: 1,
+        coverage: LocalHistoryCoverage::Complete,
+        cost_estimate: priced,
+        ..Default::default()
+    };
+    assert_eq!(complete.total_usd(), Some(1.25));
+}
+
+#[test]
+fn complete_empty_local_history_has_a_known_zero_total() {
+    let history = LocalTokenHistorySummary {
+        coverage: LocalHistoryCoverage::Complete,
+        ..Default::default()
+    };
+
+    assert_eq!(history.total_usd(), Some(0.0));
+}
+
+#[test]
 fn coverage_ratio_counts_estimated_as_covered() {
     let coverage = CostCoverageCounts {
         priced: 1,
@@ -52,6 +110,42 @@ fn explicit_zero_custom_rate_is_known_free_but_missing_rate_is_unknown() {
     let missing = CustomRates::default();
     assert_eq!(free.cost(&counts), Some(0.0));
     assert_eq!(missing.cost(&counts), None);
+}
+
+#[test]
+fn custom_pricing_reads_each_entry_on_its_own_like_upstream() {
+    let custom = CustomPricing::parse(
+        br#"{
+            " GPT-5 ": {"input": 1.25, "output": 10, "cacheRead": 0.125, "cache_read": 9},
+            "negative-input": {"input": -1, "output": 2},
+            "string-rate": {"input": "3", "output": 4},
+            "snake": {"cache_write": 0, "cacheCreation": 7},
+            "empty": {},
+            "only-unusable": {"input": -1, "output": "free"},
+            "not-an-object": 5,
+            "  ": {"input": 1}
+        }"#,
+    );
+    let rates = |key: &str| {
+        let rates = custom.entries.get(key).expect(key);
+        (
+            rates.input,
+            rates.output,
+            rates.cache_read,
+            rates.cache_write,
+        )
+    };
+    assert_eq!(rates("gpt-5"), (Some(1.25), Some(10.0), Some(0.125), None));
+    assert_eq!(rates("negative-input"), (None, Some(2.0), None, None));
+    assert_eq!(rates("string-rate"), (None, Some(4.0), None, None));
+    assert_eq!(rates("snake"), (None, None, None, Some(0.0)));
+    assert_eq!(
+        custom.entries.len(),
+        4,
+        "entries without a usable rate are dropped"
+    );
+    assert!(CustomPricing::parse(b"[1, 2]").entries.is_empty());
+    assert!(CustomPricing::parse(b"not json").entries.is_empty());
 }
 
 #[test]
@@ -230,6 +324,7 @@ fn resolve_spend_preserves_merged_report_details() {
             reasoning_tokens: Some(1),
             ..SpendTokenMix::default()
         },
+        token_total: Some(5),
         coverage: CostCoverageCounts {
             priced: 2,
             unpriced: 1,
@@ -458,6 +553,7 @@ fn spend_contract_serializes_provenance_for_tauri_and_cli() {
     let contract = SpendContract {
         provider_id: "codex".to_string(),
         history_days: 30,
+        reporting_period: "rolling:30".to_string(),
         known_cost_usd: Some(0.0),
         known_zero: false,
         provenance: CostProvenance::VendorMetered,
@@ -465,6 +561,7 @@ fn spend_contract_serializes_provenance_for_tauri_and_cli() {
         price_coverage_ratio: None,
         history_coverage_established: true,
         token_mix: SpendTokenMix::default(),
+        token_total: None,
         conversation_count: 0,
         models: Vec::new(),
         projects: Vec::new(),
@@ -517,4 +614,201 @@ fn coverage_for_models_counts_priced_rows_as_estimated() {
     assert_eq!(coverage.estimated, 2);
     assert_eq!(coverage.unpriced, 1);
     assert_eq!(coverage.total(), 3);
+}
+
+#[test]
+fn lower_bound_history_publishes_floors_and_never_an_exact_total() {
+    let priced = LocalCostEstimate {
+        known_subtotal_usd: Some(0.5),
+        coverage: CostCoverageCounts {
+            estimated: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let scanned = LocalTokenHistorySummary {
+        total_tokens: 900,
+        session_count: 2,
+        coverage: LocalHistoryCoverage::Partial,
+        cost_estimate: priced,
+        ..Default::default()
+    };
+    let floor = scanned.with_lower_bound_if_partial();
+    assert!(floor.lower_bound);
+    assert_eq!(floor.published_tokens(), Some(900));
+    assert_eq!(floor.total_usd(), None);
+
+    let payload = local_token_history_json("antigravity", &floor, 30);
+    assert_eq!(payload["tokens"]["total"], 900);
+    assert_eq!(payload["sessions_count"], 2);
+    assert_eq!(payload["tokensAreLowerBound"], true);
+    assert_eq!(payload["costIsLowerBound"], true);
+    assert!(payload["cost"]["total_usd"].is_null());
+    assert_eq!(payload["cost"]["known_subtotal_usd"], 0.5);
+}
+
+#[test]
+fn withheld_history_is_partial_with_no_published_numbers() {
+    let withheld = LocalTokenHistorySummary::withheld();
+    assert_eq!(withheld.coverage, LocalHistoryCoverage::Partial);
+    assert!(!withheld.lower_bound);
+    assert_eq!(withheld.published_tokens(), None);
+    assert!(!withheld.clone().with_lower_bound_if_partial().lower_bound);
+
+    let payload = local_token_history_json("antigravity", &withheld, 30);
+    assert!(payload["tokens"]["total"].is_null());
+    assert!(payload["sessions_count"].is_null());
+    assert_eq!(payload["tokensAreLowerBound"], false);
+    assert_eq!(payload["costIsLowerBound"], false);
+    assert_eq!(payload["historyCoverage"], "partial");
+}
+
+#[test]
+fn complete_history_is_never_marked_as_a_lower_bound() {
+    let complete = LocalTokenHistorySummary {
+        total_tokens: 10,
+        session_count: 1,
+        coverage: LocalHistoryCoverage::Complete,
+        ..Default::default()
+    }
+    .with_lower_bound_if_partial();
+    assert!(!complete.lower_bound);
+    assert_eq!(complete.published_tokens(), Some(10));
+}
+
+#[test]
+fn unpriced_model_names_are_recorded_but_not_serialized() {
+    let mut estimate = LocalCostEstimate::default();
+    estimate.record_list_price(Some("  mystery-model "), None);
+    estimate.record_list_price(None, None);
+    estimate.record_list_price(Some("known"), Some(1.0));
+    assert_eq!(estimate.coverage.unpriced, 2);
+    assert_eq!(estimate.coverage.estimated, 1);
+    assert_eq!(
+        estimate.unpriced_models.iter().collect::<Vec<_>>(),
+        vec!["mystery-model"]
+    );
+    let json = serde_json::to_value(&estimate).unwrap();
+    assert!(json.get("unpricedModels").is_none());
+}
+
+#[test]
+fn period_contract_reports_its_period_and_sidecar_window() {
+    let now = Utc::now();
+    let cases = [
+        (CostReportingPeriod::Rolling(7), "rolling:7", 7),
+        (
+            CostReportingPeriod::MonthToDate,
+            "month-to-date",
+            CostReportingPeriod::MonthToDate.sidecar_days(now),
+        ),
+        (CostReportingPeriod::AllAvailable, "all", MAX_ROLLING_DAYS),
+    ];
+    for (period, raw, sidecar_days) in cases {
+        let contract = build_contract_from_period_summary(
+            "unknown-provider",
+            period,
+            false,
+            false,
+            false,
+            CostSummary::default(),
+        );
+        assert_eq!(contract.reporting_period, raw);
+        assert_eq!(contract.history_days, sidecar_days);
+        let json = serde_json::to_value(&contract).expect("contract serializes");
+        assert_eq!(json["reportingPeriod"], raw);
+    }
+}
+
+#[test]
+fn legacy_summary_builder_keeps_a_rolling_period() {
+    let contract = build_local_spend_contract_from_summary(
+        "unknown-provider",
+        90,
+        false,
+        false,
+        false,
+        CostSummary::default(),
+    );
+    assert_eq!(contract.reporting_period, "rolling:90");
+    assert_eq!(contract.history_days, 90);
+}
+
+fn summary_with_model(model: &str, input: u64, output: u64, cached: u64) -> CostSummary {
+    CostSummary {
+        input_tokens: input,
+        output_tokens: output,
+        cached_tokens: cached,
+        by_model: HashMap::from([(model.to_string(), 1.0)]),
+        by_model_tokens: HashMap::from([(
+            model.to_string(),
+            ModelTokenCounts {
+                input_tokens: input,
+                output_tokens: output,
+                cached_tokens: cached,
+                reasoning_tokens: None,
+            },
+        )]),
+        ..CostSummary::default()
+    }
+}
+
+fn imported_with_total(token_total: Option<u64>) -> ImportedSpendSource {
+    ImportedSpendSource {
+        source_id: "opencodex".to_string(),
+        display_name: "OpenCodex".to_string(),
+        request_count: 1,
+        conversation_count: 1,
+        known_cost_usd: None,
+        provenance: CostProvenance::Unknown,
+        // The OpenCodex fixture row: cache_read is inside input, total is 105.
+        token_mix: SpendTokenMix {
+            input_tokens: Some(100),
+            output_tokens: Some(5),
+            cache_read_tokens: Some(10),
+            ..SpendTokenMix::default()
+        },
+        token_total,
+        coverage: CostCoverageCounts::default(),
+        models: Vec::new(),
+        daily: Vec::new(),
+        hourly_activity: Vec::new(),
+    }
+}
+
+// Regression (PR #611 review): the native side follows the provider's cache
+// rule, so the window total agrees with the native model totals.
+#[test]
+fn native_window_total_matches_model_totals_for_each_provider() {
+    for (provider, expected) in [("codex", 1_050), ("claude", 1_950)] {
+        let summary = summary_with_model("m", 1_000, 50, 900);
+        let rows = model_rows(provider, &summary, &CustomPricing::default());
+        let model_total: u64 = rows.iter().map(|row| row.total_tokens).sum();
+        let window_total =
+            resolve_token_total(summary.total_tokens_for_provider(provider), None, false);
+        assert_eq!(model_total, expected, "{provider} model total");
+        assert_eq!(window_total, Some(expected), "{provider} window total");
+    }
+}
+
+// Regression (PR #611 review): the imported side uses the importer's resolved
+// total (105), not a total re-derived from its token mix (115).
+#[test]
+fn imported_window_total_uses_resolved_import_total() {
+    let imported = imported_with_total(Some(105));
+    assert_eq!(
+        resolve_token_total(1_050, Some(&imported), false),
+        Some(1_155)
+    );
+    assert_eq!(
+        resolve_token_total(1_050, Some(&imported), true),
+        Some(105),
+        "replace_native drops the native side entirely"
+    );
+    assert_eq!(resolve_token_total(1_050, None, false), Some(1_050));
+    assert_eq!(
+        resolve_token_total(1_050, Some(&imported_with_total(None)), true),
+        None,
+        "an import without token data stays unknown"
+    );
 }

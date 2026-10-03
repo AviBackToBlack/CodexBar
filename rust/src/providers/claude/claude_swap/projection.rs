@@ -227,8 +227,16 @@ fn to_historical_usage(
         .map(|historical| to_measurement(&historical.measurement, historical.fetched_at))
 }
 
-pub fn action_for_account(row: &ClaudeSwapAccountRow) -> Option<ClaudeSwapAccountAction> {
-    if row.is_active {
+/// Action a row offers within `list`. Read-only adapters
+/// (`supports_account_switching == false`) offer none: usage, details and the
+/// active marker still render, but switching and re-authentication do not.
+pub fn action_for_account(
+    list: &ClaudeSwapAccountList,
+    row: &ClaudeSwapAccountRow,
+) -> Option<ClaudeSwapAccountAction> {
+    if !list.supports_account_switching {
+        None
+    } else if row.is_active {
         (row.usage_status == ClaudeSwapUsageStatus::ForeignCredential)
             .then_some(ClaudeSwapAccountAction::Reauthenticate)
     } else if row.usage_status.can_switch_to() {
@@ -263,7 +271,7 @@ pub fn project_accounts(
             } else {
                 label
             };
-            let action = action_for_account(row);
+            let action = action_for_account(list, row);
             ClaudeSwapAccount {
                 id: format!("claude-swap:{}", row.number),
                 slot: row.number,
@@ -361,6 +369,32 @@ mod tests {
                 .action
                 .is_some()
         );
+    }
+
+    #[test]
+    fn read_only_adapter_suppresses_actions_but_keeps_usage_and_active_marker() {
+        let mut list = list_fixture();
+        assert!(list.supports_account_switching);
+        list.supports_account_switching = false;
+        list.accounts[1].usage_status = ClaudeSwapUsageStatus::ForeignCredential;
+
+        let projected = project_accounts(&list, false);
+        assert_eq!(projected.len(), 3);
+        assert!(projected.iter().all(|account| account.action.is_none()));
+        // Active marker, identity and usage remain.
+        assert!(projected[0].is_active);
+        assert_eq!(projected[0].slot, 2);
+        assert_eq!(projected[0].status, "foreign_credential");
+        let inactive = projected.iter().find(|a| a.slot == 1).unwrap();
+        assert_eq!(inactive.email.as_deref(), Some("same@example.com"));
+        assert_eq!(inactive.five_hour.as_ref().unwrap().used_percent, 10.0);
+    }
+
+    #[test]
+    fn supporting_adapter_keeps_row_actions() {
+        let projected = project_accounts(&list_fixture(), false);
+        let actionable = projected.iter().find(|a| a.slot == 1).unwrap();
+        assert_eq!(actionable.action, Some(ClaudeSwapAccountAction::Switch));
     }
 
     #[test]

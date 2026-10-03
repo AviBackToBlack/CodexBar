@@ -35,6 +35,7 @@ use super::{
     AgentSessionProvider, AgentSessionSource, AgentSessionState, AgentSessionWorkspace,
     PiSessionDialect, SessionScanConfig,
 };
+use crate::process_environment::ProcessEnvironment;
 
 /// Bounded transcript prefix used for header/first-title parsing (upstream
 /// `maximumReadSize`).
@@ -132,7 +133,7 @@ pub struct PiFamilyScanInput<'a> {
     /// rows result until cwd capture lands).
     pub cwd_by_pid: CwdByPid,
     /// Environment slice (HOME/USERPROFILE/PI_*/OMP_*).
-    pub environment: EnvMap,
+    pub environment: ProcessEnvironment<EnvMap>,
     pub now: DateTime<Utc>,
     pub host: String,
     pub config: SessionScanConfig,

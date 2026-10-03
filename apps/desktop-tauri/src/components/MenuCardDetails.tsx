@@ -2,9 +2,10 @@ import { useState } from "react";
 import type {
   CostSummaryDisplayStyle,
   DailyCostPoint,
-  ProviderDisplayDetail,
+  DailyTokenPoint,
   PaceSnapshot,
   ProviderInventoryItem,
+  OpenAiApiUsageSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
@@ -22,8 +23,19 @@ import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { InventoryItemRow } from "./InventoryRows";
+import {
+  groupProviderDisplayDetails,
+  ProviderDisplayRow,
+} from "./ProviderDisplayRow";
+import { OpenAIApiUsageChart } from "./OpenAIApiUsageChart";
 import { QuotaWindowHistory } from "./QuotaWindowHistory";
+import QuotaBurndownChart from "./QuotaBurndownChart";
 import { getPaceBudget, type PaceBudget } from "../lib/paceBudget";
+import { isMonthlyLimitBlockActive } from "../lib/monthlyLimitBlock";
+import { periodCostLabel, periodTokensLabel } from "../lib/costPeriod";
+import { providerCostPeriodTitle } from "../lib/providerLabels";
+import { resetDescriptionFallback, windowDetailText } from "../lib/usageWindows";
+import { isDetailSectionVisible } from "../lib/usageItemVisibility";
 import PaceDetailsChart from "./PaceDetailsChart";
 
 /** Format a reserve description from raw pace data at render time. */
@@ -96,6 +108,17 @@ function formatCompactCount(value: number | null): string {
   );
 }
 
+function formatLocalUsagePointTitle(
+  point: DailyCostPoint,
+  tokenCount: number | undefined,
+  tokenLabel: string,
+): string {
+  if (point.value == null && tokenCount == null) return point.date;
+  const cost = point.value == null ? "—" : formatCurrency(point.value, "USD");
+  const tokens = tokenCount == null ? "—" : `${formatCompactCount(tokenCount)} ${tokenLabel}`;
+  return `${point.date}: ${cost} · ${tokens}`;
+}
+
 function formatBudget(value: number): string {
   return value < 10
     ? value.toFixed(1).replace(/\.0$/, "")
@@ -106,12 +129,17 @@ function LocalUsageBlock({
   providerId,
   summary,
   costHistory,
+  tokensHistory,
 }: {
   providerId: string;
   summary: ProviderLocalUsageSummary;
   costHistory: DailyCostPoint[];
+  tokensHistory: DailyTokenPoint[];
 }) {
   const { t } = useLocale();
+  // The selected History window; the histogram below stays a fixed 30 days.
+  const { reportingPeriod, periodCost, periodTokens } = summary;
+
   const isCodex = providerId === "codex";
   const isMuse = providerId === "muse";
   const visibleHistory = costHistory.slice(-30);
@@ -119,6 +147,7 @@ function LocalUsageBlock({
     ...visibleHistory.flatMap((point) => (point.value == null ? [] : [point.value])),
     0,
   );
+  const tokensByDate = new Map(tokensHistory.map((point) => [point.date, point.tokens]));
 
   return (
     <section className="menu-card__group menu-card__local-usage">
@@ -137,17 +166,19 @@ function LocalUsageBlock({
         </div>
         {!isMuse && (
           <div>
-            <span className="menu-card__local-label">{t("PanelThirtyDayCost")}</span>
+            <span className="menu-card__local-label">
+              {periodCostLabel(reportingPeriod, t)}
+            </span>
             <strong>
-              {summary.thirtyDayCost != null
-                ? formatCurrency(summary.thirtyDayCost, "USD")
-                : "—"}
+              {periodCost != null ? formatCurrency(periodCost, "USD") : "—"}
             </strong>
           </div>
         )}
         <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayTokens")}</span>
-          <strong>{formatCompactCount(summary.thirtyDayTokens)}</strong>
+          <span className="menu-card__local-label">
+            {periodTokensLabel(reportingPeriod, t)}
+          </span>
+          <strong>{formatCompactCount(periodTokens)}</strong>
         </div>
         {!isMuse && (
           <div>
@@ -166,9 +197,22 @@ function LocalUsageBlock({
                 height: `${point.value == null || maxCost <= 0 ? 1 : Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
                 opacity: point.value == null ? 0 : undefined,
               }}
-              title={point.value == null ? point.date : `${point.date}: ${formatCurrency(point.value, "USD")}`}
+              title={formatLocalUsagePointTitle(
+                point,
+                tokensByDate.get(point.date),
+                t("UsageSpendTokens"),
+              )}
             />
           ))}
+        </div>
+      )}
+
+      {summary.incompleteRequestCount != null && summary.incompleteRequestCount > 0 && (
+        <div className="menu-card__local-note">
+          <strong>{t("IncompleteRequestsLabel")}</strong>
+          <span>
+            {t("IncompleteRequestsDetail").replace("{}", String(summary.incompleteRequestCount))}
+          </span>
         </div>
       )}
 
@@ -294,6 +338,7 @@ type MetricRowDisplay = {
   showAsUsed?: boolean;
   compactOverview?: boolean;
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
+  monthlyLimitBlockNow?: number;
 };
 
 /**
@@ -328,7 +373,14 @@ function MetricRow({
     showPace = true,
     showAsUsed = false,
     compactOverview = false,
+    monthlyLimitBlockNow,
   } = display;
+  // Upstream 0.69.0 #4091: a longer exhausted pool (Kimi's monthly membership)
+  // blocks this window until the pool resets. Raw percentages stay untouched.
+  const blocked = isMonthlyLimitBlockActive(
+    snap.monthlyLimitBlock,
+    monthlyLimitBlockNow ?? Date.now(),
+  );
   const isInformational = snap.isInformational === true;
   const usedPct = Number.isFinite(snap.usedPercent) ? Math.max(0, snap.usedPercent) : 0;
   const barPct = Math.min(100, usedPct);
@@ -337,9 +389,10 @@ function MetricRow({
   const barDisplayPct = showAsUsed ? barPct : Math.max(0, Math.min(100, remain));
   const displayLabel = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
   const level = levelOf(remain, snap.isExhausted);
+  const detailText = windowDetailText(snap);
   const resetText = useFormattedResetTime(
-    snap.resetsAt,
-    isInformational ? null : snap.resetDescription,
+    blocked ? null : snap.resetsAt,
+    isInformational || blocked ? null : resetDescriptionFallback(snap),
     resetTimeRelative,
     resetFormatMode ?? "reset",
   );
@@ -354,6 +407,17 @@ function MetricRow({
   const paceView = showPace ? getMetricPaceView(snap) : { kind: "none" as const };
   const reserveDescription = formatReserveDescription(snap, t);
   const forecastText = formatSessionEquivalentEstimate(sessionEquivalentForecast);
+  if (blocked) {
+    // Upstream `MetricRow` status layout: title plus one secondary status line,
+    // no bar, percent, reset, pace, reserve, or forecast. The pool's own row
+    // keeps its reset; the shorter resets cannot restore access.
+    return (
+      <div className="menu-metric menu-metric--blocked">
+        <span className="menu-metric__title">{title}</span>
+        <span className="menu-metric__status">{t("PanelBlockedByMonthlyLimit")}</span>
+      </div>
+    );
+  }
   return (
     <div className="menu-metric">
       <span className="menu-metric__title">{title}</span>
@@ -380,6 +444,9 @@ function MetricRow({
           <span className="menu-metric__reset">{resetText}</span>
         )}
       </div>
+      {!compactOverview && detailText && (
+        <div className="menu-metric__detail">{detailText}</div>
+      )}
       {!compactOverview && !isInformational && snap.isExhausted && (
         <div className="menu-metric__exhausted">{exhaustedLabel}</div>
       )}
@@ -437,8 +504,11 @@ export interface MenuCardPresence {
   hasCreditsHistory: boolean;
   hasUsageBreakdown: boolean;
   hasQuotaWindowHistory: boolean;
+  hasBurndown: boolean;
   localUsage: ProviderChartData["localUsage"] | null;
   wayfinderUsage: ProviderUsageSnapshot["wayfinderUsage"] | null;
+  /** Per-day OpenAI Admin API history; `openaiapi` only, and only with data. */
+  openAiApiUsage: OpenAiApiUsageSnapshot | null;
   hasDetails: boolean;
 }
 
@@ -463,6 +533,7 @@ export function describeCard(
   costSummaryDisplayStyle: CostSummaryDisplayStyle = "detailed",
   showPace = true,
   compactOverview = false,
+  monthlyLimitBlockNow: number = Date.now(),
 ): MenuCardPresence {
   const hasCostHistory =
     chartData !== null && chartData.costHistory.some((point) => point.value != null);
@@ -472,11 +543,18 @@ export function describeCard(
     chartData !== null && chartData.usageBreakdown.length > 0;
   const hasQuotaWindowHistory =
     chartData !== null && (chartData.quotaWindowHistory?.windows.length ?? 0) > 0;
+  const hasBurndown = provider.quotaBurndown != null;
   const hasCharts =
     hasCostHistory || hasCreditsHistory || hasUsageBreakdown || hasQuotaWindowHistory;
   const isWayfinder = provider.providerId === "wayfinder";
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage : null;
+  const openAiApiUsage =
+    provider.providerId === "openaiapi" &&
+    !provider.error &&
+    (provider.openAiApiUsage?.daily.length ?? 0) > 0
+      ? (provider.openAiApiUsage ?? null)
+      : null;
   const hasMetrics = visibleMetrics.length > 0;
   const hasInventory = !provider.error && (provider.inventory?.length ?? 0) > 0;
   const hasDisplayDetails = !provider.error && (provider.displayDetails?.length ?? 0) > 0;
@@ -486,7 +564,8 @@ export function describeCard(
   const hasPace =
     showPace &&
     providerAllowsPace(provider.providerId, provider.sourceLabel) &&
-    !!provider.pace;
+    !!provider.pace &&
+    !isMonthlyLimitBlockActive(provider.pace.monthlyLimitBlock, monthlyLimitBlockNow);
   const hasDetails =
     !provider.error &&
     (hasMetrics ||
@@ -496,7 +575,8 @@ export function describeCard(
       hasPace ||
       hasCharts ||
       !!localUsage ||
-      !!wayfinderUsage) &&
+      !!wayfinderUsage ||
+      !!openAiApiUsage) &&
     // Compact Overview suppresses supplemental sections entirely; a card
     // whose only content would be suppressed renders header-only so no empty
     // divider or details container appears.
@@ -512,8 +592,10 @@ export function describeCard(
     hasCreditsHistory,
     hasUsageBreakdown,
     hasQuotaWindowHistory,
+    hasBurndown,
     localUsage,
     wayfinderUsage,
+    openAiApiUsage,
     hasDetails,
   };
 }
@@ -540,7 +622,16 @@ export default function MenuCardDetails({
     display.resetTimeRelative,
   );
   const localCostHistory = chartData?.costHistory ?? [];
+  const localTokensHistory = chartData?.tokensHistory ?? [];
   const costStyle = display.costSummaryDisplayStyle ?? "detailed";
+  const displayDetailGroups = groupProviderDisplayDetails(
+    provider.displayDetails ?? [],
+  );
+  const costPeriod = providerCostPeriodTitle(
+    provider.providerId,
+    provider.cost?.period ?? "",
+    t,
+  );
 
   const {
     hasMetrics,
@@ -553,8 +644,10 @@ export default function MenuCardDetails({
     hasCreditsHistory,
     hasUsageBreakdown,
     hasQuotaWindowHistory,
+    hasBurndown,
     localUsage,
     wayfinderUsage,
+    openAiApiUsage,
   } = presence;
 
   return (
@@ -595,20 +688,37 @@ export default function MenuCardDetails({
           ))}
         </section>
       )}
-      {!provider.error && hasDisplayDetails && !compactOverview && (
-        <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
-        </section>
-      )}
-
       {!provider.error && hasDisplayDetails && (
-        <section className="menu-card__group menu-card__provider-details">
-          {provider.displayDetails?.map((detail, index) => (
-            <DisplayDetailRow key={`${detail.id}-${index}`} detail={detail} />
-          ))}
-        </section>
+        displayDetailGroups
+          .map((group) => ({
+            ...group,
+            rows: group.rows.filter((detail) =>
+              isDetailSectionVisible(provider.hiddenUsageItemIds, detail.title),
+            ),
+          }))
+          .filter((group) => group.rows.length > 0)
+          .map((group) => (
+            <section
+              className="menu-card__group menu-card__provider-details"
+              key={group.id}
+            >
+              {group.title && (
+                <div className="menu-card__group-title" role="heading" aria-level={4}>
+                  {group.title}
+                </div>
+              )}
+              {group.rows.map((detail, index) => (
+                <ProviderDisplayRow
+                  key={`${detail.id}-${index}`}
+                  detail={detail}
+                  lineClassName="menu-card__cost-line"
+                  secondaryClassName="menu-card__cost-line--muted"
+                  trackClassName="menu-metric__bar"
+                  fillClassName="menu-metric__bar-fill"
+                />
+              ))}
+            </section>
+          ))
       )}
 
       {wayfinderUsage && !compactOverview && <WayfinderUsageBlock usage={wayfinderUsage} />}
@@ -689,6 +799,21 @@ export default function MenuCardDetails({
         </section>
       )}
 
+      {!compactOverview && openAiApiUsage && (
+        <details className="menu-card__more menu-card__daily-usage" onToggle={onLayoutChange}>
+          <summary>{t("OpenAIChartTitle")}</summary>
+          <div className="menu-card__more-content">
+            {/* Tray cards open often; skip the bar entrance animation there. */}
+            <OpenAIApiUsageChart
+              usage={openAiApiUsage}
+              animations={false}
+              t={t}
+              onLayoutChange={onLayoutChange}
+            />
+          </div>
+        </details>
+      )}
+
       {!compactOverview && (localUsage || hasPace || hasCharts) && (
         <details className="menu-card__more" onToggle={onLayoutChange}>
           <summary>{t("PanelUsageDetails")}</summary>
@@ -698,6 +823,7 @@ export default function MenuCardDetails({
                 providerId={provider.providerId}
                 summary={localUsage}
                 costHistory={localCostHistory}
+                tokensHistory={localTokensHistory}
               />
             )}
 
@@ -778,33 +904,13 @@ export default function MenuCardDetails({
                 {hasQuotaWindowHistory && (
                   <QuotaWindowHistory history={chartData!.quotaWindowHistory} t={t} />
                 )}
+                {hasBurndown && provider.quotaBurndown && (
+                  <QuotaBurndownChart burndown={provider.quotaBurndown} t={t} />
+                )}
               </section>
             )}
           </div>
         </details>
-      )}
-    </div>
-  );
-}
-
-function DisplayDetailRow({ detail }: { detail: ProviderDisplayDetail }) {
-  const progress = detail.progress;
-  const progressPercent = progress && Number.isFinite(progress.used) && Number.isFinite(progress.total) && progress.total > 0
-    ? Math.max(0, Math.min(100, (progress.used / progress.total) * 100))
-    : null;
-
-  return (
-    <div className="menu-card__provider-detail">
-      <div className="menu-card__cost-line">
-        <span>{detail.title}: {detail.value}</span>
-        {detail.secondaryValue && (
-          <span className="menu-card__cost-line--muted">{detail.secondaryValue}</span>
-        )}
-      </div>
-      {progressPercent != null && (
-        <div className="menu-metric__bar" aria-label={`${detail.title} progress`}>
-          <div className="menu-metric__bar-fill" style={{ width: `${progressPercent}%` }} />
-        </div>
       )}
     </div>
   );

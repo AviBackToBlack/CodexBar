@@ -1,11 +1,16 @@
 import type { ProviderDetail } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { ProviderIcon } from "../../../../components/providers/ProviderIcon";
+import { hideOpenAiApiProjectId } from "../../../../lib/openAiApiIdentity";
 
 interface Props {
-  provider: ProviderDetail;
+  provider: Pick<
+    ProviderDetail,
+    "id" | "displayName" | "email" | "organization" | "plan" | "authType" | "sourceLabel"
+  >;
   subtitle: string;
   t: (key: LocaleKey) => string;
+  hidePersonalInfo?: boolean;
 }
 
 /**
@@ -15,10 +20,22 @@ interface Props {
  * Port of the identity portion of
  * `rust/src/native_ui/preferences.rs::render_provider_detail_panel` (~4301).
  */
-export function IdentitySection({ provider, subtitle, t }: Props) {
+export function IdentitySection({
+  provider,
+  subtitle,
+  t,
+  hidePersonalInfo = false,
+}: Props) {
+  const hideProjectId = provider.id === "openaiapi" && hidePersonalInfo;
   const rows: { label: string; value: string | null }[] = [
-    { label: t("Account"), value: provider.email ?? provider.organization },
-    { label: t("Plan"), value: displayIdentityValue(provider.plan, t) },
+    {
+      label: t("Account"),
+      value: hideOpenAiApiProjectId(provider.email ?? provider.organization, hideProjectId),
+    },
+    {
+      label: t("Plan"),
+      value: hideOpenAiApiProjectId(displayIdentityValue(provider.plan, t), hideProjectId),
+    },
     { label: t("AuthType"), value: provider.authType },
     { label: t("DataSource"), value: provider.sourceLabel },
   ];

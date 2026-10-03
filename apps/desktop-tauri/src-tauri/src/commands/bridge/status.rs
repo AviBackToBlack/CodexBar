@@ -32,6 +32,10 @@ fn compact_reset_description(
         return Some(format_compact_reset_countdown(dt, lang));
     }
 
+    if window.description_is_detail {
+        return None;
+    }
+
     window
         .reset_description
         .as_deref()
@@ -127,4 +131,45 @@ pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codexbar::core::RateWindow;
+    use codexbar::settings::Language;
+
+    #[test]
+    fn detail_backed_description_is_never_a_tray_reset_label() {
+        let window = RateWindowSnapshot::from_rate_window(
+            &RateWindow::with_details(
+                13.0,
+                None,
+                None,
+                Some("34.07 EUR / 255.00 EUR · 220.93 EUR remaining".to_string()),
+            )
+            .with_description_as_detail(),
+        );
+
+        assert!(window.description_is_detail);
+        assert_eq!(compact_tray_status_label(&window, Language::English), "13%");
+    }
+
+    #[test]
+    fn detail_backed_window_keeps_its_countdown_when_reset_is_known() {
+        let window = RateWindowSnapshot::from_rate_window(
+            &RateWindow::with_details(
+                13.0,
+                None,
+                Some(chrono::Utc::now() + chrono::Duration::minutes(125)),
+                Some("34.07 EUR / 255.00 EUR · 220.93 EUR remaining".to_string()),
+            )
+            .with_description_as_detail(),
+        );
+
+        let label = compact_tray_status_label(&window, Language::English);
+
+        assert!(label.starts_with("13% • "), "{label}");
+        assert!(!label.contains("EUR"), "{label}");
+    }
 }

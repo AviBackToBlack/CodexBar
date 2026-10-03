@@ -9,10 +9,12 @@
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #101014; color: #e8e8ec; font: 13px/1.45 -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; }
-  header { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 12px; padding: 14px 20px; background: rgba(16,16,20,.92); backdrop-filter: blur(8px); border-bottom: 1px solid #26262e; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; padding: 14px 20px; background: rgba(16,16,20,.92); backdrop-filter: blur(8px); border-bottom: 1px solid #26262e; }
   h1 { font-size: 15px; margin: 0; font-weight: 650; }
   #freshness { color: #8b8b95; font-size: 12px; }
   #freshness.stale { color: #f8b04a; }
+  .display-preference { display: inline-flex; align-items: center; gap: 6px; color: #8b8b95; font-size: 12px; }
+  .display-preference select { background: #17171d; color: #e8e8ec; border: 1px solid #33333c; border-radius: 6px; padding: 3px 6px; font: inherit; }
   #first-load { padding: 40px 20px; color: #8b8b95; }
   #error-banner { display: none; margin: 14px 20px 0; padding: 10px 14px; border: 1px solid #7c3f3f; background: #2a1b1b; color: #f0a0a0; border-radius: 8px; }
   #auth-bar { display: none; gap: 8px; margin: 14px 20px 0; }
@@ -56,6 +58,13 @@
   <h1>CodexBar</h1>
   <span id="freshness">connecting…</span>
   <span style="flex:1"></span>
+  <label class="display-preference" for="usage-display">Usage display
+    <select id="usage-display">
+      <option value="server">Follow server</option>
+      <option value="used">Used</option>
+      <option value="remaining">Remaining</option>
+    </select>
+  </label>
   <span id="who" style="color:#63636b;font-size:11px"></span>
 </header>
 <div id="error-banner" role="alert"></div>
@@ -72,7 +81,16 @@ const ICON_URLS = __PROVIDER_ICON_URLS__;
 const DEFAULT_REFRESH = Math.max(15, __REFRESH_SECONDS__);
 const SNAPSHOT_URL = "/dashboard/v1/snapshot";
 const COST_URL = "/cost";
-const state = { token: sessionStorage.getItem("codexbar.dashboard.token") || "", timer: null, refreshSeconds: DEFAULT_REFRESH };
+const USAGE_DISPLAY_KEY = "codexbar.dashboard.usageDisplay";
+function storedUsageDisplay() {
+  try {
+    const value = localStorage.getItem(USAGE_DISPLAY_KEY);
+    return value === "used" || value === "remaining" ? value : "server";
+  } catch (e) {
+    return "server";
+  }
+}
+const state = { token: sessionStorage.getItem("codexbar.dashboard.token") || "", timer: null, refreshSeconds: DEFAULT_REFRESH, usageDisplay: storedUsageDisplay(), snapshot: null, dailyCharts: {} };
 
 const els = {
   content: document.getElementById("content"),
@@ -81,6 +99,7 @@ const els = {
   error: document.getElementById("error-banner"),
   authBar: document.getElementById("auth-bar"),
   tokenInput: document.getElementById("token-input"),
+  usageDisplay: document.getElementById("usage-display"),
 };
 
 function authHeaders() {
@@ -128,6 +147,16 @@ function pctClass(used) {
   if (used >= 70) return "bar warn";
   return "bar";
 }
+// Severity follows consumption in every display mode (70 warn, 90 full), so a
+// window with 95% left is never coloured as if it were nearly exhausted.
+function windowBarClass(w) {
+  const used = w && w.usedPercent != null ? Number(w.usedPercent) : NaN;
+  return Number.isFinite(used) ? pctClass(used) : "bar";
+}
+function showUsedBars() {
+  if (state.usageDisplay !== "server") return state.usageDisplay === "used";
+  return Boolean(state.snapshot && state.snapshot.host && state.snapshot.host.usageBarsShowUsed);
+}
 function visibleWindows(windows) {
   return (windows || []).filter(w => w.idle !== true);
 }
@@ -137,7 +166,7 @@ function windowPercent(w, showUsed) {
   return Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : null;
 }
 function windowRow(w) {
-  const showUsed = Boolean(state.snapshot && state.snapshot.host && state.snapshot.host.usageBarsShowUsed);
+  const showUsed = showUsedBars();
   const pct = windowPercent(w, showUsed);
   const suffix = showUsed ? "used" : "left";
   const value = pct === null ? "unknown" : pct.toFixed(0) + "% " + suffix;
@@ -145,7 +174,7 @@ function windowRow(w) {
   const ariaNow = pct === null ? "" : ' aria-valuenow="' + width + '"';
   return '<div class="wrow">' +
     '<span class="wlabel" title="' + esc(w.label) + '">' + esc(w.label) + "</span>" +
-    '<span class="' + (pct === null ? "bar unknown" : pctClass(pct)) + '" role="progressbar" aria-label="' + esc(w.label || "Usage") + '" aria-valuemin="0" aria-valuemax="100" aria-valuetext="' + esc(value) + '"' + ariaNow + '><i style="width:' + width.toFixed(1) + '%"></i></span>' +
+    '<span class="' + (pct === null ? "bar unknown" : windowBarClass(w)) + '" role="progressbar" aria-label="' + esc(w.label || "Usage") + '" aria-valuemin="0" aria-valuemax="100" aria-valuetext="' + esc(value) + '"' + ariaNow + '><i style="width:' + width.toFixed(1) + '%"></i></span>' +
     '<span class="wpct">' + esc(value) + "</span>" +
     '<span class="wreset">' + esc(untilTime(w.resetAt)) + "</span></div>";
 }
@@ -198,7 +227,10 @@ function providerCard(row, dailyCharts) {
   }
   return inner;
 }
-function render(snapshot, dailyCharts) {
+function renderProviders() {
+  const snapshot = state.snapshot;
+  const dailyCharts = state.dailyCharts;
+  if (!snapshot) return;
   els.firstLoad.style.display = "none";
   els.content.hidden = false;
   const rows = (snapshot.providers || []).slice().sort((a, b) =>
@@ -215,7 +247,11 @@ function render(snapshot, dailyCharts) {
   });
   if (!rows.length) html = '<div id="first-load">No enabled providers.</div>';
   els.content.innerHTML = html;
+}
+function render(snapshot, dailyCharts) {
   state.snapshot = snapshot;
+  state.dailyCharts = dailyCharts;
+  renderProviders();
   const host = snapshot.host || {};
   state.refreshSeconds = Math.max(15, Number(host.refreshIntervalSeconds) || DEFAULT_REFRESH);
   updateFreshness();
@@ -264,6 +300,18 @@ async function refresh() {
     schedule();
   }
 }
+function changeUsageDisplay() {
+  const value = els.usageDisplay.value;
+  state.usageDisplay = value === "used" || value === "remaining" ? value : "server";
+  els.usageDisplay.value = state.usageDisplay;
+  try {
+    if (state.usageDisplay === "server") localStorage.removeItem(USAGE_DISPLAY_KEY);
+    else localStorage.setItem(USAGE_DISPLAY_KEY, state.usageDisplay);
+  } catch (e) { /* the selection still applies to this page without storage */ }
+  renderProviders();
+}
+els.usageDisplay.value = state.usageDisplay;
+els.usageDisplay.addEventListener("change", changeUsageDisplay);
 document.getElementById("token-save").addEventListener("click", () => {
   state.token = els.tokenInput.value.trim();
   sessionStorage.setItem("codexbar.dashboard.token", state.token);

@@ -1,9 +1,104 @@
+use chrono::NaiveDate;
+
 use super::super::{codex_routed_pricing, models_dev_pricing};
-use super::{CODEX_PRICING, CostUsagePricing};
+use super::{CODEX_PRICING, CodexLongContextRates, CodexPricing, CostUsagePricing};
 
 pub(super) const CODEX_LONG_CONTEXT_THRESHOLD: u64 = 272_000;
-const CODEX_ASTRA_CACHE_WRITE_RATE: f64 = 1.25e-5;
-const CODEX_ASTRA_LONG_CACHE_WRITE_RATE: f64 = 2.5e-5;
+
+/// GPT-5.6 rates per token in upstream `gpt56Pricing` order:
+/// (input, cache read, cache write, output).
+pub(super) type Gpt56Rates = (f64, f64, f64, f64);
+
+/// Upstream `gpt56Pricing`: standard rates plus the whole-request rates above
+/// the 272K-token long-context threshold, each with its own cache-write rate.
+pub(super) const fn gpt56_pricing(standard: Gpt56Rates, long_context: Gpt56Rates) -> CodexPricing {
+    let (input, cache_read, cache_write, output) = standard;
+    let (long_input, long_cache_read, long_cache_write, long_output) = long_context;
+    CodexPricing {
+        input_cost_per_token: input,
+        output_cost_per_token: output,
+        cache_read_input_cost_per_token: cache_read,
+        cache_write_input_cost_per_token: Some(cache_write),
+        display_label: None,
+        long_context: Some(CodexLongContextRates {
+            input_cost_per_token: long_input,
+            output_cost_per_token: long_output,
+            cache_read_input_cost_per_token: long_cache_read,
+            cache_write_input_cost_per_token: Some(long_cache_write),
+        }),
+    }
+}
+
+/// Upstream `codexHistoricalPricing`: the rates a model billed at before its
+/// repricing. GPT-5.6 Terra and Luna were cut on 2026-07-30 (Unix 1785369600)
+/// and Sol on 2026-08-21 (Unix 1787270400). Windows keys usage by calendar
+/// day, so the cutoff compares days rather than event instants.
+pub(super) fn codex_historical_pricing(key: &str, pricing_date: NaiveDate) -> Option<CodexPricing> {
+    let ((year, month, day), standard, long_context) = match key {
+        "gpt-5.6-sol" => (
+            (2026, 8, 21),
+            (5e-6, 5e-7, 6.25e-6, 3e-5),
+            (1e-5, 1e-6, 1.25e-5, 4.5e-5),
+        ),
+        "gpt-5.6-terra" => (
+            (2026, 7, 30),
+            (2.5e-6, 2.5e-7, 3.125e-6, 1.5e-5),
+            (5e-6, 5e-7, 6.25e-6, 2.25e-5),
+        ),
+        "gpt-5.6-luna" => (
+            (2026, 7, 30),
+            (1e-6, 1e-7, 1.25e-6, 6e-6),
+            (2e-6, 2e-7, 2.5e-6, 9e-6),
+        ),
+        _ => return None,
+    };
+    let cutoff = NaiveDate::from_ymd_opt(year, month, day)?;
+    (pricing_date < cutoff).then(|| gpt56_pricing(standard, long_context))
+}
+
+/// Upstream `codexCostUSD(pricing:)` for one bundled entry. `input_tokens` is
+/// the inclusive prompt size and selects the long-context tier. A long-context
+/// cache write without its own rate falls back to the standard cache-write
+/// rate, then to the tier's input rate.
+pub(super) fn codex_cost_from_pricing(
+    pricing: &CodexPricing,
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    cache_write_input_tokens: u64,
+    output_tokens: u64,
+) -> f64 {
+    let long_context = pricing
+        .long_context
+        .filter(|_| input_tokens > CODEX_LONG_CONTEXT_THRESHOLD);
+    let (input_rate, cache_read_rate, cache_write_rate, output_rate) = match long_context {
+        Some(long) => (
+            long.input_cost_per_token,
+            long.cache_read_input_cost_per_token,
+            long.cache_write_input_cost_per_token
+                .or(pricing.cache_write_input_cost_per_token)
+                .unwrap_or(long.input_cost_per_token),
+            long.output_cost_per_token,
+        ),
+        None => (
+            pricing.input_cost_per_token,
+            pricing.cache_read_input_cost_per_token,
+            pricing
+                .cache_write_input_cost_per_token
+                .unwrap_or(pricing.input_cost_per_token),
+            pricing.output_cost_per_token,
+        ),
+    };
+    codex_cost_from_rates_with_cache_write(
+        input_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        output_tokens,
+        input_rate,
+        cache_read_rate,
+        cache_write_rate,
+        output_rate,
+    )
+}
 
 pub(super) fn codex_cost_from_rates(
     input_tokens: u64,
@@ -24,7 +119,7 @@ pub(super) fn codex_cost_from_rates(
     clippy::too_many_arguments,
     reason = "Arguments mirror independent token classes and their corresponding pricing rates."
 )]
-fn codex_cost_from_rates_with_cache_write(
+pub(super) fn codex_cost_from_rates_with_cache_write(
     input_tokens: u64,
     cached_input_tokens: u64,
     cache_write_input_tokens: u64,
@@ -60,6 +155,107 @@ pub(super) fn codex_fast_allows_long_context(model: &str) -> bool {
 }
 
 impl CostUsagePricing {
+    /// Whether one request of `input_tokens` can run in the Fast lane of
+    /// `model`. Older models offer no Fast lane above the long-context
+    /// threshold, so upstream charges such a Priority request the Standard
+    /// cost; Astra publishes long-context Fast rates.
+    pub fn codex_fast_lane_covers(model: &str, input_tokens: u64) -> bool {
+        Self::codex_api_fast_multiplier(model).is_some()
+            && (input_tokens <= CODEX_LONG_CONTEXT_THRESHOLD
+                || codex_fast_allows_long_context(model))
+    }
+
+    /// Fast cost in USD of a day aggregate under a Fast key (`-priority` or
+    /// `-fast`), or `None` when `model` names no Fast lane.
+    ///
+    /// Upstream prices every request on its own. A day aggregate sums
+    /// requests that each ran in the Fast lane, so the summed input must
+    /// neither refuse the surcharge nor switch to long-context rates: older
+    /// models price at the base model's short-context rates times the
+    /// multiplier. Astra's Fast lane has long-context rates, so its
+    /// aggregate keeps the whole-aggregate rule that Standard aggregates use.
+    pub fn codex_fast_aggregate_cost_usd(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: Option<NaiveDate>,
+    ) -> Option<f64> {
+        let base = Self::codex_fast_base_model(model);
+        if base == Self::normalize_codex_model(model) {
+            return None;
+        }
+        if codex_fast_allows_long_context(model) {
+            return pricing_date
+                .and_then(|date| {
+                    Self::codex_fast_cost_usd_at_date(
+                        model,
+                        input_tokens,
+                        cached_input_tokens,
+                        output_tokens,
+                        date,
+                    )
+                })
+                .or_else(|| {
+                    Self::codex_fast_cost_usd(
+                        model,
+                        input_tokens,
+                        cached_input_tokens,
+                        output_tokens,
+                    )
+                });
+        }
+        let multiplier = Self::codex_api_fast_multiplier(model)?;
+        let (input_rate, cache_read_rate, output_rate) =
+            Self::codex_short_context_rates(&base, pricing_date)?;
+        Some(
+            codex_cost_from_rates(
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                input_rate,
+                cache_read_rate,
+                output_rate,
+            ) * multiplier,
+        )
+    }
+
+    /// Known cost in USD of one Codex day aggregate: a Fast key prices
+    /// through its base model's Fast lane
+    /// ([`Self::codex_fast_aggregate_cost_usd`]), any other model at the
+    /// rates in effect on `pricing_date`. `None` means no rate is known.
+    pub fn codex_day_aggregate_cost_usd(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: Option<NaiveDate>,
+    ) -> Option<f64> {
+        let (input, cached, output) = (input_tokens, cached_input_tokens, output_tokens);
+        Self::codex_fast_aggregate_cost_usd(model, input, cached, output, pricing_date)
+            .or_else(|| {
+                pricing_date.and_then(|date| {
+                    Self::codex_cost_usd_at_date(model, input, cached, output, date)
+                })
+            })
+            .or_else(|| Self::codex_cost_usd(model, input, cached, output))
+    }
+
+    /// Short-context `(input, cache read, output)` rates of `model` on
+    /// `pricing_date`. Short-context pricing is linear per token, so
+    /// one-token probes read the exact dated rates back.
+    fn codex_short_context_rates(
+        model: &str,
+        pricing_date: Option<NaiveDate>,
+    ) -> Option<(f64, f64, f64)> {
+        let cost = |input, cached, output| {
+            pricing_date
+                .and_then(|date| Self::codex_cost_usd_at_date(model, input, cached, output, date))
+                .or_else(|| Self::codex_cost_usd(model, input, cached, output))
+        };
+        Some((cost(1, 0, 0)?, cost(1, 1, 0)?, cost(0, 0, 1)?))
+    }
+
     /// Calculate Codex cost in USD when input includes cache-write tokens.
     pub fn codex_cost_usd_with_cache_write(
         model: &str,
@@ -95,7 +291,7 @@ impl CostUsagePricing {
         )
     }
 
-    fn codex_cost_usd_with_cache_write_and_pricing_snapshot(
+    pub(super) fn codex_cost_usd_with_cache_write_and_pricing_snapshot(
         model: &str,
         input_tokens: u64,
         cached_input_tokens: u64,
@@ -110,46 +306,12 @@ impl CostUsagePricing {
             return None;
         }
         if let Some(pricing) = CODEX_PRICING.get(key.as_str()) {
-            let long = input_tokens > CODEX_LONG_CONTEXT_THRESHOLD;
-            let (input_rate, cache_read_rate, output_rate) = if long {
-                if let Some(long_context) = pricing.long_context {
-                    (
-                        long_context.input_cost_per_token,
-                        long_context.cache_read_input_cost_per_token,
-                        long_context.output_cost_per_token,
-                    )
-                } else {
-                    (
-                        pricing.input_cost_per_token,
-                        pricing.cache_read_input_cost_per_token,
-                        pricing.output_cost_per_token,
-                    )
-                }
-            } else {
-                (
-                    pricing.input_cost_per_token,
-                    pricing.cache_read_input_cost_per_token,
-                    pricing.output_cost_per_token,
-                )
-            };
-            let cache_write_rate = if key == "gpt-6-astra" {
-                if long {
-                    CODEX_ASTRA_LONG_CACHE_WRITE_RATE
-                } else {
-                    CODEX_ASTRA_CACHE_WRITE_RATE
-                }
-            } else {
-                input_rate
-            };
-            return Some(codex_cost_from_rates_with_cache_write(
+            return Some(codex_cost_from_pricing(
+                pricing,
                 input_tokens,
                 cached_input_tokens,
                 cache_write_input_tokens,
                 output_tokens,
-                input_rate,
-                cache_read_rate,
-                cache_write_rate,
-                output_rate,
             ));
         }
 
@@ -168,42 +330,49 @@ impl CostUsagePricing {
             Some(snapshot) => snapshot.lookup(provider_id, lookup_model),
             None => models_dev_pricing::lookup(provider_id, lookup_model),
         }?;
-        let use_tier = pricing
+        Some(Self::models_dev_cost_usd(
+            &pricing,
+            input_tokens,
+            cached_input_tokens,
+            cache_write_input_tokens,
+            output_tokens,
+        ))
+    }
+
+    /// Upstream `codexCostUSD(pricing:)` for one models.dev entry.
+    /// `input_tokens` is the inclusive prompt size (cache reads and writes are
+    /// subsets of it) and also selects the long-context tier. A cache lane
+    /// without its own rate falls back to the tier's input rate.
+    pub(crate) fn models_dev_cost_usd(
+        pricing: &models_dev_pricing::DynamicModelPricing,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        cache_write_input_tokens: u64,
+        output_tokens: u64,
+    ) -> f64 {
+        let long = pricing
             .threshold_tokens
             .is_some_and(|threshold| input_tokens > threshold);
-        let input_rate = if use_tier {
-            pricing
-                .input_cost_per_token_above_threshold
-                .unwrap_or(pricing.input_cost_per_token)
-        } else {
-            pricing.input_cost_per_token
-        };
-        let cache_read_rate = if use_tier {
-            pricing
-                .cache_read_input_cost_per_token_above_threshold
-                .or(pricing.cache_read_input_cost_per_token)
-                .unwrap_or(pricing.input_cost_per_token)
-        } else {
-            pricing
-                .cache_read_input_cost_per_token
-                .unwrap_or(pricing.input_cost_per_token)
-        };
-        let output_rate = if use_tier {
-            pricing
-                .output_cost_per_token_above_threshold
-                .unwrap_or(pricing.output_cost_per_token)
-        } else {
-            pricing.output_cost_per_token
-        };
-        Some(codex_cost_from_rates_with_cache_write(
+        let above = |rate: Option<f64>| rate.filter(|_| long);
+        let input_rate = above(pricing.input_cost_per_token_above_threshold)
+            .unwrap_or(pricing.input_cost_per_token);
+        let output_rate = above(pricing.output_cost_per_token_above_threshold)
+            .unwrap_or(pricing.output_cost_per_token);
+        let cache_read_rate = above(pricing.cache_read_input_cost_per_token_above_threshold)
+            .or(pricing.cache_read_input_cost_per_token)
+            .unwrap_or(input_rate);
+        let cache_write_rate = above(pricing.cache_write_input_cost_per_token_above_threshold)
+            .or(pricing.cache_write_input_cost_per_token)
+            .unwrap_or(input_rate);
+        codex_cost_from_rates_with_cache_write(
             input_tokens,
             cached_input_tokens,
             cache_write_input_tokens,
             output_tokens,
             input_rate,
             cache_read_rate,
-            input_rate,
+            cache_write_rate,
             output_rate,
-        ))
+        )
     }
 }

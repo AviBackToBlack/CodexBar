@@ -88,6 +88,15 @@ const PLANS: &[CommandCodePlan] = &[
     },
 ];
 
+/// Outcome of the optional subscription request for one refresh (upstream
+/// `subscriptionEnrichmentUnavailable`). It stays `Unavailable` even when a
+/// remembered plan stands in for the failed answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubscriptionLookup {
+    Answered,
+    Unavailable,
+}
+
 fn find_plan(plan_id: &str) -> Option<&'static CommandCodePlan> {
     let normalized = plan_id.trim().to_ascii_lowercase();
     PLANS.iter().find(|plan| plan.id == normalized)
@@ -138,8 +147,13 @@ impl CommandCodeProvider {
                 &cookie_header,
             )
             .await;
+        let lookup = if subscription_result.is_ok() {
+            SubscriptionLookup::Answered
+        } else {
+            SubscriptionLookup::Unavailable
+        };
         let subscription = resolve_subscription_payload(subscription_result, &fingerprint, now);
-        result_from_payloads(&credits, subscription.as_ref())
+        result_from_payloads(&credits, subscription.as_ref(), lookup)
     }
 
     async fn get_json(&self, url: &str, cookie_header: &str) -> Result<Value, ProviderError> {
@@ -355,9 +369,14 @@ fn resolve_subscription_payload_with_cache(
 #[path = "plan_cache_integration_tests.rs"]
 mod plan_cache_integration_tests;
 
+#[cfg(test)]
+#[path = "granted_credits_tests.rs"]
+mod granted_credits_tests;
+
 fn result_from_payloads(
     credits_payload: &Value,
     subscription_payload: Option<&Value>,
+    lookup: SubscriptionLookup,
 ) -> Result<ProviderFetchResult, ProviderError> {
     let credits = credits_payload
         .get("credits")
@@ -367,6 +386,7 @@ fn result_from_payloads(
     let purchased = number(credits.get("purchasedCredits")).unwrap_or(0.0);
     let premium = number(credits.get("premiumMonthlyCredits")).unwrap_or(0.0);
     let open_source = number(credits.get("opensourceMonthlyCredits")).unwrap_or(0.0);
+    let granted = number(credits.get("monthlyCreditsGranted"));
 
     // Upstream 0.48.0 F12: rolling 5-hour/weekly limits ride alongside the
     // monthly credits, under `windowLimits` at the root or inside `credits`.
@@ -390,7 +410,8 @@ fn result_from_payloads(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .and_then(find_plan);
-    let monthly_window = monthly_window(monthly_credits, purchased, plan, period_end);
+    let total = monthly_credits_total(granted, plan);
+    let monthly_window = monthly_window(monthly_credits, purchased, total, lookup, period_end);
 
     // Slot ordering mirrors upstream `toUsageSnapshot` (5-hour → weekly →
     // monthly); the local snapshot requires a primary, so an API without
@@ -413,23 +434,20 @@ fn result_from_payloads(
     } else if let Some(monthly) = monthly_window {
         UsageSnapshot::new(monthly)
     } else {
-        UsageSnapshot::new(RateWindow::with_details(
-            0.0,
-            None,
-            period_end,
-            Some(format!("{monthly_credits:.2} monthly credits remaining")),
-        ))
+        // The snapshot needs a primary. With no rolling limit and no sized
+        // monthly grant there is no quota to draw (upstream leaves every lane
+        // nil), so state the remaining balance without a percentage.
+        UsageSnapshot::new(RateWindow::informational(format!(
+            "{monthly_credits:.2} monthly credits remaining"
+        )))
     };
 
-    if let Some(method) = login_method(monthly_credits, purchased, plan) {
+    if let Some(method) = login_method(monthly_credits, purchased, plan, total) {
         snapshot = snapshot.with_login_method(method);
     }
 
-    let (used, limit) = match plan {
-        Some(plan) => (
-            (plan.monthly_credits_usd - monthly_credits).clamp(0.0, plan.monthly_credits_usd),
-            plan.monthly_credits_usd,
-        ),
+    let (used, limit) = match total {
+        Some(total) => (monthly_credits_used(total, monthly_credits), total),
         None => {
             let total = premium + open_source;
             ((total - monthly_credits).max(0.0), total.max(0.0))
@@ -489,54 +507,69 @@ fn coerce_reset_at(value: Option<&Value>) -> Option<DateTime<Utc>> {
     value.as_str().and_then(|text| parse_datetime(text.trim()))
 }
 
-/// Monthly grant window from the plan catalog (upstream `makeMonthlyWindow`):
-/// catalog total − remaining, clamped to [0, total]. Without a recognized plan
-/// the fallback keeps a visible-but-empty bar when credits remain, and no
-/// window at all when the account holds nothing.
+/// USD size of the monthly grant (upstream `monthlyCreditsTotal`): the
+/// `monthlyCreditsGranted` the credits response reports when it is finite and
+/// positive, otherwise the plan catalog entry. Zero, negative and non-finite
+/// grants fall back to the plan.
+fn monthly_credits_total(granted: Option<f64>, plan: Option<&CommandCodePlan>) -> Option<f64> {
+    granted
+        .filter(|granted| granted.is_finite() && *granted > 0.0)
+        .or_else(|| plan.map(|plan| plan.monthly_credits_usd))
+}
+
+/// USD spent in the monthly grant: `total - remaining`, clamped to [0, total].
+fn monthly_credits_used(total: f64, monthly_remaining: f64) -> f64 {
+    (total - monthly_remaining).min(total).max(0.0)
+}
+
+/// Monthly grant window (upstream `makeMonthlyWindow`): usage is the grant
+/// total minus the fresh remaining credits, clamped to [0, total]. Without a
+/// grant size the free-tier reading keeps a visible-but-empty bar when credits
+/// remain and no window when the account holds nothing, but a failed
+/// subscription lookup must not borrow that reading: an unknown size leaves the
+/// row unavailable. The reset time only comes from the subscription.
 fn monthly_window(
     monthly_remaining: f64,
     purchased: f64,
-    plan: Option<&CommandCodePlan>,
+    total: Option<f64>,
+    lookup: SubscriptionLookup,
     period_end: Option<DateTime<Utc>>,
 ) -> Option<RateWindow> {
-    if let Some(plan) = plan
-        && plan.monthly_credits_usd > 0.0
+    let used_percent = if let Some(total) = total.filter(|total| *total > 0.0) {
+        (monthly_credits_used(total, monthly_remaining) / total * 100.0).clamp(0.0, 100.0)
+    } else if lookup == SubscriptionLookup::Unavailable
+        || (monthly_remaining <= 0.0 && purchased <= 0.0)
     {
-        let total = plan.monthly_credits_usd;
-        let used = (total - monthly_remaining).clamp(0.0, total);
-        return Some(RateWindow::with_details(
-            (used / total * 100.0).clamp(0.0, 100.0),
-            RateWindow::monthly_window_minutes(period_end),
-            period_end,
-            None,
-        ));
-    }
-    if monthly_remaining > 0.0 || purchased > 0.0 {
-        return Some(RateWindow::with_details(
-            0.0,
-            RateWindow::monthly_window_minutes(period_end),
-            period_end,
-            None,
-        ));
-    }
-    None
+        return None;
+    } else {
+        0.0
+    };
+    Some(RateWindow::with_details(
+        used_percent,
+        RateWindow::monthly_window_minutes(period_end),
+        period_end,
+        None,
+    ))
 }
 
 /// Plan summary line, upstream shape: `GOAT · $61.50 of $70.00 · + $2.00 credits`.
+/// The size comes from the grant total, so a reported grant names the size
+/// even when the plan is unknown.
 fn login_method(
     monthly_remaining: f64,
     purchased: f64,
     plan: Option<&CommandCodePlan>,
+    total: Option<f64>,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(plan) = plan {
         parts.push(plan.display_name.to_string());
-        let used =
-            (plan.monthly_credits_usd - monthly_remaining).clamp(0.0, plan.monthly_credits_usd);
+    }
+    if let Some(total) = total {
         parts.push(format!(
             "{} of {}",
-            format_usd(used),
-            format_usd(plan.monthly_credits_usd)
+            format_usd(monthly_credits_used(total, monthly_remaining)),
+            format_usd(total)
         ));
     } else if monthly_remaining > 0.0 {
         parts.push(format!("{} remaining", format_usd(monthly_remaining)));
@@ -698,6 +731,7 @@ mod tests {
         let result = result_from_payloads(
             &json!({"credits":{"monthlyCredits":25,"purchasedCredits":2,"premiumMonthlyCredits":100}}),
             None,
+            SubscriptionLookup::Answered,
         )
         .unwrap();
         // No windowLimits and no recognized plan → free/unknown-plan fallback:
@@ -718,7 +752,7 @@ mod tests {
     #[test]
     fn window_limits_root_fixture_maps_5h_weekly_monthly_slots() {
         let credits: Value = serde_json::from_str(WINDOW_LIMITS_ROOT).unwrap();
-        let result = result_from_payloads(&credits, None).unwrap();
+        let result = result_from_payloads(&credits, None, SubscriptionLookup::Answered).unwrap();
         let usage = result.usage;
 
         // fiveHour: cap 3, used 0.75 → 25%, 5×60 minutes, ms-epoch reset.
@@ -747,7 +781,7 @@ mod tests {
     #[test]
     fn window_limits_nested_fixture_coerces_string_numbers_and_epoch_seconds() {
         let credits: Value = serde_json::from_str(WINDOW_LIMITS_NESTED).unwrap();
-        let result = result_from_payloads(&credits, None).unwrap();
+        let result = result_from_payloads(&credits, None, SubscriptionLookup::Answered).unwrap();
         let usage = result.usage;
 
         // "4"/"1" strings coerce; resetAt "1780200000" reads as seconds.
@@ -780,6 +814,7 @@ mod tests {
                 }
             }),
             None,
+            SubscriptionLookup::Answered,
         )
         .unwrap();
         // No usable rolling windows: monthly fallback becomes primary.
@@ -815,7 +850,9 @@ mod tests {
             }
         });
         let credits: Value = serde_json::from_str(WINDOW_LIMITS_ROOT).unwrap();
-        let result = result_from_payloads(&credits, Some(&subscription)).unwrap();
+        let result =
+            result_from_payloads(&credits, Some(&subscription), SubscriptionLookup::Answered)
+                .unwrap();
 
         // $70 grant, $8.50 remaining → 61.5 used → 87.857…%.
         let monthly = result.usage.tertiary.expect("monthly window");
@@ -839,6 +876,7 @@ mod tests {
         let result = result_from_payloads(
             &json!({"credits":{"monthlyCredits":0,"purchasedCredits":0}}),
             None,
+            SubscriptionLookup::Answered,
         )
         .unwrap();
         assert_eq!(result.usage.primary.used_percent, 0.0);

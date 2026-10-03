@@ -77,13 +77,11 @@ fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
         output: 10,
         reasoning: Some(4),
     };
-    let mut state = CodexParserState::with_timestamp_state_and_fork_mode(
-        None,
-        Some(baseline),
-        None,
-        None,
-        true,
-    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::ParentBaseline {
+        baseline,
+        paginated_continuation: false,
+        remaining_inherited_totals: None,
+    });
     assert_eq!(
         state.apply_totals_delta(CodexTotals {
             input: 20,
@@ -100,13 +98,11 @@ fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
         output: 10,
         reasoning: None,
     };
-    let mut state = CodexParserState::with_timestamp_state_and_fork_mode(
-        None,
-        Some(baseline_without_reasoning),
-        None,
-        None,
-        true,
-    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::ParentBaseline {
+        baseline: baseline_without_reasoning,
+        paginated_continuation: false,
+        remaining_inherited_totals: None,
+    });
     assert_eq!(
         state.apply_totals_delta(CodexTotals {
             input: 20,
@@ -117,6 +113,109 @@ fn fork_baseline_subtracts_known_reasoning_without_affecting_core_tokens() {
         (10, 3, 10, None)
     );
     assert!(!state.fork_baseline_ambiguous);
+}
+
+#[test]
+fn inferred_fork_waits_for_present_explicit_start_ordinal() {
+    let range = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::InferSubagent {
+        start_ordinal: Some(10),
+    });
+
+    state.process_line(
+        r#"{"timestamp":"2026-09-22T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-sol","total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10},"last_token_usage":{"input_tokens":0,"cached_input_tokens":0,"output_tokens":0}}}}"#,
+        &range,
+    );
+
+    assert!(state.records.is_empty());
+    assert!(state.fork_baseline.is_none());
+    assert!(!state.fork_baseline_locally_resolved());
+
+    state.process_line(
+        r#"{"ordinal":10,"timestamp":"2026-09-22T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.6-sol","total_token_usage":{"input_tokens":110,"cached_input_tokens":22,"output_tokens":11},"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":1}}}}"#,
+        &range,
+    );
+
+    assert_eq!(state.records.len(), 1);
+    assert_eq!(state.records[0].0.input, 10);
+    assert_eq!(state.records[0].0.cached, 2);
+    assert_eq!(state.records[0].0.output, 1);
+    assert!(!state.fork_baseline_locally_resolved());
+}
+
+#[test]
+fn inferred_fork_keeps_missing_ordinal_unresolved_after_boundary_opens() {
+    let range = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::InferSubagent {
+        start_ordinal: Some(10),
+    });
+    let token_line = |ordinal: Option<i64>, total: i64, last: i64| {
+        let mut value = serde_json::json!({
+            "timestamp": "2026-09-22T10:00:00Z",
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {
+                "model": "gpt-5.6-sol",
+                "total_token_usage": {"input_tokens": total, "cached_input_tokens": 0, "output_tokens": 0},
+                "last_token_usage": {"input_tokens": last, "cached_input_tokens": 0, "output_tokens": 0}
+            }}
+        });
+        if let Some(ordinal) = ordinal {
+            value["ordinal"] = serde_json::json!(ordinal);
+        }
+        value.to_string()
+    };
+
+    state.process_line(&token_line(Some(9), 100, 0), &range);
+    state.process_line(&token_line(Some(10), 100, 0), &range);
+    state.process_line(&token_line(Some(11), 110, 110), &range);
+    assert!(state.fork_baseline_locally_resolved());
+    state.process_line(&token_line(None, 120, 10), &range);
+    assert!(!state.fork_baseline_locally_resolved());
+    state.process_line(&token_line(Some(12), 130, 10), &range);
+
+    assert_eq!(state.records.len(), 1);
+    assert_eq!(state.records[0].0.input, 10);
+    assert!(!state.fork_baseline_locally_resolved());
+}
+
+#[test]
+fn inferred_fork_keeps_missing_ordinal_unresolved_after_local_resolution() {
+    let range = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 9, 22).unwrap(),
+    );
+    let mut state = CodexParserState::from_mode(CodexParseMode::InferSubagent {
+        start_ordinal: Some(10),
+    });
+    let token_line = |ordinal: Option<i64>, total: i64, last: i64| {
+        let mut value = serde_json::json!({
+            "timestamp": "2026-09-22T10:00:00Z",
+            "type": "event_msg",
+            "payload": {"type": "token_count", "info": {
+                "model": "gpt-5.6-sol",
+                "total_token_usage": {"input_tokens": total, "cached_input_tokens": 0, "output_tokens": 0},
+                "last_token_usage": {"input_tokens": last, "cached_input_tokens": 0, "output_tokens": 0}
+            }}
+        });
+        if let Some(ordinal) = ordinal {
+            value["ordinal"] = serde_json::json!(ordinal);
+        }
+        value.to_string()
+    };
+
+    state.process_line(&token_line(Some(9), 100, 0), &range);
+    state.process_line(&token_line(Some(10), 100, 0), &range);
+    state.process_line(&token_line(Some(11), 110, 10), &range);
+    assert!(state.fork_baseline_locally_resolved());
+    state.process_line(&token_line(None, 120, 10), &range);
+
+    assert!(!state.fork_baseline_locally_resolved());
 }
 
 #[test]
@@ -142,6 +241,7 @@ fn codex_token_pipeline_preserves_counts_above_i32_max() {
                 cached: 1_400_000_000,
                 output: 100,
                 reasoning: None,
+                turn_id: None,
             },
         );
     }
@@ -223,6 +323,7 @@ fn legacy_packed_rows_remain_three_slots_and_report_reasoning_is_unknown() {
         cached: 1,
         output: 3,
         reasoning: Some(2),
+        turn_id: None,
     };
     let mut packed = vec![10, 2, 4];
     JsonlScanner::merge_codex_record_into_packed(&mut packed, &record);
@@ -513,6 +614,49 @@ fn test_fast_codex_parser_reads_legacy_event_msg_shape() {
     let (record, _) = &parser.records[0];
     assert_eq!(record.model, "gpt-5");
     assert_eq!((record.input, record.cached, record.output), (20, 5, 3));
+}
+
+#[test]
+fn codex_fast_parser_accepts_compact_and_spaced_event_records_equally() {
+    let range = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+        NaiveDate::from_ymd_opt(2026, 5, 31).unwrap(),
+    );
+    let parsed = |line: &str| {
+        let mut parser = CodexParserState::new(Some("gpt-5".to_string()), None);
+        parser.process_line(line, &range);
+        (
+            parser.current_model,
+            parser
+                .records
+                .into_iter()
+                .map(|(record, _)| {
+                    (
+                        record.day_key,
+                        record.model,
+                        record.input,
+                        record.cached,
+                        record.output,
+                        record.reasoning,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+
+    let compact_event = r#"{"timestamp":"2026-05-31T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"cached_input_tokens":5,"output_tokens":3}}}}"#;
+    let spaced_event = r#"{ "timestamp": "2026-05-31T10:00:01Z", "type": "event_msg", "payload": { "type": "token_count", "info": { "last_token_usage": { "input_tokens": 20, "cached_input_tokens": 5, "output_tokens": 3 } } } }"#;
+    assert!(is_candidate_codex_line(spaced_event));
+    assert_eq!(parsed(compact_event), parsed(spaced_event));
+
+    let compact_context = r#"{"timestamp":"2026-05-31T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5.5"}}"#;
+    let spaced_context = "{\t\"timestamp\": \"2026-05-31T10:00:00Z\",\t\"type\":\t\"turn_context\",\t\"payload\": {\t\"model\": \"gpt-5.5\"\t}\t}";
+    assert!(is_candidate_codex_line(spaced_context));
+    assert_eq!(parsed(compact_context), parsed(spaced_context));
+
+    let unrelated = r#"{ "timestamp": "2026-05-31T10:00:00Z", "type": "response", "payload": { "model": "gpt-5.5" } }"#;
+    assert!(!is_candidate_codex_line(unrelated));
+    assert_eq!(parsed(unrelated), (Some("gpt-5".to_string()), Vec::new()));
 }
 
 #[test]
@@ -907,6 +1051,22 @@ fn process_line_accepts_type_less_bare_usage_row() {
 }
 
 #[test]
+fn process_line_keeps_bare_usage_when_model_contains_turn_context() {
+    let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
+    let range = CostUsageDayRange::new(day, day);
+    let mut parser = CodexParserState::new(None, None);
+
+    parser.process_line(
+        r#"{"timestamp":"2026-05-31T10:00:01Z","model":"turn_context","usage":{"prompt_tokens":120,"completion_tokens":30}}"#,
+        &range,
+    );
+
+    assert_eq!(parser.records.len(), 1);
+    assert_eq!(parser.records[0].0.input, 120);
+    assert_eq!(parser.records[0].0.output, 30);
+}
+
+#[test]
 fn timestamp_less_bare_usage_uses_last_accepted_usage_day() {
     let day = NaiveDate::from_ymd_opt(2026, 5, 31).unwrap();
     let range = CostUsageDayRange::new(day, day);
@@ -1043,6 +1203,8 @@ fn session_meta_pre_read_accepts_snake_and_camel_fork_identity() {
             lineage: CodexSessionLineage::Child,
             fork_timestamp: Some("2026-05-31T10:00:00Z".to_string()),
             history_base_thread_id: Some("history-snake".to_string()),
+            is_subagent: false,
+            subagent_history_start_ordinal: None,
         }
     );
 
@@ -1454,6 +1616,7 @@ fn stale_loaded_cache_does_not_replace_newer_baseline() {
     let mut stale = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
     let mut newer = JsonlScanner::load_cache(ProviderId::Codex, Some(cache_root));
     newer.last_scan_unix_ms = 2;
+    newer.scan_since_key = Some("2026-01-01".to_string());
     JsonlScanner::save_cache(ProviderId::Codex, &mut newer, Some(cache_root));
 
     stale.last_scan_unix_ms = 3;
@@ -1603,8 +1766,10 @@ fn save_cache_at_exact_limit_is_accepted() {
     let root = tempfile::tempdir().unwrap();
     let cache_root = root.path().to_path_buf();
 
-    let cache = CostUsageCache::default();
-    // Serialize to learn the actual encoded size for this exact struct.
+    let mut cache = CostUsageCache::default();
+    // Saving stamps the schema version and bucket zone first; serialize the
+    // stamped struct to learn the exact encoded size.
+    codex_cache_stamp_schema_version(&mut cache);
     let json = serde_json::to_string(&cache).unwrap();
     let exact_limit = json.len();
 
@@ -1630,7 +1795,8 @@ fn save_cache_one_over_limit_is_refused_and_removes_destination() {
     let root = tempfile::tempdir().unwrap();
     let cache_root = root.path().to_path_buf();
 
-    let cache = CostUsageCache::default();
+    let mut cache = CostUsageCache::default();
+    codex_cache_stamp_schema_version(&mut cache);
     let json = serde_json::to_string(&cache).unwrap();
     // One byte short of the encoded size forces refusal on the next attempt.
     let under_by_one = json.len().saturating_sub(1);
@@ -1653,3 +1819,10 @@ fn save_cache_one_over_limit_is_refused_and_removes_destination() {
 #[cfg(test)]
 #[path = "tests/codex_metadata.rs"]
 mod codex_metadata;
+
+#[cfg(test)]
+#[path = "tests/save_skip.rs"]
+mod save_skip;
+
+#[path = "tests/cache_zone.rs"]
+mod cache_zone;

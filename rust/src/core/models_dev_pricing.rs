@@ -1,190 +1,16 @@
 #[cfg(test)]
-mod tests {
-    use super::{
-        ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog, ModelsDevRefreshCoordinator,
-    };
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{Duration, UNIX_EPOCH};
-
-    #[test]
-    fn decodes_top_level_provider_map_and_converts_million_token_rates() {
-        let catalog = ModelsDevCatalog::decode(
-            r#"{
-                "openai": {
-                    "id": "openai",
-                    "models": {
-                        "openai/gpt-fresh": {
-                            "id": "openai/gpt-fresh",
-                            "cost": {
-                                "input": 2.5,
-                                "output": 10,
-                                "cache_read": 0.25,
-                                "cache_write": 3.75,
-                                "context_over_200k": {
-                                    "input": 5,
-                                    "output": 15,
-                                    "cache_read": 0.5,
-                                    "cache_write": 7.5
-                                }
-                            }
-                        }
-                    }
-                },
-                "anthropic": {
-                    "models": {
-                        "claude-fresh": {
-                            "id": "claude-fresh",
-                            "cost": { "input": 3, "output": 15 }
-                        }
-                    }
-                }
-            }"#,
-        )
-        .expect("top-level catalog");
-
-        let pricing = catalog.lookup("openai", "gpt-fresh").expect("pricing");
-        assert_eq!(pricing.input_cost_per_token, 2.5e-6);
-        assert_eq!(pricing.output_cost_per_token, 10e-6);
-        assert_eq!(pricing.cache_read_input_cost_per_token, Some(0.25e-6));
-        assert_eq!(pricing.cache_write_input_cost_per_token, Some(3.75e-6));
-        assert_eq!(pricing.threshold_tokens, Some(200_000));
-        assert_eq!(pricing.input_cost_per_token_above_threshold, Some(5e-6));
-    }
-
-    #[test]
-    fn decodes_providers_envelope() {
-        let catalog = ModelsDevCatalog::decode(
-            r#"{
-                "providers": {
-                    "anthropic": {
-                        "id": "anthropic",
-                        "models": {
-                            "claude-fresh": {
-                                "id": "claude-fresh",
-                                "cost": { "input": 3, "output": 15 }
-                            }
-                        }
-                    },
-                    "openai": {
-                        "models": {
-                            "gpt-fresh": {
-                                "id": "gpt-fresh",
-                                "cost": { "input": 2.5, "output": 10 }
-                            }
-                        }
-                    }
-                }
-            }"#,
-        )
-        .expect("enveloped catalog");
-
-        assert_eq!(
-            catalog
-                .lookup("anthropic", "claude-fresh")
-                .expect("pricing")
-                .output_cost_per_token,
-            15e-6
-        );
-    }
-
-    #[test]
-    fn cache_artifact_is_versioned_and_expires_after_one_day() {
-        let catalog = ModelsDevCatalog::decode(
-            r#"{
-                "openai": {
-                    "models": {
-                        "gpt-fresh": {
-                            "id": "gpt-fresh",
-                            "cost": { "input": 2.5, "output": 10 }
-                        }
-                    }
-                },
-                "anthropic": {
-                    "models": {
-                        "claude-fresh": {
-                            "id": "claude-fresh",
-                            "cost": { "input": 3, "output": 15 }
-                        }
-                    }
-                }
-            }"#,
-        )
-        .expect("catalog");
-        let fetched_at = UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let artifact = ModelsDevCacheArtifact::new(catalog, fetched_at);
-
-        assert_eq!(artifact.version, ModelsDevCache::ARTIFACT_VERSION);
-        assert!(!artifact.is_stale(fetched_at + Duration::from_secs(86_400)));
-        assert!(artifact.is_stale(fetched_at + Duration::from_secs(86_401)));
-        assert_eq!(
-            ModelsDevCache::cache_path(Some(PathBuf::from("cache-root").as_path())),
-            PathBuf::from("cache-root")
-                .join("model-pricing")
-                .join("models-dev-v1.json")
-        );
-    }
-
-    #[tokio::test]
-    async fn concurrent_refreshes_for_one_cache_path_share_one_operation() {
-        let coordinator = ModelsDevRefreshCoordinator::default();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let first_calls = Arc::clone(&calls);
-        let path = PathBuf::from("pricing.json");
-        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
-
-        let first = coordinator.refresh(path.clone(), now, async move {
-            first_calls.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            true
-        });
-        let second = coordinator.refresh(path, now, async {
-            panic!("the second caller must await the first operation");
-        });
-
-        assert!(tokio::join!(first, second).0);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn failed_refresh_is_not_retried_within_the_attempt_window() {
-        let coordinator = ModelsDevRefreshCoordinator::default();
-        let path = PathBuf::from("pricing.json");
-        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
-
-        assert!(
-            !coordinator
-                .refresh(path.clone(), now, async { false })
-                .await
-        );
-        assert!(
-            !coordinator
-                .refresh(path, now + Duration::from_secs(60), async {
-                    panic!("the 15-minute bound must suppress this attempt");
-                })
-                .await
-        );
-    }
-
-    #[test]
-    fn cache_path_uses_the_existing_per_user_cache_root() {
-        let cache_root = ModelsDevCache::default_cache_root().expect("per-user cache root");
-        assert_eq!(
-            ModelsDevCache::cache_path(None),
-            cache_root.join("model-pricing").join("models-dev-v1.json")
-        );
-    }
-}
+mod tests;
 
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, watch};
+
+use super::ModelsDevPricingTarget;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -209,6 +35,15 @@ struct ModelsDevCatalog {
     providers: HashMap<String, ModelsDevProvider>,
 }
 
+/// How a refresh decides that a model already has a catalog price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelIdMatch {
+    /// Dated, `@` and vendor-prefixed aliases may supply the price.
+    Fuzzy,
+    /// Only the trimmed catalog key or model id (upstream `exactModelID: true`).
+    Exact,
+}
+
 /// Immutable models.dev view for callers that price many rows in one pass.
 /// Loading this once avoids repeating cache metadata checks for every row.
 #[derive(Debug, Clone)]
@@ -221,6 +56,15 @@ impl ModelsDevPricingSnapshot {
         self.artifact
             .as_ref()
             .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
+    }
+
+    /// Exact-id lookup (upstream `exactModelID: true`): the trimmed id must
+    /// equal a catalog key or model id. No dated, `@`, or vendor-prefix alias
+    /// of another model can supply the price.
+    pub fn lookup_exact(&self, provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
+        self.artifact
+            .as_ref()
+            .and_then(|artifact| artifact.catalog.lookup_exact(provider_id, model_id))
     }
 
     #[cfg(test)]
@@ -291,6 +135,34 @@ impl ModelsDevCatalog {
                 .then(|| DynamicModelPricing::from_model(model))
                 .flatten()
         })
+    }
+
+    fn lookup_exact(&self, provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
+        let provider = self.providers.get(&normalize_provider_id(provider_id))?;
+        let model_id = normalize_model_id(model_id);
+        provider
+            .models
+            .get(&model_id)
+            .and_then(DynamicModelPricing::from_model)
+            .or_else(|| {
+                provider.models.values().find_map(|model| {
+                    (normalize_model_id(&model.id) == model_id)
+                        .then(|| DynamicModelPricing::from_model(model))
+                        .flatten()
+                })
+            })
+    }
+
+    fn lookup_matching(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        matching: ModelIdMatch,
+    ) -> Option<DynamicModelPricing> {
+        match matching {
+            ModelIdMatch::Fuzzy => self.lookup(provider_id, model_id),
+            ModelIdMatch::Exact => self.lookup_exact(provider_id, model_id),
+        }
     }
 
     fn is_plausible_refresh(&self) -> bool {
@@ -763,7 +635,12 @@ static REFRESH_COORDINATOR: LazyLock<ModelsDevRefreshCoordinator> =
 
 /// Loads the cached models.dev catalog once for bulk-pricing callers.
 pub fn pricing_snapshot() -> ModelsDevPricingSnapshot {
-    let load = ModelsDevCache::load(SystemTime::now(), None);
+    pricing_snapshot_at(SystemTime::now(), None)
+}
+
+/// A stale catalog prices nothing: its rows stay unpriced until a refresh.
+fn pricing_snapshot_at(now: SystemTime, cache_root: Option<&Path>) -> ModelsDevPricingSnapshot {
+    let load = ModelsDevCache::load(now, cache_root);
     let artifact = (!load.is_stale).then_some(load.artifact).flatten();
     ModelsDevPricingSnapshot { artifact }
 }
@@ -777,6 +654,15 @@ pub fn lookup(provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> 
         .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
 }
 
+/// Why a coordinated refresh runs. A stale-catalog refresh re-checks the
+/// cache inside the coordinator, so callers that queued behind a refresh that
+/// already landed do not fetch again (upstream `refreshStaleCache`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshReason {
+    StaleCatalog,
+    UnknownModels,
+}
+
 /// Refreshes the models.dev cache once when supplied models lack cached pricing.
 ///
 /// Returns true only if at least one supplied model has pricing after the coordinated refresh.
@@ -787,30 +673,89 @@ pub async fn refresh_unknown_models_if_needed(
     if model_ids.is_empty() {
         return false;
     }
-    refresh_unknown_models_at(provider_id, model_ids, SystemTime::now(), None).await
+    refresh_unknown_models_at(
+        provider_id,
+        model_ids,
+        ModelIdMatch::Fuzzy,
+        SystemTime::now(),
+        None,
+        fetch_catalog,
+    )
+    .await
 }
 
-async fn refresh_unknown_models_at(
-    provider_id: &str,
-    model_ids: &HashSet<String>,
+/// Refreshes the models.dev cache for exact pricing identities (upstream
+/// OpenCodex `refreshPricingIfNeeded`). A stale catalog refreshes first; then
+/// each provider whose exact model ids still lack a price may trigger one
+/// coordinated refresh, outside the 15-minute attempt window. Cached pricing
+/// reads never start this network work; callers run it before a fresh build.
+pub async fn refresh_exact_pricing_targets_if_needed(targets: &[ModelsDevPricingTarget]) {
+    refresh_exact_pricing_targets_with(targets, SystemTime::now(), None, fetch_catalog).await;
+}
+
+async fn refresh_exact_pricing_targets_with<F, Fut>(
+    targets: &[ModelsDevPricingTarget],
     now: SystemTime,
     cache_root: Option<&Path>,
-) -> bool {
-    let load = ModelsDevCache::load(now, cache_root);
-    let unknown_models: Vec<String> = if load.is_stale {
-        model_ids.iter().cloned().collect()
-    } else {
-        model_ids
-            .iter()
-            .filter(|model_id| {
-                load.artifact
-                    .as_ref()
-                    .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
-                    .is_none()
+    fetch: F,
+) where
+    F: FnOnce() -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = Option<ModelsDevCatalog>> + Send + 'static,
+{
+    if targets.is_empty() {
+        return;
+    }
+    if ModelsDevCache::load(now, cache_root).is_stale {
+        let _refreshed =
+            coordinated_refresh(now, cache_root, RefreshReason::StaleCatalog, fetch.clone()).await;
+    }
+    let mut grouped: BTreeMap<&str, HashSet<String>> = BTreeMap::new();
+    for target in targets {
+        grouped
+            .entry(target.provider_id.as_str())
+            .or_default()
+            .insert(target.model_id.clone());
+    }
+    for (provider_id, model_ids) in grouped {
+        let _priced = refresh_unknown_models_at(
+            provider_id,
+            &model_ids,
+            ModelIdMatch::Exact,
+            now,
+            cache_root,
+            fetch.clone(),
+        )
+        .await;
+    }
+}
+
+async fn refresh_unknown_models_at<F, Fut>(
+    provider_id: &str,
+    model_ids: &HashSet<String>,
+    matching: ModelIdMatch,
+    now: SystemTime,
+    cache_root: Option<&Path>,
+    fetch: F,
+) -> bool
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Option<ModelsDevCatalog>> + Send + 'static,
+{
+    // A stale catalog prices nothing (see `pricing_snapshot_at`).
+    let is_priced = |load: &ModelsDevCacheLoad, model_id: &str| {
+        !load.is_stale
+            && load.artifact.as_ref().is_some_and(|artifact| {
+                artifact
+                    .catalog
+                    .lookup_matching(provider_id, model_id, matching)
+                    .is_some()
             })
-            .cloned()
-            .collect()
     };
+    let load = ModelsDevCache::load(now, cache_root);
+    let unknown_models: Vec<&String> = model_ids
+        .iter()
+        .filter(|model_id| !is_priced(&load, model_id))
+        .collect();
     if unknown_models.is_empty() {
         return true;
     }
@@ -821,46 +766,57 @@ async fn refresh_unknown_models_at(
     }) {
         return false;
     }
+    drop(load);
 
+    let _refreshed =
+        coordinated_refresh(now, cache_root, RefreshReason::UnknownModels, fetch).await;
+
+    let refreshed = ModelsDevCache::load(now, cache_root);
+    unknown_models
+        .iter()
+        .any(|model_id| is_priced(&refreshed, model_id))
+}
+
+/// Runs one fetch through the per-cache-path coordinator: concurrent callers
+/// share it, and a path that attempted a refresh in the last 15 minutes waits.
+async fn coordinated_refresh<F, Fut>(
+    now: SystemTime,
+    cache_root: Option<&Path>,
+    reason: RefreshReason,
+    fetch: F,
+) -> bool
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Option<ModelsDevCatalog>> + Send + 'static,
+{
     let cache_path = ModelsDevCache::cache_path(cache_root);
     if cache_path.as_os_str().is_empty() {
         return false;
     }
     let cache_root = cache_root.map(Path::to_path_buf);
-    let refresh_cache_root = cache_root.clone();
-    let _ = REFRESH_COORDINATOR
+    REFRESH_COORDINATOR
         .refresh(cache_path, now, async move {
-            refresh_catalog(now, refresh_cache_root.as_deref()).await
+            let cache_root = cache_root.as_deref();
+            if reason == RefreshReason::StaleCatalog
+                && !ModelsDevCache::load(now, cache_root).is_stale
+            {
+                return true;
+            }
+            match fetch().await {
+                Some(catalog) => store_refreshed_catalog(catalog, now, cache_root),
+                None => false,
+            }
         })
-        .await;
-
-    let refreshed = ModelsDevCache::load(now, cache_root.as_deref());
-    !refreshed.is_stale
-        && unknown_models.iter().any(|model_id| {
-            refreshed
-                .artifact
-                .as_ref()
-                .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
-                .is_some()
-        })
+        .await
 }
 
-async fn refresh_catalog(now: SystemTime, cache_root: Option<&Path>) -> bool {
-    let Ok(client) = crate::core::apply_app_proxy(reqwest::Client::builder())
-        .timeout(Duration::from_secs(20))
-        .build()
-    else {
-        return false;
-    };
-    let Ok(response) = client.get(MODELS_DEV_URL).send().await else {
-        return false;
-    };
-    if !response.status().is_success() {
-        return false;
-    }
-    let Ok(mut catalog) = response.json::<ModelsDevCatalog>().await else {
-        return false;
-    };
+/// Saves a plausible fetched catalog, keeping priceable entries that the
+/// previous catalog had and the new one dropped.
+fn store_refreshed_catalog(
+    mut catalog: ModelsDevCatalog,
+    now: SystemTime,
+    cache_root: Option<&Path>,
+) -> bool {
     if !catalog.is_plausible_refresh() {
         return false;
     }
@@ -869,3 +825,73 @@ async fn refresh_catalog(now: SystemTime, cache_root: Option<&Path>) -> bool {
     }
     ModelsDevCache::save(catalog, now, cache_root)
 }
+
+async fn fetch_catalog() -> Option<ModelsDevCatalog> {
+    let client = crate::core::apply_app_proxy(reqwest::Client::builder())
+        .timeout(Duration::from_secs(20))
+        .build()
+        .ok()?;
+    let response = client.get(MODELS_DEV_URL).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<ModelsDevCatalog>().await.ok()
+}
+
+/// Saves `json` as the models.dev cache under `cache_root`, as a refresh at
+/// `fetched_at` would.
+#[cfg(test)]
+pub(crate) fn save_catalog_json_for_tests(
+    json: &str,
+    fetched_at: SystemTime,
+    cache_root: &Path,
+) -> bool {
+    ModelsDevCatalog::decode(json)
+        .is_some_and(|catalog| ModelsDevCache::save(catalog, fetched_at, Some(cache_root)))
+}
+
+#[cfg(test)]
+pub(crate) fn models_dev_cache_path_for_tests(cache_root: &Path) -> PathBuf {
+    ModelsDevCache::cache_path(Some(cache_root))
+}
+
+#[cfg(test)]
+pub(crate) fn pricing_snapshot_for_tests(
+    now: SystemTime,
+    cache_root: &Path,
+) -> ModelsDevPricingSnapshot {
+    pricing_snapshot_at(now, Some(cache_root))
+}
+
+/// Runs the exact-target refresh against `cache_root`; each fetch counts one
+/// call and answers `response_json` (`None` is a failed download).
+#[cfg(test)]
+pub(crate) async fn refresh_exact_pricing_targets_for_tests(
+    targets: &[ModelsDevPricingTarget],
+    now: SystemTime,
+    cache_root: &Path,
+    response_json: Option<String>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+) {
+    refresh_exact_pricing_targets_with(
+        targets,
+        now,
+        Some(cache_root),
+        counting_fetch(response_json, calls),
+    )
+    .await;
+}
+
+#[cfg(test)]
+fn counting_fetch(
+    response_json: Option<String>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+) -> impl FnOnce() -> std::future::Ready<Option<ModelsDevCatalog>> + Clone + Send + 'static {
+    move || {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::future::ready(response_json.as_deref().and_then(ModelsDevCatalog::decode))
+    }
+}
+
+#[cfg(test)]
+mod exact_refresh_tests;

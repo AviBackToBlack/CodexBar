@@ -1,6 +1,6 @@
 use super::{
     ClaudeOAuthCredentials, ClaudeOAuthFetcher, OAuthUsageResponse, UsageWindow,
-    credential_identity,
+    credential_identity, is_rate_limited_error,
 };
 use crate::core::ProviderError;
 use base64::Engine;
@@ -411,6 +411,22 @@ fn rate_limited_error_preserves_credentials_language() {
 }
 
 #[test]
+fn only_the_rate_limit_refusal_counts_as_rate_limited() {
+    let refusal = ClaudeOAuthFetcher::rate_limited_error(Duration::from_secs(5));
+    assert!(is_rate_limited_error(&refusal));
+
+    let same_text_other_variant = ProviderError::OAuth(match refusal {
+        ProviderError::OAuthTransient(message) => message,
+        other => panic!("unexpected {other:?}"),
+    });
+    assert!(!is_rate_limited_error(&same_text_other_variant));
+    assert!(!is_rate_limited_error(&ProviderError::OAuthTransient(
+        "Claude OAuth token expired and token refresh is cooling down after a failed attempt."
+            .to_string()
+    )));
+}
+
+#[test]
 fn oauth_extras_put_scoped_weekly_before_routines() {
     let response: OAuthUsageResponse = serde_json::from_str(
         r#"{
@@ -575,4 +591,28 @@ fn backoff_kinds_have_distinct_user_messages() {
     let cooldown = super::refresh_cooldown_message();
     assert!(cooldown.contains("retry shortly"), "{cooldown}");
     assert!(cooldown.contains("claude login"), "{cooldown}");
+}
+
+#[test]
+fn missing_user_profile_scope_recommends_a_usable_credential_source() {
+    let recovery = super::ClaudeOAuthFetcher::scope_recovery_message();
+    assert!(recovery.contains("Claude Code sign-in"), "{recovery}");
+    assert!(recovery.contains("OAuth token override"), "{recovery}");
+    assert!(recovery.contains("switch Claude Source"), "{recovery}");
+    assert!(!recovery.contains("setup-token"), "{recovery}");
+
+    // Local-scope error: prefixed with the current scopes.
+    let credentials = test_credentials("token");
+    let local = format!(
+        "OAuth token missing 'user:profile' scope (has: {}). {recovery}",
+        credentials.scopes.join(", ")
+    );
+    assert!(local.contains("missing 'user:profile' scope"), "{local}");
+    assert!(!local.contains("setup-token"), "{local}");
+
+    // 403 response error.
+    let forbidden =
+        format!("OAuth token does not meet scope requirement 'user:profile'. {recovery}");
+    assert!(forbidden.contains("scope requirement"), "{forbidden}");
+    assert!(!forbidden.contains("setup-token"), "{forbidden}");
 }

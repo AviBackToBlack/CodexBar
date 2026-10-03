@@ -1,6 +1,6 @@
 # Win-CodexBar
 
-[English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md) | [Türkçe](./README.tr-TR.md)
+[English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md) | [Português (Brasil)](./README.pt-BR.md) | [Türkçe](./README.tr-TR.md)
 
 Win-CodexBar is a Windows system-tray app for keeping AI coding-tool usage visible without opening a dozen dashboards. It ports the spirit of [CodexBar](https://github.com/steipete/CodexBar) to a Tauri + React desktop shell backed by shared Rust provider logic.
 
@@ -21,7 +21,7 @@ Win-CodexBar is a Windows system-tray app for keeping AI coding-tool usage visib
 - **Tray-first workflow** with a compact provider grid, usage cards, refresh action, settings shortcut, and quit control.
 - **Provider settings** for source selection, credentials, cookie import, token accounts, API keys, regions, and tray-display preferences.
 - **Windows credential protection** for app-managed API keys, manual cookies, and token accounts, using user-scoped DPAPI where available.
-- **Browser cookie import** for Chrome, Edge, Brave, and Firefox, kept opt-in per provider.
+- **Browser cookie import** for Chrome Stable, Beta, Dev, Canary, Chrome for Testing, Chromium, Edge, Brave, and Firefox, kept opt-in per provider.
 - **Installed local CLI** for scripting usage, cost, config, diagnostics, and loopback integrations.
 - **Installer + portable builds** with WebView2 runtime bootstrap, VC++ runtime bootstrap, and SHA-256 checksum files.
 
@@ -81,6 +81,7 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Kiro | Cookies / CLI | Monthly Credits, Overage |
 | Vertex AI | gcloud OAuth | Cost |
 | v0 | API Key | Billing quota, API rate limits, on-demand balance |
+| Vercel AI Gateway | API Key | Team credit balance, lifetime spend |
 | Augment | Cookies | Credits |
 | OpenCode | Local Config | Usage |
 | Kimi | Cookies | 5h Rate, Weekly |
@@ -109,17 +110,21 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | Xiaomi MiMo | Cookies | Balance, Token Plan |
 | Doubao | API Key | Request Limits |
 | Command Code | Cookies | Monthly Credits, Purchased Credits |
-| Crof | API Key | Credits, Request Quota |
 | StepFun | Oasis Token | 5h, Weekly, Token refresh |
-| Venice | API Key | USD / DIEM Balance |
+| Venice | API Key / Web session | USD / DIEM Balance, Bundled credits (web session expires in about 60 s) |
 | OpenAI | Admin API / API Key | Usage, Requests, Project-scoped cost, Credit Balance |
 | Grok | Cookies / auth.json | Billing |
 | Helmcode (also NaN Builders) | Browser cookies / manual Cookie header | Per-model token quotas, reset windows, Helmcode prepaid balance |
+| Raycast | Cookies (Chrome auto or manual) | Monthly AI credits, plan, renewal |
 | Replicate | Cookies / token accounts | Monthly spend, credit balance |
+| Aixy | API Key / token accounts | Applicable budget balances, 7-day key usage |
 | ElevenLabs | API Key | Subscription Credits, Voice Slots |
 | Deepgram | API Key | Project Usage |
 | Groq | API Key | Enterprise Metrics |
 | LLM Proxy | API Key | Quota Stats |
+| llmman | Local daemon / optional API Key | Memory in use, loaded and stored models |
+| DevPass | API Key | Plan credits, Premium weekly, API-key spend |
+| xKiro | API Key | Daily free tokens |
 
 </details>
 
@@ -133,6 +138,7 @@ The UI and contributor reporting currently support:
 - 日本語
 - 한국어
 - Español mexicano
+- Português (Brasil)
 - Türkçe
 
 ## Build From Source

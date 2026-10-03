@@ -5,12 +5,16 @@ use uuid::Uuid;
 
 use codexbar::codex_accounts::{
     AccountStore, CodexAccount, CodexAccountApi, CodexAccountManager, CodexAccountManagerError,
-    CodexAccountRuntime, CodexApiError, CodexSwitchResult, SnapshotStore, display_names_by_id,
-    ordinals_by_id, restart_codex_desktop,
+    CodexAccountRuntime, CodexAccountSource, CodexApiError, CodexSwitchResult, SnapshotStore,
+    display_names_by_id, ordinals_by_id, restart_codex_desktop,
 };
+use codexbar::notifications::CredentialAlertPolicy;
+use codexbar::settings::Settings;
 
 use crate::state::AppState;
 
+use super::credential_alerts::FetchAttempt;
+use super::providers::quota_notification_account_identity_for;
 use super::*;
 
 // ── Codex multi-account (ADR 0003, milestone 2) ──────────────────────
@@ -115,10 +119,10 @@ pub(crate) async fn refresh_codex_account_lanes(
         return;
     }
 
-    let mut handles = Vec::with_capacity(accounts.len());
+    let mut handles = tokio::task::JoinSet::new();
     for account in accounts {
         let permits = Arc::clone(&fetch_permits);
-        handles.push(tokio::spawn(async move {
+        handles.spawn(async move {
             let Ok(_permit) = permits.acquire_owned().await else {
                 return None;
             };
@@ -126,7 +130,7 @@ pub(crate) async fn refresh_codex_account_lanes(
             let home_path = account.codex_home_path.clone();
             let email_hint = account.email_hint.clone();
             let workspace_account_id = account.effective_workspace_account_id();
-            match tokio::time::timeout(
+            let result = tokio::time::timeout(
                 std::time::Duration::from_secs(DEFAULT_FETCH_TIMEOUT_SECONDS),
                 api.fetch_snapshot_for_workspace(
                     &home_path,
@@ -135,36 +139,73 @@ pub(crate) async fn refresh_codex_account_lanes(
                     true,
                 ),
             )
-            .await
-            {
-                Ok(Ok(snapshot)) => Some((account, snapshot)),
-                Ok(Err(e)) => {
-                    tracing::debug!(
-                        "codex account lane {} failed: {}",
-                        account.id,
-                        into_api_message(e)
-                    );
-                    None
+            .await;
+            match result {
+                Ok(result) => {
+                    if let Err(error) = &result {
+                        tracing::debug!("codex account lane {} failed: {}", account.id, error);
+                    }
+                    Some((account, result))
                 }
                 Err(_) => {
                     tracing::debug!("codex account lane {} timed out", account.id);
                     None
                 }
             }
-        }));
+        });
     }
 
-    let mut updates = Vec::new();
-    for handle in handles {
-        if let Ok(Some((fetched_account, snapshot))) = handle.await {
-            updates.push((fetched_account, snapshot));
+    let mut outcomes = Vec::new();
+    while let Some(result) = handles.join_next().await {
+        if let Ok(Some(outcome)) = result {
+            outcomes.push(outcome);
         }
     }
+
+    let current_accounts = match load_codex_accounts() {
+        Ok(accounts) => accounts,
+        Err(e) => {
+            tracing::warn!("codex account lanes: failed to reload accounts: {e}");
+            return;
+        }
+    };
     // Hold the generation owner through the read/merge/write so an invalidated
     // batch cannot overwrite a replacement batch's account snapshots.
     let state = app.state::<Mutex<AppState>>();
-    let Ok(state) = state.lock() else { return };
-    match save_codex_lane_results(&state, generation, updates) {
+    let Ok(mut state) = state.lock() else { return };
+    if !is_current_provider_refresh_generation(&state, generation) {
+        return;
+    }
+    let current_by_id: HashMap<Uuid, &CodexAccount> = current_accounts
+        .iter()
+        .map(|account| (account.id, account))
+        .collect();
+    let mut updates = Vec::new();
+    for (fetched_account, result) in outcomes {
+        let Some(current) = current_by_id.get(&fetched_account.id).copied() else {
+            continue;
+        };
+        if !account_lane_is_current(&fetched_account, current) {
+            continue;
+        }
+        match result {
+            Ok(snapshot) if account_snapshot_belongs_to(current, &snapshot) => {
+                observe_codex_account_lane_outcome(
+                    &mut state.notification_manager,
+                    &fetched_account,
+                    FetchAttempt::Succeeded,
+                );
+                updates.push((fetched_account, snapshot));
+            }
+            Ok(_) => {}
+            Err(error) => observe_codex_account_lane_outcome(
+                &mut state.notification_manager,
+                &fetched_account,
+                FetchAttempt::Failed(error.state_kind()),
+            ),
+        }
+    }
+    match save_codex_lane_results(&state, generation, updates, &current_accounts) {
         Ok(false) => return,
         Err(e) => tracing::warn!("codex account lanes: failed to persist snapshots: {e}"),
         Ok(true) => {}
@@ -172,20 +213,48 @@ pub(crate) async fn refresh_codex_account_lanes(
     events::emit_codex_accounts_updated(&app);
 }
 
+fn observe_codex_account_lane_outcome(
+    manager: &mut codexbar::notifications::NotificationManager,
+    account: &CodexAccount,
+    attempt: FetchAttempt,
+) {
+    if account.source != CodexAccountSource::ManagedByApp {
+        return;
+    }
+
+    let account_scope = quota_notification_account_identity_for(
+        ProviderId::Codex,
+        "",
+        account.email_hint.as_deref(),
+        None,
+        Some(account.id),
+    );
+    match attempt {
+        FetchAttempt::Succeeded => {
+            manager.observe_credential_recovery(ProviderId::Codex, &account_scope);
+        }
+        FetchAttempt::Failed(kind) if kind.needs_sign_in() => {
+            let policy = CredentialAlertPolicy::from_settings(&Settings::load());
+            manager.observe_credential_failure(policy, ProviderId::Codex, &account_scope, kind);
+        }
+        FetchAttempt::Failed(_) => {}
+    }
+}
+
 fn save_codex_lane_results(
     state: &AppState,
     generation: u64,
     updates: Vec<(CodexAccount, codexbar::codex_accounts::AccountUsageSnapshot)>,
+    current_accounts: &[CodexAccount],
 ) -> Result<bool, std::io::Error> {
     if !is_current_provider_refresh_generation(state, generation) {
         return Ok(false);
     }
-    let current_accounts = load_codex_accounts().map_err(std::io::Error::other)?;
     let current_by_id: HashMap<Uuid, &CodexAccount> = current_accounts
         .iter()
         .map(|account| (account.id, account))
         .collect();
-    let mut snapshots = snapshots_for_accounts(&current_accounts, SnapshotStore::new().load()?);
+    let mut snapshots = snapshots_for_accounts(current_accounts, SnapshotStore::new().load()?);
     for (fetched_account, snapshot) in updates {
         if current_by_id
             .get(&fetched_account.id)
@@ -511,7 +580,10 @@ fn into_user_message(error: CodexAccountManagerError) -> String {
 
 fn into_api_message(error: CodexApiError) -> String {
     match error {
-        CodexApiError::Message(msg) => msg,
+        CodexApiError::AuthenticationRequired(msg)
+        | CodexApiError::SessionExpired(msg)
+        | CodexApiError::PermissionDenied(msg)
+        | CodexApiError::Message(msg) => msg,
         CodexApiError::Network(e) => format!("network error: {e}"),
         CodexApiError::Parse(e) => format!("failed to parse Codex payload: {e}"),
     }
@@ -650,7 +722,8 @@ mod tests {
             save_codex_lane_results(
                 &state,
                 state.provider_refresh_generation,
-                vec![(account.clone(), snapshot.clone())]
+                vec![(account.clone(), snapshot.clone())],
+                &[account.clone()]
             )
             .unwrap()
         );
@@ -659,7 +732,15 @@ mod tests {
             email: Some("old@example.com".into()),
             ..snapshot
         };
-        assert!(!save_codex_lane_results(&state, old_generation, vec![(account, stale)]).unwrap());
+        assert!(
+            !save_codex_lane_results(
+                &state,
+                old_generation,
+                vec![(account.clone(), stale)],
+                &[account]
+            )
+            .unwrap()
+        );
         assert_eq!(
             std::fs::read(file_locations::snapshots_file()).unwrap(),
             before

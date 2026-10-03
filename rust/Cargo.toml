@@ -1,6 +1,6 @@
 [package]
 name = "codexbar"
-version = "0.60.3"
+version = "0.70.0"
 edition = "2024"
 authors = ["CodexBar Contributors"]
 description = "Windows and WSL system tray app for monitoring AI provider usage limits"
@@ -95,6 +95,7 @@ windows = { version = "0.58", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    "Win32_System_Power",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_UI_WindowsAndMessaging",

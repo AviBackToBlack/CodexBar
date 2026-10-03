@@ -1,16 +1,22 @@
 //! Unified Usage & Spend accounting contract for upstream 0.53 parity.
 //! Accounting semantics live here so UI/CLI never infer unknown vs zero.
 
+mod local_history;
 mod opencodex;
+
+pub use local_history::{
+    LocalCostEstimate, LocalHistoryCoverage, LocalTokenHistorySummary, local_token_history_json,
+};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use chrono::{Datelike, Local, Timelike};
+use chrono::{Datelike, Local, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::codex_workspaces::{CodexWorkspacesIndex, ProjectUsage, SessionUsage, SourceStatus};
+use crate::cost_reporting_period::{CostReportingPeriod, MAX_ROLLING_DAYS};
 use crate::cost_scanner::{
     CostScanner, CostSummary, ModelTokenCounts, get_daily_cost_history, get_daily_token_history,
 };
@@ -70,45 +76,6 @@ impl CostProvenance {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LocalHistoryCoverage {
-    Complete,
-    Partial,
-    #[default]
-    Unavailable,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct LocalTokenHistorySummary {
-    pub total_tokens: u64,
-    pub session_count: usize,
-    pub coverage: LocalHistoryCoverage,
-}
-
-pub fn local_token_history_json(
-    provider: &str,
-    history: LocalTokenHistorySummary,
-    days: u32,
-) -> serde_json::Value {
-    let complete = history.coverage == LocalHistoryCoverage::Complete;
-    serde_json::json!({
-        "provider": provider,
-        "supported": true,
-        "days_scanned": days,
-        "cost": {"total_usd": serde_json::Value::Null, "currency": serde_json::Value::Null},
-        "daily": [],
-        "tokens": {"total": complete.then_some(history.total_tokens)},
-        "sessions_count": complete.then_some(history.session_count),
-        "historyCoverage": match history.coverage {
-            LocalHistoryCoverage::Complete => "complete",
-            LocalHistoryCoverage::Partial => "partial",
-            LocalHistoryCoverage::Unavailable => "unavailable",
-        },
-        "knownZero": complete && history.total_tokens == 0,
-        "note": "Local token history; dollar costs unavailable"
-    })
-}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CostCoverageCounts {
@@ -192,6 +159,12 @@ pub struct ImportedSpendSource {
     pub known_cost_usd: Option<f64>,
     pub provenance: CostProvenance,
     pub token_mix: SpendTokenMix,
+    /// Sum of the importer's resolved per-entry totals: the authoritative
+    /// `totalTokens` when present, else input + output + cache creation
+    /// (`cache_read` is already part of input). Same basis as `models` and
+    /// `daily`. Not part of the wire contract.
+    #[serde(skip)]
+    pub token_total: Option<u64>,
     pub coverage: CostCoverageCounts,
     pub models: Vec<SpendModelRow>,
     pub daily: Vec<SpendDailyPoint>,
@@ -221,7 +194,14 @@ struct ResolvedSpendData {
 #[serde(rename_all = "camelCase")]
 pub struct SpendContract {
     pub provider_id: String,
+    /// Days of the rolling-only sidecars (workspaces, imports, per-day
+    /// history). For month to date this is the days elapsed this month; for
+    /// all available history it caps at 365. `reporting_period` names the
+    /// window the totals actually cover.
     pub history_days: u32,
+    /// Raw reporting period (`rolling:N`, `month-to-date`, `all`).
+    #[serde(default)]
+    pub reporting_period: String,
     /// Known subtotal for this window. None means unknown, never implicit zero.
     pub known_cost_usd: Option<f64>,
     pub known_zero: bool,
@@ -230,6 +210,11 @@ pub struct SpendContract {
     pub price_coverage_ratio: Option<f64>,
     pub history_coverage_established: bool,
     pub token_mix: SpendTokenMix,
+    /// Window token total with each source's own rule applied
+    /// (see [`resolve_token_total`]). Not part of the wire contract: the merged
+    /// `token_mix` above cannot express native and imported rules at once.
+    #[serde(skip)]
+    pub token_total: Option<u64>,
     pub conversation_count: u32,
     pub models: Vec<SpendModelRow>,
     pub projects: Vec<ProjectUsage>,
@@ -246,18 +231,13 @@ struct CustomPricing {
     entries: HashMap<String, CustomRates>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+/// One `custom-pricing.json` entry, in USD per million tokens. `Some(0.0)` is
+/// free; `None` is unknown and is never filled from another source.
+#[derive(Debug, Clone, Default)]
 struct CustomRates {
     input: Option<f64>,
     output: Option<f64>,
-    #[serde(rename = "cacheRead", alias = "cache_read")]
     cache_read: Option<f64>,
-    #[serde(
-        rename = "cacheWrite",
-        alias = "cache_write",
-        alias = "cacheCreation",
-        alias = "cache_creation"
-    )]
     cache_write: Option<f64>,
 }
 
@@ -269,17 +249,30 @@ impl CustomPricing {
     fn load() -> Self {
         Self::default_path()
             .and_then(|path| fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice::<HashMap<String, CustomRates>>(&bytes).ok())
-            .map(|entries| Self {
-                entries: entries
-                    .into_iter()
-                    .filter_map(|(key, rates)| {
-                        let key = key.trim().to_ascii_lowercase();
-                        (!key.is_empty() && rates.is_valid()).then_some((key, rates))
-                    })
-                    .collect(),
-            })
+            .map(|bytes| Self::parse(&bytes))
             .unwrap_or_default()
+    }
+
+    /// Upstream `CostUsageCustomPricing.parse`: keys are trimmed and
+    /// lowercased, and every entry is read on its own, so one malformed entry
+    /// never discards the others. An entry without a single usable rate is
+    /// dropped. A document that is not a JSON object is empty.
+    fn parse(bytes: &[u8]) -> Self {
+        let Ok(serde_json::Value::Object(object)) = serde_json::from_slice(bytes) else {
+            return Self::default();
+        };
+        Self {
+            entries: object
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let key = key.trim().to_ascii_lowercase();
+                    if key.is_empty() {
+                        return None;
+                    }
+                    CustomRates::from_value(&value).map(|rates| (key, rates))
+                })
+                .collect(),
+        }
     }
 
     fn rates(&self, provider_id: &str, model: &str) -> Option<&CustomRates> {
@@ -289,14 +282,52 @@ impl CustomPricing {
             .get(&provider_key)
             .or_else(|| self.entries.get(&model_key))
     }
+
+    /// Upstream `CostUsageCustomPricing.rates(providerID:model:)` for imported
+    /// ledgers: the bare model key first, then `provider/model`. An empty model
+    /// has no override.
+    fn overlay_rates(&self, provider_id: &str, model: &str) -> Option<&CustomRates> {
+        let model_key = model.trim().to_ascii_lowercase();
+        if model_key.is_empty() {
+            return None;
+        }
+        self.entries.get(&model_key).or_else(|| {
+            let provider_key = format!("{}/{}", provider_id.trim(), model.trim());
+            self.entries.get(&provider_key.to_ascii_lowercase())
+        })
+    }
 }
 
 impl CustomRates {
-    fn is_valid(&self) -> bool {
-        [self.input, self.output, self.cache_read, self.cache_write]
-            .into_iter()
-            .flatten()
-            .all(|value| value.is_finite() && value >= 0.0)
+    /// Upstream `rates(from:)`: a rate that is missing, not a number,
+    /// negative or non-finite is unknown, and the camelCase spelling wins over
+    /// the snake_case one. `None` when the entry has no usable rate at all.
+    fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let rate = |key: &str| {
+            object
+                .get(key)
+                .and_then(serde_json::Value::as_f64)
+                .filter(|rate| rate.is_finite() && *rate >= 0.0)
+        };
+        let rates = Self {
+            input: rate("input"),
+            output: rate("output"),
+            cache_read: rate("cacheRead").or_else(|| rate("cache_read")),
+            cache_write: rate("cacheWrite")
+                .or_else(|| rate("cache_write"))
+                .or_else(|| rate("cacheCreation"))
+                .or_else(|| rate("cache_creation")),
+        };
+        [
+            rates.input,
+            rates.output,
+            rates.cache_read,
+            rates.cache_write,
+        ]
+        .iter()
+        .any(Option::is_some)
+        .then_some(rates)
     }
 
     fn cost(&self, counts: &ModelTokenCounts) -> Option<f64> {
@@ -316,16 +347,22 @@ impl CustomRates {
         cache_write: u64,
     ) -> Option<f64> {
         let cached = cache_read.min(input);
-        let uncached = input.saturating_sub(cached);
+        self.lane_cost(input.saturating_sub(cached), output, cached, cache_write)
+    }
+
+    /// Upstream `CostUsageCustomPricing.costUSD(rates:...)`: every token lane is
+    /// billed on its own, and a lane with tokens but no rate leaves the cost
+    /// unknown. A missing rate is never filled from another source.
+    fn lane_cost(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> Option<f64> {
         let mut total = 0.0;
-        if uncached > 0 {
-            total += uncached as f64 * self.input? / 1_000_000.0;
+        if input > 0 {
+            total += input as f64 * self.input? / 1_000_000.0;
         }
         if output > 0 {
             total += output as f64 * self.output? / 1_000_000.0;
         }
-        if cached > 0 {
-            total += cached as f64 * self.cache_read? / 1_000_000.0;
+        if cache_read > 0 {
+            total += cache_read as f64 * self.cache_read? / 1_000_000.0;
         }
         if cache_write > 0 {
             total += cache_write as f64 * self.cache_write? / 1_000_000.0;
@@ -334,15 +371,39 @@ impl CustomRates {
     }
 }
 
+/// Refreshes models.dev prices for the OpenCodex ledger before a fresh
+/// Usage & Spend build (upstream 0.60.4 `refreshPricingIfNeeded`).
+///
+/// Call it only when a summary will be rebuilt: a cached read must never
+/// start network work. It fetches at most once per models.dev cache path per
+/// 15 minutes, and only when the catalog is stale or a priced row's exact
+/// identity is missing from it.
+pub async fn refresh_opencodex_pricing_if_needed() {
+    opencodex::refresh_pricing_if_needed().await;
+}
+
 /// Build a stable accounting contract for a local-log provider.
-///  means the upstream All-time UI window, bounded to 365 days locally.
+/// `days == 0` means the legacy All-time window, bounded to 365 days locally.
 pub fn build_local_spend_contract(
     provider_id: &str,
     days: u32,
     include_opencodex: bool,
 ) -> SpendContract {
     let history_days = if days == 0 { 365 } else { days.clamp(1, 365) };
-    let scanner = CostScanner::new(history_days);
+    build_local_spend_contract_for_period(
+        provider_id,
+        CostReportingPeriod::Rolling(history_days),
+        include_opencodex,
+    )
+}
+
+/// Scan and build the accounting contract for a reporting period.
+pub fn build_local_spend_contract_for_period(
+    provider_id: &str,
+    period: CostReportingPeriod,
+    include_opencodex: bool,
+) -> SpendContract {
+    let scanner = CostScanner::for_period(period);
     let summary = match provider_id {
         "codex" => scanner.scan_codex(),
         "claude" => scanner.scan_claude(),
@@ -350,9 +411,9 @@ pub fn build_local_spend_contract(
         "opencodego" => scanner.scan_opencodego_with_cancel(None),
         _ => CostSummary::default(),
     };
-    build_local_spend_contract_from_summary(
+    build_contract_from_period_summary(
         provider_id,
-        history_days,
+        period,
         include_opencodex,
         false,
         crate::settings::Settings::load().hide_personal_info,
@@ -369,7 +430,32 @@ pub fn build_local_spend_contract_from_summary(
     hide_personal_info: bool,
     summary: CostSummary,
 ) -> SpendContract {
-    let history_days = history_days.clamp(1, 365);
+    build_contract_from_period_summary(
+        provider_id,
+        CostReportingPeriod::Rolling(history_days.clamp(1, MAX_ROLLING_DAYS)),
+        include_opencodex,
+        hide_native_codex_when_opencodex_present,
+        hide_personal_info,
+        summary,
+    )
+}
+
+/// Build the accounting contract for `period` from a summary scanned for that
+/// same period.
+///
+/// Sources that only support rolling windows (Codex workspaces, per-day
+/// history, OpenCodex imports) use [`CostReportingPeriod::sidecar_days`]:
+/// month to date maps to the days elapsed this month and all available
+/// history caps at a year. `history_days` reports that sidecar window.
+pub fn build_contract_from_period_summary(
+    provider_id: &str,
+    period: CostReportingPeriod,
+    include_opencodex: bool,
+    hide_native_codex_when_opencodex_present: bool,
+    hide_personal_info: bool,
+    summary: CostSummary,
+) -> SpendContract {
+    let history_days = period.sidecar_days(Utc::now());
     let custom = CustomPricing::load();
     let native_models = model_rows(provider_id, &summary, &custom);
     let native_coverage = coverage_for_models(&native_models);
@@ -400,6 +486,11 @@ pub fn build_local_spend_contract_from_summary(
     let imported = imports.first();
     let replace_native =
         provider_id == "codex" && hide_native_codex_when_opencodex_present && imported.is_some();
+    let token_total = resolve_token_total(
+        summary.total_tokens_for_provider(provider_id),
+        imported,
+        replace_native,
+    );
     let resolved = resolve_spend(
         native_cost,
         native_provenance,
@@ -440,6 +531,7 @@ pub fn build_local_spend_contract_from_summary(
     SpendContract {
         provider_id: provider_id.to_string(),
         history_days,
+        reporting_period: period.raw(),
         known_cost_usd: resolved.known_cost_usd,
         known_zero,
         provenance: resolved.provenance,
@@ -451,6 +543,7 @@ pub fn build_local_spend_contract_from_summary(
         price_coverage: resolved.price_coverage,
         history_coverage_established: summary.history_coverage_established,
         token_mix: resolved.token_mix,
+        token_total,
         conversation_count,
         models: resolved.models,
         projects: native.projects,
@@ -508,6 +601,26 @@ fn load_native_spend(
             daily: daily_points(provider_id, history_days),
         },
     }
+}
+
+/// Totals native and imported sources separately, each with its own rule, then
+/// combines them. The native total comes from
+/// [`CostSummary::total_tokens_for_provider`], the same rule as the native
+/// model and daily totals. The imported side uses the importer's resolved per-entry
+/// totals (authoritative `totalTokens` when present) instead of re-deriving a
+/// total from the merged `token_mix`, whose `cache_read` is already part of
+/// input. `replace_native` mirrors [`resolve_spend`]: the imported source
+/// replaces the native one entirely.
+fn resolve_token_total(
+    native_total: u64,
+    imported: Option<&ImportedSpendSource>,
+    replace_native: bool,
+) -> Option<u64> {
+    let imported_total = imported.and_then(|source| source.token_total);
+    if replace_native {
+        return imported_total;
+    }
+    Some(native_total.saturating_add(imported_total.unwrap_or(0)))
 }
 
 #[allow(
@@ -644,7 +757,7 @@ fn model_rows(
                 input_tokens: counts.input_tokens,
                 output_tokens: counts.output_tokens,
                 cache_read_tokens: counts.cached_tokens,
-                total_tokens: counts.total(),
+                total_tokens: counts.total_for_provider(provider_id),
                 custom_pricing: custom_rates.is_some(),
             }
         })

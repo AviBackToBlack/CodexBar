@@ -4,7 +4,7 @@
 //! openai-codex / anthropic assistant rows into cost summaries without
 //! double-counting the same entry id across shared files.
 
-use chrono::{DateTime, Duration, Local, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs::File;
@@ -113,13 +113,13 @@ fn resolve_environment_path(value: &str, cwd: &Path) -> Option<PathBuf> {
 pub fn scan_pi_compatible_into(
     summary: &mut CostSummary,
     target: PiMappedProvider,
-    days: u32,
+    cutoff: DateTime<Utc>,
     cancel: Option<&AtomicBool>,
     seen_entries: &mut HashSet<String>,
 ) -> PiScanEvidence {
     scan_roots_into(
         summary,
-        days,
+        cutoff,
         cancel,
         seen_entries,
         pi_compatible_session_roots(dirs::home_dir()),
@@ -135,13 +135,13 @@ pub fn scan_pi_compatible_into(
 /// both roots so standalone Pi history is not double-counted.
 pub fn scan_pi_into(
     summary: &mut CostSummary,
-    days: u32,
+    cutoff: DateTime<Utc>,
     cancel: Option<&AtomicBool>,
     seen_entries: &mut HashSet<String>,
 ) -> PiScanEvidence {
     scan_roots_into(
         summary,
-        days,
+        cutoff,
         cancel,
         seen_entries,
         pi_compatible_session_roots(dirs::home_dir()),
@@ -184,16 +184,21 @@ fn scan_pi_daily_from_roots(
                     missing_timestamp = true;
                     return;
                 };
-                let day = timestamp
-                    .with_timezone(&Local)
-                    .date_naive()
+                let day = crate::cost_reporting_period::cost_bucket_zone()
+                    .date(timestamp)
                     .format("%Y-%m-%d")
                     .to_string();
                 if !entry.pricing_known {
                     result.unpriced_days.insert(day.clone());
                 }
                 *result.costs.entry(day.clone()).or_insert(0.0) += entry.cost;
-                let tokens = entry.input.saturating_add(entry.output);
+                // Pi reports cache reads and writes outside `input`, so the day
+                // total adds them (same rule as the standalone Pi window total).
+                let tokens = entry
+                    .input
+                    .saturating_add(entry.output)
+                    .saturating_add(entry.cache_read)
+                    .saturating_add(entry.cache_create);
                 let total = result.tokens.entry(day.clone()).or_insert(0);
                 *total = total.saturating_add(tokens);
             });
@@ -209,13 +214,12 @@ fn scan_pi_daily_from_roots(
 
 fn scan_roots_into(
     summary: &mut CostSummary,
-    days: u32,
+    cutoff: DateTime<Utc>,
     cancel: Option<&AtomicBool>,
     seen_entries: &mut HashSet<String>,
     roots: Vec<PathBuf>,
     target: Option<PiMappedProvider>,
 ) -> PiScanEvidence {
-    let cutoff = Utc::now() - Duration::days(days as i64);
     let mut sessions = 0u32;
     let mut evidence = PiScanEvidence::default();
     for root in roots {
@@ -547,13 +551,31 @@ fn parse_pi_assistant_entry_any(value: &Value) -> Option<PiEntry> {
         return None;
     }
 
+    let timestamp = entry_timestamp(value);
     let (cost, pricing_known) = match mapped {
-        PiMappedProvider::Codex => match CostUsagePricing::codex_cost_usd_with_cache_write(
-            &model,
-            input,
-            cache_read,
-            cache_create,
-            output,
+        // Upstream prices each row at its timestamp, so usage from before a
+        // model's repricing keeps the rates it was billed at.
+        PiMappedProvider::Codex => match timestamp.map_or_else(
+            || {
+                CostUsagePricing::codex_cost_usd_with_cache_write(
+                    &model,
+                    input,
+                    cache_read,
+                    cache_create,
+                    output,
+                )
+            },
+            |ts| {
+                CostUsagePricing::codex_cost_usd_at_date_with_cache_write_and_pricing_snapshot(
+                    &model,
+                    input,
+                    cache_read,
+                    cache_create,
+                    output,
+                    ts.date_naive(),
+                    None,
+                )
+            },
         ) {
             Some(cost) => (cost, true),
             None => (0.0, false),
@@ -597,7 +619,7 @@ fn parse_pi_assistant_entry_any(value: &Value) -> Option<PiEntry> {
     };
 
     Some(PiEntry {
-        timestamp: entry_timestamp(value),
+        timestamp,
         provider: mapped,
         model,
         input,
@@ -690,6 +712,34 @@ mod tests {
         assert_eq!(entry.cache_create, 300);
         assert!((entry.cost - expected).abs() < 1e-12);
         assert!(entry.pricing_known);
+    }
+
+    #[test]
+    fn prices_codex_rows_at_their_utc_timestamp() {
+        let cost = |timestamp: Option<&str>| {
+            let mut raw = serde_json::json!({
+                "id": "sol-1", "role": "assistant", "provider": "openai-codex",
+                "model": "gpt-5.6-sol",
+                "usage": { "input": 100, "output": 5, "cacheRead": 10, "cacheWrite": 20 }
+            });
+            if let Some(timestamp) = timestamp {
+                raw["timestamp"] = timestamp.into();
+            }
+            parse_pi_assistant_entry(&raw, PiMappedProvider::Codex)
+                .unwrap()
+                .cost
+        };
+        let historical = 70.0 * 5e-6 + 10.0 * 5e-7 + 20.0 * 6.25e-6 + 5.0 * 3e-5;
+        let current = 70.0 * 4e-6 + 10.0 * 4e-7 + 20.0 * 5e-6 + 5.0 * 2e-5;
+        for (timestamp, expected) in [
+            (Some("2026-07-10T12:00:00Z"), historical),
+            (Some("2026-08-20T23:59:59Z"), historical),
+            (Some("2026-08-21T00:00:00Z"), current),
+            (Some("2026-09-10T12:00:00Z"), current),
+            (None, current),
+        ] {
+            assert!((cost(timestamp) - expected).abs() < 1e-12, "{timestamp:?}");
+        }
     }
 
     #[test]
@@ -895,7 +945,14 @@ mod tests {
 
         let mut summary = CostSummary::default();
         let mut seen = HashSet::new();
-        let evidence = scan_roots_into(&mut summary, 365, None, &mut seen, vec![sessions], None);
+        let evidence = scan_roots_into(
+            &mut summary,
+            Utc::now() - Duration::days(365),
+            None,
+            &mut seen,
+            vec![sessions],
+            None,
+        );
         assert!(!evidence.complete);
         assert_eq!(summary.input_tokens, 11);
     }
@@ -926,6 +983,34 @@ mod tests {
         assert!(scan.history_coverage_established);
         assert_eq!(scan.tokens.values().sum::<u64>(), 132);
         assert_eq!(scan.tokens.len(), 1);
+    }
+
+    #[test]
+    fn daily_tokens_count_cache_like_the_window_total() {
+        let dir = tempdir().unwrap();
+        let sessions = dir.path().join("agent").join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let codex = r#"{"id":"cached-codex","role":"assistant","provider":"openai-codex","model":"gpt-5","timestamp":"2026-07-20T12:00:00Z","usage":{"input":100,"output":20,"cacheRead":10,"cacheWrite":5}}"#;
+        let claude = r#"{"id":"cached-claude","role":"assistant","provider":"anthropic","model":"claude-sonnet-4-6","timestamp":"2026-07-20T13:00:00Z","usage":{"input":40,"output":4,"cacheRead":300,"cacheWrite":30}}"#;
+        std::fs::write(
+            sessions.join("cached.jsonl"),
+            format!("{codex}\n{claude}\n"),
+        )
+        .unwrap();
+        let cutoff = DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let scan = scan_pi_daily_from_roots(cutoff, None, vec![sessions.clone()]);
+        assert!(scan.history_coverage_established);
+        let daily_total = scan.tokens.values().sum::<u64>();
+        assert_eq!(daily_total, 135 + 374);
+
+        let mut summary = CostSummary::default();
+        let mut seen = HashSet::new();
+        let evidence = scan_roots_into(&mut summary, cutoff, None, &mut seen, vec![sessions], None);
+        assert!(evidence.complete);
+        assert_eq!(summary.total_tokens_for_provider("pi"), daily_total);
     }
 
     #[test]

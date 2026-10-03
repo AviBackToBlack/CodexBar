@@ -1,15 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  formatSpendTokens,
   formatUsageSpendReportingDay,
+  formatSpendMetric,
+  formatUsd,
   filterUsageSpendSummaryForOverview,
   renderUsageSpendSharePng,
+  usageSpendShareColumns,
   usageSpendShareFooter,
   usageSpendSubscriptionCaption,
 } from "./usageSpendSharing";
 import type { SpendContract, UsageSpendRow, UsageSpendSummary } from "../types/bridge";
 
 describe("usage spend sharing", () => {
+  it("labels a mixed-pricing subtotal without presenting it as a total", () => {
+    expect(formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125)).toMatch(/^≥.* known/);
+  });
+
+  it("marks a lower-bound token count with a floor sign and leaves exact counts bare", () => {
+    const floor = formatSpendMetric(null, 1_500, "USD", "tokens", 0.0125, undefined, true);
+    expect(floor).toContain(`≥${(1_500).toLocaleString()} tokens`);
+    expect(floor).toMatch(/^≥.* known/);
+    const exact = formatSpendMetric(null, 1_500, "USD", "tokens", null, undefined, false);
+    expect(exact).toBe(`${(1_500).toLocaleString()} tokens`);
+  });
+
+  it("keeps the localized subtotal label next to a lower-bound token count", () => {
+    const metric = formatSpendMetric(null, 500, "USD", "Token", 6, "{} (teilweise)", true);
+    expect(metric).toBe(`${formatUsd(6, "USD")} (teilweise) · ≥500 Token`);
+  });
+
+  it("uses the caller's localized subtotal label", () => {
+    const metric = formatSpendMetric(null, 500, "USD", "Token", 6, "{} (teilweise)");
+    expect(metric).toBe(`${formatUsd(6, "USD")} (teilweise) · 500 Token`);
+    expect(metric).not.toContain("known");
+  });
+
+  it("renders a complete known-zero total instead of a subtotal", () => {
+    const metric = formatSpendMetric(0, 0, "USD", "tokens", 9);
+    expect(metric).not.toBe("—");
+    expect(metric).not.toContain("≥");
+    expect(metric).not.toContain("9.00");
+    expect(metric).toContain("0 tokens");
+  });
+
   it.each([
     [0, "0 subscriptions"],
     [1, "1 subscription"],
@@ -25,6 +60,15 @@ describe("usage spend sharing", () => {
     expect(formatUsageSpendReportingDay("2026-10-01", "Pacific/Norfolk")).toBe("Oct 1, 2026");
   });
 
+  it("keeps a zero token count distinct from an unknown one", () => {
+    expect(formatSpendTokens(0, "tokens", "Unknown")).toBe("0 tokens");
+    expect(formatSpendTokens(8100, "tokens", "Unknown")).toBe("8,100 tokens");
+    expect(formatSpendTokens(null, "tokens", "Unknown")).toBe("Unknown");
+    expect(formatSpendTokens(undefined, "tokens", "Unknown")).toBe("Unknown");
+    expect(formatSpendTokens(-1, "tokens", "Unknown")).toBe("Unknown");
+    expect(formatSpendTokens(Number.NaN, "tokens", "Unknown")).toBe("Unknown");
+  });
+
   it("falls back for an invalid dashboard timezone or date", () => {
     expect(formatUsageSpendReportingDay("2026-10-01", "Not/AZone")).toBe("2026-10-01");
     expect(formatUsageSpendReportingDay("2026-02-31", "UTC")).toBe("2026-02-31");
@@ -34,11 +78,14 @@ describe("usage spend sharing", () => {
     expect(
       usageSpendShareFooter({
         contract: {} as SpendContract,
+        reportingPeriod: "rolling:30",
         rows: [{
           providerId: "codex",
           displayName: "Codex",
           sevenDay: null,
           thirtyDay: null,
+          periodCost: null,
+          periodTokens: null,
           currency: "USD",
           source: "local",
           includedInOverview: true,
@@ -52,6 +99,7 @@ describe("usage spend sharing", () => {
   it("keeps hidden sources out of the Overview share summary", () => {
     const summary: UsageSpendSummary = {
       contract: {} as SpendContract,
+      reportingPeriod: "rolling:30",
       reportingDay: "2026-09-19",
       dashboardTimezone: "UTC",
       rows: [
@@ -60,6 +108,8 @@ describe("usage spend sharing", () => {
           displayName: "Codex",
           sevenDay: 1,
           thirtyDay: 2,
+          periodCost: 1,
+          periodTokens: null,
           currency: "USD",
           source: "local",
           includedInOverview: true,
@@ -69,6 +119,8 @@ describe("usage spend sharing", () => {
           displayName: "Claude",
           sevenDay: 3,
           thirtyDay: 4,
+          periodCost: 3,
+          periodTokens: null,
           currency: "USD",
           source: "hidden",
           includedInOverview: false,
@@ -86,12 +138,22 @@ describe("usage spend sharing", () => {
     // account emails or provider-identity secrets. The renderer draws exactly
     // these cells; keep the invariant comment on renderUsageSpendSharePng in
     // sync if this list ever grows.
-    const renderedCells = ["displayName", "sevenDay", "thirtyDay", "currency", "source"] as const;
+    const renderedCells = [
+      "displayName",
+      "periodCost",
+      "periodTokens",
+      "sevenDay",
+      "thirtyDay",
+      "currency",
+      "source",
+    ] as const;
     const row: UsageSpendRow = {
       providerId: "codex",
       displayName: "Codex",
       sevenDay: 1,
       thirtyDay: 2,
+      periodCost: 2,
+      periodTokens: null,
       currency: "USD",
       source: "local",
       includedInOverview: true,
@@ -101,7 +163,37 @@ describe("usage spend sharing", () => {
     );
     // Nothing outside the drawn cells may be read by the renderer, and no
     // UsageSpendRow field may carry account-identity data (no email/org).
-    expect(Object.keys(row).filter((key) => /email|org|token|account/i.test(key))).toEqual([]);
+    expect(Object.keys(row).filter((key) => /email|org|account|secret|(access|auth|api|refresh)token/i.test(key))).toEqual([]);
     expect(unsafeKeys).toEqual(["providerId", "includedInOverview"]);
   });
+
+  it("adds a labelled History window column while keeping the fixed 7 and 30 day columns", () => {
+    const row: UsageSpendRow = {
+      providerId: "codex",
+      displayName: "Codex",
+      sevenDay: 1,
+      thirtyDay: 2,
+      periodCost: 9,
+      periodTokens: 900,
+      currency: "USD",
+      source: "local",
+      includedInOverview: true,
+    };
+    const withPeriod = usageSpendShareColumns("Month to date");
+    expect(withPeriod.headers).toEqual([
+      "Provider",
+      "Month to date",
+      "7 days",
+      "30 days",
+      "Currency",
+      "Source",
+    ]);
+    const cells = withPeriod.cellsFor(row);
+    expect(cells).toHaveLength(withPeriod.headers.length);
+    expect(cells).toHaveLength(withPeriod.colW.length);
+    expect(cells[1]).toContain("900");
+    expect(cells[2]).not.toContain("900");
+  });
+
+
 });

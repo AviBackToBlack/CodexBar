@@ -9,8 +9,12 @@ use crate::core::{
 };
 
 use super::CLOUDFLARE_CHALLENGE_MESSAGE;
+use super::reset_credits;
 
 const CLOUDFLARE_BODY_PREFIX_BYTES: usize = 64 * 1024;
+
+/// Query flag that opts the usage request in to the `cedar_ember` block.
+const RESET_OPT_IN_QUERY: &str = "cedar_ember=1";
 
 fn is_cloudflare_challenge_response(
     status: StatusCode,
@@ -113,6 +117,7 @@ fn json_value_kind(value: &serde_json::Value) -> &'static str {
 /// Claude Web API fetcher
 pub struct ClaudeWebApiFetcher {
     client: Client,
+    base_url: String,
 }
 
 /// Organization info from Claude API
@@ -144,6 +149,9 @@ struct UsageResponse {
     seven_day_routines: Option<UsageWindow>,
     extra_usage: Option<ExtraUsageResponse>,
     limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
+    /// Raw limit-reset block; decoded leniently by `reset_credits` so an
+    /// unreadable block never fails the usage windows.
+    cedar_ember: Option<serde_json::Value>,
 }
 
 impl<'de> Deserialize<'de> for UsageResponse {
@@ -219,6 +227,7 @@ impl<'de> Deserialize<'de> for UsageResponse {
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(serde::de::Error::custom)?,
+            cedar_ember: map.remove("cedar_ember"),
         })
     }
 }
@@ -286,7 +295,7 @@ impl AccountResponse {
 }
 
 impl ClaudeWebApiFetcher {
-    const BASE_URL: &'static str = "https://claude.ai/api";
+    const DEFAULT_BASE_URL: &'static str = "https://claude.ai/api";
 
     /// Create a new fetcher
     pub fn new() -> Self {
@@ -295,7 +304,14 @@ impl ClaudeWebApiFetcher {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("Failed to create HTTP client"),
+            base_url: Self::DEFAULT_BASE_URL.to_string(),
         }
+    }
+
+    #[cfg(test)]
+    fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
     }
 
     /// Fetch usage using browser cookies or env-var session key
@@ -395,6 +411,15 @@ impl ClaudeWebApiFetcher {
         }
 
         let mut result = ProviderFetchResult::new(snapshot, "web");
+
+        // Web-only, display-only limit-reset inventory (never persisted).
+        if let Some(item) = usage
+            .cedar_ember
+            .as_ref()
+            .and_then(|block| reset_credits::inventory_from_block(block, Utc::now()))
+        {
+            result = result.with_inventory_item(item);
+        }
 
         // Add cost info if available
         let mut cost = extra_usage.and_then(|extra| {
@@ -506,7 +531,7 @@ impl ClaudeWebApiFetcher {
             return Ok(org_id);
         }
 
-        let url = format!("{}/organizations", Self::BASE_URL);
+        let url = format!("{}/organizations", self.base_url);
 
         let response = self
             .client
@@ -535,20 +560,43 @@ impl ClaudeWebApiFetcher {
             .ok_or_else(|| ProviderError::Parse("No organizations found".to_string()))
     }
 
-    /// Get usage data
+    /// Get usage data.
+    ///
+    /// The first request opts in to the `cedar_ember` limit-reset block. A
+    /// surface-specific rejection may reject only that opt-in, so any other
+    /// status is retried once on the plain URL. Success, 401, 429, and a
+    /// Cloudflare challenge keep their normal handling without a retry.
     async fn get_usage(
         &self,
         org_id: &str,
         headers: &reqwest::header::HeaderMap,
     ) -> Result<UsageResponse, ProviderError> {
-        let url = format!("{}/organizations/{}/usage", Self::BASE_URL, org_id);
-
-        let response = self
+        let url = format!("{}/organizations/{}/usage", self.base_url, org_id);
+        let opted_in = self
             .client
-            .get(&url)
+            .get(format!("{url}?{RESET_OPT_IN_QUERY}"))
             .headers(headers.clone())
             .send()
             .await?;
+
+        let response = match opted_in.status() {
+            StatusCode::OK | StatusCode::UNAUTHORIZED | StatusCode::TOO_MANY_REQUESTS => opted_in,
+            StatusCode::FORBIDDEN => {
+                let response_headers = opted_in.headers().clone();
+                let body = opted_in.bytes().await?;
+                if is_cloudflare_challenge_response(StatusCode::FORBIDDEN, &response_headers, &body)
+                {
+                    return Err(classify_web_http_error(
+                        "usage",
+                        StatusCode::FORBIDDEN,
+                        &response_headers,
+                        &body,
+                    ));
+                }
+                self.get_plain_usage(&url, headers).await?
+            }
+            _ => self.get_plain_usage(&url, headers).await?,
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -565,6 +613,14 @@ impl ClaudeWebApiFetcher {
         parse_json_with_body(response, "usage").await
     }
 
+    async fn get_plain_usage(
+        &self,
+        url: &str,
+        headers: &reqwest::header::HeaderMap,
+    ) -> Result<reqwest::Response, ProviderError> {
+        Ok(self.client.get(url).headers(headers.clone()).send().await?)
+    }
+
     /// Get extra usage (credits)
     async fn get_extra_usage(
         &self,
@@ -573,8 +629,7 @@ impl ClaudeWebApiFetcher {
     ) -> Result<ExtraUsageResponse, ProviderError> {
         let url = format!(
             "{}/organizations/{}/overage_spend_limit",
-            Self::BASE_URL,
-            org_id
+            self.base_url, org_id
         );
 
         let response = self
@@ -600,11 +655,7 @@ impl ClaudeWebApiFetcher {
         org_id: &str,
         headers: &reqwest::header::HeaderMap,
     ) -> Option<PrepaidBalance> {
-        let url = format!(
-            "{}/organizations/{}/prepaid/credits",
-            Self::BASE_URL,
-            org_id
-        );
+        let url = format!("{}/organizations/{}/prepaid/credits", self.base_url, org_id);
 
         let response = self
             .client
@@ -628,7 +679,7 @@ impl ClaudeWebApiFetcher {
         &self,
         headers: &reqwest::header::HeaderMap,
     ) -> Result<AccountResponse, ProviderError> {
-        let url = format!("{}/account", Self::BASE_URL);
+        let url = format!("{}/account", self.base_url);
 
         let response = self
             .client
@@ -1333,3 +1384,7 @@ mod tests {
 #[cfg(test)]
 #[path = "cloudflare_tests.rs"]
 mod cloudflare_tests;
+
+#[cfg(test)]
+#[path = "reset_opt_in_tests.rs"]
+mod reset_opt_in_tests;

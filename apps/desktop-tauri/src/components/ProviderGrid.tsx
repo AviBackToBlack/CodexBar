@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
@@ -36,6 +36,15 @@ export default function ProviderGrid({
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const canReorder = typeof onReorder === "function";
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Keep the selected item visible when it changes (keyboard switching in the
+  // scrollable dense grid); this never expands a collapsed grid.
+  useEffect(() => {
+    gridRef.current
+      ?.querySelector(".provider-grid__item--active")
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [selectedProviderId]);
 
   const applyReorder = (targetId: string) => {
     if (!onReorder || !dragId || dragId === targetId) return;
@@ -85,6 +94,7 @@ export default function ProviderGrid({
 
   return (
     <div
+      ref={gridRef}
       className={`provider-grid${densityClass}${showProviderIcons ? "" : " provider-grid--no-icons"}`}
       data-provider-count={totalItems}
       data-expanded={isExpanded ? "true" : "false"}

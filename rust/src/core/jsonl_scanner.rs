@@ -43,6 +43,8 @@ struct CachedCostReadStatusProjection {
     previous_report: Option<CachedCostReport>,
     #[serde(default)]
     codex_scan_pause_reason: Option<CodexScanPauseReason>,
+    #[serde(default)]
+    bucket_time_zone: Option<String>,
 }
 
 fn deserialize_nonempty_object<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -169,6 +171,36 @@ impl CacheStamp {
             content_hash: hasher.finish(),
         }
     }
+
+    /// Stamp the serialized cache while ignoring its scan timestamp. This
+    /// avoids allocating a second full-size JSON buffer just to normalize one
+    /// scalar before comparing cache payloads.
+    fn from_cache_payload(bytes: &[u8]) -> Option<Self> {
+        const FIELD: &[u8] = b"\"last_scan_unix_ms\":";
+        let value_start = bytes
+            .windows(FIELD.len())
+            .position(|window| window == FIELD)?
+            + FIELD.len();
+        let mut value_end = value_start;
+        if bytes.get(value_end) == Some(&b'-') {
+            value_end += 1;
+        }
+        let digits_start = value_end;
+        while bytes.get(value_end).is_some_and(u8::is_ascii_digit) {
+            value_end += 1;
+        }
+        if value_end == digits_start {
+            return None;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hasher.write(&bytes[..value_start]);
+        hasher.write(&bytes[value_end..]);
+        Some(Self {
+            byte_len: bytes.len() - (value_end - value_start),
+            content_hash: hasher.finish(),
+        })
+    }
 }
 
 /// Terminal reason for a bounded Codex catch-up pause.
@@ -190,8 +222,10 @@ pub struct CostUsageCache {
     /// Last scan timestamp in milliseconds
     pub last_scan_unix_ms: i64,
     /// Per-file usage data
+    #[serde(serialize_with = "save_skip::sorted_map")]
     pub files: HashMap<String, CostUsageFileUsage>,
     /// Aggregated daily data: day_key -> model -> [input, cached, output, reasoning?]
+    #[serde(serialize_with = "save_skip::sorted_days")]
     pub days: HashMap<String, HashMap<String, Vec<i64>>>,
     /// Inclusive range covered by the last successful full inspection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,12 +271,41 @@ pub struct CostUsageCache {
     /// persists aggregate day/model totals rather than the native request-row
     /// representation used by upstream.  The map is optional on disk so old
     /// caches remain valid and can be upgraded lazily.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "save_skip::sorted_map"
+    )]
     pub codex_source_rows: HashMap<String, CodexSourceRowCache>,
+    /// Request rows of fork-shaped Codex files (a `forked_from_id` or a
+    /// parent-baseline lineage), built from the same parsed records as the
+    /// file's day totals. Source-row evidence skips these files, so this map
+    /// is what lets Priority trace evidence reach forked sessions.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub codex_fork_rows: HashMap<String, Vec<CodexSourceUsageRow>>,
+    /// Priority (Fast) turn evidence read from the Codex trace database.
+    /// Applied as a pricing overlay whenever day totals are rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_priority_turns_cursor: Option<CodexPriorityTurnsCursor>,
+    /// Trace-database path and presence seen by the last full scan
+    /// (`sqlite:<path>` or `missing:<path>`, upstream
+    /// `codexPriorityMetadataKey`). A database that appears later bypasses
+    /// the scan debounce once so its evidence is applied promptly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_priority_metadata_key: Option<String>,
+    /// Zone the day keys were bucketed in (upstream `timeZoneIdentifier`).
+    /// A cache from another zone is rebuilt; caches written before the stamp
+    /// existed are kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bucket_time_zone: Option<String>,
     /// Content stamp of the decoded on-disk baseline. This is process-local
     /// and omitted from JSON so a stale reader cannot replace a newer cache.
     #[serde(skip)]
     pub(crate) loaded_stamp: Option<Option<CacheStamp>>,
+    /// Stamp of the loaded cache payload with `last_scan_unix_ms` omitted.
+    /// This is separate from `loaded_stamp`, which still protects stale writes.
+    #[serde(skip)]
+    pub(crate) loaded_payload_stamp: Option<CacheStamp>,
 }
 
 /// Pricing evidence attached to one cached Codex request row.
@@ -273,6 +336,10 @@ pub struct CodexSourceUsageRow {
     pub source_end_offset: i64,
     #[serde(default)]
     pub pricing: CodexSourcePricingEvidence,
+    /// Codex turn (`task_started`) the request belongs to; matches Priority
+    /// trace evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 /// Source identity and rows retained for a cached Codex file.
@@ -299,6 +366,7 @@ pub struct CostUsageFileUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_file_identity: Option<String>,
     /// Daily usage data extracted from this file
+    #[serde(serialize_with = "save_skip::sorted_days")]
     pub days: HashMap<String, HashMap<String, Vec<i64>>>,
     /// Bytes parsed so far (for incremental parsing)
     pub parsed_bytes: Option<i64>,
@@ -373,6 +441,8 @@ pub(crate) struct CodexSessionMetadata {
     pub lineage: CodexSessionLineage,
     pub fork_timestamp: Option<String>,
     pub history_base_thread_id: Option<String>,
+    pub is_subagent: bool,
+    pub subagent_history_start_ordinal: Option<i64>,
 }
 
 /// Running totals for Codex token counting
@@ -394,8 +464,35 @@ pub struct CodexForkAccountingState {
     pub history_base_thread_id: Option<String>,
     pub fork_timestamp: Option<String>,
     pub inherited_totals: Option<CodexTotals>,
+    /// Timestamp of the first token event in this fork's log. A descendant
+    /// forked before it uses this fork's inherited counter origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_timestamp: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_inherited_totals: Option<CodexTotals>,
+    /// True when the child log itself supplied enough copied-prefix history to
+    /// establish the inherited baseline without consulting a parent cache row.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locally_resolved: bool,
+    /// Parser state of an unfinished bounded parse, so the next pass continues
+    /// at `parsed_bytes` instead of rereading the fork from byte zero. Absent
+    /// once the parse reaches its target, and in caches written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<CodexForkResumeState>,
+}
+
+/// Fork parser state that the per-file cache fields do not already carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexForkResumeState {
+    /// Parent baseline the interrupted parse started from. A validated parent
+    /// that now supplies a different baseline restarts the parse.
+    pub parse_baseline: CodexTotals,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub totals_watermark: Option<CodexTotals>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub saw_interleaved_totals: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paginated_baseline_checked: bool,
 }
 
 /// Snapshot of the last validated cost report, persisted so spend surfaces keep
@@ -443,6 +540,10 @@ pub struct CodexParseResult {
     pub token_timestamps_monotonic: Option<bool>,
     /// Last token timestamp observed by the parser.
     pub last_token_timestamp: Option<String>,
+    /// First token timestamp of the parsed history. A resumed fork parse
+    /// carries its saved value forward; resumed standard parses see only their
+    /// suffix, so fork accounting never reads it from them.
+    pub first_token_timestamp: Option<String>,
     /// Number of timestamp comparisons performed while validating this parse.
     pub token_timestamp_comparisons: u64,
     /// Newly consumed bytes in this parse pass.
@@ -456,6 +557,10 @@ pub struct CodexParseResult {
     pub fork_baseline: Option<CodexTotals>,
     /// Remaining inherited counters used when a fork emits last-only rows.
     pub remaining_inherited_totals: Option<CodexTotals>,
+    pub fork_baseline_locally_resolved: bool,
+    /// State to continue an unfinished parent-baseline fork parse. `None` once
+    /// the parse is complete and for every other parse mode.
+    pub fork_resume_state: Option<CodexForkResumeState>,
 }
 
 /// A billable Codex token-count delta.
@@ -468,6 +573,7 @@ pub struct CodexUsageRecord {
     pub cached: i64,
     pub output: i64,
     pub reasoning: Option<i64>,
+    pub turn_id: Option<String>,
 }
 
 /// Day range for scanning
@@ -507,8 +613,16 @@ impl CostUsageDayRange {
 /// JSONL Scanner for cost/usage logs
 pub struct JsonlScanner;
 pub(crate) mod codex;
+pub(crate) use codex::CodexForkParseResume;
+pub(crate) use codex::priority::CodexPriorityOverlay;
+pub use codex::priority::{
+    CODEX_PRIORITY_COMPLETED_MODEL_RETENTION_LIMIT, CodexPriorityCursorAnchor,
+    CodexPriorityTurnMetadata, CodexPriorityTurnsCursor,
+};
+mod save_skip;
 pub(crate) use codex::source_rows::{
     read_source_rows, recover_rows, row_cache, row_cache_matches, row_cache_needs_recovery,
+    row_priced_model, rows_from_records,
 };
 
 impl JsonlScanner {
@@ -548,6 +662,10 @@ impl JsonlScanner {
             && let Ok(mut cache) = serde_json::from_str::<CostUsageCache>(&contents)
         {
             let stamp = CacheStamp::from_bytes(contents.as_bytes());
+            cache.loaded_payload_stamp = CacheStamp::from_cache_payload(contents.as_bytes());
+            if let Some(scan_unix_ms) = save_skip::recorded_scan_time(&cache_path, &stamp) {
+                cache.last_scan_unix_ms = scan_unix_ms;
+            }
             if provider == ProviderId::Codex {
                 return codex::codex_cache_apply_load_policy(cache, stamp);
             }
@@ -592,7 +710,8 @@ impl JsonlScanner {
             return CachedCostReadStatus::default();
         };
         if provider == ProviderId::Codex
-            && !codex::codex_cache_schema_is_current(projection.codex_cache_schema_version)
+            && (!codex::codex_cache_schema_is_current(projection.codex_cache_schema_version)
+                || !codex::codex_cache_zone_is_current(projection.bucket_time_zone.as_deref()))
         {
             return CachedCostReadStatus::default();
         }
@@ -668,24 +787,13 @@ impl JsonlScanner {
                 if !CostUsagePricing::counts_toward_codex_subscription(model) {
                     continue;
                 }
-                let priced = pricing_day
-                    .and_then(|day| {
-                        CostUsagePricing::codex_cost_usd_at_date(
-                            model,
-                            u64::try_from(input).unwrap_or(0),
-                            u64::try_from(cached).unwrap_or(0),
-                            u64::try_from(output).unwrap_or(0),
-                            day,
-                        )
-                    })
-                    .or_else(|| {
-                        CostUsagePricing::codex_cost_usd(
-                            model,
-                            u64::try_from(input).unwrap_or(0),
-                            u64::try_from(cached).unwrap_or(0),
-                            u64::try_from(output).unwrap_or(0),
-                        )
-                    });
+                let priced = CostUsagePricing::codex_day_aggregate_cost_usd(
+                    model,
+                    u64::try_from(input).unwrap_or(0),
+                    u64::try_from(cached).unwrap_or(0),
+                    u64::try_from(output).unwrap_or(0),
+                    pricing_day,
+                );
                 if let Some(cost) = priced {
                     total_cost_usd += cost;
                 } else {
@@ -851,6 +959,9 @@ impl JsonlScanner {
             let _cleared = fs::remove_file(&cache_path);
             return;
         }
+        if save_skip::skip_unchanged_save(&cache_path, cache, &json) {
+            return;
+        }
 
         let tmp_name = format!(
             ".{}.{}-{}.tmp",
@@ -882,6 +993,7 @@ impl JsonlScanner {
         };
         if wrote {
             cache.loaded_stamp = Some(Some(CacheStamp::from_bytes(json.as_bytes())));
+            cache.loaded_payload_stamp = CacheStamp::from_cache_payload(json.as_bytes());
         }
         // Best-effort temp cleanup (ignore errors — unique name avoids clashes).
         let _truncated_tmp = fs::File::create(&tmp_path).and_then(|f| f.set_len(0));

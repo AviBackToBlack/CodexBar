@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{Local, TimeZone, Utc};
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -64,6 +64,8 @@ impl From<Report> for crate::spend_contract::LocalTokenHistorySummary {
             total_tokens: report.total_tokens.unwrap_or(0),
             session_count: report.session_count,
             coverage: report.coverage,
+            cost_estimate: Default::default(),
+            ..Default::default()
         }
     }
 }
@@ -155,8 +157,8 @@ fn cache_root() -> PathBuf {
 }
 
 fn day_window(days: u32) -> (String, String) {
-    let days = days.clamp(1, 365);
-    let today = Local::now().date_naive();
+    let days = crate::cost_reporting_period::clamp_window_days(days);
+    let today = crate::cost_reporting_period::cost_bucket_zone().date(Utc::now());
     (
         (today - chrono::Duration::days(i64::from(days - 1))).to_string(),
         today.to_string(),

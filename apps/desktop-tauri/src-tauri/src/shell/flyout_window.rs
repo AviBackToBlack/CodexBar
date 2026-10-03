@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use codexbar::settings::Settings;
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl};
 
+use super::activation::{self, Activation};
 use crate::geometry_store::{self, StoredSize};
 use crate::state::AppState;
 use crate::surface::SurfaceMode;
@@ -72,14 +73,21 @@ pub fn is_open(app: &AppHandle) -> bool {
         .is_some_and(|w| w.is_visible().unwrap_or(false))
 }
 
-/// Build (first open) or show + focus (subsequent opens) the flyout window at
+/// Build (first open) or show (subsequent opens) the flyout window at
 /// `position`, if given, else the default tray-anchored position.
+/// `activation` says whether it may take focus once shown (see
+/// [`super::activation`]); on first open the frontend reveals the window, so
+/// the request is stored and applied by `reveal_tray_panel_window`.
 ///
 /// `WebviewWindowBuilder::build` deadlocks when called synchronously from a
 /// Tauri command on Windows (see `commands/surface.rs::open_settings_window`
 /// precedent) — callers must invoke this from an async context (an `async`
 /// command, or `tauri::async_runtime::spawn`), never a sync command handler.
-pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<(), String> {
+pub fn open_or_focus(
+    app: &AppHandle,
+    position: Option<(i32, i32)>,
+    activation: Activation,
+) -> Result<(), String> {
     let settings = Settings::load();
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
         apply_window_always_on_top(&window, settings.tray_panel_always_on_top)?;
@@ -91,7 +99,7 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
             reanchor(app)?;
         }
         window.show().map_err(|e| e.to_string())?;
-        window.set_focus().map_err(|e| e.to_string())?;
+        activation::apply(&window, activation)?;
         if show_grace_starts_now(false) {
             mark_shown(app);
         }
@@ -127,6 +135,10 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
         // `dragDropEnabled: false` in tauri.conf.json for why this must be
         // disabled explicitly on every window that hosts that grid.
         .disable_drag_drop_handler()
+        // Showing never activates the flyout by itself (tao shows it with
+        // SW_SHOWNOACTIVATE); `activation::apply` decides whether it takes
+        // focus.
+        .focused(false)
         .visible(false);
     if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
         builder = builder.min_inner_size(min_w, min_h);
@@ -152,7 +164,7 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     if show_grace_starts_now(true) {
         mark_shown(app);
     }
-    arm_reveal(app)?;
+    arm_reveal(app, activation)?;
     Ok(())
 }
 
@@ -181,11 +193,14 @@ fn show_grace_starts_now(first_build_hidden: bool) -> bool {
     !first_build_hidden
 }
 
-fn arm_reveal(app: &AppHandle) -> Result<(), String> {
+fn arm_reveal(app: &AppHandle, activation: Activation) -> Result<(), String> {
     let state = app
         .try_state::<Mutex<AppState>>()
         .ok_or_else(|| "app state unavailable".to_string())?;
-    state.lock().map_err(|e| e.to_string())?.arm_flyout_reveal();
+    state
+        .lock()
+        .map_err(|e| e.to_string())?
+        .arm_flyout_reveal(activation);
     Ok(())
 }
 
@@ -214,7 +229,8 @@ pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
     } else {
         // Tray-toggle is fire-and-forget; open_or_focus surfaces its own
         // errors via tracing, so the toggle call site discards the result.
-        let _open = open_or_focus(app, position);
+        // Both callers (tray left-click, global hotkey) are user actions.
+        let _open = open_or_focus(app, position, Activation::UserAction);
     }
 }
 

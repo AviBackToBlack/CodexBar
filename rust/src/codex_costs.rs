@@ -15,7 +15,7 @@ pub(crate) use summary_contract::{
     decode_remote_codex_summary,
 };
 
-use chrono::{Duration, Local, NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -23,6 +23,7 @@ use crate::core::{
     CodexUsageRecord, CostUsageCache, CostUsageDayRange, CostUsagePricing, JsonlScanner,
     is_unpriced_codex_routing_model,
 };
+use crate::cost_reporting_period::cost_bucket_zone;
 use crate::cost_scanner::{CostSummary, ModelPricingCompleteness, ModelTokenCounts};
 use crate::spend_contract::CostCoverageCounts;
 
@@ -40,12 +41,12 @@ pub(crate) fn build_codex_cost_summary(
         &today,
         history_days,
         Utc::now(),
-        crate::core::local_timezone_name(),
+        cost_bucket_zone().identifier(),
     )
 }
 
 fn codex_today_summary(history: &CostSummary, cache: &CostUsageCache) -> CostSummary {
-    let today = Local::now().date_naive();
+    let today = cost_bucket_zone().date(Utc::now());
     let range = CostUsageDayRange::new(today, today);
     let mut summary = CostSummary {
         period_start: Some(today),
@@ -228,7 +229,7 @@ pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRa
 
 #[cfg(test)]
 pub(crate) fn scan_codex_file_cost(path: &Path) -> f64 {
-    let today = Local::now().date_naive();
+    let today = chrono::Local::now().date_naive();
     let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
     scan_codex_file_cost_for_range(path, &range)
 }
@@ -361,27 +362,17 @@ fn add_codex_tokens_to_summary(
         return Some(0.0);
     }
 
-    let priced = pricing_day
-        .and_then(|day| {
-            CostUsagePricing::codex_cost_usd_at_date(
-                &model_key,
-                tokens.input,
-                tokens.cached,
-                tokens.output,
-                day,
-            )
-        })
-        .or_else(|| {
-            CostUsagePricing::codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output)
-        });
-    let uses_fallback_pricing = priced.is_none();
-    let cost = codex_cost_usd_for_day(
+    let priced = CostUsagePricing::codex_day_aggregate_cost_usd(
         &model_key,
         tokens.input,
         tokens.cached,
         tokens.output,
         pricing_day,
     );
+    let uses_fallback_pricing = priced.is_none();
+    let cost = priced.unwrap_or_else(|| {
+        codex_cost_usd_fallback(&model_key, tokens.input, tokens.cached, tokens.output)
+    });
     if uses_fallback_pricing {
         summary.unknown_models.insert(model_key.clone());
         match &mut summary.model_pricing_completeness {
@@ -484,26 +475,8 @@ fn codex_cost_usd_for_day(
     if CostUsagePricing::is_codex_unattributed_model(model) {
         return 0.0;
     }
-    let priced = pricing_day
-        .and_then(|day| CostUsagePricing::codex_cost_usd_at_date(model, input, cached, output, day))
-        .or_else(|| CostUsagePricing::codex_cost_usd(model, input, cached, output));
-    if let Some(cost) = priced {
-        return cost;
-    }
-
-    let normalized = CostUsagePricing::normalize_codex_model(model);
-    if normalized.contains("fast") || normalized.contains("priority") {
-        let fast = pricing_day
-            .and_then(|day| {
-                CostUsagePricing::codex_fast_cost_usd_at_date(model, input, cached, output, day)
-            })
-            .or_else(|| CostUsagePricing::codex_fast_cost_usd(model, input, cached, output));
-        if let Some(cost) = fast {
-            return cost;
-        }
-    }
-
-    codex_cost_usd_fallback(model, input, cached, output)
+    CostUsagePricing::codex_day_aggregate_cost_usd(model, input, cached, output, pricing_day)
+        .unwrap_or_else(|| codex_cost_usd_fallback(model, input, cached, output))
 }
 
 fn codex_cost_usd_fallback(model: &str, input: u64, cached: u64, output: u64) -> f64 {
@@ -581,6 +554,7 @@ mod tests {
             cached: 0,
             output: 20,
             reasoning,
+            turn_id: None,
         };
 
         let mut known_summary = CostSummary::default();
@@ -612,6 +586,7 @@ mod tests {
             cached: 0,
             output: 20,
             reasoning,
+            turn_id: None,
         };
         let records = vec![
             (make_record(Some(7)), 0),
@@ -653,12 +628,21 @@ mod tests {
 
     #[test]
     fn test_codex_pricing_uses_gpt55_standard_short_context_rates() {
-        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+        let cost = codex_cost_usd("gpt-5.5", 200_000, 80_000, 100_000);
 
         // GPT-5.5 standard short-context pricing:
-        // 600k non-cached input at $5/M, 400k cached input at $0.50/M,
-        // and 1M output at $30/M.
-        assert!((cost - 33.20).abs() < 0.01);
+        // 120k non-cached input at $5/M, 80k cached input at $0.50/M,
+        // and 100k output at $30/M.
+        assert!((cost - 3.64).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_codex_pricing_bills_whole_gpt55_request_at_long_context_rates() {
+        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+
+        // Above 272K input the whole request bills at $10/M input,
+        // $1/M cached input and $45/M output.
+        assert!((cost - 51.40).abs() < 1e-9);
     }
 
     #[test]
@@ -675,6 +659,7 @@ mod tests {
                     cached: 0,
                     output: 0,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -687,6 +672,7 @@ mod tests {
                     cached: 0,
                     output: 0,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -699,6 +685,7 @@ mod tests {
                     cached: 0,
                     output: 0,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -750,6 +737,7 @@ mod tests {
                     cached: 0,
                     output: 5,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -762,6 +750,7 @@ mod tests {
                     cached: 0,
                     output: 1_000_000,
                     reasoning: None,
+                    turn_id: None,
                 },
                 0,
             ),
@@ -789,6 +778,7 @@ mod tests {
                 cached: 0,
                 output: 1,
                 reasoning: None,
+                turn_id: None,
             },
             0,
         )];
@@ -810,6 +800,7 @@ mod tests {
                 cached: 0,
                 output: 0,
                 reasoning: None,
+                turn_id: None,
             },
             0,
         )];
@@ -843,6 +834,7 @@ mod tests {
                 cached: 0,
                 output: 1_000_000,
                 reasoning: None,
+                turn_id: None,
             },
             0,
         )];

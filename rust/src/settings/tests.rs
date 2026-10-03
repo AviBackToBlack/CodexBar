@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn test_settings_default() {
     let settings = Settings::default();
+    assert_eq!(settings.preferred_currency_code, "AUTO");
     assert!(settings.enabled_providers.contains("claude"));
     assert!(settings.enabled_providers.contains("codex"));
     assert_eq!(settings.refresh_interval_secs, 300);
@@ -19,9 +20,10 @@ fn test_settings_default() {
     assert_eq!(settings.critical_usage_threshold, 90.0);
     assert!(!settings.show_reset_when_exhausted);
     assert!(!settings.predictive_pace_warning_enabled);
+    assert!(!settings.credential_expiry_notifications_enabled);
     assert!(!settings.float_bar_show_cost);
     assert!(!settings.tray_panel_always_on_top);
-    assert_eq!(settings.overview_layout, "compact");
+    assert_eq!(settings.overview_layout, "detailed");
     assert!(settings.promote_tray_icon);
     assert!(settings.claude_daily_routines_usage_visible);
     assert!(!settings.claude_allow_reading_claude_code_credentials);
@@ -32,10 +34,45 @@ fn test_settings_default() {
 }
 
 #[test]
-fn overview_layout_defaults_to_compact_and_round_trips() {
+fn kimi_cookie_source_defaults_to_automatic_discovery() {
+    let settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Kimi), "auto");
+    assert_eq!(settings.cookie_source(ProviderId::Claude), "manual");
+}
+
+#[test]
+fn hyper_cookie_source_defaults_to_automatic_session_import() {
+    // Upstream resolves `hyperCookieSource` with an `.auto` fallback.
+    let mut settings = Settings::default();
+    assert_eq!(settings.cookie_source(ProviderId::Hyper), "auto");
+    settings.set_cookie_source(ProviderId::Hyper, "off");
+    assert_eq!(settings.cookie_source(ProviderId::Hyper), "off");
+}
+
+#[test]
+fn preferred_currency_defaults_validates_and_round_trips() {
+    let legacy: Settings = serde_json::from_str(r#"{"enabled_providers": []}"#)
+        .expect("legacy settings without a preferred currency remain valid");
+    assert_eq!(legacy.preferred_currency_code, "AUTO");
+
+    let selected: Settings =
+        serde_json::from_str(r#"{"enabled_providers": [], "preferred_currency_code": "try"}"#)
+            .expect("supported currency loads");
+    assert_eq!(selected.preferred_currency_code, "TRY");
+    let encoded = serde_json::to_string(&selected).expect("serialize selected currency");
+    assert!(encoded.contains(r#""preferred_currency_code":"TRY""#));
+
+    let invalid: Settings =
+        serde_json::from_str(r#"{"enabled_providers": [], "preferred_currency_code": "BTC"}"#)
+            .expect("unknown currency is normalized safely");
+    assert_eq!(invalid.preferred_currency_code, "AUTO");
+}
+
+#[test]
+fn overview_layout_defaults_to_detailed_and_round_trips() {
     let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
-        .expect("missing overview layout defaults to compact");
-    assert_eq!(defaulted.overview_layout, "compact");
+        .expect("missing overview layout defaults to detailed");
+    assert_eq!(defaulted.overview_layout, "detailed");
 
     let compact = Settings {
         overview_layout: "compact".to_string(),
@@ -48,7 +85,7 @@ fn overview_layout_defaults_to_compact_and_round_trips() {
     let unknown: Settings =
         serde_json::from_str(r#"{ "enabled_providers": [], "overview_layout": "unsupported" }"#)
             .expect("unknown overview layout is accepted and normalized");
-    assert_eq!(unknown.overview_layout, "compact");
+    assert_eq!(unknown.overview_layout, "detailed");
 }
 
 #[test]
@@ -113,6 +150,59 @@ fn open_codex_usage_logs_default_off_and_round_trip() {
     let loaded: Settings = serde_json::from_str(&json).expect("deserialize OpenCodex usage opt-in");
     assert!(loaded.open_codex_usage_logs_enabled);
     assert!(loaded.hide_native_codex_cost_when_open_codex_present);
+}
+
+#[test]
+fn tray_pace_color_defaults_off_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing tray pace color defaults false");
+    assert!(!defaulted.menu_bar_color_pace);
+
+    let enabled = Settings {
+        menu_bar_color_pace: true,
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&enabled).expect("serialize tray pace color");
+    assert!(json.contains(r#""menu_bar_color_pace":true"#));
+
+    let loaded: Settings = serde_json::from_str(&json).expect("deserialize tray pace color");
+    assert!(loaded.menu_bar_color_pace);
+}
+
+#[test]
+fn cost_reporting_period_defaults_to_thirty_days_and_round_trips() {
+    let defaulted: Settings = serde_json::from_str(r#"{ "enabled_providers": [] }"#)
+        .expect("missing cost_reporting_period defaults");
+    assert_eq!(
+        defaulted.cost_reporting_period,
+        CostReportingPeriod::Rolling(30)
+    );
+
+    for period in [
+        CostReportingPeriod::Rolling(90),
+        CostReportingPeriod::MonthToDate,
+        CostReportingPeriod::AllAvailable,
+    ] {
+        let settings = Settings {
+            cost_reporting_period: period,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).expect("serialize cost period");
+        assert!(json.contains(&format!(r#""cost_reporting_period":"{}""#, period.raw())));
+        let loaded: Settings = serde_json::from_str(&json).expect("deserialize cost period");
+        assert_eq!(loaded.cost_reporting_period, period);
+    }
+}
+
+#[test]
+fn unreadable_cost_reporting_period_loads_as_the_default() {
+    let loaded: Settings =
+        serde_json::from_str(r#"{ "enabled_providers": [], "cost_reporting_period": "weekly" }"#)
+            .expect("an unreadable period must not fail the whole settings file");
+    assert_eq!(
+        loaded.cost_reporting_period,
+        CostReportingPeriod::Rolling(30)
+    );
 }
 
 #[test]
@@ -183,6 +273,7 @@ fn new_warning_and_reset_settings_are_backward_compatible() {
 
     assert!(!loaded.show_reset_when_exhausted);
     assert!(!loaded.predictive_pace_warning_enabled);
+    assert!(!loaded.credential_expiry_notifications_enabled);
 }
 
 #[test]
@@ -549,6 +640,20 @@ fn test_api_key_provider_catalog_includes_token_providers() {
 }
 
 #[test]
+fn openrouter_api_key_help_explains_management_keys() {
+    let info = get_api_key_providers()
+        .into_iter()
+        .find(|info| info.id == ProviderId::OpenRouter)
+        .expect("OpenRouter api key metadata");
+    assert_eq!(
+        info.api_key_help,
+        Some(
+            "Required. Enter a regular API key or a Management API key here. Management keys also enable account Activity on the official OpenRouter API."
+        )
+    );
+}
+
+#[test]
 fn test_t3_chat_is_cookie_configured_not_api_key_configured() {
     let providers = get_api_key_providers();
     assert!(
@@ -684,13 +789,14 @@ fn test_language_defaults_to_english() {
 #[test]
 fn test_language_all_variants_available() {
     let languages = Language::all();
-    assert_eq!(languages.len(), 8);
+    assert_eq!(languages.len(), 9);
     assert!(languages.contains(&Language::English));
     assert!(languages.contains(&Language::Chinese));
     assert!(languages.contains(&Language::ChineseTraditional));
     assert!(languages.contains(&Language::Japanese));
     assert!(languages.contains(&Language::Korean));
     assert!(languages.contains(&Language::Spanish));
+    assert!(languages.contains(&Language::PortugueseBrazil));
     assert!(languages.contains(&Language::Russian));
     assert!(languages.contains(&Language::Turkish));
 }
@@ -703,6 +809,29 @@ fn test_language_display_names() {
     assert_eq!(Language::Japanese.display_name(), "日本語");
     assert_eq!(Language::Russian.display_name(), "Русский");
     assert_eq!(Language::Turkish.display_name(), "Türkçe");
+    assert_eq!(
+        Language::PortugueseBrazil.display_name(),
+        "Português (Brasil)"
+    );
+}
+
+#[test]
+fn test_language_resolves_brazilian_portuguese_aliases() {
+    for alias in [
+        "portuguesebrazil",
+        "pt",
+        "pt-BR",
+        "Portuguese",
+        "Português",
+        "portugues",
+        "Português (Brasil)",
+    ] {
+        assert_eq!(
+            Language::resolve(alias),
+            Some(Language::PortugueseBrazil),
+            "failed to resolve {alias}"
+        );
+    }
 }
 
 #[test]
@@ -769,6 +898,38 @@ fn test_settings_with_utf8_bom_parses_perprovider_tray_mode() {
     let settings: Settings = serde_json::from_str(json.trim_start_matches('\u{feff}')).unwrap();
 
     assert_eq!(settings.tray_icon_mode, TrayIconMode::PerProvider);
+}
+
+#[test]
+fn stacked_tray_mode_preserves_provider_preferences() {
+    let json = r#"{
+        "tray_icon_mode": "stacked",
+        "stacked_tray_top_provider": "claude",
+        "stacked_tray_bottom_provider": "codex"
+    }"#;
+
+    let settings: Settings = serde_json::from_str(json).unwrap();
+
+    assert_eq!(settings.tray_icon_mode, TrayIconMode::Stacked);
+    assert_eq!(
+        settings.stacked_tray_top_provider.as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        settings.stacked_tray_bottom_provider.as_deref(),
+        Some("codex")
+    );
+
+    let saved = serde_json::to_string(&settings).unwrap();
+    let reloaded: Settings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(
+        reloaded.stacked_tray_top_provider.as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        reloaded.stacked_tray_bottom_provider.as_deref(),
+        Some("codex")
+    );
 }
 
 #[test]
@@ -1045,6 +1206,108 @@ fn test_new_format_provider_configs_only() {
     assert_eq!(settings.api_region(ProviderId::Zai), "global");
 }
 
+#[test]
+fn retired_provider_config_is_ignored_until_explicit_save() {
+    let original = r#"{
+            "enabled_providers": ["codex", "crof"],
+            "refresh_interval_secs": 300,
+            "provider_metrics": { "codex": "weekly", "crof": "session" },
+            "float_bar_provider_ids": ["codex", "crof"],
+            "stacked_tray_top_provider": "crof",
+            "stacked_tray_bottom_provider": "crof",
+            "provider_configs": {
+                "crof": { "api_token": "retired-fixture-key" },
+                "codex": { "cookie_source": "manual", "openai_web_extras": false },
+                "alibaba": { "api_region": "cn", "manual_cookie_header": "ali=PLACEHOLDER" }
+            }
+        }"#;
+    let original_bytes = original.as_bytes().to_vec();
+
+    let settings: Settings =
+        serde_json::from_str(original).expect("load settings with retired key");
+
+    assert_eq!(original.as_bytes(), original_bytes);
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "manual");
+    assert!(!settings.openai_web_extras(ProviderId::Codex));
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["codex".to_string()])
+    );
+    assert_eq!(settings.provider_metrics.len(), 1);
+    assert_eq!(settings.float_bar_provider_ids, ["codex"]);
+    assert_eq!(settings.stacked_tray_top_provider, None);
+    assert_eq!(settings.stacked_tray_bottom_provider, None);
+    assert_eq!(settings.api_region(ProviderId::Alibaba), "cn");
+    assert_eq!(
+        settings.manual_cookie_header(ProviderId::Alibaba),
+        "ali=PLACEHOLDER"
+    );
+
+    let saved = serde_json::to_string(&settings).expect("serialize sanitized settings");
+    let saved_value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    let saved_configs = saved_value["provider_configs"].as_object().unwrap();
+    assert!(!saved_configs.contains_key("crof"));
+    assert!(saved_configs.contains_key("codex"));
+    assert!(saved_configs.contains_key("alibaba"));
+    assert!(
+        !saved.contains("\"crof\""),
+        "saved settings retained Crof: {saved}"
+    );
+}
+
+#[test]
+fn provider_aliases_are_canonicalized_at_the_load_boundary() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["openai", "ClAuDe", "not-a-provider"],
+            "provider_metrics": {
+                "openai": "weekly",
+                "CoDeX": "session",
+                "not-a-provider": "weekly"
+            },
+            "float_bar_provider_ids": ["OPENAI", "codex", "ClAuDe", "unknown"],
+            "stacked_tray_top_provider": "OPENAI",
+            "stacked_tray_bottom_provider": "ClAuDe"
+        }"#,
+    )
+    .expect("load settings containing provider aliases");
+
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["claude".to_string(), "codex".to_string()])
+    );
+    assert_eq!(
+        settings.provider_metrics.get("codex"),
+        Some(&MetricPreference::Session)
+    );
+    assert_eq!(settings.provider_metrics.len(), 1);
+    assert_eq!(settings.float_bar_provider_ids, ["codex", "claude"]);
+    assert_eq!(settings.stacked_tray_top_provider.as_deref(), Some("codex"));
+    assert_eq!(
+        settings.stacked_tray_bottom_provider.as_deref(),
+        Some("claude")
+    );
+}
+
+#[test]
+fn stacked_preferences_preserve_known_disabled_providers() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "enabled_providers": ["claude"],
+            "stacked_tray_top_provider": "OPENAI",
+            "stacked_tray_bottom_provider": "not-a-provider"
+        }"#,
+    )
+    .expect("load stacked preferences independently of enablement");
+
+    assert_eq!(settings.stacked_tray_top_provider.as_deref(), Some("codex"));
+    assert_eq!(settings.stacked_tray_bottom_provider, None);
+    assert_eq!(
+        settings.enabled_providers,
+        HashSet::from(["claude".to_string()])
+    );
+}
+
 /// Default `Settings` should serialize WITHOUT a `provider_configs`
 /// field (empty map skipped).
 #[test]
@@ -1189,4 +1452,22 @@ fn legacy_visibility_setters_preserve_other_explicit_hidden_items() {
         settings.hidden_usage_item_ids(ProviderId::Claude),
         vec!["metric:secondary".to_string()]
     );
+}
+
+/// Cookie-denial settings must survive the same path-based persistence used by
+/// `Settings::save` and `Settings::load`, including the secure-file wrapper
+/// shared by desktop and CLI settings.
+#[test]
+fn cookie_denial_round_trips_through_settings_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Codex, "off");
+    settings.set_openai_web_extras(ProviderId::Codex, false);
+
+    settings.save_to_path(&path).unwrap();
+    let loaded = Settings::load_from_path(Some(&path));
+
+    assert_eq!(loaded.cookie_source(ProviderId::Codex), "off");
+    assert!(!loaded.openai_web_extras(ProviderId::Codex));
 }

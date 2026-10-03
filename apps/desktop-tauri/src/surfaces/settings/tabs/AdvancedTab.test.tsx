@@ -29,10 +29,12 @@ const settings: SettingsSnapshot = {
   highUsageThreshold: 70,
   criticalUsageThreshold: 90,
   predictivePaceWarningEnabled: false,
+  credentialExpiryNotificationsEnabled: false,
   trayIconMode: "single",
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
   menuBarShowsPercent: true,
+  menuBarColorPace: false,
   showAsUsed: false,
   showAllTokenAccountsInMenu: true,
   enableAnimations: true,
@@ -53,6 +55,7 @@ const settings: SettingsSnapshot = {
   autoDownloadUpdates: false,
   installUpdatesOnQuit: false,
   globalShortcut: "",
+  switcherShortcuts: {},
   codexCustomSessionsDirs: [],
   updateChannel: "stable",
   uiLanguage: "english",
@@ -182,5 +185,27 @@ describe("AdvancedTab", () => {
       ),
     ).toHaveLength(0);
     expect(screen.getAllByText("HooksEnableLabel")).toHaveLength(1);
+  });
+
+  it("toggles Stay Awake independently of agent session discovery", () => {
+    const set = vi.fn();
+    render(
+      <AdvancedTab
+        settings={{ ...settings, agentSessionsEnabled: false, stayAwakeEnabled: false }}
+        set={set}
+        saving={false}
+      />,
+    );
+
+    const toggle = screen
+      .getByText("AgentSessionsStayAwakeLabel")
+      .closest(".settings-field")
+      ?.querySelector('input[type="checkbox"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle).not.toBeDisabled();
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle as Element);
+    expect(set).toHaveBeenCalledWith({ stayAwakeEnabled: true });
   });
 });

@@ -223,6 +223,7 @@ function providerSourceHintShort(
     case "notion":
     case "t3chat":
     case "commandcode":
+    case "raycast":
       return t("ProviderSourceWebShort");
     case "gemini":
     case "antigravity":
@@ -241,8 +242,9 @@ function providerSourceHintShort(
     case "zenmux":
     case "clinepass":
     case "neuralwatt":
+    case "devpass":
+    case "xkiro":
     case "doubao":
-    case "crof":
     case "stepfun":
     case "venice":
     case "openaiapi":
@@ -253,6 +255,7 @@ function providerSourceHintShort(
     case "xai":
     case "fireworks":
     case "meta":
+    case "vercel":
       return t("ProviderSourceApiShort");
     case "kiro":
       return t("ProviderSourceKiroEnvShort");

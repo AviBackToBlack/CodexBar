@@ -61,7 +61,9 @@
 }
 
 .menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset {
+.menu-surface--tray .menu-metric__reset,
+.menu-surface--tray .menu-metric__status,
+.menu-surface--tray .menu-metric__detail {
   font-size: 11px;
   line-height: 1.4;
 }
@@ -78,9 +80,15 @@
 .menu-metric__budget-header::before {
   content: "›";
   margin-right: 4px;
+  transition: transform 120ms ease;
 }
 .menu-metric__budget-header[aria-expanded="true"]::before {
   transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-metric__budget-header::before {
+    transition: none;
+  }
 }
 
 .codex-menu-accounts {

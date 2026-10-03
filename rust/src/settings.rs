@@ -12,13 +12,16 @@
 )]
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::core::ProviderId;
+use crate::cost_reporting_period::CostReportingPeriod;
 
 /// Stable namespace used by the desktop bridge for quota metric rows.
 pub const USAGE_ITEM_METRIC_PREFIX: &str = "metric:";
+/// Stable namespace for provider detail sections (upstream 0.62.0 #3638).
+pub const USAGE_ITEM_DETAIL_SECTION_PREFIX: &str = "detailSection:";
 pub const CODEX_SPARK_USAGE_ITEM_IDS: [&str; 2] = [
     "metric:extra-codex-spark",
     "metric:extra-codex-spark-weekly",
@@ -26,14 +29,25 @@ pub const CODEX_SPARK_USAGE_ITEM_IDS: [&str; 2] = [
 pub const CLAUDE_DAILY_ROUTINES_USAGE_ITEM_ID: &str = "metric:extra-claude-routines";
 
 mod api_keys;
+mod config_path;
+mod cost_time_zone;
 mod manual_cookies;
+mod optional_details;
+mod preferences_document;
 mod provider_workspace;
 mod raw;
 mod status;
 mod types;
 
 pub use api_keys::*;
+pub use config_path::{
+    CONFIG_PATH_ENV, apply_config_path_env, config_store_dir, resolve_config_path,
+    settings_file_override,
+};
+pub use cost_time_zone::*;
 pub use manual_cookies::*;
+pub use optional_details::provider_has_optional_details;
+pub use preferences_document::*;
 pub use provider_workspace::*;
 use raw::RawSettings;
 pub use status::*;
@@ -82,6 +96,10 @@ impl LowPowerModePreference {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "RawSettings", default)]
 pub struct Settings {
+    /// Preferred display currency for supported spend amounts; AUTO keeps provider currencies.
+    #[serde(default = "default_preferred_currency_code")]
+    pub preferred_currency_code: String,
+
     /// Enabled provider IDs (by CLI name)
     pub enabled_providers: HashSet<String>,
 
@@ -136,6 +154,16 @@ pub struct Settings {
     #[serde(default)]
     pub tray_icon_mode: TrayIconMode,
 
+    /// Optional preferred provider for the upper row of a stacked tray icon.
+    /// Stale or disabled values are retained and ignored until eligible again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacked_tray_top_provider: Option<String>,
+
+    /// Optional preferred provider for the lower row of a stacked tray icon.
+    /// Stale or duplicate values fall back to the next eligible provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacked_tray_bottom_provider: Option<String>,
+
     /// Show provider icons in the merged switcher UI
     #[serde(default = "default_true")]
     pub switcher_shows_icons: bool,
@@ -147,6 +175,10 @@ pub struct Settings {
     /// Replace bar-only tray display with provider branding plus percent text where supported
     #[serde(default)]
     pub menu_bar_shows_percent: bool,
+
+    /// Colour the Windows tray usage indicator by pace when enabled.
+    #[serde(default)]
+    pub menu_bar_color_pace: bool,
 
     /// Show usage bars as "used" (true) or "remaining" (false)
     pub show_as_used: bool,
@@ -164,6 +196,10 @@ pub struct Settings {
     /// Warn when Codex or Claude pace predicts exhaustion before reset.
     #[serde(default)]
     pub predictive_pace_warning_enabled: bool,
+
+    /// Notify once per failure episode when a provider account needs sign-in again.
+    #[serde(default)]
+    pub credential_expiry_notifications_enabled: bool,
 
     /// Show pace visualizations and forecast text in provider menu cards.
     #[serde(default = "default_true")]
@@ -212,6 +248,12 @@ pub struct Settings {
     #[serde(default = "default_global_shortcut")]
     pub global_shortcut: String,
 
+    /// Provider-switcher shortcut overrides (action -> shortcut, normalized).
+    /// Empty means every action uses its default; see
+    /// [`crate::switcher_shortcuts`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub switcher_shortcuts: BTreeMap<String, String>,
+
     /// Additional Codex home or sessions directories to include in local cost scans.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codex_custom_sessions_dirs: Vec<String>,
@@ -219,6 +261,10 @@ pub struct Settings {
     /// Discover local and configured SSH Codex/Claude sessions.
     #[serde(default)]
     pub agent_sessions_enabled: bool,
+
+    /// Keep the system awake (no idle sleep) while a local agent session is live.
+    #[serde(default)]
+    pub stay_awake_enabled: bool,
 
     /// SSH targets queried for remote agent sessions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -369,6 +415,16 @@ pub struct Settings {
     /// Hide native Codex spend rows when an OpenCodex import is present.
     #[serde(default)]
     pub hide_native_codex_cost_when_open_codex_present: bool,
+
+    /// History window for local cost surfaces: `rolling:N`, `month-to-date`, or
+    /// `all` (upstream 0.67.0). Missing or unreadable values read as `rolling:30`.
+    #[serde(default)]
+    pub cost_reporting_period: CostReportingPeriod,
+
+    /// IANA zone local cost history is bucketed in; empty means the machine
+    /// zone (upstream 0.67.0 `tokenCostUsageBucketTimeZone`).
+    #[serde(default)]
+    pub cost_usage_bucket_time_zone: String,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -509,7 +565,8 @@ fn normalize_hidden_usage_item_ids(ids: Vec<String>) -> Vec<String> {
             !id.is_empty()
                 && id.len() <= 128
                 && !id.chars().any(char::is_control)
-                && id.starts_with(USAGE_ITEM_METRIC_PREFIX)
+                && (id.starts_with(USAGE_ITEM_METRIC_PREFIX)
+                    || id.starts_with(USAGE_ITEM_DETAIL_SECTION_PREFIX))
         })
         .filter(|id| seen.insert(id.clone()))
         .collect::<Vec<_>>();
@@ -525,6 +582,7 @@ impl Default for Settings {
         enabled.insert("codex".to_string());
 
         Self {
+            preferred_currency_code: "AUTO".to_string(),
             enabled_providers: enabled,
             refresh_interval_secs: 300, // 5 minutes
             adaptive_refresh: false,
@@ -541,14 +599,18 @@ impl Default for Settings {
             provider_usage_thresholds: HashMap::new(),
             merge_tray_icons: false, // Show single provider by default
             tray_icon_mode: TrayIconMode::default(), // Single icon by default
+            stacked_tray_top_provider: None,
+            stacked_tray_bottom_provider: None,
             switcher_shows_icons: true,
             menu_bar_shows_highest_usage: false,
             menu_bar_shows_percent: false,
+            menu_bar_color_pace: false,
             show_as_used: true,        // Show as "used" by default
             enable_animations: true,   // Animations enabled by default
             reset_time_relative: true, // Show relative times by default
             show_reset_when_exhausted: false,
             predictive_pace_warning_enabled: false,
+            credential_expiry_notifications_enabled: false,
             show_pace: true,
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             overview_layout: default_overview_layout(),
@@ -560,8 +622,10 @@ impl Default for Settings {
             provider_metrics: HashMap::new(), // Empty = use Automatic for all
             provider_order: Vec::new(), // Empty = canonical ProviderId::all() order
             global_shortcut: default_global_shortcut(), // Ctrl+Shift+U by default
+            switcher_shortcuts: BTreeMap::new(),
             codex_custom_sessions_dirs: Vec::new(),
             agent_sessions_enabled: false,
+            stay_awake_enabled: false,
             agent_session_ssh_hosts: Vec::new(),
             hooks_enabled: false,
             http_proxy_enabled: false,
@@ -595,12 +659,18 @@ impl Default for Settings {
             cost_summary_display_style: CostSummaryDisplayStyle::default(),
             open_codex_usage_logs_enabled: false,
             hide_native_codex_cost_when_open_codex_present: false,
+            cost_reporting_period: CostReportingPeriod::default(),
+            cost_usage_bucket_time_zone: String::new(),
         }
     }
 }
 
+fn default_preferred_currency_code() -> String {
+    "AUTO".to_string()
+}
+
 fn default_overview_layout() -> String {
-    "compact".to_string()
+    "detailed".to_string()
 }
 
 pub fn normalize_overview_layout(value: &str) -> String {
@@ -612,30 +682,25 @@ pub fn normalize_overview_layout(value: &str) -> String {
 }
 
 impl Settings {
-    /// Get the settings file path
+    /// Get the settings file path (`CODEXBAR_CONFIG` when the CLI applied it).
     pub fn settings_path() -> Option<PathBuf> {
-        crate::logging::config_root().map(|p| p.join("settings.json"))
+        config_path::settings_file_for(settings_file_override(), crate::logging::config_root())
     }
 
     /// Load settings from disk
     pub fn load() -> Self {
+        let path = Self::settings_path();
         #[allow(
             unused_mut,
             reason = "mutability is needed for conditional initialization paths that the compiler cannot prove"
         )]
-        let mut settings = match Self::settings_path() {
-            Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
-                Ok(content) => {
-                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
-                }
-                Err(_) => Self::default(),
-            },
-            _ => Self::default(),
-        };
+        let mut settings = Self::load_from_path(path.as_deref());
 
         // Sync autostart toggle with actual registry state and repair stale commands from older builds.
+        // A CLI run on a `CODEXBAR_CONFIG` file skips these desktop integrations, so it touches
+        // neither the Run key nor the default config root.
         #[cfg(target_os = "windows")]
-        {
+        if settings_file_override().is_none() {
             settings.start_at_login = Self::sync_start_at_login_registry();
             settings.apply_promote_tray_default_migration();
         }
@@ -646,6 +711,18 @@ impl Settings {
         settings.migrate_legacy_usage_item_flags();
 
         settings
+    }
+
+    fn load_from_path(path: Option<&Path>) -> Self {
+        match path {
+            Some(path) if path.exists() => match crate::secure_file::read_string(path) {
+                Ok(content) => {
+                    serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
+                }
+                Err(_) => Self::default(),
+            },
+            _ => Self::default(),
+        }
     }
 
     /// Materialize `hidden_usage_item_ids` from the pre-0.62 per-provider
@@ -714,13 +791,17 @@ impl Settings {
         let path = Self::settings_path()
             .ok_or_else(|| anyhow::anyhow!("Could not determine settings path"))?;
 
+        self.save_to_path(&path)
+    }
+
+    fn save_to_path(&self, path: &Path) -> anyhow::Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let json = serde_json::to_string_pretty(self)?;
-        crate::secure_file::write_string(&path, &json)?;
+        crate::secure_file::write_string(path, &json)?;
 
         Ok(())
     }
@@ -933,12 +1014,17 @@ impl Settings {
         self.provider_configs.entry(id).or_default()
     }
 
-    /// Cookie source for `id`, or the default `"manual"` if unset.
+    /// Cookie source for `id`. Kimi and Charm Hyper follow upstream's
+    /// automatic default; providers with no specific default retain the
+    /// legacy manual default.
     pub fn cookie_source(&self, id: ProviderId) -> &str {
         self.provider_configs
             .get(&id)
             .and_then(|c| c.cookie_source.as_deref())
-            .unwrap_or(DEFAULT_COOKIE_SOURCE)
+            .unwrap_or(match id {
+                ProviderId::Kimi | ProviderId::Hyper => "auto",
+                _ => DEFAULT_COOKIE_SOURCE,
+            })
     }
 
     pub fn set_cookie_source(&mut self, id: ProviderId, source: impl Into<String>) {

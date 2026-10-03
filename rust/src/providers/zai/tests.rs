@@ -81,7 +81,7 @@ fn parses_successful_response_without_message() {
     }))
     .unwrap();
 
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
 
     assert_eq!(usage.login_method.as_deref(), Some("BigModel CN"));
     assert_eq!(usage.primary.used_percent, 10.0);
@@ -107,7 +107,7 @@ fn parses_current_api_percentage_and_reset_time() {
     }))
     .unwrap();
 
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
 
     assert_eq!(usage.primary.used_percent, 75.0);
     assert_eq!(usage.primary.window_minutes, Some(300));
@@ -145,7 +145,10 @@ fn five_hour_reset_plausibility_drops_impossible_timestamp() {
     }))
     .unwrap();
 
-    let usage = ZaiProvider::new().parse_quota_response(&quota).unwrap();
+    let usage = ZaiProvider::new()
+        .parse_quota_response(&quota)
+        .unwrap()
+        .usage;
     assert_eq!(usage.primary.used_percent, 25.0);
     assert_eq!(usage.primary.window_minutes, Some(300));
     assert_eq!(usage.primary.reset_description.as_deref(), Some("5-hour"));
@@ -210,7 +213,7 @@ fn credit_limit_plan_drives_primary_and_weekly_windows() {
     }))
     .unwrap();
 
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
 
     // Shortest window (5h credits) is the primary; longest (weekly) secondary.
     assert!((usage.primary.used_percent - 95.0).abs() < f64::EPSILON);
@@ -244,7 +247,7 @@ fn usage_signal_overrides_stale_percentage() {
     }))
     .unwrap();
 
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
 
     assert!((usage.primary.used_percent - 5.0).abs() < f64::EPSILON);
 }
@@ -270,7 +273,7 @@ fn time_limit_primary_carries_mcp_label_without_duration() {
         }
     }))
     .unwrap();
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
     assert_eq!(usage.primary.window_minutes, None);
     assert_eq!(usage.primary.reset_description.as_deref(), Some("MCP"));
     assert!(usage.primary.resets_at.is_some());
@@ -295,7 +298,7 @@ fn bare_time_limit_primary_has_no_window_duration() {
         }
     }))
     .unwrap();
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
     assert_eq!(usage.primary.window_minutes, None);
     assert_eq!(usage.primary.reset_description.as_deref(), Some("MCP"));
 }
@@ -326,7 +329,7 @@ fn mcp_limit_renders_separate_named_window() {
         }
     }))
     .unwrap();
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
 
     assert_eq!(usage.primary.window_minutes, Some(10080));
     assert_eq!(
@@ -371,7 +374,7 @@ fn session_five_hour_window_becomes_primary_over_weekly() {
         }
     }))
     .unwrap();
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
 
     assert_eq!(usage.primary.used_percent, 55.0);
     assert_eq!(usage.primary.window_minutes, Some(300));
@@ -394,7 +397,7 @@ fn plan_name_falls_back_to_level_key() {
         }
     }))
     .unwrap();
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
     assert_eq!(usage.login_method.as_deref(), Some("GLM Coding Plan"));
 
     for key in ["plan", "plan_type", "packageName"] {
@@ -403,7 +406,7 @@ fn plan_name_falls_back_to_level_key() {
             "data": { key: "Coding Plan", "limits": [] }
         }))
         .unwrap();
-        let usage = provider.parse_quota_response(&quota).unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap().usage;
         assert_eq!(usage.login_method.as_deref(), Some("Coding Plan"), "{key}");
     }
 }
@@ -416,7 +419,7 @@ fn empty_plan_fields_fall_back_to_default() {
         "data": { "planName": "  ", "level": "", "limits": [] }
     }))
     .unwrap();
-    let usage = provider.parse_quota_response(&quota).unwrap();
+    let usage = provider.parse_quota_response(&quota).unwrap().usage;
     assert_eq!(usage.login_method.as_deref(), Some("z.ai"));
 }
 
@@ -432,4 +435,142 @@ fn preserves_api_code_error_message() {
     let error = provider.parse_quota_response(&quota).unwrap_err();
 
     assert!(error.to_string().contains("invalid token"));
+}
+
+fn parse_data(data: serde_json::Value) -> Result<ZaiParsedQuota, ProviderError> {
+    let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+        "code": 200,
+        "data": data,
+    }))
+    .unwrap();
+    ZaiProvider::new().parse_quota_response(&quota)
+}
+
+fn detail_value(parsed: &ZaiParsedQuota) -> Option<(&str, &str, Option<&str>)> {
+    parsed
+        .unavailable_detail
+        .as_ref()
+        .map(|row| (row.title(), row.value(), row.secondary_value()))
+}
+
+#[test]
+fn missing_or_unrecognized_limits_do_not_fabricate_quota() {
+    for limits in [
+        serde_json::json!([]),
+        serde_json::json!([{"type": "FUTURE_LIMIT", "unit": 3, "number": 5, "percentage": 40}]),
+        serde_json::json!([{"type": "FUTURE_POINTS_POOL", "pointsRemaining": 800}]),
+    ] {
+        let parsed = parse_data(serde_json::json!({"level": "Pro", "limits": limits})).unwrap();
+        assert!(parsed.usage.primary.is_informational);
+        assert!(parsed.usage.secondary.is_none());
+        assert!(parsed.usage.extra_rate_windows.is_empty());
+        assert_eq!(parsed.usage.login_method.as_deref(), Some("Pro"));
+        assert_eq!(
+            detail_value(&parsed),
+            Some((
+                "Coding Plan usage",
+                "Unavailable",
+                Some("Check Usage Dashboard for complete plan usage.")
+            ))
+        );
+    }
+}
+
+#[test]
+fn unsupported_pool_preserves_known_mcp_limit() {
+    let parsed = parse_data(serde_json::json!({"limits": [
+        {"type": "FUTURE_POINTS_POOL", "pointsRemaining": 800},
+        {"type": "TIME_LIMIT", "unit": 5, "number": 1, "percentage": 25}
+    ]}))
+    .unwrap();
+
+    assert_eq!(
+        parsed.usage.primary.reset_description.as_deref(),
+        Some("MCP")
+    );
+    assert_eq!(parsed.usage.primary.used_percent, 25.0);
+    assert!(!parsed.usage.primary.is_informational);
+    assert_eq!(
+        detail_value(&parsed).map(|row| (row.0, row.1)),
+        Some(("Coding Plan usage", "Unavailable"))
+    );
+}
+
+#[test]
+fn unknown_extra_limit_marks_only_additional_quota_unavailable() {
+    let parsed = parse_data(serde_json::json!({"limits": [
+        {"type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 25},
+        {"type": "FUTURE_POINTS_POOL", "pointsRemaining": 800}
+    ]}))
+    .unwrap();
+
+    assert_eq!(parsed.usage.primary.used_percent, 25.0);
+    assert_eq!(
+        detail_value(&parsed).map(|row| (row.0, row.1)),
+        Some(("Additional quota", "Unavailable"))
+    );
+}
+
+#[test]
+fn fully_recognized_limits_have_no_unavailable_detail() {
+    let parsed = parse_data(serde_json::json!({"limits": [
+        {"type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 0}
+    ]}))
+    .unwrap();
+
+    assert_eq!(parsed.usage.primary.used_percent, 0.0);
+    assert!(parsed.unavailable_detail.is_none());
+}
+
+#[test]
+fn malformed_entries_and_envelopes_point_to_usage_dashboard() {
+    for data in [
+        serde_json::json!({"pointsPool": {"remaining": 800}}),
+        serde_json::json!({"limits": null}),
+        serde_json::json!({"limits": [{"unit": 3, "number": 5, "percentage": 25}]}),
+        serde_json::json!({"limits": [{"type": null, "unit": 3, "number": 5, "percentage": 25}]}),
+        serde_json::json!({"limits": [{"type": 42, "unit": 3, "number": 5, "percentage": 25}]}),
+        serde_json::json!({"limits": ["TOKENS_LIMIT"]}),
+        serde_json::json!({"limits": [{"type": "TOKENS_LIMIT", "percentage": "high"}]}),
+    ] {
+        let error = parse_data(data.clone()).expect_err("unsupported shape must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Check Usage Dashboard for plan usage."),
+            "{data}: {error}"
+        );
+    }
+}
+
+#[test]
+fn quota_body_maps_shape_errors_to_dashboard_guidance_but_keeps_syntax_errors() {
+    let shape = parse_quota_body(br#"{"code":200,"data":{"limits":{}}}"#)
+        .expect_err("object limits must not deserialize");
+    assert!(
+        shape
+            .to_string()
+            .contains("Unsupported z.ai quota format. Check Usage Dashboard for plan usage."),
+        "{shape}"
+    );
+
+    let syntax = parse_quota_body(b"{not json").expect_err("syntax error");
+    assert!(!syntax.to_string().contains("Usage Dashboard"), "{syntax}");
+}
+
+#[test]
+fn recognized_entry_without_any_quota_signal_is_malformed() {
+    for entry in [
+        serde_json::json!({"type": "TOKENS_LIMIT"}),
+        serde_json::json!({"type": "TIME_LIMIT", "unit": 5, "number": 1}),
+    ] {
+        let error = parse_data(serde_json::json!({"limits": [entry]}))
+            .expect_err("signal-less entry must not fabricate 0%");
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported z.ai quota entry. Check Usage Dashboard for plan usage."),
+            "{error}"
+        );
+    }
 }

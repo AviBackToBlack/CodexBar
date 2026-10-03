@@ -239,3 +239,34 @@ fn applies_deepseek_summary_as_extra_windows() {
         Some("¥0.0000 · Current month")
     );
 }
+
+#[test]
+fn only_owned_transport_failures_retain_the_last_balance() {
+    let provider = DeepSeekProvider::new();
+    let owner = session_resolver::balance_owner("chrome:Default", "token-value");
+
+    assert_eq!(
+        provider
+            .last_good_failure_policy_for_error(&ProviderError::Timeout.with_failure_owner(owner)),
+        LastGoodFailurePolicy::Preserve
+    );
+    // A deadline has no owner but is still an owned failure; the shell then
+    // fails closed because no session can match.
+    assert_eq!(
+        provider
+            .last_good_failure_policy_for_error(&ProviderError::Timeout.with_failure_owner(None)),
+        LastGoodFailurePolicy::Preserve
+    );
+    for error in [
+        ProviderError::Timeout,
+        ProviderError::AuthRequired,
+        ProviderError::Other("HTTP 500".into()),
+        ProviderError::Parse("bad".into()),
+    ] {
+        assert_eq!(
+            provider.last_good_failure_policy_for_error(&error),
+            LastGoodFailurePolicy::Replace,
+            "{error:?}"
+        );
+    }
+}

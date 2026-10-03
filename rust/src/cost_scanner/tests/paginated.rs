@@ -140,7 +140,7 @@ fn paginated_continuation_raises_inherited_baseline_from_total_last() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
-    let base = Utc::now() - Duration::hours(1);
+    let base = recent_codex_fixture_time();
     write_codex_fork_session_fixture(
         &sessions,
         "ancestor.jsonl",
@@ -197,11 +197,60 @@ fn paginated_continuation_raises_inherited_baseline_from_total_last() {
 }
 
 #[test]
+fn bounded_paginated_continuation_raises_its_baseline_once() {
+    let root = tempfile::tempdir().unwrap();
+    let sessions = root.path().join("sessions");
+    let base = Utc::now() - Duration::hours(1);
+    write_codex_fork_session_fixture(
+        &sessions,
+        "ancestor.jsonl",
+        "original-ancestor",
+        None,
+        base,
+        base,
+        &[1_539_046],
+    );
+    let continuation = write_codex_paginated_continuation_fixture(
+        &sessions,
+        "continuation.jsonl",
+        "thread-session",
+        "original-ancestor",
+        "thread-session",
+        base + Duration::seconds(10),
+    );
+    let mut options = CostScanOptions::app_driven();
+    options.prefer_newest_codex_sessions_first = false;
+    // One JSONL line per refresh, so each page is read by a resumed parse.
+    options.codex_max_scan_bytes_per_refresh = 1;
+    let scanner = CostScanner::new(7)
+        .with_options(options)
+        .with_cache_root(root.path().join("cache"))
+        .with_sessions_dirs(vec![sessions]);
+
+    let (summary, cache) = (0..20)
+        .find_map(|_| {
+            let (summary, _, cache) = scanner.scan_codex_detailed_with_cache(None);
+            (!cache.codex_scan_incomplete).then_some((summary, cache))
+        })
+        .expect("bounded Codex scan never completed");
+    // The first page raises the inherited baseline; the second page bills its
+    // cumulative growth, exactly as one unbounded parse does.
+    assert_eq!(summary.input_tokens, 19_533_671);
+    assert_eq!(summary.cached_tokens, 17_620_864);
+    assert_eq!(summary.output_tokens, 53_217);
+    let usage = &cache.files[&continuation.to_string_lossy().to_string()];
+    let state = usage.codex_fork_accounting_state.as_ref().unwrap();
+    assert_eq!(state.inherited_totals.as_ref().unwrap().input, 739_823_760);
+    assert!(state.resume.is_none(), "a finished parse keeps no cursor");
+    assert_eq!(cached_input_total(usage), 17_994_625);
+}
+
+#[test]
 fn paginated_history_base_equal_parent_keeps_true_fork_subtraction() {
     let root = tempfile::tempdir().unwrap();
     let sessions = root.path().join("sessions");
     let cache_root = root.path().join("cache");
-    let base = Utc::now() - Duration::hours(1);
+    let base = recent_codex_fixture_time();
     write_codex_fork_session_fixture(
         &sessions,
         "parent.jsonl",

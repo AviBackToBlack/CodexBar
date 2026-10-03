@@ -15,7 +15,9 @@ describe("Language type", () => {
     const langRu: Language = "russian";
     expect(langRu).toBe("russian");
     const langTr: Language = "turkish";
+    const langPtBr: Language = "portuguesebrazil";
     expect(langTr).toBe("turkish");
+    expect(langPtBr).toBe("portuguesebrazil");
   });
 
   it("allows 'spanish' in LocaleStrings payload", () => {
@@ -79,10 +81,12 @@ describe("Language type", () => {
       highUsageThreshold: 70,
       criticalUsageThreshold: 90,
       predictivePaceWarningEnabled: false,
+      credentialExpiryNotificationsEnabled: false,
       trayIconMode: "single",
       switcherShowsIcons: true,
       menuBarShowsHighestUsage: true,
       menuBarShowsPercent: true,
+      menuBarColorPace: false,
       showAsUsed: false,
       showAllTokenAccountsInMenu: true,
       enableAnimations: true,
@@ -98,6 +102,7 @@ describe("Language type", () => {
       autoDownloadUpdates: false,
       installUpdatesOnQuit: false,
       globalShortcut: "",
+      switcherShortcuts: {},
       codexCustomSessionsDirs: [],
       updateChannel: "stable",
       uiLanguage: "spanish",

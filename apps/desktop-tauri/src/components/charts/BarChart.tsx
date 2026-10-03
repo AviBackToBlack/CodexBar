@@ -1,10 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, useMemo, useRef, useState } from "react";
 import { useChartAnimation } from "./useChartAnimation";
 import {
   WIDTH,
   getBarCenter,
   getBarWidth,
   getBarX,
+  getScrollableChartWidth,
   shouldRenderCenterMax,
 } from "./chartGeometry";
 
@@ -23,6 +24,18 @@ import {
 export interface BarChartPoint {
   label: string;
   value: number | null;
+  /** Localized marker for requests excluded from this slot's value. */
+  incompleteNote?: string;
+}
+
+/**
+ * Controlled bar selection. When set, the bars form a roving-tabindex listbox:
+ * hover or focus selects a bar, Left/Right move the selection, Home/End jump to
+ * the first/last bar, and the hover tooltip is left to the caller's detail view.
+ */
+export interface BarChartSelection {
+  index: number;
+  onSelect: (index: number) => void;
 }
 
 export interface BarChartProps {
@@ -35,6 +48,9 @@ export interface BarChartProps {
   animations?: boolean;
   /** Optional empty-state message rendered when `data.length === 0`. */
   emptyMessage?: string;
+  selection?: BarChartSelection;
+  /** Keep narrow bars readable by making long series horizontally scrollable. */
+  scrollable?: boolean;
 }
 
 const DEFAULT_COLOR = "var(--chart-cost)";
@@ -48,10 +64,13 @@ export function BarChart({
   ariaLabel,
   animations = true,
   emptyMessage,
+  selection,
+  scrollable = false,
 }: BarChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
+  const barRefs = useRef<Array<SVGRectElement | null>>([]);
 
   const anim = useChartAnimation(data.length, animations, [
     data.length,
@@ -80,7 +99,11 @@ export function BarChart({
     );
   }
 
-  const barWidth = getBarWidth(data.length);
+  const chartWidth = scrollable ? getScrollableChartWidth(data.length) : WIDTH;
+  const chartClass = scrollable
+    ? "chart chart--bar chart--scrollable"
+    : "chart chart--bar";
+  const barWidth = getBarWidth(data.length, chartWidth);
   const plotHeight = Math.max(1, height - 4);
 
   const onMove = (e: React.MouseEvent<SVGRectElement>, i: number) => {
@@ -91,26 +114,52 @@ export function BarChart({
   };
   const onLeave = () => setHover(null);
 
+  const selectedIndex = selection
+    ? Math.min(Math.max(selection.index, 0), data.length - 1)
+    : -1;
+  const onKeyDown = (e: KeyboardEvent<SVGSVGElement>) => {
+    if (!selection) return;
+    let next: number;
+    if (e.key === "ArrowLeft") next = selectedIndex - 1;
+    else if (e.key === "ArrowRight") next = selectedIndex + 1;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = data.length - 1;
+    else return;
+    e.preventDefault();
+    next = Math.min(Math.max(next, 0), data.length - 1);
+    selection.onSelect(next);
+    barRefs.current[next]?.focus();
+  };
+
   return (
-    <div className="chart chart--bar" ref={containerRef}>
+    <div className={chartClass} ref={containerRef}>
       <svg
-        width={WIDTH}
+        width={chartWidth}
         height={height}
-        viewBox={`0 0 ${WIDTH} ${height}`}
+        viewBox={`0 0 ${chartWidth} ${height}`}
         className="chart__svg"
-        role="img"
+        style={scrollable ? { width: chartWidth, maxWidth: "none" } : undefined}
+        role={selection ? "listbox" : "img"}
+        aria-orientation={selection ? "horizontal" : undefined}
         aria-label={ariaLabel}
+        onKeyDown={selection ? onKeyDown : undefined}
       >
         {data.map((p, i) => {
           const base = p.value == null ? 1 : p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
           const eased = anim.barProgress(i);
           const barH = base * eased;
-          const x = getBarX(i, data.length);
+          const x = getBarX(i, data.length, chartWidth);
           const y = height - barH;
           const isPeak = i === peakIndex && barH > CAP_HEIGHT;
           const bodyH = isPeak ? Math.max(0, barH - CAP_HEIGHT) : barH;
           const bodyY = isPeak ? y + CAP_HEIGHT : y;
           const isHovered = hover?.i === i;
+          const isSelected = i === selectedIndex;
+          let opacity = 0.9;
+          if (p.value == null) opacity = 0;
+          else if (p.value === 0) opacity = 0.25;
+          else if (selection) opacity = isSelected ? 1 : 0.6;
+          else if (isHovered) opacity = 1;
 
           return (
             <g key={`${p.label}-${i}`}>
@@ -120,14 +169,37 @@ export function BarChart({
                 width={barWidth}
                 height={bodyH}
                 fill={color}
-                opacity={p.value == null ? 0 : p.value === 0 ? 0.25 : isHovered ? 1 : 0.9}
+                opacity={opacity}
                 rx={1}
                 className="chart__bar"
-                onMouseMove={p.value == null ? undefined : (e) => onMove(e, i)}
-                onMouseLeave={onLeave}
+                {...(selection
+                  ? {
+                      ref: (node: SVGRectElement | null) => {
+                        barRefs.current[i] = node;
+                      },
+                      role: "option",
+                      "aria-selected": isSelected,
+                      "aria-label": p.value == null ? p.label : `${p.label}: ${fmt(p.value)}`,
+                      tabIndex: isSelected ? 0 : -1,
+                      "data-selected": isSelected ? "true" : "false",
+                      onMouseEnter: () => selection.onSelect(i),
+                      onFocus: () => selection.onSelect(i),
+                    }
+                  : {
+                      onMouseMove:
+                        p.value == null
+                          ? undefined
+                          : (e: React.MouseEvent<SVGRectElement>) => onMove(e, i),
+                      onMouseLeave: onLeave,
+                    })}
               >
                 <title>
-                  {p.value == null ? p.label : `${p.label}: ${fmt(p.value)}`}
+                  {[
+                    p.value == null ? p.label : `${p.label}: ${fmt(p.value)}`,
+                    p.incompleteNote,
+                  ]
+                    .filter(Boolean)
+                    .join(" \u00b7 ")}
                 </title>
               </rect>
               {isPeak && (
@@ -146,18 +218,26 @@ export function BarChart({
           );
         })}
       </svg>
-      <div className="chart__axis">
-        <span className="chart__axis-start" style={{ left: `${getBarCenter(0, data.length)}px` }}>
+      <div className="chart__axis" style={scrollable ? { width: chartWidth } : undefined}>
+        <span
+          className="chart__axis-start"
+          style={{ left: `${getBarCenter(0, data.length, chartWidth)}px` }}
+        >
           {data[0].label}
         </span>
         {shouldRenderCenterMax(data.length) && (
-          <span className="chart__axis-max" style={{ left: `${WIDTH / 2}px` }}>{fmt(max)}</span>
+          <span className="chart__axis-max" style={{ left: `${chartWidth / 2}px` }}>
+            {fmt(max)}
+          </span>
         )}
-        <span className="chart__axis-end" style={{ left: `${getBarCenter(data.length - 1, data.length)}px` }}>
+        <span
+          className="chart__axis-end"
+          style={{ left: `${getBarCenter(data.length - 1, data.length, chartWidth)}px` }}
+        >
           {data[data.length - 1].label}
         </span>
       </div>
-      {hover && !anim.running && (
+      {!selection && hover && !anim.running && (
         <div
           className="chart__tooltip"
           style={{ left: hover.x, top: hover.y }}
@@ -165,6 +245,9 @@ export function BarChart({
         >
           <span className="chart__tooltip-label">{data[hover.i].label}</span>
           <strong>{fmt(data[hover.i].value ?? 0)}</strong>
+          {data[hover.i].incompleteNote && (
+            <span className="chart__tooltip-label">{data[hover.i].incompleteNote}</span>
+          )}
         </div>
       )}
     </div>

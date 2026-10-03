@@ -310,6 +310,11 @@ mod tests {
             normalize_workspace_id(Some("https://opencode.ai/workspace/wrk_ONE/go")).as_deref(),
             Some("wrk_ONE")
         );
+        // Console page URL form after the OpenCode Go layout move (#591).
+        assert_eq!(
+            normalize_workspace_id(Some("https://opencode.ai/console/wrk_ONE/go")).as_deref(),
+            Some("wrk_ONE")
+        );
         assert_eq!(
             normalize_workspace_id(Some("https://example.com/console/org_TWO/go")),
             None

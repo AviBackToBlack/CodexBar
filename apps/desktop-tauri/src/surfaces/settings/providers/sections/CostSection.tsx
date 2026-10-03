@@ -1,5 +1,6 @@
 import type { CostSnapshotBridge } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
+import { useCurrency } from "../../../../hooks/CurrencyProvider";
 
 interface Props {
   cost: CostSnapshotBridge | null;
@@ -11,11 +12,21 @@ interface Props {
  * `rust/src/native_ui/preferences.rs::render_provider_detail_panel`.
  */
 export function CostSection({ cost, t }: Props) {
+  const { format, preferredCode } = useCurrency();
   if (!cost) return null;
+  const formatCost = (amount: number | null, original: string | null | undefined) =>
+    preferredCode === "AUTO" && original ? original : format(amount, cost.currencyCode, cost.currencySymbol);
+
+  const balanceOnly =
+    cost.balance != null &&
+    cost.limit == null &&
+    cost.used === 0 &&
+    (cost.daily?.length ?? 0) === 0;
+  if (balanceOnly) return null;
 
   const rows: { label: string; value: string | null }[] = [
-    { label: t("DetailCostUsed"), value: cost.formattedUsed },
-    { label: t("DetailCostLimit"), value: cost.formattedLimit },
+    { label: t("DetailCostUsed"), value: formatCost(cost.used, cost.formattedUsed) },
+    { label: t("DetailCostLimit"), value: cost.limit == null ? null : formatCost(cost.limit, cost.formattedLimit) },
     {
       label: t("DetailCostResets"),
       value: cost.resetsAt ?? null,

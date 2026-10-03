@@ -177,6 +177,8 @@ async fn collect_provider_diagnostic(
             .map(ToOwned::to_owned),
         manual_cookie_missing: false,
         api_key: api_keys.get(provider_id.cli_name()).map(ToOwned::to_owned),
+        token_account_kind: None,
+        token_account_isolated: false,
         workspace_id: settings
             .provider_config(provider_id)
             .and_then(|config| config.workspace_id.clone()),
@@ -188,8 +190,10 @@ async fn collect_provider_diagnostic(
             .provider_config(provider_id)
             .and_then(|config| config.gateway_url.clone()),
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // Diagnostics keep the short optional-join grace (upstream #2583 gate).
         requires_optional_usage_completeness: false,
+        optional_details_enabled: settings.optional_details_enabled(provider_id),
     };
 
     let fetch_result = provider.fetch_usage(&ctx).await;
@@ -397,9 +401,11 @@ fn error_category(err: &ProviderError) -> &'static str {
         | ProviderError::OAuth(_)
         | ProviderError::OAuthExpired(_)
         | ProviderError::OAuthRevoked(_)
-        | ProviderError::NoCookies => "auth",
+        | ProviderError::NoCookies
+        | ProviderError::BrowserSignInRequired { .. } => "auth",
         ProviderError::OAuthTransient(_) => "api",
         ProviderError::Network(_) | ProviderError::Timeout => "network",
+        ProviderError::OwnedTransport { source, .. } => error_category(source),
         ProviderError::NotInstalled(_) | ProviderError::UnsupportedSource(_) => "config",
         ProviderError::Parse(_) => "parse",
         ProviderError::Other(message) => {
@@ -426,6 +432,15 @@ fn safe_error_message(err: &ProviderError) -> String {
 mod tests {
     use super::*;
     use crate::core::{RateWindow, UsageSnapshot};
+
+    #[test]
+    fn browser_sign_in_failures_count_as_auth() {
+        let error = ProviderError::BrowserSignInRequired {
+            message: "Sign in at the provider page in your browser.".to_string(),
+            sign_in_url: "https://example.test/login".to_string(),
+        };
+        assert_eq!(error_category(&error), "auth");
+    }
 
     #[test]
     fn source_mode_names_are_stable() {

@@ -228,13 +228,20 @@ fn parse_resets_at_from_text(text: &str, now: DateTime<Utc>) -> Option<DateTime<
         let unit = &caps[1];
         let seconds = seconds_from_duration(value, unit);
         // "Resets in N <unit>" values are parsed from dashboard text and
-        // rounded to whole seconds.
+        // rounded to whole seconds. An offset that cannot be represented as a
+        // timestamp (oversized `N`, `seconds as i64` saturating) yields no reset
+        // line and keeps the usage percentage (upstream #3758/#3764: safely
+        // handle unrepresentable timestamps).
         #[allow(
             clippy::cast_possible_truncation,
             reason = "reset countdown truncated to whole seconds by design"
         )]
-        let total_seconds = seconds as i64;
-        return Some(now + Duration::seconds(total_seconds));
+        let total_seconds = Duration::try_seconds(seconds as i64)?;
+        let reset = now.checked_add_signed(total_seconds)?;
+        if reset <= now {
+            return None;
+        }
+        return Some(reset);
     }
 
     // "Resets at HH:mm (zone hint)"
@@ -482,10 +489,30 @@ pub(super) fn to_usage_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, TimeZone};
+    use chrono::TimeZone;
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 8, 3, 12, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn oversized_days_text_yields_no_reset_line() {
+        // "Resets in 99999999999999999999 days": `seconds as i64` saturates
+        // and `Duration::seconds` would panic; the guard returns None.
+        let text = "Resets in 99999999999999999999 days";
+        assert_eq!(parse_resets_at_from_text(text, now()), None);
+    }
+
+    #[test]
+    fn normal_days_text_keeps_the_reset_line() {
+        let text = "Resets in 2 days";
+        let reset = parse_resets_at_from_text(text, now()).expect("2 days");
+        assert_eq!(reset, now() + Duration::seconds(2 * 86_400));
+    }
+
+    #[test]
+    fn text_without_a_reset_count_is_unmatched() {
+        assert_eq!(parse_resets_at_from_text("no reset info", now()), None);
     }
 
     #[test]

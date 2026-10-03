@@ -11,6 +11,9 @@ pub struct ProviderDetail {
     pub enabled: bool,
     pub auto_resume_after_quota_reset: bool,
     pub auto_resume_supported: bool,
+    /// LiteLLM/Claude expose one opt-in extra breakdown; other providers do not.
+    pub optional_details_supported: bool,
+    pub optional_details_enabled: bool,
 
     // Identity
     pub email: Option<String>,
@@ -23,11 +26,24 @@ pub struct ProviderDetail {
     // Usage windows — reuse existing RateWindowSnapshot shape.
     pub session: Option<RateWindowSnapshot>,
     pub weekly: Option<RateWindowSnapshot>,
+    /// Provider-declared label for the session (primary) lane; None when the
+    /// provider uses the generic "Session" wording.
+    pub primary_label: Option<String>,
+    /// Provider-declared label for the weekly (secondary) lane; None when the
+    /// provider uses the generic "Weekly" wording.
+    pub secondary_label: Option<String>,
     pub model_specific: Option<RateWindowSnapshot>,
     pub tertiary: Option<RateWindowSnapshot>,
     /// Locale key naming the tertiary lane when it carries a semantic label
     /// beyond "Tertiary" (upstream F5). Drives the settings metric picker.
     pub tertiary_label_key: Option<&'static str>,
+    /// Id of the extra rate window holding the provider's monthly plan
+    /// allowance (upstream 0.70.0 #4072). Offers the Monthly Plan metric in
+    /// the settings metric picker.
+    pub monthly_plan_window_id: Option<&'static str>,
+    /// Metric picker label for the primary lane when it is not a session
+    /// window (upstream `menuBarLayoutPrimaryLabel`).
+    pub primary_metric_label: Option<&'static str>,
     pub extra_rate_windows: Vec<NamedRateWindowSnapshot>,
     pub usage_items: Vec<ProviderUsageItemSnapshot>,
     pub hidden_usage_item_ids: Vec<String>,
@@ -37,6 +53,9 @@ pub struct ProviderDetail {
     // Cost / pace.
     pub cost: Option<CostSnapshotBridge>,
     pub pace: Option<PaceSnapshot>,
+    /// Per-day OpenAI Admin API history for the Settings daily usage chart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_ai_api_usage: Option<OpenAiApiUsageSnapshot>,
 
     // Error / state.
     pub last_error: Option<String>,
@@ -57,6 +76,31 @@ pub struct ProviderDetail {
     pub usage_source: Option<String>,
     pub cookie_source: Option<String>,
     pub region: Option<String>,
+    /// True when the Manual cookie source has no usable header and the
+    /// provider opted in to failing closed (`manual_empty_cookie_policy`).
+    /// Drives the "No cookie header pasted." hint and the switch-to-Auto action.
+    pub manual_cookie_missing: bool,
+}
+
+/// Same decision the refresh path makes in `build_fetch_context`, gated on the
+/// provider's fail-closed policy so opening the pane never triggers a browser
+/// cookie import.
+fn manual_cookie_missing_for(id: ProviderId, settings: &Settings) -> bool {
+    if settings.cookie_source(id) != "manual"
+        || instantiate_provider(id).manual_empty_cookie_policy()
+            != ManualEmptyCookiePolicy::FailClosedWeb
+    {
+        return false;
+    }
+    let token_accounts = TokenAccountStore::new().load().unwrap_or_default();
+    build_fetch_context(
+        id,
+        settings,
+        &ManualCookies::load(),
+        &ApiKeys::load(),
+        &token_accounts,
+    )
+    .manual_cookie_missing
 }
 
 pub(crate) fn build_provider_detail(
@@ -73,15 +117,7 @@ pub(crate) fn build_provider_detail(
     let provider = instantiate_provider(id);
     let metadata = provider.metadata();
     let resume_supported = auto_resume_supported(id);
-    let dashboard_url = if id == codexbar::core::ProviderId::MiniMax {
-        Some(
-            codexbar::providers::MiniMaxProvider::dashboard_url_for_region(Some(
-                settings.api_region(id),
-            )),
-        )
-    } else {
-        metadata.dashboard_url.map(|s| s.to_string())
-    };
+    let dashboard_url = provider_dashboard_url(id, &settings);
 
     let detail = ProviderDetail {
         id: id.cli_name().to_string(),
@@ -89,6 +125,8 @@ pub(crate) fn build_provider_detail(
         enabled,
         auto_resume_after_quota_reset: settings.auto_resume_after_quota_reset(id),
         auto_resume_supported: resume_supported,
+        optional_details_supported: codexbar::settings::provider_has_optional_details(id),
+        optional_details_enabled: settings.optional_details_enabled(id),
         email: None,
         plan: None,
         auth_type: None,
@@ -97,9 +135,13 @@ pub(crate) fn build_provider_detail(
         last_updated: None,
         session: None,
         weekly: None,
+        primary_label: None,
+        secondary_label: None,
         model_specific: None,
         tertiary: None,
         tertiary_label_key: metadata.tertiary_label_key,
+        monthly_plan_window_id: provider.monthly_plan_window_id(),
+        primary_metric_label: provider.menu_bar_primary_label(),
         extra_rate_windows: Vec::new(),
         usage_items: Vec::new(),
         hidden_usage_item_ids: settings.hidden_usage_item_ids(id),
@@ -107,6 +149,7 @@ pub(crate) fn build_provider_detail(
         display_details: Vec::new(),
         cost: None,
         pace: None,
+        open_ai_api_usage: None,
         last_error: None,
         error_state: None,
         dashboard_url: dashboard_url.clone(),
@@ -122,6 +165,7 @@ pub(crate) fn build_provider_detail(
         usage_source: provider_usage_source_lookup(&settings, id.cli_name()),
         cookie_source: provider_cookie_source_lookup(&settings, id.cli_name()),
         region: provider_region_lookup(&settings, id.cli_name()),
+        manual_cookie_missing: manual_cookie_missing_for(id, &settings),
     };
 
     Ok((detail, settings, id))
@@ -154,6 +198,14 @@ pub fn get_provider_detail(
         detail.email = snapshot.account_email.clone();
         detail.plan = snapshot.plan_name.clone();
         detail.organization = snapshot.account_organization.clone();
+        if parsed_provider_id == ProviderId::Helmcode {
+            detail.dashboard_url = Some(
+                codexbar::providers::helmcode::dashboard_url_for_organization(
+                    snapshot.account_organization.as_deref(),
+                )
+                .to_string(),
+            );
+        }
         detail.source_label = if snapshot.source_label.is_empty() {
             None
         } else {
@@ -165,13 +217,15 @@ pub fn get_provider_detail(
                 super::usage_item_descriptors(Some(&snapshot), &settings, parsed_provider_id);
             detail.session = Some(snapshot.primary.clone());
             detail.weekly = snapshot.secondary.clone();
-            detail.model_specific = snapshot.model_specific.clone();
+            detail.primary_label = snapshot.primary_label.clone();
+            detail.secondary_label = snapshot.secondary_label.clone();
             detail.tertiary = snapshot.tertiary.clone();
             detail.extra_rate_windows = snapshot.extra_rate_windows.clone();
             detail.inventory = snapshot.inventory.clone();
             detail.display_details = snapshot.display_details.clone();
             detail.cost = snapshot.cost.clone();
             detail.pace = snapshot.pace.clone();
+            detail.open_ai_api_usage = snapshot.open_ai_api_usage.clone();
         }
         detail.last_error = snapshot.error.clone();
         detail.error_state = Some(snapshot.error_state);

@@ -92,6 +92,13 @@ pub struct RateWindow {
     #[serde(default)]
     pub is_informational: bool,
 
+    /// Whether `reset_description` is a detail line (for example spend
+    /// amounts) rather than reset wording. Renderers show it as its own
+    /// secondary line and never as a reset time. Provider-owned; kept out of
+    /// serialized output so CLI JSON is unchanged.
+    #[serde(default, skip_serializing)]
+    pub description_is_detail: bool,
+
     /// Whether the provider explicitly supplied the usage percentage.
     /// Internal-only metadata prevents a missing value normalized to zero from
     /// becoming an exported quota measurement.
@@ -112,6 +119,7 @@ impl RateWindow {
             resets_at: None,
             reset_description: None,
             is_informational: false,
+            description_is_detail: false,
             usage_known: true,
         }
     }
@@ -152,8 +160,15 @@ impl RateWindow {
             resets_at,
             reset_description,
             is_informational: false,
+            description_is_detail: false,
             usage_known: true,
         }
+    }
+
+    /// Mark `reset_description` as a detail line instead of reset wording.
+    pub fn with_description_as_detail(mut self) -> Self {
+        self.description_is_detail = true;
+        self
     }
 
     pub(crate) fn with_usage_known(mut self, usage_known: bool) -> Self {

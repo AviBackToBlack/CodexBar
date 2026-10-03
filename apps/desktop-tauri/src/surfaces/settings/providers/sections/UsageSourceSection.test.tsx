@@ -32,6 +32,12 @@ describe("usage source policy", () => {
       "oauth",
       "web",
     ]);
+    expect(usageSourcePolicy("zed")?.options.map((option) => option.value)).toEqual([
+      "auto",
+      "oauth",
+      "web",
+    ]);
+    expect(usageSourcePolicy("zed")?.options[0].description).toContain("editor credential");
     expect(usageSourcePolicy("antigravity")?.options[0].description).toContain(
       "skips agy reports without account identity",
     );

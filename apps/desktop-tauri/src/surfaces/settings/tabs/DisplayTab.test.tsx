@@ -14,11 +14,15 @@ import DisplayTab from "./DisplayTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 
 const baseSettings = {
+  enabledProviders: ["codex", "claude"],
   trayIconMode: "single",
+  stackedTrayTopProvider: null,
+  stackedTrayBottomProvider: null,
   trayPanelAlwaysOnTop: false,
   switcherShowsIcons: false,
   menuBarShowsHighestUsage: false,
   menuBarShowsPercent: false,
+  menuBarColorPace: false,
   menuBarDisplayMode: "detailed",
   overviewLayout: "detailed",
   windowScalePercent: 100,
@@ -29,9 +33,17 @@ const baseSettings = {
   showPace: false,
 } as unknown as SettingsSnapshot;
 
-function renderTab(set: (patch: Record<string, unknown>) => void) {
+function renderTab(
+  set: (patch: Record<string, unknown>) => void,
+  mode: "menuBar" | "menu" = "menu",
+) {
   return render(
-    <DisplayTab settings={baseSettings} set={set as never} saving={false} />,
+    <DisplayTab
+      mode={mode}
+      settings={baseSettings}
+      set={set as never}
+      saving={false}
+    />,
   );
 }
 
@@ -82,5 +94,39 @@ describe("DisplayTab menu settings", () => {
     );
 
     expect(set).toHaveBeenCalledWith({ trayPanelAlwaysOnTop: true });
+  });
+
+  it("updates the tray pace color preference", () => {
+    const set = vi.fn();
+    renderTab(set, "menuBar");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "ColorPaceInTray" }));
+
+    expect(set).toHaveBeenCalledWith({ menuBarColorPace: true });
+  });
+});
+
+describe("DisplayTab stacked tray providers", () => {
+  it("persists explicit top and bottom provider choices", () => {
+    const set = vi.fn();
+    render(
+      <DisplayTab
+        mode="menuBar"
+        settings={{ ...baseSettings, trayIconMode: "stacked" } as SettingsSnapshot}
+        providers={[
+          { id: "codex", displayName: "Codex", cookieDomain: null },
+          { id: "claude", displayName: "Claude", cookieDomain: null },
+        ]}
+        set={set}
+        saving={false}
+      />,
+    );
+    const selects = screen.getAllByRole("combobox");
+
+    fireEvent.change(selects[1], { target: { value: "claude" } });
+    fireEvent.change(selects[2], { target: { value: "codex" } });
+
+    expect(set).toHaveBeenCalledWith({ stackedTrayTopProvider: "claude" });
+    expect(set).toHaveBeenCalledWith({ stackedTrayBottomProvider: "codex" });
   });
 });

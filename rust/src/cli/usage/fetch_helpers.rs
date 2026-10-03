@@ -4,10 +4,12 @@ use super::UsageCommand;
 use super::render::{
     render_brief_text, render_json_result, render_text_error, render_text_with_status,
 };
+use crate::cli::fetch_context::populate_api_region_from_settings;
 use crate::core::{
-    ProviderFetchResult, ProviderId, TokenAccountStore, TokenAccountSupport, instantiate_provider,
+    ProviderFetchResult, ProviderId, TokenAccountKind, TokenAccountOverride, TokenAccountStore,
+    TokenAccountSupport, instantiate_provider,
 };
-use crate::settings::ApiKeys;
+use crate::settings::{ApiKeys, Settings};
 use crate::status::{ProviderStatus as StatusInfo, fetch_provider_status};
 
 pub async fn fetch_provider_text_output(provider_id: ProviderId, command: &UsageCommand) -> String {
@@ -29,10 +31,7 @@ pub async fn fetch_provider_json_output(
 ) -> serde_json::Value {
     match fetch_provider_result(provider_id, command).await {
         Ok((result, status)) => render_json_result(provider_id, result, status.as_ref()),
-        Err(e) => serde_json::json!({
-            "provider": provider_id.cli_name(),
-            "error": e.to_string(),
-        }),
+        Err(e) => crate::cli::error_kind::usage_error_row(provider_id, &e),
     }
 }
 
@@ -45,7 +44,9 @@ pub async fn fetch_provider_result(
         .fetch_status
         .then(|| fetch_provider_status(provider_id.cli_name()));
     let mut ctx = command.ctx.clone();
-    if ctx.api_key.is_none() {
+    let account_projected = project_cli_account(provider_id, command.account.as_deref(), &mut ctx)?;
+    populate_api_region_from_settings(provider_id, &Settings::load(), &mut ctx);
+    if !account_projected && ctx.api_key.is_none() {
         ctx.api_key = resolve_cli_api_key(provider_id, command.account.as_deref())?;
     }
     let result = provider.fetch_usage(&ctx).await?;
@@ -55,6 +56,70 @@ pub async fn fetch_provider_result(
         None
     };
     Ok((result, status))
+}
+
+/// Apply the selected labeled account to the same route used by the desktop
+/// shell. The three v0.65 account-source ports require provider-specific route
+/// selection in addition to the shared credential injection.
+fn project_cli_account(
+    provider: ProviderId,
+    account_ref: Option<&str>,
+    ctx: &mut crate::core::FetchContext,
+) -> anyhow::Result<bool> {
+    if !matches!(
+        provider,
+        ProviderId::Kimi | ProviderId::Doubao | ProviderId::OpenCodeGo
+    ) {
+        return Ok(false);
+    }
+    let store = TokenAccountStore::new();
+    let data = match store.load_provider(provider) {
+        Ok(data) => data,
+        Err(error) if account_ref.is_some() => {
+            return Err(error.into());
+        }
+        Err(_) => return Ok(false),
+    };
+    if data.accounts.is_empty() {
+        if account_ref.is_some() {
+            anyhow::bail!(
+                "No token accounts configured for {}",
+                provider.display_name()
+            );
+        }
+        return Ok(false);
+    }
+    let account = if let Some(account_ref) = account_ref {
+        find_token_account(&data, account_ref)?
+    } else {
+        data.active_account().ok_or_else(|| {
+            anyhow::anyhow!("No active token account for {}", provider.display_name())
+        })?
+    }
+    .clone();
+    project_token_account(provider, &account, ctx);
+    Ok(true)
+}
+
+pub(super) fn project_token_account(
+    provider: ProviderId,
+    account: &crate::core::TokenAccount,
+    ctx: &mut crate::core::FetchContext,
+) {
+    let projected = TokenAccountOverride::from_account(provider, account.clone());
+    let effective_source_mode = projected.effective_source_mode(ctx.source_mode);
+    ctx.token_account_kind = Some(projected.kind);
+    ctx.token_account_isolated = true;
+    ctx.api_key = projected
+        .env_override
+        .as_ref()
+        .and_then(|env| env.values().next().cloned());
+    ctx.manual_cookie_header = projected.cookie_header;
+    ctx.auto_prefer_web = projected.kind == TokenAccountKind::Cookie;
+
+    if let Some(source_mode) = effective_source_mode {
+        ctx.source_mode = source_mode;
+    }
 }
 
 /// Resolve an API key from token accounts (active or `--account`) then stored keys.

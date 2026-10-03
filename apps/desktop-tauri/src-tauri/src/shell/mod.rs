@@ -6,6 +6,7 @@ use std::sync::{LazyLock, Mutex};
 use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
 
+pub mod activation;
 pub(crate) mod dwm;
 pub mod flyout_window;
 mod geometry;

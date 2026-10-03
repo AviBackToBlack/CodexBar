@@ -1,6 +1,6 @@
 # Win-CodexBar
 
-[English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md) | [Türkçe](./README.tr-TR.md)
+[English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md) | [Português (Brasil)](./README.pt-BR.md) | [Türkçe](./README.tr-TR.md)
 
 [CodexBar](https://github.com/steipete/CodexBar) 的 Windows 移植版 —— 一個系統系統匣應用，讓你隨時掌握各個 AI 程式設計工具的用量額度。
 
@@ -14,7 +14,7 @@
 
 ## 功能特性
 
-- **56 個 AI 提供者** — Codex、Claude、Cursor、Factory、Gemini、Copilot、Antigravity、z.ai、MiniMax、Kiro、Vertex AI、Augment、OpenCode、Kimi、Kimi K2、Amp、Warp、Ollama、Azure OpenAI、T3 Chat、OpenRouter、JetBrains AI、Alibaba、Alibaba Token Plan、NanoGPT、Infini、Perplexity、Abacus AI、Mistral、OpenCode Go、Kilo、AWS Bedrock、Codebuff、DeepSeek、Windsurf、Manus、小米 MiMo、Doubao、Command Code、Crof、StepFun、Venice、OpenAI、Grok、ElevenLabs、Deepgram、Groq、LLM Proxy、Chutes、LiteLLM、Poe、Devin、Zed、CrossModel、Qoder、Sakana AI
+- **56 個 AI 提供者** — Codex、Claude、Cursor、Factory、Gemini、Copilot、Antigravity、z.ai、MiniMax、Kiro、Vertex AI、Augment、OpenCode、Kimi、Kimi K2、Amp、Warp、Ollama、Azure OpenAI、T3 Chat、OpenRouter、JetBrains AI、Alibaba、Alibaba Token Plan、NanoGPT、Infini、Perplexity、Abacus AI、Mistral、OpenCode Go、Kilo、AWS Bedrock、Codebuff、DeepSeek、Windsurf、Manus、小米 MiMo、Doubao、Command Code、StepFun、Venice、OpenAI、Grok、ElevenLabs、Deepgram、Groq、LLM Proxy、Chutes、LiteLLM、Poe、Devin、Zed、CrossModel、Qoder、Sakana AI
 - **系統系統匣圖示** — 動態雙條進度顯示會話與周用量
 - **Floating Bar** — 可選的置頂透明用量條，支援方向、透明度和點選穿透控制
 - **瀏覽器 Cookie 匯入** — Chrome、Edge、Brave、Firefox（Windows DPAPI 解密）
@@ -217,7 +217,6 @@ codexbar cost  -p codex           # 本機成本（JSONL 日誌）
 | 小米 MiMo | Cookies | 餘額、Token 套餐 |
 | Doubao | API Key | 請求限制 |
 | Command Code | Cookies | 月度 Credits、已購 Credits |
-| Crof | API Key | Credits、請求配額 |
 | StepFun | Oasis Token | 5h、周用量 |
 | Venice | API Key | USD / DIEM 餘額 |
 | OpenAI | Admin API / API Key | 用量、請求數、餘額 |

@@ -1,6 +1,9 @@
 //! DeepSeek provider implementation.
 //!
-//! Fetches API account balance from DeepSeek's `/user/balance` endpoint.
+//! Fetches API account balance from DeepSeek's `/user/balance` endpoint. When
+//! no API key is configured, Auto mode reads the Platform balance through a
+//! signed-in Chrome session and keeps that balance visible through temporary
+//! connection failures of the same session.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -8,15 +11,30 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 
+mod chrome_session;
+mod platform_balance;
 pub mod pricing;
+mod session_resolver;
 
 use crate::core::{
-    CostSnapshot, FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
+    CostSnapshot, FetchContext, LastGoodFailurePolicy, Provider, ProviderError,
+    ProviderFetchResult, ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 const DEEPSEEK_API_BASE: &str = "https://api.deepseek.com";
 const DEEPSEEK_CREDENTIAL_TARGET: &str = "codexbar-deepseek";
+
+/// Upper bound for importing Chrome sessions and validating them. Staying
+/// under the shell's fetch timeout keeps a slow resolution attributable: it
+/// fails with no session owner instead of a shell-level timeout.
+const CHROME_SESSION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(28);
+
+/// Validation results outlive a single provider instance, which the shell
+/// recreates for every refresh.
+static CHROME_SESSION_CACHE: std::sync::LazyLock<session_resolver::ValidationCache> =
+    std::sync::LazyLock::new(|| {
+        session_resolver::ValidationCache::new(session_resolver::VALIDITY_TTL)
+    });
 
 #[derive(Debug, Deserialize)]
 struct BalanceResponse {
@@ -203,7 +221,57 @@ impl DeepSeekProvider {
         ctx: &FetchContext,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let api_key = Self::get_api_key(ctx.api_key.as_deref())?;
+        self.fetch_usage_with_api_key(&api_key).await
+    }
 
+    /// Balance from a signed-in Chrome session on platform.deepseek.com, used
+    /// when no API key is configured. Reads the balance only.
+    async fn fetch_usage_chrome_session(
+        &self,
+        missing_key: ProviderError,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let selection = chrome_session::ProfileSelection::from_env();
+        let client = self.client.clone();
+        let resolution = tokio::time::timeout(CHROME_SESSION_DEADLINE, async {
+            let candidates = tokio::task::spawn_blocking(chrome_session::import_tokens)
+                .await
+                .unwrap_or_default();
+            session_resolver::resolve(&candidates, &selection, &CHROME_SESSION_CACHE, |token| {
+                let client = client.clone();
+                async move { platform_balance::fetch_platform_balance(&client, &token).await }
+            })
+            .await
+        })
+        .await;
+
+        match resolution {
+            // A deadline has no attributable session, so it never retains a balance.
+            Err(_) => Err(ProviderError::Timeout.with_failure_owner(None)),
+            Ok(session_resolver::Resolution::Balance { balance, owner }) => Ok(
+                ProviderFetchResult::new(Self::snapshot_from_balance(*balance), "web")
+                    .with_last_good_owner(owner),
+            ),
+            Ok(session_resolver::Resolution::SessionRequired) => Err(match missing_key {
+                ProviderError::NotInstalled(message) => ProviderError::NotInstalled(format!(
+                    "{message} Or sign in to platform.deepseek.com in Chrome."
+                )),
+                other => other,
+            }),
+            Ok(session_resolver::Resolution::SelectionRequired(profiles)) => {
+                Err(ProviderError::Other(format!(
+                    "DeepSeek is signed in on several Chrome profiles ({}). Set {} to choose one.",
+                    profiles.join(", "),
+                    chrome_session::PROFILE_ID_ENV,
+                )))
+            }
+            Ok(session_resolver::Resolution::Failed(error)) => Err(error),
+        }
+    }
+
+    async fn fetch_usage_with_api_key(
+        &self,
+        api_key: &str,
+    ) -> Result<ProviderFetchResult, ProviderError> {
         let resp = self
             .client
             .get(format!("{DEEPSEEK_API_BASE}/user/balance"))
@@ -228,7 +296,7 @@ impl DeepSeekProvider {
         let mut usage = Self::snapshot_from_balance(balance);
         let mut result = ProviderFetchResult::new(usage.clone(), "api");
 
-        if let Ok(summary) = self.fetch_usage_summary(&api_key).await {
+        if let Ok(summary) = self.fetch_usage_summary(api_key).await {
             usage = Self::apply_usage_summary(usage, &summary);
             result = ProviderFetchResult::new(usage, "api");
             if summary.month_cost > 0.0 || !summary.model_costs.is_empty() {
@@ -501,7 +569,11 @@ impl Provider for DeepSeekProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::OAuth => self.fetch_usage_api(ctx).await,
+            SourceMode::Auto => match Self::get_api_key(ctx.api_key.as_deref()) {
+                Ok(api_key) => self.fetch_usage_with_api_key(&api_key).await,
+                Err(missing_key) => self.fetch_usage_chrome_session(missing_key).await,
+            },
+            SourceMode::OAuth => self.fetch_usage_api(ctx).await,
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
             }
@@ -510,6 +582,17 @@ impl Provider for DeepSeekProvider {
 
     fn available_sources(&self) -> Vec<SourceMode> {
         vec![SourceMode::Auto, SourceMode::OAuth]
+    }
+
+    /// Only a transport failure attributed to a Chrome session keeps the last
+    /// balance; the shell then checks that the session matches the cached one.
+    /// API-key balances and every other failure surface normally.
+    fn last_good_failure_policy_for_error(&self, error: &ProviderError) -> LastGoodFailurePolicy {
+        if matches!(error, ProviderError::OwnedTransport { .. }) {
+            LastGoodFailurePolicy::Preserve
+        } else {
+            LastGoodFailurePolicy::Replace
+        }
     }
 }
 

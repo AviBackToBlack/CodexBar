@@ -3,8 +3,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::LastGoodOwner;
 use super::ProviderDisplayDetail;
 use super::RateWindow;
+use crate::spend_contract::CostProvenance;
 /// Subscription dates explicitly reported by an authenticated provider
 /// dashboard or subscription endpoint.
 ///
@@ -73,6 +75,56 @@ pub struct WayfinderRouteSummary {
     pub saved: f64,
 }
 
+/// Per-UTC-day OpenAI Admin API usage behind the daily usage chart (upstream 0.66.0
+/// `openAIAPIUsage`). It carries only what the two Admin endpoints report and stays
+/// provider-siloed: it is never persisted and never mixed into quota math.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiUsageHistory {
+    /// Length of the requested window in days (1-365).
+    pub history_days: u32,
+    /// Project the Admin queries were scoped to, when one is configured.
+    pub project_id: Option<String>,
+    /// One bucket per UTC day that has data, ascending by `start_time`.
+    pub daily: Vec<OpenAiApiDailyUsage>,
+}
+
+/// One UTC-day bucket. `input_tokens` and `output_tokens` include audio tokens and
+/// `cached_input_tokens` is a subset of input, so
+/// `total_tokens == input_tokens + output_tokens` (cached is never added on top).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiDailyUsage {
+    /// Bucket start, epoch seconds.
+    pub start_time: i64,
+    /// Bucket end, epoch seconds (always after `start_time`).
+    pub end_time: i64,
+    pub cost_usd: f64,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    /// Descending by cost, then name.
+    pub line_items: Vec<OpenAiApiLineItemCost>,
+    /// Descending by total tokens, then name.
+    pub models: Vec<OpenAiApiModelUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiLineItemCost {
+    pub name: String,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiApiModelUsage {
+    pub name: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+}
+
 /// A labeled extra usage window surfaced by provider APIs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedRateWindow {
@@ -88,6 +140,19 @@ pub struct NamedRateWindow {
     /// selection metadata only; external snapshot JSON stays stable.
     #[serde(default = "named_rate_window_fallback_lane_default", skip_serializing)]
     pub fallback_lane: bool,
+    /// Tray-icon lane this window stands in for when the snapshot has no real
+    /// core window in that lane. The snapshot's own lanes stay unchanged.
+    /// In-memory selection metadata only; external snapshot JSON stays stable.
+    #[serde(default, skip_serializing)]
+    pub icon_fallback: Option<IconLane>,
+}
+
+/// Core lane of the tray icon that a provider-declared extra window may fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IconLane {
+    Primary,
+    Secondary,
 }
 
 /// One display-only item of provider-issued discrete inventory.
@@ -102,6 +167,19 @@ pub struct ProviderInventoryItem {
     pub id: String,
     pub title: String,
     pub available_count: u32,
+    pub next_expires_at: Option<DateTime<Utc>>,
+}
+
+/// Latest reset-credit inventory observation, kept for monitoring exports.
+///
+/// Unlike [`ProviderInventoryItem`] this is never rendered: a provider that
+/// already shows reset credits in its own rows must not gain a second row,
+/// and an exhausted inventory (`available_count == 0`) stays distinct from
+/// no observation at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResetCreditsObservation {
+    pub available_count: u32,
+    /// Soonest expiry among the available credits.
     pub next_expires_at: Option<DateTime<Utc>>,
 }
 
@@ -121,7 +199,13 @@ impl NamedRateWindow {
             window,
             usage_known: true,
             fallback_lane: false,
+            icon_fallback: None,
         }
+    }
+
+    pub fn with_icon_fallback(mut self, lane: IconLane) -> Self {
+        self.icon_fallback = Some(lane);
+        self
     }
 
     pub fn with_usage_known(mut self, usage_known: bool) -> Self {
@@ -414,6 +498,17 @@ pub struct CostSnapshot {
     /// usage signal and must remain visible when optional local summaries are hidden.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub always_visible: bool,
+
+    /// Input-plus-output token total for the same reporting window as `used`,
+    /// when the provider supplies one. Text rendering only: it is not part of
+    /// the serialized cost payload, which keeps the ordinary usage JSON contract.
+    #[serde(skip)]
+    pub history_tokens: Option<u64>,
+
+    /// How the `used` figure was produced, when the provider states it. Text
+    /// rendering only; not serialized.
+    #[serde(skip)]
+    pub provenance: Option<CostProvenance>,
 }
 
 impl CostSnapshot {
@@ -432,6 +527,8 @@ impl CostSnapshot {
             account_id: None,
             daily: Vec::new(),
             always_visible: false,
+            history_tokens: None,
+            provenance: None,
         }
     }
 
@@ -541,6 +638,18 @@ impl CostSnapshot {
         self
     }
 
+    /// Attach the provider-supplied token total for this spend window.
+    pub fn with_history_tokens(mut self, tokens: u64) -> Self {
+        self.history_tokens = Some(tokens);
+        self
+    }
+
+    /// Record how the spend figure was produced (reported, estimated, mixed).
+    pub fn with_provenance(mut self, provenance: CostProvenance) -> Self {
+        self.provenance = Some(provenance);
+        self
+    }
+
     /// Builder pattern: set currency symbol for localized rendering.
     pub fn with_currency_symbol(mut self, symbol: impl Into<String>) -> Self {
         self.currency_symbol = Some(symbol.into());
@@ -587,12 +696,17 @@ impl CostSnapshot {
 }
 
 /// Format a value as currency
-fn format_currency(value: f64, currency_code: &str) -> String {
+///
+/// The single symbol table for native code paths: tray, CLI, and any Rust
+/// renderer. The web UI formats through `Intl` instead, so the two agree on
+/// codes both know (USD/EUR/GBP/TRY) and stay readable elsewhere.
+pub fn format_currency(value: f64, currency_code: &str) -> String {
     let value = finite_amount(value).unwrap_or(0.0);
     match currency_code.to_uppercase().as_str() {
         "USD" => format!("${:.2}", value),
         "EUR" => format!("€{:.2}", value),
         "GBP" => format!("£{:.2}", value),
+        "TRY" => format!("₺{:.2}", value),
         _ => format!("{:.2} {}", value, currency_code),
     }
 }
@@ -615,12 +729,24 @@ pub struct ProviderFetchResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wayfinder_usage: Option<WayfinderUsageSnapshot>,
 
+    /// Per-day OpenAI Admin API history for the daily usage chart. Set only by the
+    /// Admin usage path; the balance fallback has no per-day data. It is projected
+    /// through the frontend bridge and intentionally excluded from core serialization.
+    #[serde(skip)]
+    pub open_ai_api_usage: Option<OpenAiApiUsageHistory>,
+
     /// Transient non-quota inventory for provider-specific display.
     ///
     /// The field is intentionally skipped by serde: it belongs to the current
     /// fetch and must not change persisted `ProviderFetchResult` JSON.
     #[serde(skip)]
     pub inventory: Vec<ProviderInventoryItem>,
+
+    /// Reset-credit observation for monitoring exports (`serve` metrics).
+    /// Transient like [`Self::inventory`], but never rendered and never sent
+    /// across the frontend bridge.
+    #[serde(skip)]
+    pub reset_credits: Option<ResetCreditsObservation>,
 
     /// Transient provider-specific detail rows for display only. They are not
     /// serialized by the core result; use [`Self::display_details`] for an
@@ -643,6 +769,11 @@ pub struct ProviderFetchResult {
     /// actions. It never crosses the frontend bridge.
     #[serde(skip)]
     pub account_identity: Option<String>,
+
+    /// Live session that supplied this result, used only for owner-checked
+    /// last-good retention. It is in memory only and never crosses the bridge.
+    #[serde(skip)]
+    pub last_good_owner: Option<LastGoodOwner>,
 }
 
 fn default_pace_authoritative() -> bool {
@@ -656,13 +787,22 @@ impl ProviderFetchResult {
             usage,
             cost: None,
             wayfinder_usage: None,
+            open_ai_api_usage: None,
             inventory: Vec::new(),
+            reset_credits: None,
             display_details: Vec::new(),
             source_label: source_label.into(),
             has_successful_claude_cli_quota: false,
             pace_authoritative: true,
             account_identity: None,
+            last_good_owner: None,
         }
+    }
+
+    /// Record which live session supplied this result.
+    pub fn with_last_good_owner(mut self, owner: Option<LastGoodOwner>) -> Self {
+        self.last_good_owner = owner;
+        self
     }
 
     /// Attach the provider's stable account identity without exposing it to
@@ -698,9 +838,21 @@ impl ProviderFetchResult {
         self
     }
 
+    /// Attach the per-day OpenAI Admin API history.
+    pub fn with_open_ai_api_usage(mut self, history: OpenAiApiUsageHistory) -> Self {
+        self.open_ai_api_usage = Some(history);
+        self
+    }
+
     /// Attach one display-only inventory item without exposing redemption IDs.
     pub fn with_inventory_item(mut self, item: ProviderInventoryItem) -> Self {
         self.inventory.push(item);
+        self
+    }
+
+    /// Record the reset-credit observation behind monitoring exports.
+    pub fn with_reset_credits(mut self, observation: ResetCreditsObservation) -> Self {
+        self.reset_credits = Some(observation);
         self
     }
 }
@@ -742,6 +894,48 @@ mod tests {
     }
 
     #[test]
+    fn fetch_result_reset_credits_are_transient_and_not_displayed() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        let expiry = DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap();
+        let result =
+            ProviderFetchResult::new(usage, "oauth").with_reset_credits(ResetCreditsObservation {
+                available_count: 0,
+                next_expires_at: Some(expiry),
+            });
+
+        assert!(result.inventory.is_empty());
+        assert_eq!(
+            result.reset_credits.map(|credits| credits.available_count),
+            Some(0)
+        );
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert!(encoded.get("reset_credits").is_none());
+        assert!(encoded.get("resetCredits").is_none());
+
+        let decoded: ProviderFetchResult = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.reset_credits.is_none());
+    }
+
+    #[test]
+    fn openai_api_history_is_transient_and_not_serialized() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        let result = ProviderFetchResult::new(usage, "admin-api").with_open_ai_api_usage(
+            OpenAiApiUsageHistory {
+                history_days: 30,
+                project_id: Some("proj_abc".to_string()),
+                daily: Vec::new(),
+            },
+        );
+
+        assert!(result.open_ai_api_usage.is_some());
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert!(encoded.get("open_ai_api_usage").is_none());
+
+        let decoded: ProviderFetchResult = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.open_ai_api_usage.is_none());
+    }
+
+    #[test]
     fn display_details_reject_invalid_shapes_and_duplicate_ids() {
         let usage = UsageSnapshot::new(RateWindow::new(25.0));
         let result = ProviderFetchResult::new(usage, "web")
@@ -756,6 +950,56 @@ mod tests {
         let details = result.display_details();
         assert_eq!(details.len(), 1);
         assert_eq!(details[0].value(), "12");
+    }
+
+    #[test]
+    fn display_details_validate_optional_section_titles() {
+        let usage = UsageSnapshot::new(RateWindow::new(25.0));
+        let row = ProviderDisplayDetail::new("budget", "Project", "$10 remaining")
+            .and_then(|row| row.with_section_title("Applicable budgets"));
+        let result = ProviderFetchResult::new(usage, "api").with_display_detail(row);
+
+        assert_eq!(
+            result.display_details()[0].section_title(),
+            Some("Applicable budgets")
+        );
+        assert!(
+            ProviderDisplayDetail::new("budget", "Project", "$10")
+                .and_then(|row| row.with_section_title("\n"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn display_details_batch_keeps_order_and_skips_duplicate_ids() {
+        let rows = ["a", "b", "a"]
+            .into_iter()
+            .filter_map(|id| ProviderDisplayDetail::new(id, id, "1"));
+        let result = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(1.0)), "api")
+            .with_display_details(rows);
+        let ids: Vec<_> = result
+            .display_details()
+            .iter()
+            .map(|row| row.id())
+            .collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn display_detail_section_titles_are_validated() {
+        let row = ProviderDisplayDetail::new("a", "Alpha", "1").unwrap();
+        assert_eq!(row.section_title(), None);
+        assert!(row.clone().with_section_title("").is_none());
+        assert!(row.clone().with_section_title("bad\nsection").is_none());
+        assert!(row.clone().with_section_title("x".repeat(129)).is_none());
+        assert_eq!(
+            row.with_section_title("Model activity")
+                .unwrap()
+                .section_title(),
+            Some("Model activity")
+        );
+        assert!(ProviderDisplayDetail::is_valid_title("fixture-alpha"));
+        assert!(!ProviderDisplayDetail::is_valid_title(""));
     }
 
     #[test]

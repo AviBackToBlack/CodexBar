@@ -1,5 +1,7 @@
 use super::*;
+use crate::codex_costs::codex_period_start;
 use crate::core::{CodexSessionLineage, CostUsagePricing};
+use chrono::{FixedOffset, Local, NaiveTime, TimeZone};
 use std::io::Write;
 
 #[test]
@@ -395,7 +397,7 @@ fn counts_claude_usage_once_across_duplicate_records() {
     assert_eq!(record.output, 50);
     assert_eq!(record.cache_create, 10);
     assert_eq!(record.cache_read, 20);
-    assert!(record.cost > 0.0);
+    assert!(record.cost.is_some_and(|cost| cost > 0.0));
 
     let cutoff = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
@@ -456,6 +458,67 @@ fn excludes_preliminary_proxy_estimates_but_keeps_cache_aware_rows() {
 }
 
 #[test]
+fn claude_scan_counts_unreconciled_incomplete_requests_per_day_and_model() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("transcript.jsonl");
+    let now = Utc::now() - Duration::hours(1);
+    let ts = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let day = cost_bucket_zone().date(now).format("%Y-%m-%d").to_string();
+    let row = |request: &str, message: &str, stop: &str, usage: &str| {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","requestId":"{request}","message":{{"id":"{message}","model":"claude-sonnet-4-6","stop_reason":{stop},"usage":{usage}}}}}"#
+        )
+    };
+    let body = [
+        // Superseded: a completed row with the same key exists.
+        row("req_done", "msg_done", "null", r#"{"input_tokens":1000}"#),
+        row(
+            "req_done",
+            "msg_done",
+            r#""end_turn""#,
+            r#"{"input_tokens":1000,"output_tokens":50}"#,
+        ),
+        // Never completed, duplicated preliminary rows count once.
+        row("req_open", "msg_open", "null", r#"{"input_tokens":500}"#),
+        row("req_open", "msg_open", "null", r#"{"input_tokens":500}"#),
+    ]
+    .join("\n");
+    std::fs::write(&path, body).unwrap();
+
+    let cutoff = Utc::now() - Duration::days(1);
+    let mut seen = HashSet::new();
+    let mut pricing = ClaudeScanPricingResolver::default();
+    let mut tracker = ClaudeIncompleteTracker::default();
+    let mut summary = CostSummary::default();
+    let result = scan_claude_file_with_pricing(
+        &path,
+        &cutoff,
+        &mut seen,
+        None,
+        &mut pricing,
+        &mut tracker,
+        |record| assert!(add_claude_record_to_summary(&mut summary, record)),
+    );
+    assert_eq!(result.counted, 1);
+    assert!(
+        !result.is_complete(),
+        "preliminary rows keep coverage unknown"
+    );
+
+    let report = tracker.resolve(&seen);
+    report.apply_to(&mut summary);
+    assert_eq!(summary.incomplete_request_count, 1);
+    assert_eq!(
+        summary.incomplete_by_model.get("claude-sonnet-4-6"),
+        Some(&1)
+    );
+    assert_eq!(report.by_day.get(&day), Some(&1));
+    // Only the completed row contributes tokens.
+    assert_eq!(summary.input_tokens, 1000);
+    assert_eq!(summary.output_tokens, 50);
+}
+
+#[test]
 fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zero() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("transcript.jsonl");
@@ -470,6 +533,7 @@ fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zer
         &mut empty_seen,
         None,
         &mut empty_pricing,
+        &mut ClaudeIncompleteTracker::default(),
         |_| {},
     );
     let mut empty_summary = CostSummary::default();
@@ -486,6 +550,7 @@ fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zer
         &mut malformed_seen,
         None,
         &mut malformed_pricing,
+        &mut ClaudeIncompleteTracker::default(),
         |_| {},
     );
     assert_eq!(malformed_result.malformed_lines, 1);
@@ -493,6 +558,157 @@ fn malformed_claude_history_stays_unknown_while_valid_empty_history_is_known_zer
     finalize_claude_summary(&mut malformed_summary, true, malformed_result, false);
     assert!(!malformed_summary.history_coverage_established);
     assert!(!malformed_summary.known_zero);
+}
+
+#[test]
+fn claude_daily_token_coverage_requires_a_complete_valid_scan() {
+    let root = tempfile::tempdir().unwrap();
+    let cutoff = Utc::now() - Duration::days(1);
+    let valid_path = root.path().join("valid.jsonl");
+    let timestamp = Utc::now() - Duration::hours(1);
+    let today = timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    std::fs::write(
+        &valid_path,
+        format!(
+            "{}\n",
+            claude_transcript_line(
+                &timestamp.to_rfc3339(),
+                "requestId",
+                "req_valid",
+                "msg_valid"
+            )
+        ),
+    )
+    .unwrap();
+
+    let mut valid_tokens = HashMap::from([(today.clone(), 0)]);
+    let valid_result = scan_claude_file_for_daily_tokens(
+        &valid_path,
+        &cutoff,
+        &mut HashSet::new(),
+        &mut ClaudeScanPricingResolver::default(),
+        &mut valid_tokens,
+    );
+    assert!(valid_result.is_complete());
+    let mut covered_days = HashSet::new();
+    mark_claude_daily_token_coverage(&mut covered_days, &valid_tokens, valid_result);
+    assert!(covered_days.contains(&today));
+
+    let assert_uncovered = |path: &Path| {
+        let mut daily_tokens = HashMap::from([(today.clone(), 0)]);
+        let result = scan_claude_file_for_daily_tokens(
+            path,
+            &cutoff,
+            &mut HashSet::new(),
+            &mut ClaudeScanPricingResolver::default(),
+            &mut daily_tokens,
+        );
+        assert!(!result.is_complete());
+        let mut covered_days = HashSet::from(["stale-coverage".to_string()]);
+        mark_claude_daily_token_coverage(&mut covered_days, &daily_tokens, result);
+        assert!(covered_days.is_empty());
+        result
+    };
+
+    let malformed_path = root.path().join("malformed.jsonl");
+    std::fs::write(&malformed_path, b"{malformed\n").unwrap();
+    assert_eq!(assert_uncovered(&malformed_path).malformed_lines, 1);
+
+    let incomplete_path = root.path().join("incomplete.jsonl");
+    std::fs::write(
+        &incomplete_path,
+        r#"{"type":"assistant","message":{"id":"msg_preliminary","model":"gpt-5.6-sol","stop_reason":null,"usage":{"input_tokens":1000}}}"#,
+    )
+    .unwrap();
+    assert_eq!(assert_uncovered(&incomplete_path).incomplete_requests, 1);
+
+    let missing_timestamp_path = root.path().join("missing-timestamp.jsonl");
+    std::fs::write(
+        &missing_timestamp_path,
+        r#"{"type":"assistant","requestId":"req_no_timestamp","message":{"id":"msg_no_timestamp","model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"output_tokens":500}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        assert_uncovered(&missing_timestamp_path).aggregation_failures,
+        1
+    );
+
+    let unreadable_path = root.path().join("missing.jsonl");
+    assert_eq!(assert_uncovered(&unreadable_path).read_failures, 1);
+
+    let scanner = CostScanner::new(1);
+    let missing_directory = root.path().join("missing-directory");
+    let traversal_read_failures =
+        scanner.walk_claude_files(&missing_directory, &cutoff, None, &mut |_| {});
+    assert_eq!(traversal_read_failures, 1);
+    let mut covered_days = HashSet::from([today]);
+    mark_claude_daily_token_coverage(
+        &mut covered_days,
+        &valid_tokens,
+        ClaudeFileScanResult {
+            read_failures: traversal_read_failures,
+            ..ClaudeFileScanResult::default()
+        },
+    );
+    assert!(covered_days.is_empty());
+}
+
+#[test]
+fn public_claude_daily_token_dispatch_reports_incomplete_fixture_scans() {
+    const CHILD_MARKER: &str = "CODEXBAR_CLAUDE_DAILY_TOKEN_TEST_CHILD";
+    const CHILD_DONE: &str = "isolated Claude daily-history fixture verified";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .expect("child receives isolated Claude config directory");
+        let projects_dir = config_dir.join("projects");
+        let project_dir = projects_dir.join("fixture-project");
+        let (complete_history, incomplete) = get_daily_token_history("claude", 1);
+        assert!(!incomplete, "valid fixture scan should establish coverage");
+        assert!(complete_history.iter().any(|(_, tokens)| *tokens > 0));
+
+        std::fs::write(project_dir.join("malformed.jsonl"), b"{malformed\n").unwrap();
+        let (partial_history, incomplete) = get_daily_token_history("claude", 1);
+        assert!(
+            incomplete,
+            "malformed fixture should leave coverage incomplete"
+        );
+        assert_eq!(partial_history, complete_history);
+        println!("{CHILD_DONE}");
+        return;
+    }
+
+    let config_dir = tempfile::tempdir().unwrap();
+    let project_dir = config_dir.path().join("projects").join("fixture-project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let timestamp = Utc::now().to_rfc3339();
+    std::fs::write(
+        project_dir.join("valid.jsonl"),
+        format!(
+            "{}\n",
+            claude_transcript_line(&timestamp, "requestId", "req_public", "msg_public")
+        ),
+    )
+    .unwrap();
+
+    let test_thread = std::thread::current();
+    let test_name = test_thread.name().expect("test harness names this thread");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+        .env(CHILD_MARKER, "1")
+        .env("CLAUDE_CONFIG_DIR", config_dir.path())
+        .output()
+        .expect("spawn isolated exact-test child");
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains(CHILD_DONE),
+        "fixture child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -552,9 +768,17 @@ fn shared_claude_reader_excludes_vertex_rows_but_keeps_anthropic_usage() {
     let anthropic = format!(
         r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_anthropic","message":{{"id":"msg_anthropic","model":"claude-sonnet-4-6","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
     );
-    let vertex = format!(
-        r#"{{"type":"assistant","timestamp":"{timestamp}","requestId":"req_vrtx_123","message":{{"id":"msg_vrtx_123","model":"claude-sonnet-4-6","usage":{{"input_tokens":1000,"output_tokens":500}}}}}}"#
-    );
+    let vertex = serde_json::json!({
+        "type": "assistant",
+        "timestamp": timestamp,
+        "requestId": "req_vrtx_123",
+        "message": {
+            "id": "msg_vrtx_123",
+            "model": "claude-sonnet-4-6",
+            "usage": {"input_tokens": u64::MAX, "output_tokens": u64::MAX}
+        }
+    })
+    .to_string();
     std::fs::write(&path, format!("{anthropic}\n{vertex}\n")).unwrap();
 
     let cutoff = Utc::now() - Duration::days(30);
@@ -567,6 +791,86 @@ fn shared_claude_reader_excludes_vertex_rows_but_keeps_anthropic_usage() {
     assert_eq!(counted, 1);
     assert_eq!(records, vec![(10, 5)]);
     let _removed = std::fs::remove_file(&path);
+}
+
+#[test]
+fn oversized_claude_history_preserves_independent_components_and_fails_closed() {
+    let first: ClaudeEvent = serde_json::from_str(&format!(
+        r#"{{"type":"assistant","timestamp":"2026-09-20T12:00:00Z","requestId":"req_overflow_1","message":{{"id":"msg_overflow_1","model":"claude-sonnet-4-6","usage":{{"input_tokens":{},"output_tokens":2}}}}}}"#,
+        u64::MAX
+    ))
+    .unwrap();
+    let second: ClaudeEvent = serde_json::from_str(
+        r#"{"type":"assistant","timestamp":"2026-09-20T12:01:00Z","requestId":"req_overflow_2","message":{"id":"msg_overflow_2","model":"claude-sonnet-4-6","usage":{"input_tokens":1,"output_tokens":3}}}"#,
+    )
+    .unwrap();
+    let first = claude_usage_record_from_event(&first).expect("first usage row");
+    let second = claude_usage_record_from_event(&second).expect("second usage row");
+    let mut summary = CostSummary::default();
+
+    assert!(add_claude_record_to_summary(&mut summary, &first));
+    assert!(!add_claude_record_to_summary(&mut summary, &second));
+    assert_eq!(summary.input_tokens, u64::MAX);
+    assert_eq!(summary.output_tokens, 5);
+    assert!(summary.total_cost_usd.is_finite());
+
+    finalize_claude_summary(
+        &mut summary,
+        true,
+        ClaudeFileScanResult {
+            counted: 2,
+            aggregation_failures: 1,
+            ..ClaudeFileScanResult::default()
+        },
+        false,
+    );
+    assert!(!summary.history_coverage_established);
+    assert!(!summary.known_zero);
+}
+
+#[test]
+fn oversized_single_claude_row_keeps_cost_but_marks_combined_quota_tokens_unknown() {
+    let event: ClaudeEvent = serde_json::from_str(&format!(
+        r#"{{"type":"assistant","timestamp":"2026-09-20T12:00:00Z","requestId":"req_combined_overflow","message":{{"id":"msg_combined_overflow","model":"claude-sonnet-4-6","usage":{{"input_tokens":{},"output_tokens":1}}}}}}"#,
+        u64::MAX
+    ))
+    .unwrap();
+    let record = claude_usage_record_from_event(&event).expect("usage row");
+    let quota = quota_history_record_from_usage(&record).expect("timestamped quota row");
+
+    assert!(record.cost.is_some_and(f64::is_finite));
+    assert_eq!(quota.tokens, None);
+    assert!(!quota.tokens_are_complete);
+    assert!(quota.cost_usd.is_some_and(f64::is_finite));
+    assert!(quota.cost_is_complete);
+}
+
+#[test]
+fn nonfinite_claude_price_is_unknown_instead_of_zero() {
+    let snapshot = crate::core::ModelsDevPricingSnapshot::from_catalog_json_for_tests(
+        r#"{
+            "anthropic": {"models": {"claude-test-extreme-price": {
+                "id": "claude-test-extreme-price", "cost": {"input": 1e308, "output": 1}
+            }}}
+        }"#,
+    )
+    .expect("pricing fixture");
+    let mut pricing = ClaudeScanPricingResolver::with_snapshot(snapshot);
+    let event: ClaudeEvent = serde_json::from_str(&format!(
+        r#"{{"type":"assistant","timestamp":"2026-09-20T12:00:00Z","requestId":"req_nonfinite","message":{{"id":"msg_nonfinite","model":"claude-test-extreme-price","usage":{{"input_tokens":{},"output_tokens":1}}}}}}"#,
+        u64::MAX
+    ))
+    .unwrap();
+    let record =
+        claude_usage_record_from_event_with_pricing(&event, &mut pricing).expect("usage row");
+    let mut summary = CostSummary::default();
+
+    assert_eq!(record.cost, None);
+    assert!(!add_claude_record_to_summary(&mut summary, &record));
+    assert_eq!(summary.input_tokens, u64::MAX);
+    assert_eq!(summary.output_tokens, 1);
+    assert_eq!(summary.total_cost_usd, 0.0);
+    assert!(!summary.known_zero);
 }
 
 fn claude_transcript_line(
@@ -626,14 +930,15 @@ fn daily_history_dedups_across_files_and_buckets_by_local_day() {
             .to_string()
     };
     let mut daily_costs = HashMap::new();
-    daily_costs.insert(day_key(&day_one), Some(0.0));
-    daily_costs.insert(day_key(&day_two), Some(0.0));
+    daily_costs.insert(day_key(&day_one), None);
+    daily_costs.insert(day_key(&day_two), None);
+    let mut unknown_cost_dates = HashSet::new();
 
     let cutoff = Utc::now() - Duration::days(30);
     let mut seen = HashSet::new();
     for path in [&file_a, &file_b] {
         for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
-            add_claude_record_to_daily_costs(&mut daily_costs, record);
+            add_claude_record_to_daily_costs(&mut daily_costs, &mut unknown_cost_dates, record);
         });
     }
 
@@ -650,6 +955,65 @@ fn daily_history_dedups_across_files_and_buckets_by_local_day() {
     // Best-effort test cleanup; the files may already be gone.
     let _removed_a = std::fs::remove_file(&file_a);
     let _removed_b = std::fs::remove_file(&file_b);
+}
+
+fn claude_daily_cost_record(timestamp: DateTime<Utc>, cost: Option<f64>) -> ClaudeUsageRecord {
+    ClaudeUsageRecord {
+        model: "claude-test".to_string(),
+        pricing_known: cost.is_some(),
+        timestamp: Some(timestamp),
+        dedup_key: None,
+        input: 1,
+        output: 1,
+        cache_create: 0,
+        cache_read: 0,
+        cost,
+    }
+}
+
+#[test]
+fn unknown_claude_cost_date_cannot_be_restored_by_later_priced_record() {
+    let timestamp = Utc::now();
+    let day = timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut daily_costs = HashMap::from([(day.clone(), None)]);
+    let mut unknown_cost_dates = HashSet::new();
+
+    assert!(add_claude_record_to_daily_costs(
+        &mut daily_costs,
+        &mut unknown_cost_dates,
+        &claude_daily_cost_record(timestamp, Some(0.75)),
+    ));
+    assert!(!add_claude_record_to_daily_costs(
+        &mut daily_costs,
+        &mut unknown_cost_dates,
+        &claude_daily_cost_record(timestamp, None),
+    ));
+    assert!(!add_claude_record_to_daily_costs(
+        &mut daily_costs,
+        &mut unknown_cost_dates,
+        &claude_daily_cost_record(timestamp, Some(1.25)),
+    ));
+
+    assert_eq!(daily_costs[&day], None);
+    assert!(unknown_cost_dates.contains(&day));
+}
+
+#[test]
+fn claude_daily_zero_fill_preserves_unknown_dates_and_fills_untouched_dates() {
+    let unknown_day = "2026-09-22".to_string();
+    let untouched_day = "2026-09-23".to_string();
+    let mut daily_costs =
+        HashMap::from([(unknown_day.clone(), None), (untouched_day.clone(), None)]);
+    let unknown_cost_dates = HashSet::from([unknown_day.clone()]);
+
+    zero_fill_uninitialized_claude_daily_costs(&mut daily_costs, &unknown_cost_dates);
+
+    assert_eq!(daily_costs[&unknown_day], None);
+    assert_eq!(daily_costs[&untouched_day], Some(0.0));
 }
 
 #[test]
@@ -671,17 +1035,59 @@ fn claude_scan_counts_final_incomplete_jsonl_line() {
     let _removed = std::fs::remove_file(&path);
 }
 
+/// An event time for a fresh Codex session fixture: an hour ago, kept on today's local date.
+///
+/// The scanner files each event under its local date, and the session fixtures live in today's
+/// date folder. A plain `now - 1h` lands on yesterday in the first hour after local midnight
+/// (00:00-01:00Z on the UTC CI runner), so tests that read today's bucket or rely on the day
+/// folder scan order failed in that hour.
+fn recent_codex_fixture_time() -> DateTime<Utc> {
+    recent_fixture_time_at(Local::now())
+}
+
+/// `now - 1h`, or the start of `now`'s local day when that hour reaches back into yesterday.
+fn recent_fixture_time_at<Tz: TimeZone>(now: DateTime<Tz>) -> DateTime<Utc> {
+    let hour_ago = now.clone() - Duration::hours(1);
+    if hour_ago.date_naive() == now.date_naive() {
+        return hour_ago.with_timezone(&Utc);
+    }
+    now.timezone()
+        .from_local_datetime(&now.date_naive().and_time(NaiveTime::MIN))
+        .earliest()
+        .unwrap_or(now)
+        .with_timezone(&Utc)
+}
+
+#[test]
+fn recent_codex_fixture_time_stays_on_the_local_day() {
+    let utc_plus_7 = FixedOffset::east_opt(7 * 3600).unwrap();
+    let at = |hour, minute| {
+        utc_plus_7
+            .with_ymd_and_hms(2026, 10, 1, hour, minute, 0)
+            .unwrap()
+    };
+    assert_eq!(recent_fixture_time_at(at(8, 30)), at(7, 30));
+    assert_eq!(recent_fixture_time_at(at(1, 0)), at(0, 0));
+    assert_eq!(recent_fixture_time_at(at(0, 40)), at(0, 0));
+    assert_eq!(recent_fixture_time_at(at(0, 0)), at(0, 0));
+
+    let ci_run = Utc.with_ymd_and_hms(2026, 10, 1, 0, 45, 0).unwrap();
+    assert_eq!(
+        recent_fixture_time_at(ci_run),
+        Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).unwrap()
+    );
+}
+
 fn write_codex_session_fixture(sessions_root: &Path, name: &str, input_tokens: u64) -> PathBuf {
-    let today = Local::now().date_naive();
+    let event_time = recent_codex_fixture_time();
+    let today = event_time.with_timezone(&Local).date_naive();
     let day_dir = sessions_root
         .join(today.format("%Y").to_string())
         .join(today.format("%m").to_string())
         .join(today.format("%d").to_string());
     std::fs::create_dir_all(&day_dir).unwrap();
     let path = day_dir.join(name);
-    let ts = (Utc::now() - Duration::hours(1))
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
+    let ts = event_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let body = format!(
         r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":{input_tokens},"cached_input_tokens":0,"output_tokens":5}}}}}}}}
 "#
@@ -695,13 +1101,13 @@ fn write_codex_session_fixture_with_inputs(
     name: &str,
     input_tokens: &[u64],
 ) -> PathBuf {
-    let today = Local::now().date_naive();
+    let base = recent_codex_fixture_time();
+    let today = base.with_timezone(&Local).date_naive();
     let day_dir = sessions_root
         .join(today.format("%Y").to_string())
         .join(today.format("%m").to_string())
         .join(today.format("%d").to_string());
     std::fs::create_dir_all(&day_dir).unwrap();
-    let base = Utc::now() - Duration::hours(1);
     let mut body = String::new();
     for (index, input) in input_tokens.iter().enumerate() {
         let timestamp = (base
@@ -1449,10 +1855,16 @@ fn cost_scan_second_pass_skips_unchanged_files_via_cache() {
 
     // Second pass with default debounce still inspects files but skips re-parse.
     // Use app_driven so we exercise per-file mtime skip rather than whole-scan debounce.
+    CodexLineagePlanner::reset_graph_build_count();
     let (summary2, stats2) = scanner.scan_codex_detailed(None);
     assert_eq!(stats2.files_seen, 2);
     assert_eq!(stats2.files_skipped, 2, "cache hit skips re-parse");
     assert_eq!(stats2.files_parsed, 0);
+    assert_eq!(
+        CodexLineagePlanner::graph_build_count(),
+        0,
+        "warm root-only scan must bypass lineage graph construction"
+    );
     assert!(stats2.codex_metadata_read_paths.is_empty());
     assert!(stats2.codex_history_read_paths.is_empty());
     assert_eq!(stats2.codex_read_receipt, Default::default());
@@ -1561,13 +1973,17 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
         .get_mut(&path_key)
         .expect("source rows persisted");
     assert_eq!(source_rows.rows.len(), 1);
+    // Cached evidence that disagrees with the source: a Priority row on a
+    // model with a Fast lane, so the recovered row keeps a `-priority` key
+    // (a Priority row without a Fast lane would price at its Standard base).
+    source_rows.rows[0].pricing.pricing_model = Some("gpt-5.5".to_string());
     source_rows.rows[0].pricing.pricing_mode = Some("priority".to_string());
     first_cache.last_scan_unix_ms = 1;
     JsonlScanner::save_cache(ProviderId::Codex, &mut first_cache, Some(&cache_root));
 
-    let timestamp = (Utc::now() - Duration::minutes(30))
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
+    // Half an hour after the fixture's row, so both rows share one local day.
+    let appended_time = recent_codex_fixture_time() + Duration::minutes(30);
+    let timestamp = appended_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let appended = format!(
         r#"{{"timestamp":"{timestamp}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":200,"cached_input_tokens":0,"output_tokens":10}}}}}}}}"#
     ) + "\n";
@@ -1580,8 +1996,15 @@ fn codex_source_recovery_keeps_appended_duplicate_unpriced_after_cache_reload() 
 
     let (_, _, second_cache) = scanner.scan_codex_detailed_with_cache(None);
     let usage = second_cache.files.get(&path_key).expect("file cache");
-    let day = Local::now().format("%Y-%m-%d").to_string();
-    assert_eq!(usage.days[&day]["gpt-5-priority"], vec![100, 0, 5]);
+    let day = appended_time
+        .with_timezone(&Local)
+        .format("%Y-%m-%d")
+        .to_string();
+    assert_eq!(
+        usage.days[&day]["gpt-5.5-priority"],
+        vec![100, 0, 5],
+        "gpt-5.5 turns also price at the Priority rate"
+    );
     assert_eq!(
         usage.days[&day][CostUsagePricing::CODEX_UNATTRIBUTED_MODEL],
         vec![100, 0, 5]
@@ -3036,6 +3459,113 @@ fn incomplete_or_buffered_empty_codex_fragment_is_not_marked_complete() {
     assert!(buffered_cache.codex_pending_paths.contains(&buffered_key));
 }
 
+// Regression (PR #611 review): Codex `input_tokens` already contains cached
+// input, Claude cache buckets are separate. Every total must follow the
+// provider's rule, and the model, daily and window totals must agree.
+#[test]
+fn provider_totals_add_cache_only_when_it_is_separate_from_input() {
+    let counts = ModelTokenCounts {
+        input_tokens: 100,
+        output_tokens: 5,
+        cached_tokens: 90,
+        reasoning_tokens: None,
+    };
+    assert_eq!(counts.total_for_provider("codex"), 105);
+    assert_eq!(counts.total_for_provider("claude"), 195);
+
+    let summary = CostSummary {
+        input_tokens: 100,
+        output_tokens: 5,
+        cached_tokens: 90,
+        ..CostSummary::default()
+    };
+    assert_eq!(summary.total_tokens_for_provider("codex"), 105);
+    assert_eq!(summary.total_tokens_for_provider("claude"), 195);
+}
+
+#[test]
+fn codex_day_total_excludes_cached_input_and_matches_model_totals() {
+    let day_key = "2026-08-18".to_string();
+    let day = CostUsageDayRange::parse_day_key(&day_key).expect("day");
+    let range = CostUsageDayRange::new(day, day);
+    let mut one_day = HashMap::new();
+    one_day.insert(
+        day_key,
+        HashMap::from([("gpt-5".to_string(), vec![1_000, 900, 50])]),
+    );
+    let mut scratch = CostSummary::default();
+    add_codex_days_map_to_summary(&mut scratch, &one_day, &range);
+
+    assert_eq!(scratch.input_tokens, 1_000);
+    assert_eq!(scratch.cached_tokens, 900);
+    // The value `get_daily_token_history("codex")` stores for the day.
+    let day_total = scratch.total_tokens_for_provider("codex");
+    assert_eq!(day_total, 1_050, "cached input is already inside input");
+    let model_total: u64 = scratch
+        .by_model_tokens
+        .values()
+        .map(|counts| counts.total_for_provider("codex"))
+        .sum();
+    assert_eq!(model_total, day_total);
+}
+
+#[test]
+fn claude_day_total_includes_cache_and_matches_summary_and_model_totals() {
+    use chrono::TimeZone as _;
+    let timestamp = Local
+        .with_ymd_and_hms(2026, 8, 18, 12, 0, 0)
+        .single()
+        .expect("local time")
+        .with_timezone(&Utc);
+    let record = ClaudeUsageRecord {
+        model: "claude-sonnet-4-5".to_string(),
+        pricing_known: true,
+        timestamp: Some(timestamp),
+        dedup_key: None,
+        input: 10,
+        output: 20,
+        cache_create: 300,
+        cache_read: 4_000,
+        cost: Some(0.0),
+    };
+    let mut summary = CostSummary::default();
+    assert!(add_claude_record_to_summary(&mut summary, &record));
+    let mut daily = HashMap::from([("2026-08-18".to_string(), 0u64)]);
+    assert!(add_claude_record_to_daily_tokens(&mut daily, &record));
+
+    let window_total = summary.total_tokens_for_provider("claude");
+    assert_eq!(window_total, 4_330);
+    assert_eq!(daily["2026-08-18"], window_total);
+    let model_total: u64 = summary
+        .by_model_tokens
+        .values()
+        .map(|counts| counts.total_for_provider("claude"))
+        .sum();
+    assert_eq!(model_total, window_total);
+}
+
+#[cfg(test)]
+#[path = "tests/claude_swap.rs"]
+mod claude_swap;
+#[cfg(test)]
+#[path = "tests/copied_prefix.rs"]
+mod copied_prefix;
+#[cfg(test)]
+#[path = "tests/direct_fork.rs"]
+mod direct_fork;
+#[cfg(test)]
+#[path = "tests/fork_resume.rs"]
+mod fork_resume;
+#[cfg(test)]
+#[path = "tests/lineage_cache.rs"]
+mod lineage_cache;
 #[cfg(test)]
 #[path = "tests/paginated.rs"]
 mod paginated;
+
+#[path = "tests/period.rs"]
+mod period;
+
+#[cfg(test)]
+#[path = "tests/archived.rs"]
+mod archived;

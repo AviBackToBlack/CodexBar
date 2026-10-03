@@ -14,11 +14,13 @@ mod proof_harness;
 mod shell;
 mod shortcut_bridge;
 mod state;
+mod stay_awake;
 mod surface;
 mod surface_target;
 mod tray_accounts;
 mod tray_bridge;
 mod tray_menu;
+mod tray_presentation;
 mod tray_visibility;
 mod usage_metric;
 mod window_positioner;
@@ -51,13 +53,21 @@ fn should_hide_close_request(mode: SurfaceMode) -> bool {
 ///
 /// Spawned because building the flyout window synchronously can deadlock on
 /// Windows (see `shell::flyout_window::open_or_focus`).
+///
+/// Launch and relaunch are not clicks in CodexBar, so the panel only asks
+/// Windows for the foreground (`Activation::IfAllowed`): a launch from Start
+/// or Explorer gets focus, a login-time or background launch does not.
 fn open_primary_window(app: &tauri::AppHandle, delay: Duration) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        if let Err(error) = shell::flyout_window::open_or_focus(&app, None) {
+        if let Err(error) = shell::flyout_window::open_or_focus(
+            &app,
+            None,
+            shell::activation::Activation::IfAllowed,
+        ) {
             tracing::warn!(%error, "failed to open the tray panel window");
         }
     });
@@ -140,21 +150,42 @@ fn main() {
 
     let mut initial_state = AppState::new();
     initial_state.proof_config = proof_config;
-    // Proof-harness seed: CODEXBAR_SEED_USAGE_JSON plants one synthetic Codex
-    // ProviderUsageSnapshot before the event loop and any WebView read. The
-    // cache timestamp makes the seeded cache count as fresh so the first
-    // frontend refresh-if-stale call does not evict the synthetic data.
-    if let Some(snapshot) = proof_harness::seed_usage_snapshot_from_env() {
-        tracing::info!(
-            "proof-harness: seeded provider snapshot for '{}'",
-            snapshot.provider_id
-        );
-        initial_state.provider_cache.push(snapshot);
-        initial_state.provider_cache_updated_at = Some(std::time::Instant::now());
+    // Validate the complete proof seed before installing any snapshots, so an
+    // invalid multi-provider fixture cannot leave a partial cache behind.
+    if let Some(snapshots) =
+        proof_harness::seed_usage_snapshots_from_env(initial_state.proof_config.as_ref())
+    {
+        let seeded_at = std::time::Instant::now();
+        for snapshot in &snapshots {
+            tracing::info!(
+                "proof-harness: seeded provider snapshot for '{}'",
+                snapshot.provider_id
+            );
+            if let Some(provider) = codexbar::core::ProviderId::from_cli_name(&snapshot.provider_id)
+            {
+                initial_state
+                    .provider_cache_updated_at_by_provider
+                    .insert(provider, seeded_at);
+            }
+        }
+        initial_state.provider_cache.extend(snapshots);
+        initial_state.provider_cache_seeded = true;
+        initial_state.provider_cache_updated_at = Some(seeded_at);
+    }
+
+    let context = tauri::generate_context!();
+    if is_proof_mode {
+        // Proof runs show surfaces for automation but never take focus.
+        shell::activation::suppress_all();
+    } else {
+        // If CodexBar is already running, the single-instance plugin hands
+        // this launch off to it; pass our foreground permission along first.
+        shell::activation::grant_foreground_to_running_instance(&context.config().identifier);
     }
 
     tauri::Builder::default()
         .manage(Mutex::new(initial_state))
+        .manage(commands::CurrencyRateCache::default())
         .plugin(shortcut_bridge::plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -166,6 +197,8 @@ fn main() {
             commands::get_bootstrap_state,
             commands::get_provider_catalog,
             commands::get_settings_snapshot,
+            commands::get_currency_rates,
+            stay_awake::get_stay_awake_status,
             commands::list_agent_sessions,
             commands::focus_agent_session,
             commands::update_settings,
@@ -237,12 +270,15 @@ fn main() {
             commands::get_provider_local_usage_summary,
             commands::get_usage_spend_summary,
             commands::write_usage_spend_export,
+            commands::export_preferences,
+            commands::import_preferences,
             commands::get_spend_contract,
             commands::get_codex_workspaces_snapshot,
             commands::reorder_providers,
             commands::set_provider_cookie_source,
             commands::set_provider_usage_source,
             commands::set_provider_auto_resume_after_quota_reset,
+            commands::set_provider_optional_details,
             commands::has_openrouter_management_api_key,
             commands::set_openrouter_management_api_key,
             commands::remove_openrouter_management_api_key,
@@ -253,6 +289,7 @@ fn main() {
             commands::get_provider_region_options,
             commands::set_provider_workspace_id,
             commands::set_provider_gateway_url,
+            commands::get_provider_gateway_url,
             commands::get_provider_workspace_id,
             commands::get_gemini_cli_signed_in,
             commands::get_vertexai_status,
@@ -295,6 +332,7 @@ fn main() {
             shortcut_bridge::register(app.handle());
             floatbar::install(app.handle());
             auto_refresh::install(app.handle().clone());
+            stay_awake::install(app.handle().clone());
             if settings.powertoys_status_pipe_enabled {
                 powertoys::install(app.handle().clone());
             }
@@ -415,8 +453,13 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run CodexBar desktop shell");
+        .build(context)
+        .expect("failed to build CodexBar desktop shell")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                stay_awake::shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

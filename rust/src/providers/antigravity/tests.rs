@@ -268,36 +268,6 @@ fn missing_cli_error_explains_runtime_state() {
     assert!(error.contains("agy CLI was not found"));
 }
 
-#[test]
-fn managed_agy_candidates_prefer_override_then_path_then_known_installs() {
-    let explicit = PathBuf::from(r"D:\tools\agy.exe");
-    let path_lookup = PathBuf::from(r"C:\path\agy.exe");
-    let local_app_data = PathBuf::from(r"C:\Users\test\AppData\Local");
-    let home = PathBuf::from(r"C:\Users\test");
-
-    let candidates = AntigravityProvider::agy_binary_candidates(
-        Some(explicit.clone()),
-        Some(path_lookup.clone()),
-        Some(local_app_data.clone()),
-        Some(home.clone()),
-    );
-
-    assert_eq!(candidates[0], explicit);
-    assert_eq!(candidates[1], path_lookup);
-    // Build expectations with `join` so the assertions match on every host:
-    // on Unix `\` is an ordinary character and `join` inserts `/`.
-    assert_eq!(
-        candidates[2],
-        local_app_data.join("agy").join("bin").join("agy.exe")
-    );
-    assert_eq!(
-        candidates[3],
-        home.join(".local")
-            .join("bin")
-            .join(if cfg!(windows) { "agy.exe" } else { "agy" })
-    );
-}
-
 // ── Managed lifecycle policy (fake outcomes) ───────────────────────
 //
 // The process lifecycle itself is covered by `crate::managed_process`; these
@@ -576,7 +546,7 @@ fn strategy_ids_are_stable_and_reject_unknown_sources() {
     assert_eq!(AntigravityStrategyId::Cli.as_str(), "cli");
 }
 
-fn offline_result() -> ProviderFetchResult {
+pub(super) fn offline_result() -> ProviderFetchResult {
     ProviderFetchResult::new(
         UsageSnapshot::new(RateWindow::informational("Offline · 2 conversations"))
             .with_login_method("offline"),
@@ -641,9 +611,35 @@ async fn local_probe_success_does_not_run_structured_cli_fallback() {
 }
 
 #[tokio::test]
+async fn local_probe_success_wins_over_an_invalid_cli_override() {
+    let provider = AntigravityProvider::new();
+    let fallback_called = Arc::new(AtomicBool::new(false));
+    let marker = Arc::clone(&fallback_called);
+    let local = ProviderFetchResult::new(UsageSnapshot::new(RateWindow::new(10.0)), "local");
+
+    let result = provider
+        .resolve_runtime_fallback_with_offline(
+            Ok(Some(local)),
+            move || async move {
+                marker.store(true, Ordering::SeqCst);
+                Err(LiveFailure::from(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but unusable".to_string(),
+                )))
+            },
+            Some(offline_result()),
+        )
+        .await
+        .expect("successful local desktop probe must remain authoritative");
+
+    assert_eq!(result.source_label, "local");
+    assert_eq!(result.usage.primary.used_percent, 10.0);
+    assert!(!fallback_called.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn local_auth_probe_failure_uses_structured_cli_fallback() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async {
+        .resolve_runtime_fallback(Err(ProviderError::AuthRequired.into()), || async {
             Ok(Some(structured_cli_result()))
         })
         .await
@@ -657,7 +653,7 @@ async fn local_auth_probe_failure_uses_structured_cli_fallback() {
 async fn generic_local_probe_failure_uses_valid_structured_cli_json() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback(
-            Err(ProviderError::Other("local API unavailable".to_string())),
+            Err(ProviderError::Other("local API unavailable".to_string()).into()),
             || async { Ok(Some(structured_cli_result())) },
         )
         .await
@@ -670,7 +666,9 @@ async fn generic_local_probe_failure_uses_valid_structured_cli_json() {
 #[tokio::test]
 async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() {
     let result = AntigravityProvider::new()
-        .resolve_runtime_fallback(Err(ProviderError::AuthRequired), || async { Ok(None) })
+        .resolve_runtime_fallback(Err(ProviderError::AuthRequired.into()), || async {
+            Ok(None)
+        })
         .await;
 
     assert!(matches!(result, Err(ProviderError::AuthRequired)));
@@ -680,11 +678,11 @@ async fn unauthenticated_local_and_unavailable_cli_paths_remain_auth_required() 
 async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
                 let error = quota_summary::parse_cli_usage_report(br#"{"status":"SUCCESS""#)
                     .expect_err("malformed JSON must fail parsing");
-                Err(error)
+                Err(LiveFailure::from(error))
             },
             None,
         )
@@ -697,11 +695,11 @@ async fn malformed_structured_cli_json_from_fallback_is_a_parse_error() {
 async fn cli_fallback_error_prefers_offline_history() {
     let result = AntigravityProvider::new()
         .resolve_runtime_fallback_with_offline(
-            Err(ProviderError::AuthRequired),
+            Err(ProviderError::AuthRequired.into()),
             || async {
-                Err(ProviderError::Parse(
+                Err(LiveFailure::from(ProviderError::Parse(
                     "Antigravity CLI usage report: malformed JSON".to_string(),
-                ))
+                )))
             },
             Some(offline_result()),
         )
@@ -710,6 +708,47 @@ async fn cli_fallback_error_prefers_offline_history() {
 
     assert_eq!(result.source_label, "offline");
     assert_eq!(result.usage.login_method.as_deref(), Some("offline"));
+}
+
+#[tokio::test]
+async fn unusable_cli_override_prefers_offline_history() {
+    let result = AntigravityProvider::new()
+        .resolve_runtime_fallback_with_offline(
+            Err(ProviderError::AuthRequired.into()),
+            || async {
+                Err(LiveFailure::from(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
+                )))
+            },
+            Some(offline_result()),
+        )
+        .await
+        .expect("offline history should survive an unusable CLI override");
+
+    assert_eq!(result.source_label, "offline");
+    assert_eq!(result.usage.login_method.as_deref(), Some("offline"));
+}
+
+#[tokio::test]
+async fn unusable_cli_override_without_history_reports_the_override() {
+    let result = AntigravityProvider::new()
+        .resolve_runtime_fallback_with_offline(
+            Err(ProviderError::Other("local API unavailable".to_string()).into()),
+            || async {
+                Err(LiveFailure::from(ProviderError::NotInstalled(
+                    "ANTIGRAVITY_CLI_PATH is set but does not point to a usable agy file".into(),
+                )))
+            },
+            None,
+        )
+        .await;
+
+    match result {
+        Err(ProviderError::NotInstalled(message)) => {
+            assert!(message.contains("ANTIGRAVITY_CLI_PATH"), "{message}");
+        }
+        other => panic!("expected the actionable override error, got {other:?}"),
+    }
 }
 
 #[test]

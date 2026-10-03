@@ -4,11 +4,16 @@
 
 use clap::Args;
 
+use super::cost_period::{
+    cost_totals_json, resolve_period, rolling_window_days, stamp_period, window_days,
+};
 use super::usage::{OutputFormat, ProviderSelection};
 use crate::codex_costs::{
     CodexHostCostReport, CodexHostCostsArgs, CodexHostOutcome, run_codex_host_costs,
 };
+use crate::codex_workspaces::short_session_id;
 use crate::core::{CostScanOptions, ProviderId};
+use crate::cost_reporting_period::CostReportingPeriod;
 use crate::cost_scanner::{CostScanner, CostSummary};
 use crate::settings::Settings;
 use crate::spend_contract::build_local_spend_contract_from_summary;
@@ -36,9 +41,14 @@ pub struct CostArgs {
     #[arg(long)]
     pub pretty: bool,
 
-    /// Number of days to scan (default: 30)
-    #[arg(short, long, default_value = "30")]
-    pub days: u32,
+    /// Cost history window in days (1..=365); always rolling and overrides --period
+    #[arg(short, long)]
+    pub days: Option<u32>,
+
+    /// Cost period: month-to-date or all. Without --days or --period the
+    /// saved cost period applies (30 days by default)
+    #[arg(long)]
+    pub period: Option<String>,
 
     /// A16 (upstream 0.48.0): exclude pi/OMP-compatible agent session mirrors,
     /// reporting only the provider-native local JSONL logs. When omitted
@@ -62,6 +72,12 @@ pub struct CostArgs {
     /// Emit the versioned native Codex summary contract as JSON.
     #[arg(long = "summary-only")]
     pub summary_only: bool,
+
+    /// Antigravity only: when a recorded model has no known public price, wait
+    /// for one bounded models.dev pricing refresh and rescan. Without it the
+    /// CLI starts no pricing download.
+    #[arg(long)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,9 +107,19 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     let group_by = CostGroupBy::from_arg(args.group_by.as_deref());
     let use_color = !args.no_color && is_terminal();
 
-    if args.remote.is_some() || args.summary_only {
+    let settings = Settings::load();
+    let host_summary = args.remote.is_some() || args.summary_only;
+    let period = resolve_period(
+        args.days,
+        args.period.as_deref(),
+        settings.cost_reporting_period,
+        host_summary,
+    )?;
+    let days = window_days(period);
+
+    if host_summary {
         return run_codex_host_costs(&CodexHostCostsArgs {
-            days: args.days,
+            days,
             remote: args.remote.clone(),
             summary_only: args.summary_only,
             pretty: args.pretty,
@@ -115,13 +141,14 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     // owns its mirrored Codex/Claude events. A single native-provider request
     // keeps the historical inclusive behavior unless explicitly narrowed.
     scan_options.include_pi_sessions = !args.provider_native_only && !pi_selected;
-    let scanner = CostScanner::new(args.days).with_options(scan_options);
+    let scanner = CostScanner::for_period(period).with_options(scan_options);
 
     tracing::debug!(
-        "Running cost command: providers={:?}, format={:?}, days={}",
+        "Running cost command: providers={:?}, format={:?}, period={}, days={}",
         providers.as_list(),
         format,
-        args.days
+        period,
+        days
     );
 
     // Collect cost data for requested providers
@@ -169,13 +196,17 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
                     display_name: provider.display_name().to_string(),
                     summary: CostSummary::default(),
                     supported: true,
-                    token_history: Some(crate::providers::antigravity::local_sessions::summarize(
-                        args.days,
-                    )),
+                    token_history: Some(
+                        crate::providers::antigravity::local_sessions::summarize_with_pricing_refresh(
+                            days,
+                            args.refresh,
+                        )
+                        .await,
+                    ),
                 });
             }
             ProviderId::Muse => {
-                let report = crate::providers::muse::local_usage::scan(args.days, None);
+                let report = crate::providers::muse::local_usage::scan(days, None);
                 results.push(CostResult {
                     provider: provider.cli_name().to_string(),
                     display_name: provider.display_name().to_string(),
@@ -199,10 +230,17 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
 
     match format {
         OutputFormat::Text => {
-            print_text_output(&results, use_color, args.days, group_by);
+            print_text_output(&results, use_color, period, group_by);
         }
         OutputFormat::Json => {
-            print_json_output(&results, args.pretty, args.days)?;
+            // Upstream 0.60.4 refreshes OpenCodex prices before the JSON
+            // payload; on Windows the import lives in the Codex contract.
+            if results.iter().any(|result| result.provider == "codex")
+                && settings.open_codex_usage_logs_enabled
+            {
+                crate::spend_contract::refresh_opencodex_pricing_if_needed().await;
+            }
+            print_json_output(&results, args.pretty, period, days, &settings)?;
         }
     }
 
@@ -273,12 +311,18 @@ struct CostResult {
 }
 
 /// Print text output
-fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_by: CostGroupBy) {
+fn print_text_output(
+    results: &[CostResult],
+    use_color: bool,
+    period: CostReportingPeriod,
+    group_by: CostGroupBy,
+) {
+    let label = period.label();
     for (i, result) in results.iter().enumerate() {
         let title = if result.token_history.is_some() {
-            format!("{} Token History (last {} days)", result.display_name, days)
+            format!("{} Token History ({label})", result.display_name)
         } else {
-            format!("{} Cost (last {} days)", result.display_name, days)
+            format!("{} Cost ({label})", result.display_name)
         };
         if use_color {
             println!("\x1b[1m{title}\x1b[0m");
@@ -286,31 +330,39 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
             println!("{title}");
         }
 
-        if let Some(history) = result.token_history {
-            print_local_token_history(history, days);
+        if let Some(history) = result.token_history.as_ref() {
+            print_local_token_history(history);
         } else if group_by == CostGroupBy::Session && result.provider == "codex" {
-            print_codex_session_output(result, days);
+            print_codex_session_output(result, period);
         } else if group_by == CostGroupBy::Session {
             println!("  Session grouping is only available for Codex local conversations");
         } else if !result.supported {
             println!("  Local cost scanning not available for this provider");
             println!("  (Only Codex and Claude have local logs)");
         } else if result.summary.sessions_count == 0 {
-            if result.summary.known_zero {
-                println!("  No usage in the last {} days (scan complete)", days);
+            if result.summary.incomplete_request_count > 0 {
+                // Only preliminary proxy rows exist: usage is unavailable, not $0.
+                println!("  No completed usage data found");
+                print_incomplete_note(result.summary.incomplete_request_count);
+            } else if result.summary.known_zero {
+                println!("  No usage in the selected period (scan complete)");
             } else {
                 println!("  No usage data found");
                 println!("  Check that you have used {} locally", result.display_name);
             }
         } else {
             // Total cost
+            let incomplete_suffix = incomplete_suffix(result.summary.incomplete_request_count);
             if use_color {
                 println!(
-                    "  Total:    \x1b[32m{}\x1b[0m",
+                    "  Total:    \x1b[32m{}\x1b[0m{incomplete_suffix}",
                     result.summary.format_total()
                 );
             } else {
-                println!("  Total:    {}", result.summary.format_total());
+                println!(
+                    "  Total:    {}{incomplete_suffix}",
+                    result.summary.format_total()
+                );
             }
 
             // Token breakdown
@@ -323,6 +375,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
 
             // Sessions
             println!("  Sessions: {}", result.summary.sessions_count);
+            print_incomplete_note(result.summary.incomplete_request_count);
 
             // Cost by model
             if !result.summary.by_model.is_empty() {
@@ -372,11 +425,32 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32, group_b
     }
 }
 
-fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySummary, days: u32) {
+/// " · Incomplete" marker for totals that exclude preliminary Claude proxy
+/// rows (upstream 0.60.5 #3688).
+fn incomplete_suffix(count: u32) -> &'static str {
+    if count > 0 { " · Incomplete" } else { "" }
+}
+
+fn print_incomplete_note(count: u32) {
+    if count > 0 {
+        println!(
+            "  Incomplete: {count} requests lacked final usage and were excluded from tokens and cost."
+        );
+    }
+}
+
+fn print_local_token_history(history: &crate::spend_contract::LocalTokenHistorySummary) {
     use crate::spend_contract::LocalHistoryCoverage;
     match history.coverage {
+        LocalHistoryCoverage::Partial if history.lower_bound => {
+            println!(
+                "  Tokens:   at least {} (lower bound; scan stopped short)",
+                format_number(history.total_tokens)
+            );
+            println!("  Sessions: at least {}", history.session_count);
+        }
         LocalHistoryCoverage::Complete if history.total_tokens == 0 => {
-            println!("  No token usage in the last {days} days (scan complete)");
+            println!("  No token usage in the selected period (scan complete)");
         }
         LocalHistoryCoverage::Complete => {
             println!("  Tokens:   {} total", format_number(history.total_tokens));
@@ -386,11 +460,26 @@ fn print_local_token_history(history: crate::spend_contract::LocalTokenHistorySu
             println!("  Local token history is unavailable or incomplete");
         }
     }
-    println!("  Local token history; dollar costs unavailable");
+    if let Some(cost) = history.total_usd() {
+        println!("  API list-price estimate: ${cost:.2} (not billed spend)");
+    } else if let Some(cost) = history.cost_estimate.known_subtotal_usd {
+        if history.coverage == LocalHistoryCoverage::Complete {
+            println!(
+                "  Known API list-price subtotal: ${cost:.2} ({} unpriced requests)",
+                history.cost_estimate.coverage.unpriced
+            );
+        } else {
+            println!("  Known API list-price subtotal: at least ${cost:.2} (history incomplete)");
+        }
+    } else {
+        println!("  Local token history; dollar costs unavailable");
+    }
 }
 
-fn print_codex_session_output(result: &CostResult, days: u32) {
-    let index = crate::codex_workspaces::CodexWorkspacesIndex::new(days);
+fn print_codex_session_output(result: &CostResult, period: CostReportingPeriod) {
+    // The conversation index keeps rolling 1..=365 day windows, so All lists
+    // the most recent year; the heading below reports the window it used.
+    let index = crate::codex_workspaces::CodexWorkspacesIndex::new(rolling_window_days(period));
     let snapshot = match index.load_snapshot(false, |_| {}) {
         Ok(snapshot) => snapshot,
         Err(err) => {
@@ -436,31 +525,21 @@ fn print_codex_session_output(result: &CostResult, days: u32) {
     println!("  Not a subscription bill or plan value · local usage × public API prices");
 }
 
-fn short_session_id(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= 12 {
-        return trimmed.to_string();
-    }
-    let prefix: String = trimmed.chars().take(4).collect();
-    let suffix: String = trimmed
-        .chars()
-        .rev()
-        .take(8)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{prefix}...{suffix}")
-}
-
 /// Print JSON output
-fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Value> {
-    let settings = Settings::load();
+fn build_json_payloads(
+    results: &[CostResult],
+    period: CostReportingPeriod,
+    days: u32,
+    settings: &Settings,
+) -> Vec<serde_json::Value> {
     results
         .iter()
         .map(|r| {
-            if let Some(history) = r.token_history {
-                return crate::spend_contract::local_token_history_json(&r.provider, history, days);
+            if let Some(history) = r.token_history.as_ref() {
+                let mut payload =
+                    crate::spend_contract::local_token_history_json(&r.provider, history, days);
+                stamp_period(&mut payload, period);
+                return payload;
             }
             if !r.supported {
                 serde_json::json!({
@@ -478,10 +557,11 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
                         settings.hide_personal_info,
                         r.summary.clone(),
                     ));
-                serde_json::json!({
+                let mut payload = serde_json::json!({
                     "provider": r.provider,
                     "supported": true,
                     "days_scanned": days,
+                    "totals": cost_totals_json(&r.provider, &r.summary),
                     "cost": {"total_usd": r.summary.total_cost_usd, "currency": "USD"},
                     "tokens": {"input": r.summary.input_tokens, "output": r.summary.output_tokens, "cached": r.summary.cached_tokens},
                     "sessions_count": r.summary.sessions_count,
@@ -498,14 +578,31 @@ fn build_json_payloads(results: &[CostResult], days: u32) -> Vec<serde_json::Val
                     }).collect::<serde_json::Map<_, _>>(),
                     "period": {"start": r.summary.period_start.map(|d| d.to_string()), "end": r.summary.period_end.map(|d| d.to_string())},
                     "spendContract": spend_contract
-                })
+                });
+                // Only emitted when a scan excluded preliminary Claude proxy rows.
+                if r.summary.incomplete_request_count > 0
+                    && let Some(object) = payload.as_object_mut()
+                {
+                    object.insert(
+                        "incompleteRequestCount".to_string(),
+                        serde_json::json!(r.summary.incomplete_request_count),
+                    );
+                }
+                stamp_period(&mut payload, period);
+                payload
             }
         })
         .collect()
 }
 
-fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow::Result<()> {
-    let payloads = build_json_payloads(results, days);
+fn print_json_output(
+    results: &[CostResult],
+    pretty: bool,
+    period: CostReportingPeriod,
+    days: u32,
+    settings: &Settings,
+) -> anyhow::Result<()> {
+    let payloads = build_json_payloads(results, period, days, settings);
 
     let output = if pretty {
         serde_json::to_string_pretty(&payloads)?
@@ -617,14 +714,44 @@ mod tests {
     }
 
     #[test]
+    fn json_output_emits_incomplete_request_count_only_when_positive() {
+        let make = |incomplete_request_count| CostResult {
+            provider: "claude".to_string(),
+            display_name: "Claude".to_string(),
+            summary: CostSummary {
+                incomplete_request_count,
+                ..CostSummary::default()
+            },
+            supported: true,
+            token_history: None,
+        };
+        let payloads = build_json_payloads(
+            &[make(3), make(0)],
+            CostReportingPeriod::Rolling(30),
+            30,
+            &Settings::default(),
+        );
+        assert_eq!(payloads[0]["incompleteRequestCount"], 3);
+        assert!(payloads[1].get("incompleteRequestCount").is_none());
+    }
+
+    #[test]
+    fn incomplete_suffix_marks_only_positive_counts() {
+        assert_eq!(incomplete_suffix(0), "");
+        assert_eq!(incomplete_suffix(2), " · Incomplete");
+    }
+
+    #[test]
     fn antigravity_json_keeps_unknown_cost_distinct_from_zero() {
         use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
         let payload = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 12_345,
                 session_count: 2,
                 coverage: LocalHistoryCoverage::Complete,
+                cost_estimate: Default::default(),
+                ..Default::default()
             },
             30,
         );
@@ -635,10 +762,12 @@ mod tests {
 
         let partial = crate::spend_contract::local_token_history_json(
             "antigravity",
-            LocalTokenHistorySummary {
+            &LocalTokenHistorySummary {
                 total_tokens: 999,
                 session_count: 1,
                 coverage: LocalHistoryCoverage::Partial,
+                cost_estimate: Default::default(),
+                ..Default::default()
             },
             30,
         );
@@ -646,6 +775,201 @@ mod tests {
         assert!(partial["tokens"]["total"].is_null());
         assert_eq!(partial["historyCoverage"], "partial");
     }
+
+    #[test]
+    fn antigravity_json_labels_public_price_estimates() {
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            &LocalTokenHistorySummary {
+                total_tokens: 1_000,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Complete,
+                cost_estimate: crate::spend_contract::LocalCostEstimate {
+                    known_subtotal_usd: Some(0.0125),
+                    coverage: crate::spend_contract::CostCoverageCounts {
+                        estimated: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            30,
+        );
+        assert_eq!(payload["cost"]["total_usd"], 0.0125);
+        assert_eq!(payload["cost"]["known_subtotal_usd"], 0.0125);
+        assert_eq!(payload["cost"]["currency"], "USD");
+        assert!(payload["note"].as_str().unwrap().contains("not billed"));
+    }
+
+    #[test]
+    fn antigravity_json_keeps_partial_scan_cost_as_a_subtotal() {
+        use crate::spend_contract::{
+            CostCoverageCounts, LocalCostEstimate, LocalHistoryCoverage, LocalTokenHistorySummary,
+        };
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            &LocalTokenHistorySummary {
+                total_tokens: 1_000,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Partial,
+                cost_estimate: LocalCostEstimate {
+                    known_subtotal_usd: Some(0.0125),
+                    coverage: CostCoverageCounts {
+                        estimated: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            30,
+        );
+        assert!(payload["cost"]["total_usd"].is_null());
+        assert_eq!(payload["cost"]["known_subtotal_usd"], 0.0125);
+        assert_eq!(payload["historyCoverage"], "partial");
+        assert!(
+            payload["note"]
+                .as_str()
+                .unwrap()
+                .contains("history is incomplete")
+        );
+    }
+
+    #[test]
+    fn antigravity_json_emits_zero_for_complete_empty_history() {
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            &LocalTokenHistorySummary {
+                coverage: LocalHistoryCoverage::Complete,
+                ..Default::default()
+            },
+            30,
+        );
+        assert_eq!(payload["cost"]["total_usd"], 0.0);
+        assert!(payload["cost"]["known_subtotal_usd"].is_null());
+        assert_eq!(payload["cost"]["currency"], "USD");
+        assert_eq!(payload["knownZero"], true);
+    }
+
+    #[test]
+    fn antigravity_json_keeps_mixed_pricing_as_a_known_subtotal() {
+        use crate::spend_contract::{
+            CostCoverageCounts, LocalCostEstimate, LocalHistoryCoverage, LocalTokenHistorySummary,
+        };
+        let payload = crate::spend_contract::local_token_history_json(
+            "antigravity",
+            &LocalTokenHistorySummary {
+                total_tokens: 1_500,
+                session_count: 2,
+                coverage: LocalHistoryCoverage::Complete,
+                cost_estimate: LocalCostEstimate {
+                    known_subtotal_usd: Some(0.0125),
+                    coverage: CostCoverageCounts {
+                        estimated: 1,
+                        unpriced: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            30,
+        );
+        assert!(payload["cost"]["total_usd"].is_null());
+        assert_eq!(payload["cost"]["known_subtotal_usd"], 0.0125);
+        assert_eq!(payload["cost"]["pricingCoverage"]["estimated"], 1);
+        assert_eq!(payload["cost"]["pricingCoverage"]["unpriced"], 1);
+        assert!(payload["note"].as_str().unwrap().contains("subtotal"));
+    }
+
+    #[derive(clap::Parser)]
+    struct Wrapper {
+        #[command(flatten)]
+        args: CostArgs,
+    }
+
+    fn parse_args(argv: &[&str]) -> CostArgs {
+        use clap::Parser;
+        Wrapper::try_parse_from(std::iter::once("cost").chain(argv.iter().copied()))
+            .expect("cost args parse")
+            .args
+    }
+
+    #[test]
+    fn days_and_period_are_detectable_when_absent() {
+        let args = parse_args(&[]);
+        assert_eq!(args.days, None);
+        assert_eq!(args.period, None);
+        let args = parse_args(&["--period", "month-to-date", "--days", "7"]);
+        assert_eq!(args.days, Some(7));
+        assert_eq!(args.period.as_deref(), Some("month-to-date"));
+    }
+
+    #[test]
+    fn json_payload_carries_period_identity_and_totals() {
+        let summary = CostSummary {
+            total_cost_usd: 2.5,
+            input_tokens: 10,
+            output_tokens: 5,
+            sessions_count: 1,
+            ..Default::default()
+        };
+        let results = [CostResult {
+            provider: "claude".to_string(),
+            display_name: "Claude".to_string(),
+            summary,
+            supported: true,
+            token_history: None,
+        }];
+        let settings = Settings::default();
+        let payloads =
+            build_json_payloads(&results, CostReportingPeriod::MonthToDate, 12, &settings);
+        let payload = &payloads[0];
+        assert_eq!(payload["reportingPeriod"], "month-to-date");
+        assert_eq!(payload["historyLabel"], "Month to date");
+        assert_eq!(payload["days_scanned"], 12);
+        assert_eq!(payload["totals"]["totalCost"], 2.5);
+        assert_eq!(payload["totals"]["totalTokens"], 15);
+        // Existing fields keep their meaning.
+        assert_eq!(payload["cost"]["total_usd"], 2.5);
+        assert_eq!(payload["tokens"]["input"], 10);
+
+        let rolling =
+            build_json_payloads(&results, CostReportingPeriod::Rolling(30), 30, &settings);
+        assert_eq!(rolling[0]["reportingPeriod"], "rolling:30");
+        assert_eq!(rolling[0]["historyLabel"], "Last 30 days");
+    }
+
+    #[test]
+    fn token_history_payload_is_stamped_with_the_period() {
+        use crate::spend_contract::{LocalHistoryCoverage, LocalTokenHistorySummary};
+        let results = [CostResult {
+            provider: "antigravity".to_string(),
+            display_name: "Antigravity".to_string(),
+            summary: CostSummary::default(),
+            supported: true,
+            token_history: Some(LocalTokenHistorySummary {
+                total_tokens: 3,
+                session_count: 1,
+                coverage: LocalHistoryCoverage::Complete,
+                ..Default::default()
+            }),
+        }];
+        let settings = Settings::default();
+        let payloads = build_json_payloads(
+            &results,
+            CostReportingPeriod::AllAvailable,
+            20_000,
+            &settings,
+        );
+        assert_eq!(payloads[0]["reportingPeriod"], "all");
+        assert_eq!(payloads[0]["historyLabel"], "All");
+        assert_eq!(payloads[0]["days_scanned"], 20_000);
+    }
+
     #[test]
     fn provider_native_only_flag_default_false() {
         // Default CostArgs has provider_native_only = false (backward compat).
@@ -662,12 +986,6 @@ mod tests {
     fn group_by_defaults_none_and_accepts_session() {
         assert_eq!(CostGroupBy::from_arg(None), CostGroupBy::None);
         assert_eq!(CostGroupBy::from_arg(Some("session")), CostGroupBy::Session);
-    }
-
-    #[test]
-    fn short_session_id_is_privacy_conscious() {
-        assert_eq!(short_session_id("abc"), "abc");
-        assert_eq!(short_session_id("1234567890abcdef"), "1234...90abcdef");
     }
 
     #[test]

@@ -9,6 +9,7 @@ import { useLocale } from "../hooks/useLocale";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import type { LocaleKey } from "../i18n/keys";
 import { providerSupportsChartData } from "../lib/providerCharts";
+import { hideOpenAiApiProjectId } from "../lib/openAiApiIdentity";
 import MenuCardDetails, { describeCard, type MetricEntry } from "./MenuCardDetails";
 import CodexAccountsMenu from "./CodexAccountsMenu";
 import ClaudeAccountsMenu from "./ClaudeAccountsMenu";
@@ -17,6 +18,7 @@ import { DEEPSEEK_PRICING_EVENT } from "../hooks/useDeepSeekPricingStatus";
 import { getDeepSeekPricingStatus } from "../lib/tauri";
 import type { DeepSeekPricingStatus } from "../types/bridge";
 import { isUsageItemVisible } from "../lib/usageItemVisibility";
+import { useMonthlyLimitBlockNow } from "../hooks/useMonthlyLimitBlockNow";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -194,7 +196,13 @@ export default function MenuCard({
       ? maskEmail(provider.accountEmail)
       : provider.accountEmail
     : null;
-  const planName = !isWayfinder ? displayPlanName(provider.planName, t) : null;
+  const planName = !isWayfinder
+    ? displayPlanName(provider.planName, t)
+    : null;
+  const displayedPlanName = hideOpenAiApiProjectId(
+    planName,
+    provider.providerId === "openaiapi" && hideEmail,
+  );
 
   const metrics: MetricEntry[] = [
     ...(isWayfinder
@@ -238,9 +246,15 @@ export default function MenuCard({
       resetFormatMode: extra.id === "reset-credits" ? "expires" : "reset",
     });
   }
-  const visibleMetrics = metrics
-    .filter((metric) => isUsageItemVisible(provider.hiddenUsageItemIds, metric.id))
-    .slice(0, compactOverview ? 2 : metrics.length);
+  const visibleMetrics = metrics.filter((metric) =>
+    isUsageItemVisible(provider.hiddenUsageItemIds, metric.id),
+  );
+  // Snapshots are cached across failed refreshes, so monthly-limit blocks are
+  // re-checked against the clock and lift when the pool's reset passes.
+  const monthlyLimitBlockNow = useMonthlyLimitBlockNow([
+    ...visibleMetrics.map((metric) => metric.snap.monthlyLimitBlock),
+    provider.pace?.monthlyLimitBlock,
+  ]);
 
   const presence = describeCard(
     provider,
@@ -249,6 +263,7 @@ export default function MenuCard({
     costSummaryDisplayStyle,
     showPace,
     compactOverview,
+    monthlyLimitBlockNow,
   );
   const { hasDetails } = presence;
   const cardClassName = [
@@ -285,8 +300,8 @@ export default function MenuCard({
                 ? provider.updatedAt
                 : formatRelativeUpdated(Date.parse(provider.updatedAt), t)}
             </span>
-            {planName && (
-              <span className="menu-card__plan-badge">{planName}</span>
+            {displayedPlanName && (
+              <span className="menu-card__plan-badge">{displayedPlanName}</span>
             )}
           </div>
         )}
@@ -322,6 +337,7 @@ export default function MenuCard({
             showAsUsed,
             compactOverview,
             costSummaryDisplayStyle,
+            monthlyLimitBlockNow,
           }}
           metrics={visibleMetrics}
           chartData={chartData}

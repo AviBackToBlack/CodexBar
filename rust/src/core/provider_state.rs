@@ -44,6 +44,16 @@ impl ProviderStateKind {
     pub const fn is_problem(self) -> bool {
         !matches!(self, ProviderStateKind::Ready)
     }
+
+    /// Whether this state means the account must sign in again. The only
+    /// states that qualify for credential-expiry alerts; quota, permission,
+    /// rate-limit and transport failures map elsewhere and never do.
+    pub const fn needs_sign_in(self) -> bool {
+        matches!(
+            self,
+            ProviderStateKind::NeedsAuthentication | ProviderStateKind::ExpiredSession
+        )
+    }
 }
 
 impl ProviderError {
@@ -64,14 +74,15 @@ impl ProviderError {
             ProviderError::OAuthExpired(_) => ProviderStateKind::ExpiredSession,
             ProviderError::OAuth(_) => ProviderStateKind::NeedsAuthentication,
             ProviderError::OAuthTransient(_) => ProviderStateKind::Unknown,
-            ProviderError::AuthRequired | ProviderError::NoCookies => {
-                ProviderStateKind::NeedsAuthentication
-            }
+            ProviderError::AuthRequired
+            | ProviderError::NoCookies
+            | ProviderError::BrowserSignInRequired { .. } => ProviderStateKind::NeedsAuthentication,
             ProviderError::Network(_)
             | ProviderError::Timeout
             | ProviderError::Parse(_)
             | ProviderError::UnsupportedSource(_)
             | ProviderError::Other(_) => ProviderStateKind::Unknown,
+            ProviderError::OwnedTransport { source, .. } => source.state_kind(),
         }
     }
 }
@@ -87,6 +98,14 @@ mod tests {
 
         assert_eq!(E::AuthRequired.state_kind(), K::NeedsAuthentication);
         assert_eq!(E::NoCookies.state_kind(), K::NeedsAuthentication);
+        assert_eq!(
+            E::BrowserSignInRequired {
+                message: "Sign in at the provider page in your browser.".into(),
+                sign_in_url: "https://example.test/login".into(),
+            }
+            .state_kind(),
+            K::NeedsAuthentication
+        );
         assert_eq!(
             E::OAuth("Claude OAuth credentials not found. Run `claude`.".into()).state_kind(),
             K::NeedsAuthentication
@@ -135,6 +154,15 @@ mod tests {
         ] {
             assert!(kind.is_problem());
         }
+    }
+
+    #[test]
+    fn only_authentication_states_need_sign_in() {
+        assert!(ProviderStateKind::NeedsAuthentication.needs_sign_in());
+        assert!(ProviderStateKind::ExpiredSession.needs_sign_in());
+        assert!(!ProviderStateKind::Ready.needs_sign_in());
+        assert!(!ProviderStateKind::LocalRuntimeOffline.needs_sign_in());
+        assert!(!ProviderStateKind::Unknown.needs_sign_in());
     }
 
     #[test]

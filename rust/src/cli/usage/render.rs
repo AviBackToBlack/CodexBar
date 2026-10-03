@@ -10,6 +10,7 @@ use crate::core::{
     CostSnapshot, ProviderDisplayDetail, ProviderFetchResult, ProviderId, ProviderInventoryItem,
     RateWindow, UsagePace, UsageSnapshot, instantiate_provider,
 };
+use crate::spend_contract::CostProvenance;
 use crate::status::{ProviderStatus as StatusInfo, StatusLevel};
 
 pub fn render_text_error(provider_id: ProviderId, error_msg: &str, use_color: bool) -> String {
@@ -81,6 +82,7 @@ pub fn render_json_result(
                         "title": detail.title(),
                         "value": detail.value(),
                         "secondaryValue": detail.secondary_value(),
+                        "sectionTitle": detail.section_title(),
                         "progress": detail.progress().map(|progress| {
                             serde_json::json!({
                                 "used": progress.used(),
@@ -298,7 +300,14 @@ fn append_inventory_lines(lines: &mut Vec<String>, inventory: &[ProviderInventor
 }
 
 fn append_display_detail_lines(lines: &mut Vec<String>, details: &[ProviderDisplayDetail]) {
+    let mut current_section: Option<&str> = None;
     for detail in details {
+        if detail.section_title() != current_section {
+            current_section = detail.section_title();
+            if let Some(section) = current_section {
+                lines.push(format!("  {section}:"));
+            }
+        }
         let secondary = detail
             .secondary_value()
             .map(|value| format!(" ({value})"))
@@ -325,17 +334,34 @@ fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow,
     }
 
     let bar = render_progress_bar(window.used_percent, 20, use_color);
-    let reset = window
-        .format_countdown()
-        .map(|c| format!(" (resets in {})", c))
-        .unwrap_or_default();
+    let countdown = window.format_countdown();
+    let reset_suffix = match (window.description_is_detail, countdown.as_deref()) {
+        (false, Some(countdown)) => format!(" (resets in {countdown})"),
+        _ => String::new(),
+    };
     lines.push(format!(
         "  {:<8} {} {} used{}",
         format!("{}:", label),
         bar,
         format_percent(window.used_percent),
-        reset
+        reset_suffix,
     ));
+
+    if window.description_is_detail {
+        // The description is a detail line (for example spend amounts), so
+        // the reset stays on its own line and only exists with a real date.
+        if let Some(countdown) = countdown {
+            lines.push(format!("    resets in {countdown}"));
+        }
+        if let Some(detail) = window
+            .reset_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+        {
+            lines.push(format!("    {detail}"));
+        }
+    }
 }
 
 fn append_secondary_window_line(
@@ -427,11 +453,12 @@ fn append_cost_line(lines: &mut Vec<String>, cost: Option<&CostSnapshot>) {
 
     // Provider-supplied Activity history is a completed reporting window,
     // rather than the ordinary current-cost meter. Providers mark such
-    // snapshots `always_visible`; keep their source period and known zero
-    // visible in text output without adding a second generic cost line. The
-    // daily points remain available in the JSON cost payload.
+    // snapshots `always_visible`; keep their source period, known zero, token
+    // total and cost provenance visible in text output without adding a second
+    // generic cost line or recomputing totals from the daily points. The daily
+    // points remain available in the JSON cost payload.
     if cost.limit.is_none() && cost.always_visible {
-        lines.push(format!("  {}: {}", cost.period, cost.format_used()));
+        lines.push(format_history_line(cost));
         return;
     }
 
@@ -449,6 +476,53 @@ fn append_cost_line(lines: &mut Vec<String>, cost: Option<&CostSnapshot>) {
             cost.period
         ));
     }
+}
+
+/// One provider-history line: `<period>: <spend> (<provenance>) · <tokens> tokens`.
+///
+/// Mirrors upstream `CLIRenderer.liveHistoryLine` (0.61.0). The spend and token
+/// totals are the provider's own; nothing is summed from daily points.
+fn format_history_line(cost: &CostSnapshot) -> String {
+    let spend = cost.format_used();
+    let spend = match cost.provenance {
+        Some(CostProvenance::VendorMetered) => format!("{spend} (reported)"),
+        Some(CostProvenance::ListPriceEstimate) => format!("{spend} (estimated)"),
+        Some(CostProvenance::Mixed) => format!("{spend} (includes estimates)"),
+        Some(CostProvenance::Unknown) | None => spend,
+    };
+    let mut values = vec![spend];
+    if let Some(tokens) = cost.history_tokens {
+        let unit = if tokens == 1 { "token" } else { "tokens" };
+        values.push(format!("{} {unit}", format_token_count(tokens)));
+    }
+    format!("  {}: {}", cost.period, values.join(" · "))
+}
+
+/// Compact token count: `999`, `1.2K`, `15K`, `2.5M`, `1B`. A unit is promoted
+/// once the lower unit would round to 1000 (upstream `tokenCountString`).
+fn format_token_count(tokens: u64) -> String {
+    const UNITS: [(u64, f64, &str); 3] = [
+        (999_500_000, 1_000_000_000.0, "B"),
+        (999_500, 1_000_000.0, "M"),
+        (1_000, 1_000.0, "K"),
+    ];
+    for (threshold, divisor, suffix) in UNITS {
+        if tokens >= threshold {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "display rounding to at most two significant digits"
+            )]
+            let scaled = tokens as f64 / divisor;
+            let formatted = if scaled >= 10.0 {
+                format!("{scaled:.0}")
+            } else {
+                let one = format!("{scaled:.1}");
+                one.strip_suffix(".0").unwrap_or(&one).to_string()
+            };
+            return format!("{formatted}{suffix}");
+        }
+    }
+    tokens.to_string()
 }
 
 /// Render usage as text (backwards compatible version)

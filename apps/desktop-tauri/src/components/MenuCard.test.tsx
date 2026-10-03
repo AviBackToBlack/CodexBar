@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -55,7 +55,7 @@ function rateWindow(
 function provider(
   error: string | null,
   usedPercent = 0,
-  opts: { exhausted?: boolean; resetDescription?: string | null } = {},
+  opts: { exhausted?: boolean; resetDescription?: string | null; resetsAt?: string | null } = {},
 ): ProviderUsageSnapshot {
   return {
     providerId: "claude",
@@ -119,16 +119,21 @@ describe("MenuCard", () => {
       buildBundle({
         ActionCopyError: "Copy error",
         ApiSpendTitle: "API spend",
+        AtlasCloudAvailableBalance: "Available balance",
+        AtlasCloudBalance: "Atlas Cloud balance",
         DetailPaceRunsOutIn: "Runs out in",
         PanelEstimatedFromLocalLogs: "Estimated from local logs",
         PanelLeftSuffix: "left",
         PanelNow: "now",
         PanelOneHour: "1h",
         PanelFiveHours: "5h",
+        PanelBlockedByMonthlyLimit: "Blocked by monthly limit",
         PanelOnPaceBudget: "On-pace budget",
         PanelReserveSuffix: "in reserve",
-        PanelThirtyDayCost: "30d cost",
-        PanelThirtyDayTokens: "30d tokens",
+        PanelPeriodCost: "{} cost",
+        PanelPeriodTokens: "{} tokens",
+        CostPeriodShortMonthToDate: "MTD",
+        CostPeriodShortDays: "{}d",
         PanelTodayBudget: "today",
         PanelUsedSuffix: "used",
         ResetsInHoursMinutes: "Resets in {}h {}m",
@@ -146,6 +151,7 @@ describe("MenuCard", () => {
         WayfinderOffline: "Gateway offline",
         WayfinderDryRun: "Dry run",
         WayfinderMissingKeys: "Missing keys",
+        UsageSpendTokens: "tokens",
         DeepSeekPricingTitle: "DeepSeek pricing",
         DeepSeekPricingStandard: "Standard / pre-schedule",
         DeepSeekPricingPeak: "Peak hours",
@@ -160,12 +166,16 @@ describe("MenuCard", () => {
     tauriMocks.getProviderChartData.mockResolvedValue({
       providerId: "claude",
       costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      tokensHistory: [{ date: "2026-05-24", tokens: 14_200 }],
       creditsHistory: [],
       usageBreakdown: [],
       localUsage: {
         todayCost: null,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
+        periodCost: 1.23,
+        periodTokens: 584_000,
+        reportingPeriod: "rolling:30",
         latestTokens: null,
         topModel: "glim-4.6",
         estimateNote: "Estimated from local logs",
@@ -264,6 +274,38 @@ describe("MenuCard", () => {
     expect(fill?.style.width).toBe("35%");
   });
 
+  it("shows an additional balance description below the meter and reset time", async () => {
+    const snapshot = provider(null, 25, {
+      resetDescription: "750 / 1000 credits left",
+    });
+    snapshot.primaryLabel = "Credits";
+    snapshot.primary.descriptionIsDetail = true;
+    snapshot.selectedMetric.descriptionIsDetail = true;
+    const resetsAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    snapshot.primary.resetsAt = resetsAt;
+    snapshot.selectedMetric.resetsAt = resetsAt;
+
+    renderCard(snapshot);
+
+    const description = await screen.findByText("750 / 1000 credits left");
+    expect(description).toHaveClass("menu-metric__detail");
+    expect(screen.getByText(/Resets in/)).toBeInTheDocument();
+  });
+
+  it("does not repeat a reset-phrase description as an extra detail", async () => {
+    const snapshot = provider(null, 20, { resetDescription: "Resets in 3h" });
+    const resetsAt = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString();
+    snapshot.primary.resetsAt = resetsAt;
+    snapshot.selectedMetric.resetsAt = resetsAt;
+
+    renderCard(snapshot);
+
+    await screen.findByText(/Resets in/);
+    expect(document.querySelectorAll(".menu-metric__reset")).toHaveLength(1);
+    expect(document.querySelectorAll(".menu-metric__detail")).toHaveLength(0);
+    expect(screen.queryByText("Resets in 3h")).not.toBeInTheDocument();
+  });
+
   it("displays over-quota usage without overflowing the bar", async () => {
     renderCard(provider(null, 115, { exhausted: true, resetDescription: "115% used" }), {
       showAsUsed: true,
@@ -310,7 +352,7 @@ describe("MenuCard", () => {
     expect(screen.getByText("58% left")).toBeInTheDocument();
   });
 
-  it("limits quota rows and suppresses supplemental content in compact Overview", async () => {
+  it("shows every quota row in compact Overview (upstream 0.62.0 #2616)", async () => {
     const snapshot = provider(null, 20, { resetDescription: "Resets in 2h" });
     snapshot.secondary = rateWindow(42, { windowMinutes: 7 * 24 * 60 });
     snapshot.secondaryLabel = "Weekly";
@@ -321,10 +363,26 @@ describe("MenuCard", () => {
 
     expect(await screen.findByText("Session")).toBeInTheDocument();
     expect(screen.getByText("ProviderWeeklyLabel")).toBeInTheDocument();
-    expect(screen.queryByText("ProviderMonthly")).not.toBeInTheDocument();
-    expect(document.querySelectorAll(".menu-metric")).toHaveLength(2);
-    expect(document.querySelector(".menu-metric__reset")).toBeNull();
-    expect(document.querySelector(".menu-card__more")).toBeNull();
+    expect(screen.getByText("ProviderMonthly")).toBeInTheDocument();
+    expect(document.querySelectorAll(".menu-metric")).toHaveLength(3);
+  });
+
+  it("shows both Agent Plan lanes next to the informational placeholder in compact Overview", async () => {
+    const snapshot = provider(null, 0);
+    snapshot.primary = { ...rateWindow(0), isInformational: true, resetDescription: "No active 5h session" };
+    snapshot.extraRateWindows = [
+      { id: "doubao-agent-session", title: "5-hour", window: rateWindow(42, { windowMinutes: 300 }) },
+      { id: "doubao-agent-weekly", title: "Weekly", window: rateWindow(67, { windowMinutes: 10080 }) },
+    ];
+
+    renderCard(snapshot, { compactOverview: true });
+
+    // Compact Overview shows every quota row (upstream 0.62.0 #2616), so the
+    // placeholder no longer competes with the measured lanes for a row.
+    expect(await screen.findByText("58% left")).toBeInTheDocument();
+    expect(screen.getByText("33% left")).toBeInTheDocument();
+    expect(screen.getByText("No active 5h session")).toBeInTheDocument();
+    expect(document.querySelectorAll(".menu-metric")).toHaveLength(3);
   });
 
   it("localizes Claude scoped weekly extra-window labels", async () => {
@@ -355,6 +413,46 @@ describe("MenuCard", () => {
     renderCard(otherProvider);
     expect(await screen.findByText("Fable only")).toBeInTheDocument();
   });
+
+  it.each([false, true])(
+    "shows detail-backed amounts as their own line, never as reset text (resetsAt: %s)",
+    async (hasReset) => {
+      const resetsAt = hasReset
+        ? new Date(Date.now() + 3 * 60 * 60 * 1000 + 30_000).toISOString()
+        : null;
+      const snapshot = provider(null, 75, {
+        resetDescription: "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+        resetsAt,
+      });
+      snapshot.providerId = "mistral";
+      snapshot.primary.descriptionIsDetail = true;
+      snapshot.selectedMetric.descriptionIsDetail = true;
+      snapshot.extraRateWindows = [
+        {
+          id: "mistral-monthly-plan",
+          title: "Monthly Plan",
+          window: {
+            ...rateWindow(13, {
+              resetDescription: "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+              resetsAt,
+            }),
+            descriptionIsDetail: true,
+          },
+        },
+      ];
+
+      renderCard(snapshot);
+
+      const primaryDetail = await screen.findByText(
+        "19.17 EUR / 25.50 EUR · 6.33 EUR remaining",
+      );
+      const planDetail = screen.getByText("34.07 EUR / 255.00 EUR · 220.93 EUR remaining");
+      expect(primaryDetail).toHaveClass("menu-metric__detail");
+      expect(planDetail).toHaveClass("menu-metric__detail");
+      expect(screen.queryByText(/Resets .*EUR/)).not.toBeInTheDocument();
+      expect(document.querySelectorAll(".menu-metric__reset")).toHaveLength(hasReset ? 2 : 0);
+    },
+  );
 
   it("renders informational metrics without quota percentages", async () => {
     const snapshot = provider(null, 20);
@@ -585,6 +683,148 @@ describe("MenuCard", () => {
     expect(container.querySelector(".menu-metric__forecast")).not.toBeInTheDocument();
   });
 
+  function kimiBlockedByMonthlyPool(blockResetsAt: string | null, poolResetsAt: string) {
+    const hour = 60 * 60 * 1000;
+    const shortReset = new Date(Date.now() + 3 * hour).toISOString();
+    const block = { resetsAt: blockResetsAt };
+    const snapshot = provider(null);
+    snapshot.providerId = "kimi";
+    snapshot.displayName = "Kimi";
+    snapshot.primaryLabel = "Code 7-day";
+    // Raw provider percentages stay untouched (0% used): the block alone
+    // decides the presentation, as in upstream `blockingQuotaMetrics`.
+    snapshot.primary = {
+      ...rateWindow(0, {
+        windowMinutes: 7 * 24 * 60,
+        resetsAt: shortReset,
+        reservePercent: 30,
+        reserveWillLastToReset: true,
+      }),
+      monthlyLimitBlock: block,
+    };
+    snapshot.secondaryLabel = "Code 5-hour";
+    snapshot.secondary = {
+      ...rateWindow(0, { windowMinutes: 5 * 60, resetsAt: shortReset }),
+      monthlyLimitBlock: block,
+    };
+    snapshot.sessionEquivalentForecast = {
+      estimatedWindowsToExhaustWeekly: 4,
+      windowsUntilReset: 6,
+      availableWindowsUntilReset: 6,
+      sampleCount: 3,
+      weeklyResetsAt: shortReset,
+      weeklyUsedPercent: 0,
+    };
+    snapshot.extraRateWindows = [
+      {
+        id: "kimi-monthly",
+        title: "Total usage",
+        window: rateWindow(100, {
+          windowMinutes: 30 * 24 * 60,
+          exhausted: true,
+          resetsAt: poolResetsAt,
+        }),
+      },
+    ];
+    snapshot.pace = {
+      stage: "far_behind",
+      deltaPercent: -40,
+      expectedUsedPercent: 40,
+      actualUsedPercent: 0,
+      etaSeconds: null,
+      willLastToReset: true,
+      monthlyLimitBlock: block,
+    };
+    return snapshot;
+  }
+
+  it("shows only the title and status for windows blocked by an exhausted monthly pool", async () => {
+    const poolReset = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString();
+    const { container } = renderCard(kimiBlockedByMonthlyPool(poolReset, poolReset), {
+      showAsUsed: true,
+    });
+
+    expect(await screen.findAllByText("Blocked by monthly limit")).toHaveLength(2);
+    const blockedRows = container.querySelectorAll(".menu-metric--blocked");
+    expect(blockedRows).toHaveLength(2);
+    expect(blockedRows[0]).toHaveTextContent(/^Code 7-dayBlocked by monthly limit$/);
+    expect(blockedRows[1]).toHaveTextContent(/^Code 5-hourBlocked by monthly limit$/);
+    for (const row of blockedRows) {
+      expect(row.querySelector(".menu-metric__bar")).toBeNull();
+      expect(row.querySelector(".menu-metric__pct")).toBeNull();
+      expect(row.querySelector(".menu-metric__reset")).toBeNull();
+    }
+    // The pool row keeps its own bar, percent, reset and exhausted label.
+    expect(screen.getByText("Total usage")).toBeInTheDocument();
+    expect(screen.getAllByText("100% used")).toHaveLength(1);
+    expect(screen.queryByText("0% used")).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".menu-metric__reset")).toHaveLength(1);
+    expect(container.querySelectorAll(".menu-metric__exhausted")).toHaveLength(1);
+    // No pace, reserve, budget or session forecast for blocked windows.
+    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
+    expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
+    expect(container.querySelector(".menu-metric__forecast")).not.toBeInTheDocument();
+    expect(container.querySelector(".menu-card__pace")).not.toBeInTheDocument();
+  });
+
+  it("keeps a block without a known pool reset", async () => {
+    const poolReset = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString();
+    const { container } = renderCard(kimiBlockedByMonthlyPool(null, poolReset), {
+      showAsUsed: true,
+    });
+
+    expect(await screen.findAllByText("Blocked by monthly limit")).toHaveLength(2);
+    expect(container.querySelector(".menu-card__pace")).not.toBeInTheDocument();
+  });
+
+  it("ignores a cached block whose monthly pool reset already passed", async () => {
+    const past = new Date(Date.now() - 60 * 1000).toISOString();
+    const { container } = renderCard(kimiBlockedByMonthlyPool(past, past), {
+      showAsUsed: true,
+    });
+
+    expect(await screen.findAllByText("0% used")).toHaveLength(2);
+    expect(screen.queryByText("Blocked by monthly limit")).not.toBeInTheDocument();
+    expect(container.querySelector(".menu-metric--blocked")).toBeNull();
+    expect(container.querySelector(".menu-card__pace")).toBeInTheDocument();
+  });
+
+  it("lifts the block when the monthly pool resets while the card stays open", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-06-01T00:00:00Z"));
+      const poolReset = new Date("2026-06-01T00:10:00Z").toISOString();
+      const { container } = renderCard(kimiBlockedByMonthlyPool(poolReset, poolReset), {
+        showAsUsed: true,
+      });
+      await act(async () => {});
+      expect(screen.getAllByText("Blocked by monthly limit")).toHaveLength(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 1000);
+      });
+      expect(screen.getAllByText("Blocked by monthly limit")).toHaveLength(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.queryByText("Blocked by monthly limit")).not.toBeInTheDocument();
+      expect(container.querySelector(".menu-metric--blocked")).toBeNull();
+      expect(screen.getAllByText("0% used")).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps windows that are not blocked untouched", async () => {
+    const snapshot = provider(null, 0, {});
+    snapshot.providerId = "kimi";
+    renderCard(snapshot, { showAsUsed: true });
+
+    expect(await screen.findByText("0% used")).toBeInTheDocument();
+    expect(screen.queryByText("Blocked by monthly limit")).not.toBeInTheDocument();
+  });
+
   it("renders local token and cost totals after chart data loads", async () => {
     const { container } = renderCard(provider(null));
 
@@ -599,6 +839,91 @@ describe("MenuCard", () => {
     expect(details.open).toBe(false);
     fireEvent.click(details.querySelector("summary")!);
     expect(details.open).toBe(true);
+  });
+
+  it("includes the matching daily token count in the local cost tooltip", async () => {
+    const snapshot = provider(null);
+    snapshot.providerId = "codex";
+    snapshot.displayName = "Codex";
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      providerId: "codex",
+      costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: null,
+        thirtyDayCost: 1.23,
+        thirtyDayTokens: 14_200,
+        latestTokens: null,
+        topModel: "gpt-5",
+        estimateNote: "Estimated from local logs",
+        tokenCostUpdatedAtMs: 1234,
+      },
+      tokensHistory: [{ date: "2026-05-24", tokens: 14_200 }],
+      tokensIncomplete: false,
+    });
+
+    const { container } = renderCard(snapshot);
+    const bar = await waitFor(() => {
+      const element = container.querySelector(".menu-card__local-chart span");
+      if (!element) throw new Error("local chart bar not rendered yet");
+      return element;
+    });
+
+    expect(bar).toHaveAttribute("title", "2026-05-24: $1.23 · 14K tokens");
+  });
+
+  it("labels local totals with the selected History window instead of 30 days", async () => {
+    tauriMocks.getProviderChartData.mockResolvedValue({
+      providerId: "claude",
+      costHistory: [{ date: "2026-05-24", value: 1.23 }],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: null,
+        // The fixed 30-day fields must not leak into the period rows.
+        thirtyDayCost: 1.23,
+        thirtyDayTokens: 584_000,
+        periodCost: 7.5,
+        periodTokens: 2_000_000,
+        reportingPeriod: "month-to-date",
+        latestTokens: null,
+        topModel: "glim-4.6",
+        estimateNote: "Estimated from local logs",
+        tokenCostUpdatedAtMs: 1234,
+      },
+    });
+
+    renderCard(provider(null));
+
+    expect(await screen.findByText("MTD cost")).toBeInTheDocument();
+    expect(screen.getByText("MTD tokens")).toBeInTheDocument();
+    expect(screen.getByText("$7.50")).toBeInTheDocument();
+    expect(screen.getByText("2M")).toBeInTheDocument();
+    expect(screen.queryByText("30d cost")).not.toBeInTheDocument();
+    expect(screen.queryByText("584K")).not.toBeInTheDocument();
+  });
+
+  it("renders provider display details once and hides them in compact overview", async () => {
+    const snapshot = provider(null);
+    snapshot.displayDetails = [
+      {
+        id: "atlascloud-available",
+        sectionTitle: null,
+        title: "Available balance",
+        value: "$95.50",
+        secondaryValue: null,
+        progress: null,
+      },
+    ];
+
+    const detailed = renderCard(snapshot);
+    expect(await screen.findByText("Available balance: $95.50")).toBeInTheDocument();
+    expect(screen.getAllByText("Available balance: $95.50")).toHaveLength(1);
+    detailed.unmount();
+
+    renderCard(snapshot, { compactOverview: true });
+    expect(screen.queryByText("Available balance: $95.50")).not.toBeInTheDocument();
   });
 
   it("places Claude accounts above metrics and the collapsed usage details", async () => {

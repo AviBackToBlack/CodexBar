@@ -93,11 +93,18 @@ pub fn read_string(path: &Path) -> io::Result<String> {
 }
 
 /// Write a UTF-8 file, protecting it with Windows DPAPI when available.
+///
+/// The protected bytes are staged in an owner-only sibling, synced, and then
+/// published atomically, so a failed or interrupted write leaves the previous
+/// file intact and a partly written secret is never the live file.
 pub fn write_string(path: &Path, contents: &str) -> io::Result<()> {
     let bytes = protected_file_bytes(contents)?;
-    std::fs::write(path, bytes)?;
-    restrict_file_permissions(path)?;
-    Ok(())
+    crate::atomic_file::write_atomic_private(path, &bytes).map_err(|error| {
+        match error.downcast::<io::Error>() {
+            Ok(io_error) => io_error,
+            Err(other) => io::Error::other(other),
+        }
+    })
 }
 
 #[cfg(windows)]
@@ -228,19 +235,6 @@ fn unprotect(_encrypted: &[u8]) -> io::Result<Vec<u8>> {
     ))
 }
 
-#[cfg(unix)]
-fn restrict_file_permissions(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(0o600);
-    std::fs::set_permissions(path, perms)
-}
-
-#[cfg(not(unix))]
-fn restrict_file_permissions(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +255,70 @@ mod tests {
         write_string(&path, r#"{"secret":"value"}"#).unwrap();
 
         assert_eq!(read_string(&path).unwrap(), r#"{"secret":"value"}"#);
+    }
+
+    #[test]
+    fn write_replaces_existing_file_and_leaves_only_the_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secure.json");
+        write_string(&path, r#"{"secret":"old"}"#).unwrap();
+        write_string(&path, r#"{"secret":"new"}"#).unwrap();
+
+        assert_eq!(read_string(&path).unwrap(), r#"{"secret":"new"}"#);
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("secure.json")]);
+    }
+
+    #[test]
+    fn failed_publish_keeps_destination_and_leaves_no_secret_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory at the destination makes the publish step fail after the
+        // staged sibling was fully written.
+        let path = dir.path().join("secure.json");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep"), b"previous").unwrap();
+
+        assert!(write_string(&path, r#"{"secret":"leaked-value"}"#).is_err());
+
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read(path.join("keep")).unwrap(), b"previous");
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let entry_path = entry.unwrap().path();
+            if entry_path.is_file() {
+                assert_eq!(
+                    std::fs::metadata(&entry_path).unwrap().len(),
+                    0,
+                    "failed publish must truncate the staged secret"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn write_into_missing_directory_fails_without_creating_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing").join("secure.json");
+
+        assert!(write_string(&path, "{}").is_err());
+        assert!(!dir.path().join("missing").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_publishes_owner_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secure.json");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_string(&path, r#"{"secret":"value"}"#).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

@@ -47,6 +47,7 @@ type RateWindowOptions = {
   informational?: boolean;
   resetsAt?: string | null;
   resetDescription?: string | null;
+  descriptionIsDetail?: boolean;
 };
 
 function rateWindow(
@@ -61,6 +62,7 @@ function rateWindow(
     resetDescription: opts.resetDescription ?? null,
     isExhausted: opts.exhausted ?? false,
     isInformational: opts.informational,
+    descriptionIsDetail: opts.descriptionIsDetail,
     reservePercent: null,
     reserveDescription: null,
   };
@@ -76,6 +78,7 @@ function snapshot(
     errorState?: ProviderUsageSnapshot["errorState"];
     resetsAt?: string | null;
     resetDescription?: string | null;
+    descriptionIsDetail?: boolean;
     informational?: boolean;
     secondary?: {
       used: number;
@@ -149,10 +152,12 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     highUsageThreshold: 70,
     criticalUsageThreshold: 90,
     predictivePaceWarningEnabled: false,
+    credentialExpiryNotificationsEnabled: false,
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
     menuBarShowsPercent: false,
+    menuBarColorPace: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
@@ -165,6 +170,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     autoDownloadUpdates: false,
     installUpdatesOnQuit: false,
     globalShortcut: "Ctrl+Shift+U",
+    switcherShortcuts: {},
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",
@@ -230,7 +236,8 @@ describe("FloatBar", () => {
         ProviderIssueSessionExpired: "Session expired",
         ProviderIssueLocalRuntimeOffline: "Local runtime offline",
         ProviderIssueUnknown: "Usage unavailable",
-        FloatBarThirtyDayShort: "30d",
+        CostPeriodShortMonthToDate: "MTD",
+        CostPeriodShortDays: "{}d",
         FloatBarNoProviders: "No providers",
         FloatBarRemainingSuffix: "remaining",
       }),
@@ -325,35 +332,123 @@ describe("FloatBar", () => {
     });
   });
 
-  it("keeps an informational primary window when no secondary window is available", async () => {
+  it("never shows a detail-backed description as reset text", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
-      snapshot("claude", "Claude", 10, { informational: true }),
+      snapshot("claude", "Claude", 13, {
+        resetDescription: "34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
+        descriptionIsDetail: true,
+      }),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowResetInline: true }),
+    );
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = renderFloatBar(bootstrap({ floatBarShowResetInline: true }));
     await waitFor(() => {
-      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
-        "Claude: 10% used",
+      const pill = container.querySelector(".floatbar__pill");
+      expect(pill?.getAttribute("title")).toBe(
+        "Claude: 13% used\n34.07 EUR / 255.00 EUR · 220.93 EUR remaining",
       );
+      expect(container.querySelector(".floatbar__reset")).toBeNull();
     });
   });
 
-  it("keeps an informational primary window when the secondary window is informational", async () => {
+  it("keeps an informational primary window when no secondary window is available", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
-      snapshot("claude", "Claude", 10, {
+      snapshot("claude", "Claude", 0, {
         informational: true,
-        secondary: { used: 90, informational: true },
+        resetDescription: "No active 5h session",
       }),
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
     const { container } = renderFloatBar(bootstrap());
     await waitFor(() => {
-      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toContain(
-        "Claude: 10% used",
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toBe(
+        "Claude: No active 5h session",
       );
     });
+  });
+
+  it("keeps an informational primary window when the secondary window is informational", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 0, {
+        informational: true,
+        resetDescription: "No active 5h session",
+        secondary: { used: 90, informational: true, resetDescription: "Weekly unavailable" },
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toBe(
+        "Claude: No active 5h session",
+      );
+    });
+  });
+
+  it("shows an informational metric's text instead of a percentage or reset wording", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("litellm", "LiteLLM", 0, {
+        informational: true,
+        resetDescription: "No budget set",
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["litellm"], floatBarShowResetInline: true }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["litellm"], floatBarShowResetInline: true }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    const pill = container.querySelector(".floatbar__pill");
+    expect(pill?.getAttribute("title")).toBe("LiteLLM: No budget set");
+    expect(pill?.querySelector(".floatbar__pct")?.textContent).toBe("No budget set");
+    expect(pill?.textContent).not.toMatch(/%|Resets/);
+    expect(pill?.querySelector(".floatbar__reset")).toBeNull();
+    expect(pill?.classList.contains("floatbar__pill--ok")).toBe(true);
+  });
+
+  it("keeps the neutral tone for an informational metric in remaining mode", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("cursor", "Cursor", 100, {
+        informational: true,
+        resetDescription: "$12.40 API-rate",
+      }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ enabledProviders: ["cursor"], showAsUsed: false }),
+    );
+
+    const { container } = renderFloatBar(
+      bootstrap({ enabledProviders: ["cursor"], showAsUsed: false }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    const pill = container.querySelector(".floatbar__pill");
+    expect(pill?.getAttribute("title")).toBe("Cursor: $12.40 API-rate");
+    expect(pill?.classList.contains("floatbar__pill--ok")).toBe(true);
+  });
+
+  it("uses an em dash for an informational metric without text and keeps a timestamp reset", async () => {
+    const resetsAt = new Date(Date.now() + (2 * 60 + 5) * 60_000).toISOString();
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("codex", "Codex", 0, { informational: true, resetsAt }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")?.getAttribute("title")).toMatch(
+        /^Codex: —\nResets in 2h \d+m$/,
+      );
+    });
+    expect(container.querySelector(".floatbar__pct")?.textContent).toBe("—");
   });
 
   it("sorts providers by their selected rate window", async () => {
@@ -388,6 +483,9 @@ describe("FloatBar", () => {
       todayCost: 1.25,
       thirtyDayCost: 12.5,
       thirtyDayTokens: 1000,
+      periodCost: 12.5,
+      periodTokens: 1000,
+      reportingPeriod: "rolling:30",
       latestTokens: 200,
       topModel: "gpt-5",
       estimateNote: "Estimated from local logs",
@@ -409,6 +507,9 @@ describe("FloatBar", () => {
       todayCost: 1.25,
       thirtyDayCost: 12.5,
       thirtyDayTokens: 1000,
+      periodCost: 12.5,
+      periodTokens: 1000,
+      reportingPeriod: "rolling:30",
       latestTokens: 200,
       topModel: "gpt-5",
       estimateNote: "Estimated from local logs",
@@ -425,6 +526,38 @@ describe("FloatBar", () => {
     expect(container.querySelector(".floatbar__cost-pill")?.getAttribute("title")).toContain(
       "(Estimate)",
     );
+  });
+
+  it("shows the selected History window cost with its short label", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([snapshot("codex", "Codex", 75)]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowCost: true, costReportingPeriod: "month-to-date" }),
+    );
+    tauriMocks.getProviderLocalUsageSummary.mockResolvedValue({
+      todayCost: 1.25,
+      // Fixed 30-day compat field stays different from the selected window.
+      thirtyDayCost: 12.5,
+      thirtyDayTokens: 1000,
+      periodCost: 4.75,
+      periodTokens: 300,
+      reportingPeriod: "month-to-date",
+      latestTokens: 200,
+      topModel: "gpt-5",
+      estimateNote: "Estimated from local logs",
+      tokenCostUpdatedAtMs: 1234,
+    });
+
+    const { container } = renderFloatBar(
+      bootstrap({ floatBarShowCost: true, costReportingPeriod: "month-to-date" }),
+    );
+
+    await waitFor(() => {
+      const items = Array.from(container.querySelectorAll(".floatbar__cost-item")).map(
+        (item) => item.textContent,
+      );
+      expect(items).toEqual(["Today$1.25", "MTD$4.75"]);
+    });
+    expect(container.textContent).not.toContain("$12.50");
   });
 
   it("does not scan local costs by default", async () => {

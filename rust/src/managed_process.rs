@@ -19,7 +19,6 @@ use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
-#[cfg(test)]
 use std::os::windows::io::RawHandle;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
@@ -32,12 +31,10 @@ use windows::Win32::NetworkManagement::IpHelper::{
 use windows::Win32::System::Console::{
     ClosePseudoConsole, CreatePseudoConsole, HPCON, PSEUDOCONSOLE_INHERIT_CURSOR,
 };
-#[cfg(test)]
-use windows::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
@@ -49,6 +46,8 @@ use windows::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows::core::{PCWSTR, PWSTR};
+
+use crate::process_environment::ProcessEnvironment;
 
 /// Maximum number of terminal cursor-position replies sent to one child.
 const MAX_CURSOR_REPLIES: usize = 32;
@@ -69,8 +68,8 @@ pub struct ManagedProcessConfig {
     pub program: PathBuf,
     /// Arguments passed to the executable.
     pub args: Vec<OsString>,
-    /// Additional environment variables for the child.
-    pub env: Vec<(OsString, OsString)>,
+    /// Additional environment variables for the child (`Debug` renders only the entry count).
+    pub env: ProcessEnvironment<Vec<(OsString, OsString)>>,
     /// Working directory, when the provider wants to pin one.
     pub cwd: Option<PathBuf>,
     /// PTY geometry.
@@ -557,8 +556,33 @@ fn create_managed_job(label: &str) -> ManagedProcessResult<OwnedHandle> {
     Ok(job)
 }
 
-/// Post-creation assignment retained only for the job-termination unit test.
-#[cfg(test)]
+/// Kill-on-close Job Object for a child the caller spawned itself (for example
+/// a piped, non-PTY probe). Every process in the job, including descendants
+/// started after the child was assigned, is terminated when this value drops.
+/// Only processes explicitly assigned here (and their descendants) are touched.
+pub struct ProcessJob {
+    job: OwnedHandle,
+    label: String,
+}
+
+impl ProcessJob {
+    /// Create an empty kill-on-close job.
+    pub fn create(label: &str) -> ManagedProcessResult<Self> {
+        Ok(Self {
+            job: create_managed_job(label)?,
+            label: label.to_string(),
+        })
+    }
+
+    /// Place a freshly spawned process (and any descendants it starts from now
+    /// on) into the job. Assign immediately after spawning; unlike
+    /// [`ManagedProcess`], which joins the job atomically at creation, this is
+    /// a post-creation assignment.
+    pub fn contain(&self, process: RawHandle) -> ManagedProcessResult<()> {
+        assign_process_to_job(&self.job, process, &self.label)
+    }
+}
+
 fn assign_process_to_job(
     job: &OwnedHandle,
     process: RawHandle,
@@ -638,7 +662,12 @@ impl Drop for Attributes {
     }
 }
 
-fn build_command_line(program: &Path, args: &[OsString]) -> ManagedProcessResult<Vec<u16>> {
+/// NUL-terminated `CreateProcessW` command line: `program` and `args`, each
+/// quoted with the MSDN rules. Also used by `host::console_launch`.
+pub(crate) fn build_command_line(
+    program: &Path,
+    args: &[OsString],
+) -> ManagedProcessResult<Vec<u16>> {
     let mut cmdline = Vec::new();
     append_quoted(program.as_os_str(), &mut cmdline)?;
     for arg in args {
@@ -841,7 +870,7 @@ mod tests {
                 OsString::from("-Command"),
                 OsString::from("Start-Sleep -Seconds 30"),
             ],
-            env: Vec::new(),
+            env: ProcessEnvironment::default(),
             cwd: None,
             pty_rows: 30,
             pty_cols: 120,
@@ -1082,7 +1111,7 @@ mod tests {
                 OsString::from("-Command"),
                 OsString::from(script),
             ],
-            env: Vec::new(),
+            env: ProcessEnvironment::default(),
             cwd: None,
             pty_rows: 30,
             pty_cols: 120,

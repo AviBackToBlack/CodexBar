@@ -9,9 +9,10 @@ Win-CodexBar can extract browser cookies for providers that use web authenticati
 | Chrome | DPAPI + AES-256-GCM; modern profiles may use Chromium ABE (`v20`) | ⚠️ Automatic only when the needed cookies are not App-Bound |
 | Edge | DPAPI + AES-256-GCM; modern profiles may use Chromium ABE (`v20`) | ⚠️ Automatic only when the needed cookies are not App-Bound |
 | Brave | DPAPI + AES-256-GCM; modern profiles may use Chromium ABE (`v20`) | ⚠️ Automatic only when the needed cookies are not App-Bound |
+| Chrome Beta, Dev, Canary, Chrome for Testing, Chromium | DPAPI + AES-256-GCM; modern profiles may use Chromium ABE (`v20`) | ⚠️ Automatic only when the needed cookies are not App-Bound |
 | Firefox | Unencrypted SQLite | ✅ Automatic |
 
-Chromium App-Bound Encryption (ABE) binds protected cookie keys to the browser installation. Win-CodexBar does not bypass that protection. If the selected Chromium profile stores the provider cookies as App-Bound `v20` values, automatic import cannot decrypt them with the normal user DPAPI key. Use a manual Cookie header or Firefox instead. Chromium browser choices remain available because older or unmigrated profiles can still contain readable DPAPI/AES-GCM cookies.
+Chromium App-Bound Encryption (ABE) binds protected cookie keys to the browser installation. Win-CodexBar does not bypass that protection. If the selected Chromium profile stores the provider cookies as App-Bound `v20` values, automatic import cannot decrypt them with the normal user DPAPI key. Use a manual Cookie header or Firefox instead. Chromium browser choices remain available because older or unmigrated profiles can still contain readable DPAPI/AES-GCM cookies. Each Chrome channel (Stable, Beta, Dev, Canary, Chrome for Testing) and Chromium is a separate import choice that reads only its own `User Data` profiles.
 
 ## How It Works
 
@@ -36,6 +37,10 @@ If automatic extraction fails (for example, Chromium App-Bound Encryption is act
 3. Refresh the page and click any request to the provider
 4. Copy the `Cookie` header value from **Request Headers**
 5. In CodexBar Settings → provider detail → **Browser Cookies**, paste the value
+
+## Kimi local-storage tokens
+
+With the Kimi cookie source set to automatic, CodexBar also reads `access_token` from Chromium browsers' `Local Storage` for the selected Kimi region (`www.kimi.com` or `www.kimi.ai`), after the Kimi Desktop session and browser cookies. Local storage is not App-Bound encrypted, so this can work when cookie decryption is blocked. Only unexpired three-segment JWTs are used; refresh tokens are never read. A manual Cookie header always wins, and Cookie source Off or Manual skips this step. Open Kimi in the browser to renew an expired session. Firefox and Safari local storage are not read, and only the `Default` and `Profile N` profiles are scanned.
 
 ## Troubleshooting
 

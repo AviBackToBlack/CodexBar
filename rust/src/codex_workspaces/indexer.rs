@@ -1,10 +1,10 @@
 //! Scan Codex rollout JSONL + read-only catalog → project usage snapshot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 
 use crate::agent_sessions::CodexRolloutFirstLineParser;
@@ -12,9 +12,10 @@ use crate::codex_costs::codex_period_start;
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner, sha256_hex};
 
 use super::sidecar::{SidecarError, WorkspaceUsageSidecar};
+use super::thread_names::apply_session_names_and_ranking;
 use super::types::{
     CodexLocalProjectUsageSnapshot, CostEstimate, DailyPoint, Progress, ProgressPhase,
-    ProjectUsage, SessionUsage, SourceStatus, UsageTotals,
+    ProjectUsage, SessionUsage, SourceStatus, UsageTotals, untitled_session_label,
 };
 use super::{CHATS_DISPLAY_NAME, CHATS_PROJECT_ID};
 
@@ -39,10 +40,9 @@ pub struct CodexLocalDataScope {
 }
 
 impl CodexLocalDataScope {
-    /// `CODEX_HOME` → `CODEX_SQLITE_HOME` → `~/.codex`.
+    /// `CODEX_HOME` → `~/.codex`; the SQLite override is only for thread metadata.
     pub fn resolve() -> Option<Self> {
         let home = non_empty_env("CODEX_HOME")
-            .or_else(|| non_empty_env("CODEX_SQLITE_HOME"))
             .map(PathBuf::from)
             .or_else(|| dirs::home_dir().map(|h| h.join(".codex")))?;
         Some(Self::from_home(home))
@@ -148,6 +148,11 @@ impl CodexWorkspacesIndex {
             match sidecar.load_latest_snapshot(scope.scope_signature(), self.history_days) {
                 Ok(Some(mut cached)) => {
                     cached.source_status = source_status;
+                    apply_session_names_and_ranking(
+                        &mut cached,
+                        &scope.codex_home,
+                        non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+                    );
                     return Ok(cached);
                 }
                 Ok(None) => {}
@@ -156,12 +161,35 @@ impl CodexWorkspacesIndex {
         }
 
         progress(Progress::phase(ProgressPhase::ScanningLogs));
-        let today = Local::now().date_naive();
+        let today = crate::cost_reporting_period::cost_bucket_zone().date(Utc::now());
         let since = codex_period_start(today, self.history_days);
         let range = CostUsageDayRange::new(since, today);
 
         let mut files = list_session_files(&scope.sessions_root, &range);
         files.extend(list_session_files(&scope.archived_sessions_root, &range));
+        // Codex archives a thread by moving its rollout into the flat
+        // `archived_sessions` folder, and older builds kept rollouts flat in
+        // the sessions root (upstream `listCodexSessionFilesFlat`). A flat
+        // file named like one already listed is a copy of that session, so
+        // it is skipped and the session is counted once.
+        let mut names: HashSet<_> = files
+            .iter()
+            .filter_map(|path| path.file_name().map(ToOwned::to_owned))
+            .collect();
+        for path in list_flat_session_files(&scope.sessions_root, &range)
+            .into_iter()
+            .chain(list_flat_session_files(
+                &scope.archived_sessions_root,
+                &range,
+            ))
+        {
+            if path
+                .file_name()
+                .is_some_and(|name| names.insert(name.to_owned()))
+            {
+                files.push(path);
+            }
+        }
         files.sort();
         files.dedup();
 
@@ -241,17 +269,12 @@ impl CodexWorkspacesIndex {
             .collect();
         daily.sort_by(|a, b| a.day.cmp(&b.day));
 
-        let mut sessions: Vec<SessionUsage> = session_buckets
+        let sessions: Vec<SessionUsage> = session_buckets
             .values()
             .map(SessionBucket::to_session_usage)
             .collect();
-        sessions.sort_by(|a, b| {
-            b.latest_activity
-                .cmp(&a.latest_activity)
-                .then_with(|| a.id.cmp(&b.id))
-        });
 
-        let snapshot = CodexLocalProjectUsageSnapshot {
+        let mut snapshot = CodexLocalProjectUsageSnapshot {
             updated_at: Utc::now(),
             history_days: self.history_days,
             scope_signature: scope.scope_signature().to_string(),
@@ -263,6 +286,11 @@ impl CodexWorkspacesIndex {
             daily,
             source_status,
         };
+        apply_session_names_and_ranking(
+            &mut snapshot,
+            &scope.codex_home,
+            non_empty_env("CODEX_SQLITE_HOME").as_deref(),
+        );
 
         progress(Progress::phase(ProgressPhase::Saving));
         sidecar.publish_snapshot(&snapshot)?;
@@ -359,7 +387,7 @@ impl SessionBucket {
                 .title
                 .clone()
                 .filter(|t| !t.trim().is_empty())
-                .unwrap_or_else(|| "Local Codex chat".to_string()),
+                .unwrap_or_else(|| untitled_session_label(&self.id)),
             cwd: self.cwd.clone(),
             started_at: self.started_at,
             latest_activity: self.latest_activity,
@@ -412,11 +440,6 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 .into_iter()
                 .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
                 .map(|(m, _)| m);
-            let top_sessions = buckets
-                .iter()
-                .take(5)
-                .map(|b| b.to_session_usage())
-                .collect();
             ProjectUsage {
                 id: first.project_id.clone(),
                 display_name: first.project_display_name.clone(),
@@ -427,7 +450,7 @@ fn build_projects(sessions: &HashMap<String, SessionBucket>) -> Vec<ProjectUsage
                 session_count: buckets.len() as u32,
                 latest_activity: latest,
                 top_model,
-                top_sessions,
+                top_sessions: Vec::new(),
             }
         })
         .collect()
@@ -483,7 +506,7 @@ fn index_one_file(path: &Path, range: &CostUsageDayRange) -> Option<ParsedFile> 
         day_entry.1 = day_entry.1.saturating_add(cached);
         day_entry.2 = day_entry.2.saturating_add(output);
 
-        match CostUsagePricing::codex_cost_usd(&model, input, cached, output) {
+        match codex_cost_on_day(&record.day_key, &model, input, cached, output) {
             Some(usd) => cost.known_usd += usd,
             None => cost.unknown_tokens = cost.unknown_tokens.saturating_add(tokens),
         }
@@ -526,11 +549,20 @@ fn merge_daily(
             let tokens = input.saturating_add(*output);
             acc.total_tokens = acc.total_tokens.saturating_add(tokens);
             acc.cached_input_tokens = acc.cached_input_tokens.saturating_add(*cached);
-            match CostUsagePricing::codex_cost_usd(model, *input, *cached, *output) {
+            match codex_cost_on_day(day, model, *input, *cached, *output) {
                 Some(usd) => acc.known_usd += usd,
                 None => acc.unknown_tokens = acc.unknown_tokens.saturating_add(tokens),
             }
         }
+    }
+}
+
+/// Prices at the usage day's rates, like the cost scanners, so usage from
+/// before a model's repricing keeps the rates it was billed at.
+fn codex_cost_on_day(day: &str, model: &str, input: u64, cached: u64, output: u64) -> Option<f64> {
+    match CostUsageDayRange::parse_day_key(day) {
+        Some(day) => CostUsagePricing::codex_cost_usd_at_date(model, input, cached, output, day),
+        None => CostUsagePricing::codex_cost_usd(model, input, cached, output),
     }
 }
 
@@ -539,6 +571,12 @@ fn list_session_files(root: &Path, range: &CostUsageDayRange) -> Vec<PathBuf> {
         return Vec::new();
     }
     JsonlScanner::list_codex_session_files(root, &range.scan_since_key, &range.scan_until_key)
+}
+
+/// Rollouts kept directly in `root`; a missing folder lists nothing.
+fn list_flat_session_files(root: &Path, range: &CostUsageDayRange) -> Vec<PathBuf> {
+    JsonlScanner::list_codex_flat_session_files(root, &range.scan_since_key, &range.scan_until_key)
+        .unwrap_or_default()
 }
 
 fn read_catalog_status(db_path: &Path) -> SourceStatus {
@@ -745,6 +783,7 @@ fn meta_day_out_of_range(path: &Path, range: &CostUsageDayRange) -> bool {
 mod tests {
     use super::*;
     use crate::codex_workspaces::types::SourceStatus;
+    use chrono::Local;
     use rusqlite::Connection;
     use std::fs::File;
     use std::io::Write;
@@ -836,6 +875,65 @@ mod tests {
     }
 
     #[test]
+    fn archived_and_flat_rollouts_are_indexed_once() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("codex");
+        let sessions = home.join("sessions");
+        let archived = home.join("archived_sessions");
+        fs::create_dir_all(&archived).unwrap();
+        let day = Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let parts: Vec<&str> = day.split('-').collect();
+        let dated_dir = sessions.join(parts[0]).join(parts[1]).join(parts[2]);
+        let project = tmp.path().join("proj");
+        fs::create_dir_all(&project).unwrap();
+        for (name, input, output) in [
+            ("sess-dated.jsonl", 1000, 10),
+            ("sess-archived.jsonl", 200, 20),
+            ("sess-legacy.jsonl", 30, 3),
+        ] {
+            write_session(
+                &sessions,
+                &day,
+                name,
+                &project.to_string_lossy(),
+                "gpt-5",
+                input,
+                output,
+            );
+        }
+        // Codex archives a thread by moving its rollout into the flat
+        // archive; older builds kept rollouts flat in the sessions root.
+        fs::rename(
+            dated_dir.join("sess-archived.jsonl"),
+            archived.join("sess-archived.jsonl"),
+        )
+        .unwrap();
+        fs::rename(
+            dated_dir.join("sess-legacy.jsonl"),
+            sessions.join("sess-legacy.jsonl"),
+        )
+        .unwrap();
+        // An archived copy of a dated rollout is not counted twice.
+        fs::copy(
+            dated_dir.join("sess-dated.jsonl"),
+            archived.join("sess-dated.jsonl"),
+        )
+        .unwrap();
+
+        let snap = CodexWorkspacesIndex::new(30)
+            .with_codex_home(&home)
+            .with_sidecar_path(tmp.path().join("sidecar.sqlite"))
+            .load_snapshot(true, |_| {})
+            .expect("snapshot");
+
+        assert_eq!(snap.indexed_file_count, 3);
+        assert_eq!(snap.total.input_tokens, 1230);
+        assert_eq!(snap.total.output_tokens, 33);
+        let sessions_indexed: u32 = snap.projects.iter().map(|p| p.session_count).sum();
+        assert_eq!(sessions_indexed, 3);
+    }
+
+    #[test]
     fn cached_snapshot_is_not_reused_for_another_codex_home() {
         let tmp = TempDir::new().unwrap();
         let first_home = tmp.path().join("first-codex");
@@ -873,6 +971,20 @@ mod tests {
             first_snapshot.scope_signature,
             second_snapshot.scope_signature
         );
+    }
+
+    #[test]
+    fn daily_costs_use_each_day_rates() {
+        let sol = |day: &str| {
+            let models = HashMap::from([("gpt-5.6-sol".to_string(), (100, 10, 5))]);
+            let mut daily = HashMap::new();
+            merge_daily(&mut daily, &HashMap::from([(day.to_string(), models)]));
+            daily[day].known_usd
+        };
+        let historical = 90.0 * 5e-6 + 10.0 * 5e-7 + 5.0 * 3e-5;
+        let current = 90.0 * 4e-6 + 10.0 * 4e-7 + 5.0 * 2e-5;
+        assert!((sol("2026-08-20") - historical).abs() < 1e-12);
+        assert!((sol("2026-08-21") - current).abs() < 1e-12);
     }
 
     #[test]
@@ -955,10 +1067,7 @@ mod tests {
         snap.redact_for_privacy();
         assert_eq!(snap.projects[0].display_name, "Workspace");
         assert!(snap.projects[0].path.is_none());
-        assert_eq!(
-            snap.projects[0].top_sessions[0].display_title,
-            "Local Codex chat"
-        );
+        assert_eq!(snap.projects[0].top_sessions[0].display_title, "Session s1");
         assert!(snap.projects[0].top_sessions[0].cwd.is_none());
     }
 }

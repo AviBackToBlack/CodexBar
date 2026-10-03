@@ -498,7 +498,7 @@ mod tests {
                 true,
                 ordinals[&with_nickname.id],
             ),
-            "user@example.com — Work"
+            "Account 2"
         );
         assert_eq!(
             codex_account_menu_label(
@@ -512,7 +512,7 @@ mod tests {
 
         let hidden =
             codex_accounts_menu(&accounts, Some(&without_nickname), Language::English, true);
-        assert_eq!(hidden.children[0].label, "user@example.com — Work");
+        assert_eq!(hidden.children[0].label, "Account 2");
         assert_eq!(hidden.children[1].label, "Account 1");
         assert_eq!(hidden.children[0].checked, Some(false));
         assert!(!hidden.children[0].disabled);
@@ -522,7 +522,7 @@ mod tests {
             hidden.children[1].id.as_deref(),
             Some(format!("switch_codex_account:{}", without_nickname.id).as_str())
         );
-        assert!(hidden.children[0].label.contains("Work"));
+        assert!(hidden.children[0].label.contains("Account"));
         assert!(!hidden.children[1].label.contains('@'));
         assert!(!hidden.children[1].label.contains("example.com"));
         assert!(!hidden.children[1].label.contains("personal"));
@@ -534,7 +534,7 @@ mod tests {
             true,
         );
         assert_eq!(reversed.children[0].label, "Account 1");
-        assert_eq!(reversed.children[1].label, "user@example.com — Work");
+        assert_eq!(reversed.children[1].label, "Account 2");
 
         let visible = codex_accounts_menu(&[with_nickname], None, Language::English, false);
         assert_eq!(visible.children[0].label, "user@example.com — Work");

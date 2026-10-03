@@ -96,6 +96,8 @@ pub enum Language {
     Korean,
     /// Spanish (Mexican)
     Spanish,
+    /// Portuguese (Brazil)
+    PortugueseBrazil,
     /// Russian
     Russian,
     /// Turkish
@@ -112,6 +114,7 @@ impl Language {
             Language::Japanese => "日本語",
             Language::Korean => "한국어",
             Language::Spanish => "Español",
+            Language::PortugueseBrazil => "Português (Brasil)",
             Language::Russian => "Русский",
             Language::Turkish => "Türkçe",
         }
@@ -126,6 +129,7 @@ impl Language {
             Language::Japanese,
             Language::Korean,
             Language::Spanish,
+            Language::PortugueseBrazil,
             Language::Russian,
             Language::Turkish,
         ]
@@ -141,6 +145,7 @@ impl Language {
             Language::Japanese => "japanese",
             Language::Korean => "korean",
             Language::Spanish => "spanish",
+            Language::PortugueseBrazil => "portuguesebrazil",
             Language::Russian => "russian",
             Language::Turkish => "turkish",
         }
@@ -156,6 +161,14 @@ impl Language {
             Language::Japanese => &["ja", "ja-jp", "日本語"],
             Language::Korean => &["ko", "ko-kr", "한국어"],
             Language::Spanish => &["es", "es-mx", "español"],
+            Language::PortugueseBrazil => &[
+                "pt",
+                "pt-br",
+                "portuguese",
+                "português",
+                "portugues",
+                "português (brasil)",
+            ],
             Language::Russian => &["ru", "ru-ru", "русский"],
             Language::Turkish => &["tr", "tr-tr", "türkçe", "turkce"],
         }
@@ -247,6 +260,8 @@ pub enum TrayIconMode {
     Single,
     /// One tray icon per enabled provider
     PerProvider,
+    /// One tray icon with the selected metrics for two providers stacked vertically
+    Stacked,
 }
 
 impl TrayIconMode {
@@ -255,6 +270,7 @@ impl TrayIconMode {
         match self {
             TrayIconMode::Single => "Single Icon",
             TrayIconMode::PerProvider => "Per Provider",
+            TrayIconMode::Stacked => "Stacked Providers",
         }
     }
 
@@ -263,6 +279,7 @@ impl TrayIconMode {
         match self {
             TrayIconMode::Single => "Show one tray icon for all providers",
             TrayIconMode::PerProvider => "Show a separate tray icon for each enabled provider",
+            TrayIconMode::Stacked => "Show two providers as stacked usage meters",
         }
     }
 }
@@ -280,8 +297,8 @@ pub enum MetricPreference {
     Credits,
     #[serde(rename = "extraUsage", alias = "extrausage")]
     ExtraUsage,
-    /// Current-month plan spend for PAYG providers (e.g. Mistral) that have
-    /// cost data but no rate-limit window (#2821, #2947).
+    /// The provider's monthly plan allowance window, such as Mistral's Vibe
+    /// plan (upstream 0.70.0 #4072).
     MonthlyPlan,
     Average,
 }
@@ -312,7 +329,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary",
             MetricPreference::Credits => "Credits",
             MetricPreference::ExtraUsage => "Extra usage",
-            MetricPreference::MonthlyPlan => "Monthly plan spend",
+            MetricPreference::MonthlyPlan => "Monthly plan",
             MetricPreference::Average => "Average",
         }
     }
@@ -327,7 +344,7 @@ impl MetricPreference {
             MetricPreference::Tertiary => "Tertiary usage limit",
             MetricPreference::Credits => "Credit balance",
             MetricPreference::ExtraUsage => "On-demand or extra usage budget",
-            MetricPreference::MonthlyPlan => "Current-month plan spend (PAYG)",
+            MetricPreference::MonthlyPlan => "Monthly plan allowance",
             MetricPreference::Average => "Average across metrics",
         }
     }
@@ -410,6 +427,11 @@ pub struct ProviderConfig {
     /// Disabled by default; the desktop shell never injects a prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_resume_after_quota_reset: bool,
+    /// LiteLLM/Claude-only: fetch one optional extra breakdown (LiteLLM model
+    /// activity, Claude workspace spend). Disabled by default; each provider
+    /// has exactly one such breakdown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional_details_enabled: bool,
     /// Per-provider accent color override (hex, e.g. "#FF5733"). `None`
     /// means the shipped brand color is used (#2972).
     #[serde(skip_serializing_if = "Option::is_none")]

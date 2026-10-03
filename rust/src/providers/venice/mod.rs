@@ -8,6 +8,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::future::Future;
 
 use crate::core::{
     FetchContext, Provider, ProviderDisplayDetail, ProviderError, ProviderFetchResult, ProviderId,
@@ -18,7 +19,10 @@ const VENICE_BALANCE_URL: &str = "https://api.venice.ai/api/v1/billing/balance";
 const VENICE_SESSION_URL: &str = "https://outerface.venice.ai/api/user/session";
 const VENICE_CREDENTIAL_TARGET: &str = "codexbar-venice";
 const VENICE_SESSION_COOKIE: &str = "__venice-auth.session-token";
-const VENICE_COOKIE_DOMAINS: &[&str] = &["venice.ai", "outerface.venice.ai"];
+const VENICE_COOKIE_DOMAIN: &str = "venice.ai";
+const VENICE_CLERK_SESSION_COOKIE: &str = "__session";
+const VENICE_MISSING_CREDENTIALS_MESSAGE: &str = "Venice session cookie not found (__session, __session_<suffix>, or __venice-auth.session-token). Open a signed-in venice.ai tab and retry, or paste a fresh Cookie header.";
+const VENICE_INVALID_SESSION_MESSAGE: &str = "Venice browser session is invalid or expired. Keep a signed-in venice.ai tab active and retry; Clerk sessions last about 60 seconds. In Manual mode, paste a fresh Cookie header.";
 const VENICE_EXPIRATION_SKEW_SECS: i64 = 60;
 const MAX_VENICE_COOKIE_HEADER_LEN: usize = 1_048_576;
 const MAX_VENICE_COOKIE_VALUE_LEN: usize = 16_384;
@@ -39,14 +43,61 @@ struct VeniceBalances {
     usd: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct VeniceSessionResponse {
-    token: String,
+/// Why a `/api/auth/session` reply carried no usable session token.
+#[derive(Debug, PartialEq, Eq)]
+enum SessionTokenError {
+    /// The reply parsed but has a missing, null, non-string or blank `token`.
+    /// Upstream treats this as invalid credentials (an expired Clerk session).
+    Invalid,
+    /// The body is not a JSON object.
+    Malformed(String),
+}
+
+/// Extracts the session token from a `/api/auth/session` body the way upstream
+/// `VeniceWebUsageFetcher.snapshot(fromSessionData:)` does: a JSON object whose
+/// `token` is a non-blank string.
+fn session_token_from_body(body: &[u8]) -> Result<String, SessionTokenError> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|error| SessionTokenError::Malformed(error.to_string()))?;
+    let Some(object) = value.as_object() else {
+        return Err(SessionTokenError::Malformed(
+            "expected a JSON object".to_string(),
+        ));
+    };
+    match object.get("token").and_then(Value::as_str) {
+        Some(token) if !token.trim().is_empty() => Ok(token.to_string()),
+        _ => Err(SessionTokenError::Invalid),
+    }
 }
 
 pub struct VeniceProvider {
     metadata: ProviderMetadata,
     client: Client,
+}
+
+#[derive(Debug)]
+enum VeniceWebFailure {
+    InvalidSession,
+    Anonymous,
+    MissingQuota(ProviderError),
+    Other(ProviderError),
+}
+
+impl VeniceWebFailure {
+    fn into_provider_error(self) -> ProviderError {
+        match self {
+            Self::InvalidSession => invalid_session_error(),
+            Self::Anonymous => ProviderError::AuthRequired,
+            Self::MissingQuota(error) | Self::Other(error) => error,
+        }
+    }
+
+    fn is_unusable_session(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidSession | Self::Anonymous | Self::MissingQuota(_)
+        )
+    }
 }
 
 impl VeniceProvider {
@@ -108,44 +159,84 @@ impl VeniceProvider {
         &self,
         manual_cookie_header: Option<&str>,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let raw_cookie_header = match manual_cookie_header {
-            Some(header) => header.to_string(),
-            None => crate::providers::browser_cookie_header(VENICE_COOKIE_DOMAINS)?,
-        };
-        let cookie_header =
-            session_cookie_header(&raw_cookie_header).ok_or(ProviderError::NoCookies)?;
+        if let Some(header) = manual_cookie_header {
+            let credential = session_credential_from_header(header)
+                .ok_or_else(|| ProviderError::Other(VENICE_MISSING_CREDENTIALS_MESSAGE.into()))?;
+            return self
+                .fetch_web_session(&credential)
+                .await
+                .map_err(VeniceWebFailure::into_provider_error);
+        }
 
-        let response = self
-            .client
-            .get(VENICE_SESSION_URL)
-            .header("Cookie", cookie_header)
+        let candidates =
+            match crate::providers::browser_cookie_candidates_for_domain(VENICE_COOKIE_DOMAIN) {
+                Ok(candidates) => candidates,
+                Err(ProviderError::NoCookies) => {
+                    return Err(ProviderError::Other(
+                        VENICE_MISSING_CREDENTIALS_MESSAGE.into(),
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+        let candidates = browser_session_candidates(candidates);
+        fetch_web_sessions(candidates, |credential| async move {
+            self.fetch_web_session(&credential).await
+        })
+        .await
+    }
+
+    async fn fetch_web_session(
+        &self,
+        credential: &VeniceSessionCredential,
+    ) -> Result<ProviderFetchResult, VeniceWebFailure> {
+        let response = credential
+            .apply(self.client.get(VENICE_SESSION_URL))
             .header("Accept", "application/json")
             .send()
-            .await?;
+            .await
+            .map_err(|error| VeniceWebFailure::Other(error.into()))?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED
             || response.status() == reqwest::StatusCode::FORBIDDEN
         {
-            return Err(ProviderError::AuthRequired);
+            return Err(VeniceWebFailure::InvalidSession);
         }
         if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
+            return Err(VeniceWebFailure::Other(ProviderError::Other(format!(
                 "Venice web session returned status {}",
                 response.status()
-            )));
+            ))));
         }
 
-        let session: VeniceSessionResponse = response.json().await.map_err(|e| {
-            ProviderError::Parse(format!("Failed to parse Venice web session: {e}"))
-        })?;
-        if session.token.trim().is_empty() {
-            return Err(ProviderError::AuthRequired);
-        }
-        let token = session.token.as_str();
-        let claims = crate::codex_accounts::api::jwt_payload(token)
-            .ok_or_else(|| ProviderError::Parse("Venice session token is not a JWT".into()))?;
-        snapshot_from_web_claims(&claims, Utc::now())
+        let body = response
+            .bytes()
+            .await
+            .map_err(|error| VeniceWebFailure::Other(error.into()))?;
+        snapshot_from_session_body(&body, Utc::now())
     }
+}
+
+/// Turns a `/api/auth/session` body into a snapshot. A missing or blank token
+/// is an invalid session, so the caller can try the next browser session.
+fn snapshot_from_session_body(
+    body: &[u8],
+    now: DateTime<Utc>,
+) -> Result<ProviderFetchResult, VeniceWebFailure> {
+    let token = match session_token_from_body(body) {
+        Ok(token) => token,
+        Err(SessionTokenError::Invalid) => return Err(VeniceWebFailure::InvalidSession),
+        Err(SessionTokenError::Malformed(detail)) => {
+            return Err(VeniceWebFailure::Other(ProviderError::Parse(format!(
+                "Failed to parse Venice web session: {detail}"
+            ))));
+        }
+    };
+    let claims = crate::codex_accounts::api::jwt_payload(&token).ok_or_else(|| {
+        VeniceWebFailure::Other(ProviderError::Parse(
+            "Venice session token is not a JWT".into(),
+        ))
+    })?;
+    snapshot_from_web_claims(&claims, now)
 }
 
 fn snapshot_from_balance(balance: &VeniceBalanceResponse) -> UsageSnapshot {
@@ -233,27 +324,161 @@ impl Provider for VeniceProvider {
     fn owns_browser_cookie_resolution(&self) -> bool {
         true
     }
+
+    /// Venice web credential failures carry upstream's recovery text in
+    /// `ProviderError::Other`; keep them classified as sign-in gates.
+    fn error_state_kind(&self, error: &ProviderError) -> crate::core::ProviderStateKind {
+        match error {
+            ProviderError::Other(message) if message == VENICE_MISSING_CREDENTIALS_MESSAGE => {
+                crate::core::ProviderStateKind::NeedsAuthentication
+            }
+            ProviderError::Other(message) if message == VENICE_INVALID_SESSION_MESSAGE => {
+                crate::core::ProviderStateKind::ExpiredSession
+            }
+            _ => error.state_kind(),
+        }
+    }
 }
 
-fn session_cookie_header(raw: &str) -> Option<String> {
+fn invalid_session_error() -> ProviderError {
+    ProviderError::Other(VENICE_INVALID_SESSION_MESSAGE.into())
+}
+
+fn browser_session_candidates(
+    candidates: Vec<(
+        crate::browser::detection::BrowserType,
+        Vec<crate::browser::cookies::Cookie>,
+    )>,
+) -> Vec<(
+    crate::browser::detection::BrowserType,
+    VeniceSessionCredential,
+)> {
+    candidates
+        .into_iter()
+        .filter_map(|(browser, cookies)| {
+            session_credential_from_browser_cookies(&cookies)
+                .map(|credential| (browser, credential))
+        })
+        .collect()
+}
+
+async fn fetch_web_sessions<F, Fut>(
+    candidates: Vec<(
+        crate::browser::detection::BrowserType,
+        VeniceSessionCredential,
+    )>,
+    mut loader: F,
+) -> Result<ProviderFetchResult, ProviderError>
+where
+    F: FnMut(VeniceSessionCredential) -> Fut,
+    Fut: Future<Output = Result<ProviderFetchResult, VeniceWebFailure>>,
+{
+    let mut candidates = candidates.into_iter().peekable();
+    let mut last_failure = None;
+    while let Some((browser, credential)) = candidates.next() {
+        match loader(credential).await {
+            Ok(result) => return Ok(result),
+            Err(failure) if failure.is_unusable_session() => {
+                if candidates.peek().is_some() {
+                    tracing::debug!(
+                        browser = %browser.display_name(),
+                        "Venice session unusable; trying the next browser"
+                    );
+                }
+                last_failure = Some(failure.into_provider_error());
+            }
+            Err(failure) => return Err(failure.into_provider_error()),
+        }
+    }
+
+    Err(last_failure
+        .unwrap_or_else(|| ProviderError::Other(VENICE_MISSING_CREDENTIALS_MESSAGE.into())))
+}
+
+/// Credential accepted by the Venice session endpoint.
+#[derive(Debug, PartialEq, Eq)]
+enum VeniceSessionCredential {
+    /// Legacy `__venice-auth.session-token` value, sent as a Cookie header.
+    Legacy(String),
+    /// Clerk `__session` / `__session_<suffix>` value, sent as a Bearer token
+    /// with no Cookie header.
+    Clerk(String),
+}
+
+impl VeniceSessionCredential {
+    fn apply(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self {
+            Self::Legacy(value) => {
+                request.header("Cookie", format!("{VENICE_SESSION_COOKIE}={value}"))
+            }
+            Self::Clerk(value) => request.bearer_auth(value),
+        }
+    }
+}
+
+fn is_clerk_session_cookie_name(name: &str) -> bool {
+    name == VENICE_CLERK_SESSION_COOKIE
+        || name
+            .strip_prefix("__session_")
+            .is_some_and(|suffix| !suffix.is_empty())
+}
+
+/// Browser cookies are trusted only from the exact `venice.ai` host, so
+/// `clerk.venice.ai` cookies such as `__client` are never used. The shared
+/// extractor also returns subdomain cookies, hence the filter here.
+fn session_credential_from_browser_cookies(
+    cookies: &[crate::browser::cookies::Cookie],
+) -> Option<VeniceSessionCredential> {
+    session_credential(
+        cookies
+            .iter()
+            .filter(|cookie| {
+                cookie
+                    .domain
+                    .trim()
+                    .trim_matches('.')
+                    .eq_ignore_ascii_case(VENICE_COOKIE_DOMAIN)
+            })
+            .map(|cookie| (cookie.name.as_str(), cookie.value.as_str())),
+    )
+}
+
+fn session_credential_from_header(raw: &str) -> Option<VeniceSessionCredential> {
     if raw.len() > MAX_VENICE_COOKIE_HEADER_LEN {
         return None;
     }
+    // A header pasted from DevTools often keeps its "Cookie:" prefix.
+    let raw = raw.trim();
+    let raw = match raw.get(.."cookie:".len()) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("cookie:") => raw["cookie:".len()..].trim(),
+        _ => raw,
+    };
+    session_credential(raw.split(';').filter_map(|part| part.split_once('=')))
+}
 
+/// The legacy cookie (exact, then contiguous chunks) wins over Clerk; among
+/// Clerk cookies the unsuffixed `__session` wins over the first suffixed one.
+fn session_credential<'a>(
+    pairs: impl Iterator<Item = (&'a str, &'a str)>,
+) -> Option<VeniceSessionCredential> {
     let mut exact = None;
+    let mut clerk: Option<(&str, &str)> = None;
     let mut chunks = BTreeMap::new();
     let chunk_prefix = format!("{VENICE_SESSION_COOKIE}.");
 
-    for part in raw.split(';') {
-        let Some((raw_name, raw_value)) = part.split_once('=') else {
-            continue;
-        };
+    for (raw_name, raw_value) in pairs {
         let name = raw_name.trim();
         let value = raw_value.trim();
         if value.is_empty()
             || value.len() > MAX_VENICE_COOKIE_VALUE_LEN
             || value.chars().any(char::is_control)
         {
+            continue;
+        }
+        if is_clerk_session_cookie_name(name) {
+            if clerk.is_none() || name == VENICE_CLERK_SESSION_COOKIE {
+                clerk = Some((name, value));
+            }
             continue;
         }
         if name == VENICE_SESSION_COOKIE {
@@ -276,27 +501,26 @@ fn session_cookie_header(raw: &str) -> Option<String> {
     }
 
     if let Some(value) = exact {
-        return Some(format!("{VENICE_SESSION_COOKIE}={value}"));
+        return Some(VeniceSessionCredential::Legacy(value));
     }
-    if chunks.is_empty() || chunks.keys().max() != Some(&(chunks.len() - 1)) {
-        // Chunked cookies are contiguous 0..len-1 by construction; a gap or a
-        // tail that starts above 0 means a partial or forged set, so the
-        // session token cannot be reassembled safely.
-        return None;
+    // Chunked cookies are contiguous 0..len-1 by construction; a gap or a
+    // tail that starts above 0 means a partial or forged set, so the session
+    // token cannot be reassembled safely and a Clerk cookie is used instead.
+    if !chunks.is_empty() && chunks.keys().max() == Some(&(chunks.len() - 1)) {
+        let values: Vec<String> = chunks.into_values().collect();
+        return Some(VeniceSessionCredential::Legacy(values.concat()));
     }
-
-    let values: Vec<String> = chunks.into_values().collect();
-    Some(format!("{VENICE_SESSION_COOKIE}={}", values.concat()))
+    clerk.map(|(_, value)| VeniceSessionCredential::Clerk(value.to_string()))
 }
 
 fn snapshot_from_web_claims(
     claims: &serde_json::Map<String, Value>,
     now: DateTime<Utc>,
-) -> Result<ProviderFetchResult, ProviderError> {
+) -> Result<ProviderFetchResult, VeniceWebFailure> {
     let expiration =
-        epoch_value_to_datetime(claims.get("exp")).ok_or_else(|| ProviderError::AuthRequired)?;
+        epoch_value_to_datetime(claims.get("exp")).ok_or(VeniceWebFailure::InvalidSession)?;
     if expiration < now - chrono::Duration::seconds(VENICE_EXPIRATION_SKEW_SECS) {
-        return Err(ProviderError::AuthRequired);
+        return Err(VeniceWebFailure::InvalidSession);
     }
 
     if claims
@@ -304,19 +528,28 @@ fn snapshot_from_web_claims(
         .and_then(Value::as_str)
         .is_some_and(is_anonymous_user_type)
     {
-        return Err(ProviderError::AuthRequired);
+        return Err(VeniceWebFailure::Anonymous);
     }
 
     let usage = claims
         .get("bundledCreditsUsage")
         .and_then(Value::as_object)
-        .ok_or_else(|| ProviderError::Parse("Venice web session has no credits usage".into()))?;
-    let used_this_cycle = finite_non_negative(usage.get("usedThisCycle"))
-        .ok_or_else(|| ProviderError::Parse("Venice web session has invalid usage".into()))?;
+        .ok_or_else(|| {
+            VeniceWebFailure::MissingQuota(ProviderError::Parse(
+                "Venice web session has no credits usage".into(),
+            ))
+        })?;
+    let used_this_cycle = finite_non_negative(usage.get("usedThisCycle")).ok_or_else(|| {
+        VeniceWebFailure::MissingQuota(ProviderError::Parse(
+            "Venice web session has invalid usage".into(),
+        ))
+    })?;
     let monthly_refill_credits = finite_non_negative(usage.get("monthlyRefillCredits"))
         .filter(|value| *value > 0.0)
         .ok_or_else(|| {
-            ProviderError::Parse("Venice web session has invalid refill credits".into())
+            VeniceWebFailure::MissingQuota(ProviderError::Parse(
+                "Venice web session has invalid refill credits".into(),
+            ))
         })?;
 
     let available_credits = finite_non_negative(usage.get("availableCredits"))
@@ -424,12 +657,21 @@ fn epoch_value_to_datetime(value: Option<&Value>) -> Option<DateTime<Utc>> {
     DateTime::<Utc>::from_timestamp(seconds, 0)
 }
 
-/// Venice documents `userType: "anonymous"` for logged-out sessions; the
-/// claim is compared case-insensitively because the API treats the enum as a
-/// free-form string. Other spellings are not guessed here: an unknown value
-/// is treated as an authenticated user type.
+/// User types that mean a logged-out web session. Upstream
+/// `VeniceWebUsageFetcher.anonymousUserTypes` lists these spellings and
+/// matches them case-insensitively; any other value is an authenticated user.
+const ANONYMOUS_USER_TYPES: [&str; 5] = [
+    "anonymous",
+    "anon",
+    "guest",
+    "unauthenticated",
+    "logged_out",
+];
+
 fn is_anonymous_user_type(value: &str) -> bool {
-    value.eq_ignore_ascii_case("anonymous")
+    ANONYMOUS_USER_TYPES
+        .iter()
+        .any(|candidate| value.eq_ignore_ascii_case(candidate))
 }
 
 fn format_credits(value: f64) -> String {
@@ -441,141 +683,4 @@ fn format_credits(value: f64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn web_claims() -> serde_json::Map<String, Value> {
-        serde_json::from_value(serde_json::json!({
-            "exp": 1_900_000_000,
-            "userType": "paid",
-            "bundledCredits": 80,
-            "veniceCredits": 120,
-            "bundledCreditsUsage": {
-                "usedThisCycle": 12,
-                "monthlyRefillCredits": 100,
-                "availableCredits": 88,
-                "tierCap": 200,
-                "nextRefillAt": 1_900_000_000_000i64
-            }
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn venice_snapshot_uses_diem_allocation() {
-        let snapshot = snapshot_from_balance(&VeniceBalanceResponse {
-            can_consume: true,
-            consumption_currency: Some("DIEM".into()),
-            balances: VeniceBalances {
-                diem: Some(25.0),
-                usd: None,
-            },
-            diem_epoch_allocation: Some(100.0),
-        });
-        assert_eq!(snapshot.primary.used_percent, 75.0);
-    }
-
-    #[test]
-    fn session_cookie_prefers_exact_and_reassembles_contiguous_chunks() {
-        assert_eq!(
-            session_cookie_header(
-                "other=x; __venice-auth.session-token.0=ab; __venice-auth.session-token.1=cd"
-            ),
-            Some("__venice-auth.session-token=abcd".to_string())
-        );
-        assert_eq!(
-            session_cookie_header(
-                "__venice-auth.session-token.0=ab; __venice-auth.session-token.2=cd"
-            ),
-            None
-        );
-        assert_eq!(
-            session_cookie_header(
-                "__venice-auth.session-token=exact; __venice-auth.session-token.0=chunk"
-            ),
-            Some("__venice-auth.session-token=exact".to_string())
-        );
-        assert_eq!(
-            session_cookie_header("__venice-auth.session-token.0=a\nsecret"),
-            None
-        );
-        assert_eq!(
-            session_cookie_header(
-                "__venice-auth.session-token=one; __venice-auth.session-token=two"
-            ),
-            None
-        );
-        assert_eq!(
-            session_cookie_header("__venice-auth.session-token.not-a-chunk=value"),
-            None
-        );
-        let oversized = format!(
-            "__venice-auth.session-token={}",
-            "x".repeat(MAX_VENICE_COOKIE_VALUE_LEN + 1)
-        );
-        assert_eq!(session_cookie_header(&oversized), None);
-    }
-
-    #[test]
-    fn web_claims_produce_display_details_without_quota_math() {
-        let result = snapshot_from_web_claims(
-            &web_claims(),
-            DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap(),
-        )
-        .unwrap();
-
-        assert!(result.usage.primary.is_informational);
-        let details: Vec<_> = result.display_details().iter().collect();
-        assert_eq!(details.len(), 6);
-        assert_eq!(details[0].value(), "88");
-        assert_eq!(
-            details[2].progress().map(|progress| progress.total()),
-            Some(100.0)
-        );
-    }
-
-    #[test]
-    fn epoch_value_accepts_seconds_milliseconds_and_rejects_outliers() {
-        let seconds = serde_json::json!(1_900_000_000u64);
-        let millis = serde_json::json!(1_900_000_000_000i64);
-        assert_eq!(
-            epoch_value_to_datetime(Some(&seconds)),
-            DateTime::<Utc>::from_timestamp(1_900_000_000, 0)
-        );
-        assert_eq!(
-            epoch_value_to_datetime(Some(&millis)),
-            DateTime::<Utc>::from_timestamp(1_900_000_000, 0)
-        );
-        assert_eq!(epoch_value_to_datetime(None), None);
-        assert_eq!(epoch_value_to_datetime(Some(&serde_json::json!(42))), None);
-        assert_eq!(
-            epoch_value_to_datetime(Some(&serde_json::json!("1900000000"))),
-            DateTime::<Utc>::from_timestamp(1_900_000_000, 0)
-        );
-    }
-
-    #[test]
-    fn web_claims_reject_expired_anonymous_and_missing_usage() {
-        let now = DateTime::<Utc>::from_timestamp(1_900_000_000, 0).unwrap();
-        let mut expired = web_claims();
-        expired.insert("exp".into(), Value::from(1_800_000_000));
-        assert!(matches!(
-            snapshot_from_web_claims(&expired, now),
-            Err(ProviderError::AuthRequired)
-        ));
-
-        let mut anonymous = web_claims();
-        anonymous.insert("userType".into(), Value::from("anonymous"));
-        assert!(matches!(
-            snapshot_from_web_claims(&anonymous, now),
-            Err(ProviderError::AuthRequired)
-        ));
-
-        let mut missing = web_claims();
-        missing.remove("bundledCreditsUsage");
-        assert!(matches!(
-            snapshot_from_web_claims(&missing, now),
-            Err(ProviderError::Parse(_))
-        ));
-    }
-}
+mod tests;

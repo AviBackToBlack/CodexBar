@@ -173,7 +173,7 @@ mod pi_family_tests {
         let input = PiFamilyScanInput {
             processes,
             cwd_by_pid,
-            environment,
+            environment: environment.into(),
             now,
             host: "fixture-host".to_string(),
             config: SessionScanConfig::default(),

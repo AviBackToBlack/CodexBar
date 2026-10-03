@@ -12,7 +12,7 @@ export type SettingsTabId =
 
 // ── Narrowed string-literal unions (persisted settings enums) ─────────
 
-export type TrayIconMode = "single" | "perProvider";
+export type TrayIconMode = "single" | "perProvider" | "stacked";
 
 export type NotificationSoundTheme = "windows" | "codexBar";
 
@@ -53,6 +53,7 @@ export type Language =
   | "japanese"
   | "korean"
   | "spanish"
+  | "portuguesebrazil"
   | "russian"
   | "turkish";
 
@@ -171,6 +172,7 @@ export interface ProviderSummary {
 }
 
 export interface SettingsSnapshot {
+  preferredCurrencyCode?: string;
   enabledProviders: string[];
   providerOrder?: string[];
   refreshIntervalSecs: number;
@@ -188,11 +190,15 @@ export interface SettingsSnapshot {
   criticalUsageThreshold: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled: boolean;
+  credentialExpiryNotificationsEnabled: boolean;
   showPace?: boolean;
   trayIconMode: TrayIconMode;
+  stackedTrayTopProvider?: string | null;
+  stackedTrayBottomProvider?: string | null;
   switcherShowsIcons: boolean;
   menuBarShowsHighestUsage: boolean;
   menuBarShowsPercent: boolean;
+  menuBarColorPace: boolean;
   showAsUsed: boolean;
   showAllTokenAccountsInMenu: boolean;
   enableAnimations: boolean;
@@ -205,9 +211,13 @@ export interface SettingsSnapshot {
   autoDownloadUpdates: boolean;
   installUpdatesOnQuit: boolean;
   globalShortcut: string;
+  /** Fully resolved action -> shortcut map (defaults overlaid by overrides). */
+  switcherShortcuts: Record<string, string>;
   /** Extra Codex home or sessions directories scanned for local cost estimates. */
   codexCustomSessionsDirs: string[];
   agentSessionsEnabled?: boolean;
+  /** Hold system awake while a local agent session is live. */
+  stayAwakeEnabled?: boolean;
   agentSessionSshHosts?: string[];
   /** Master switch for external hooks (hooks.json next to settings). */
   hooksEnabled?: boolean;
@@ -275,12 +285,26 @@ export interface SettingsSnapshot {
   /** Opt-in read-only OpenCodex usage.jsonl import. */
   openCodexUsageLogsEnabled?: boolean;
   hideNativeCodexCostWhenOpenCodexPresent?: boolean;
+  /**
+   * History window for local cost surfaces: `rolling:N` (1..=365),
+   * `month-to-date`, or `all`. Absent from older backends.
+   */
+  costReportingPeriod?: string;
   /** Per-provider accent color overrides (CLI name → hex color, #2972). */
   providerAccentColors: Record<string, string>;
 }
 
+export interface CurrencyRatesSnapshot {
+  rates: Record<string, number>;
+  /** Codes the converter supports (Rust-owned list). */
+  supportedCodes: string[];
+  /** Normalized preference this snapshot was built for ("AUTO" or a code). */
+  preferredCode: string;
+}
+
 /** Partial settings object — only include fields you want to change. */
 export interface SettingsUpdate {
+  preferredCurrencyCode?: string;
   enabledProviders?: string[];
   refreshIntervalSecs?: number;
   adaptiveRefresh?: boolean;
@@ -297,11 +321,15 @@ export interface SettingsUpdate {
   criticalUsageThreshold?: number;
   providerUsageThresholds?: Record<string, UsageThresholdOverride>;
   predictivePaceWarningEnabled?: boolean;
+  credentialExpiryNotificationsEnabled?: boolean;
   showPace?: boolean;
   trayIconMode?: TrayIconMode;
+  stackedTrayTopProvider?: string;
+  stackedTrayBottomProvider?: string;
   switcherShowsIcons?: boolean;
   menuBarShowsHighestUsage?: boolean;
   menuBarShowsPercent?: boolean;
+  menuBarColorPace?: boolean;
   showAsUsed?: boolean;
   showAllTokenAccountsInMenu?: boolean;
   enableAnimations?: boolean;
@@ -314,8 +342,11 @@ export interface SettingsUpdate {
   autoDownloadUpdates?: boolean;
   installUpdatesOnQuit?: boolean;
   globalShortcut?: string;
+  /** Overrides only; replaces the stored map. `{}` restores the defaults. */
+  switcherShortcuts?: Record<string, string>;
   codexCustomSessionsDirs?: string[];
   agentSessionsEnabled?: boolean;
+  stayAwakeEnabled?: boolean;
   agentSessionSshHosts?: string[];
   hooksEnabled?: boolean;
   httpProxyEnabled?: boolean;
@@ -360,6 +391,8 @@ export interface SettingsUpdate {
   costSummaryDisplayStyle?: CostSummaryDisplayStyle;
   openCodexUsageLogsEnabled?: boolean;
   hideNativeCodexCostWhenOpenCodexPresent?: boolean;
+  /** `rolling:N` (1..=365), `month-to-date`, or `all`; the backend rejects other values. */
+  costReportingPeriod?: string;
   providerAccentColors?: Record<string, string | null>;
 }
 
@@ -379,8 +412,16 @@ export interface UsageSpendRow {
   displayName: string;
   sevenDay: number | null;
   thirtyDay: number | null;
+  sevenDayEstimate?: LocalCostEstimate;
+  thirtyDayEstimate?: LocalCostEstimate;
   sevenDayTokens?: number | null;
   thirtyDayTokens?: number | null;
+  /** The token figure is a floor from an incomplete scan ("at least N"). */
+  sevenDayTokensLowerBound?: boolean;
+  thirtyDayTokensLowerBound?: boolean;
+  /** Cost over the selected History window (`UsageSpendSummary.reportingPeriod`). */
+  periodCost: number | null;
+  periodTokens: number | null;
   currency: string;
   source: string;
   includedInOverview: boolean;
@@ -391,9 +432,16 @@ export interface UsageSpendRow {
   staleUpdatedAt?: string;
 }
 
+export interface LocalCostEstimate {
+  knownSubtotalUsd: number | null;
+  coverage: CostCoverageCounts;
+}
+
 export interface UsageSpendSummary {
   rows: UsageSpendRow[];
   contract: SpendContract;
+  /** Raw History window the `period*` columns were built for. */
+  reportingPeriod: string;
   reportingDay: string;
   dashboardTimezone: string;
 }
@@ -517,6 +565,8 @@ export interface CodexLocalProjectUsageSnapshot {
 export interface SpendContract {
   providerId: string;
   historyDays: number;
+  /** Raw History window this contract was built for. */
+  reportingPeriod: string;
   knownCostUsd: number | null;
   knownZero: boolean;
   provenance: CostProvenance;
@@ -544,6 +594,15 @@ export interface BootstrapState {
 
 // ── Provider usage snapshot types ────────────────────────────────────
 
+/**
+ * A longer exhausted pool (Kimi monthly, upstream 0.69.0 #4091) blocks the
+ * window until `resetsAt`; `null` means the reset is unknown and the block
+ * holds. Surfaces re-check it at render time because snapshots are cached.
+ */
+export interface MonthlyLimitBlock {
+  resetsAt: string | null;
+}
+
 export interface RateWindowSnapshot {
   usedPercent: number;
   remainingPercent: number;
@@ -552,10 +611,14 @@ export interface RateWindowSnapshot {
   resetDescription: string | null;
   isExhausted: boolean;
   isInformational?: boolean;
+  /** `resetDescription` is a detail line (for example spend amounts), not reset wording. */
+  descriptionIsDetail?: boolean;
   reservePercent: number | null;
   reserveDescription: string | null;
   reserveWillLastToReset?: boolean;
   reserveEtaSeconds?: number | null;
+  /** Set while a longer exhausted pool blocks this window; raw percentages stay the provider data. */
+  monthlyLimitBlock?: MonthlyLimitBlock | null;
 }
 
 export interface CostDailyPoint {
@@ -592,6 +655,24 @@ export interface PaceSnapshot {
   etaSeconds: number | null;
   expectedUsedPercent: number;
   actualUsedPercent: number;
+  /** Block of the window this pace comes from; no pace is shown while it is active. */
+  monthlyLimitBlock?: MonthlyLimitBlock | null;
+}
+
+/** One burndown chart point (RFC 3339 capture time + remaining percent). */
+export interface QuotaBurndownPoint {
+  capturedAt: string;
+  remainingPercent: number;
+}
+
+/** Recorded remaining-quota burndown for one series (upstream 0.70.0 #4085). */
+export interface QuotaBurndownSnapshot {
+  series: "session" | "weekly";
+  windowMinutes: number;
+  start: string;
+  reset: string;
+  samples: QuotaBurndownPoint[];
+  ideal: [QuotaBurndownPoint, QuotaBurndownPoint];
 }
 
 export interface SessionEquivalentForecastSnapshot {
@@ -624,6 +705,7 @@ export interface ProviderDisplayProgress {
 /** Transient provider detail row; it is display-only and never quota math. */
 export interface ProviderDisplayDetail {
   id: string;
+  sectionTitle: string | null;
   title: string;
   value: string;
   secondaryValue: string | null;
@@ -663,6 +745,8 @@ export interface ProviderUsageSnapshot {
     window: RateWindowSnapshot;
     /** Provider-declared fallback lane; only fills in without a core quota window. */
     fallbackLane?: boolean;
+    /** Provider-declared tray-icon lane this window stands in for when that core lane is absent. */
+    iconFallback?: "primary" | "secondary";
   }>;
   /** Display-only discrete provider inventory; never used as quota math. */
   inventory?: ProviderInventoryItem[];
@@ -685,7 +769,11 @@ export interface ProviderUsageSnapshot {
   trayStatusLabel: string | null;
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
+  /** Per-UTC-day OpenAI Admin API history; only the `openaiapi` Admin path sets it. */
+  openAiApiUsage?: OpenAiApiUsageSnapshot | null;
   sessionEquivalentForecast?: SessionEquivalentForecastSnapshot | null;
+  /** Recorded remaining-quota burndown; Codex and Claude only. */
+  quotaBurndown?: QuotaBurndownSnapshot | null;
 }
 
 export interface WayfinderRouteSummary {
@@ -715,6 +803,49 @@ export interface WayfinderUsageSnapshot {
   unit: string;
   priced: boolean;
   routes: WayfinderRouteSummary[];
+}
+
+/** Line item cost for one UTC day; descending by cost, then name. */
+export interface OpenAiApiLineItemSnapshot {
+  name: string;
+  costUsd: number;
+}
+
+/** Model usage for one UTC day; descending by total tokens, then name. */
+export interface OpenAiApiModelUsageSnapshot {
+  name: string;
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+/**
+ * One UTC-day bucket. Input and output include audio tokens, cached input is a
+ * subset of input, and `totalTokens === inputTokens + outputTokens`.
+ */
+export interface OpenAiApiDailyUsageSnapshot {
+  /** Bucket start, epoch seconds. */
+  startTime: number;
+  /** Bucket end, epoch seconds; always after `startTime`. */
+  endTime: number;
+  costUsd: number;
+  requests: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  lineItems: OpenAiApiLineItemSnapshot[];
+  models: OpenAiApiModelUsageSnapshot[];
+}
+
+export interface OpenAiApiUsageSnapshot {
+  /** Requested window in days (1-365). */
+  historyDays: number;
+  projectId: string | null;
+  /** Ascending by `startTime`; empty when the window had no data. */
+  daily: OpenAiApiDailyUsageSnapshot[];
 }
 
 export interface RefreshCompletePayload {
@@ -798,6 +929,8 @@ export interface AppInfoBridge {
 export interface DailyCostPoint {
   date: string;
   value: number | null;
+  /** Claude requests excluded from this day's totals (upstream 0.60.5 #3688). */
+  incompleteRequestCount?: number;
 }
 
 /** Exact local token totals per day (upstream 0.50.0 #2930). */
@@ -819,12 +952,19 @@ export interface DailyUsageBreakdown {
 
 export interface ProviderLocalUsageSummary {
   todayCost: number | null;
+  /** Always the trailing 30 days. */
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
+  /** Selected History window totals. */
+  periodCost: number | null;
+  periodTokens: number | null;
+  reportingPeriod: string;
   latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;
   tokenCostUpdatedAtMs: number;
+  /** Claude requests excluded from the selected-period totals (upstream 0.60.5 #3688). */
+  incompleteRequestCount?: number;
 }
 
 export interface QuotaWindowHistoryPoint {
@@ -945,6 +1085,9 @@ export interface ProviderDetail {
   autoResumeAfterQuotaReset: boolean;
   /** Whether the active credential lane can be correlated to a local CLI session. */
   autoResumeSupported: boolean;
+  /** LiteLLM and Claude expose one opt-in extra breakdown; other providers do not. */
+  optionalDetailsSupported: boolean;
+  optionalDetailsEnabled: boolean;
 
   // Identity
   email: string | null;
@@ -957,16 +1100,26 @@ export interface ProviderDetail {
   // Usage windows — mirror RateWindowSnapshot.
   session: RateWindowSnapshot | null;
   weekly: RateWindowSnapshot | null;
+  /** Provider-declared label for the session (primary) lane, e.g. "Personal budget". */
+  primaryLabel?: string | null;
+  /** Provider-declared label for the weekly (secondary) lane, e.g. "Team budget". */
+  secondaryLabel?: string | null;
   modelSpecific: RateWindowSnapshot | null;
   tertiary: RateWindowSnapshot | null;
   /** Locale key for the tertiary metric lane when it carries a semantic label (upstream F5). */
   tertiaryLabelKey?: string | null;
+  /** Extra rate window id holding the monthly plan allowance; offers the Monthly Plan metric (upstream 0.70.0). */
+  monthlyPlanWindowId?: string | null;
+  /** Metric picker label for the primary lane when it is not a session window. */
+  primaryMetricLabel?: string | null;
   extraRateWindows: Array<{
     id: string;
     title: string;
     window: RateWindowSnapshot;
     /** Provider-declared fallback lane; only fills in without a core quota window. */
     fallbackLane?: boolean;
+    /** Provider-declared tray-icon lane this window stands in for when that core lane is absent. */
+    iconFallback?: "primary" | "secondary";
   }>;
   /** Metric and extra rows exposed by the current provider snapshot. */
   usageItems?: ProviderUsageItem[];
@@ -979,6 +1132,8 @@ export interface ProviderDetail {
 
   cost: CostSnapshotBridge | null;
   pace: PaceSnapshot | null;
+  /** Per-UTC-day OpenAI Admin API history; only the `openaiapi` Admin path sets it. */
+  openAiApiUsage?: OpenAiApiUsageSnapshot | null;
 
   lastError: string | null;
   errorState: ProviderStateKind | null;
@@ -994,6 +1149,9 @@ export interface ProviderDetail {
   /** Phase 6c — currently-persisted cookie source value ("auto" | "manual" | "off" | …).
    *  `null` for providers that do not expose a cookie-source picker. */
   cookieSource: string | null;
+  /** Manual cookie source is selected with no usable header, and the provider
+   *  fails closed instead of importing browser cookies. */
+  manualCookieMissing?: boolean;
   /** Phase 6c — currently-persisted region value. `null` for non-regional providers. */
   region: string | null;
 }

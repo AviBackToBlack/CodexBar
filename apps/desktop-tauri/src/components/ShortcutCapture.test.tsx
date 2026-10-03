@@ -77,6 +77,27 @@ describe("ShortcutCapture", () => {
     expect(onCommit).toHaveBeenCalledWith("Ctrl+Shift+K");
   });
 
+  it("uses a custom composer, recording hint and empty label", async () => {
+    const compose = (event: KeyboardEvent) =>
+      event.key === "ArrowLeft" ? "left" : null;
+    const { onCommit } = await mount({
+      compose,
+      recordingHint: "custom hint",
+      emptyLabel: "disabled",
+    });
+    expect(screen.getByText("disabled")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    expect(screen.getByText("custom hint")).toBeInTheDocument();
+
+    // A bare key is not a valid accelerator, but the custom composer accepts it.
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", code: "ArrowLeft", bubbles: true }),
+      );
+    });
+    expect(onCommit).toHaveBeenCalledWith("left");
+  });
+
   it("cancels on Escape without committing", async () => {
     const { onCommit } = await mount();
     fireEvent.click(screen.getByRole("button", { name: "Record" }));

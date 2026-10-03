@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
 import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
 import { providerAllowsPace } from "../../../lib/providerPace";
@@ -6,6 +6,7 @@ import {
   getCredentialStorageStatus,
   getProviderCookieSourceOptions,
   getProviderDetail,
+  getProviderGatewayUrl,
   getProviderRegionOptions,
   getTokenAccountProviders,
   openProviderDashboard,
@@ -26,6 +27,7 @@ import { IdentitySection } from "./sections/IdentitySection";
 import { UsageSection } from "./sections/UsageSection";
 import { UsageItemVisibilitySection } from "./sections/UsageItemVisibilitySection";
 import { AutoResumeSection } from "./sections/AutoResumeSection";
+import { OptionalDetailsSection } from "./sections/OptionalDetailsSection";
 import { PaceSection } from "./sections/PaceSection";
 import { CostSection } from "./sections/CostSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
@@ -46,8 +48,12 @@ import { AccentColorSection } from "./sections/AccentColorSection";
 import { ProviderIssueNotice } from "./sections/ProviderIssueNotice";
 import { CredentialStorageSection } from "./sections/CredentialStorageSection";
 import { CredentialsDispatcher } from "./sections/CredentialsDispatcher";
-import { WayfinderGatewaySection } from "./sections/WayfinderGatewaySection";
+import {
+  isGatewayProviderId,
+  WayfinderGatewaySection,
+} from "./sections/WayfinderGatewaySection";
 import { AzureApiVersionSection } from "./sections/AzureApiVersionSection";
+import { MuseBrowserTeamSection } from "./sections/MuseBrowserTeamSection";
 
 interface Props {
   providerId: string | null;
@@ -83,6 +89,8 @@ export function ProviderDetailPane({
   onSettingsChange,
 }: Props) {
   const { t, language } = useLocale();
+  const [gatewayLoadedProviderId, setGatewayLoadedProviderId] =
+    useState<string | null>(null);
   const [state, dispatch] = useReducer(
     providerDetailPaneReducer,
     { wayfinderGatewayUrl, providerId },
@@ -142,11 +150,33 @@ export function ProviderDetailPane({
     }
   }, []);
 
+  const gatewayProviderId =
+    providerId !== null && isGatewayProviderId(providerId) ? providerId : null;
+
+  useEffect(() => {
+    setGatewayLoadedProviderId(null);
+    if (!gatewayProviderId) return;
+    let cancelled = false;
+    void getProviderGatewayUrl(gatewayProviderId).then((url) => {
+      if (!cancelled) {
+        dispatch({ type: "SET_GATEWAY_DRAFT", draft: url });
+        setGatewayLoadedProviderId(gatewayProviderId);
+      }
+    }).catch((e) => {
+      if (!cancelled) {
+        dispatch({ type: "SAVE_GATEWAY_ERROR", error: String(e) });
+        setGatewayLoadedProviderId(gatewayProviderId);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [gatewayProviderId]);
+
   const saveGateway = async () => {
     dispatch({ type: "SAVE_GATEWAY_START" });
     try {
-      await setProviderGatewayUrl("wayfinder", gatewayDraft);
-      await load("wayfinder");
+      if (!gatewayProviderId) return;
+      await setProviderGatewayUrl(gatewayProviderId, gatewayDraft);
+      await load(gatewayProviderId);
     } catch (e) {
       dispatch({ type: "SAVE_GATEWAY_ERROR", error: String(e) });
     } finally {
@@ -288,7 +318,12 @@ export function ProviderDetailPane({
 
   return (
     <div className="provider-detail">
-      <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+      <IdentitySection
+        provider={detail}
+        subtitle={subtitle}
+        t={t}
+        hidePersonalInfo={hidePersonalInfo}
+      />
 
       {detail.id === "codex" && (
         <CodexAccountsSection t={t} hidePersonalInfo={hidePersonalInfo} />
@@ -319,8 +354,18 @@ export function ProviderDetailPane({
         t={t}
         onChanged={reload}
       />
-      {detail.id === "wayfinder" && (
+      <OptionalDetailsSection
+        providerId={detail.id}
+        enabled={detail.optionalDetailsEnabled}
+        available={detail.optionalDetailsSupported}
+        disabled={settingsDisabled}
+        t={t}
+        onChanged={reload}
+      />
+      {isGatewayProviderId(detail.id) &&
+        gatewayLoadedProviderId === detail.id && (
         <WayfinderGatewaySection
+          providerId={detail.id}
           draft={gatewayDraft}
           error={gatewayError}
           busy={busy}
@@ -366,6 +411,16 @@ export function ProviderDetailPane({
           providerId={detail.id}
           currentValue={detail.cookieSource}
           options={cookieOptions}
+          manualCookieMissing={detail.manualCookieMissing}
+          t={t}
+          onChanged={reload}
+        />
+      )}
+      {detail.id === "muse" && (
+        <MuseBrowserTeamSection
+          providerId={detail.id}
+          details={detail.displayDetails}
+          disabled={settingsDisabled}
           t={t}
           onChanged={reload}
         />
@@ -404,11 +459,13 @@ export function ProviderDetailPane({
         key={`cookie-${credKey}`}
         providerId={detail.id}
         cookieDomain={cookieDomain}
+        onChanged={reload}
       />
       <ChartsSection
         providerId={detail.id}
         accountEmail={detail.email}
         accentColor={providerAccentColors[detail.id]}
+        openAiApiUsage={detail.openAiApiUsage}
         t={t}
       />
 

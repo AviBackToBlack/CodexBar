@@ -45,6 +45,7 @@ import type {
   CodexAccountsStateBridge,
   CodexSwitchResult,
   DeepSeekPricingStatus,
+  CurrencyRatesSnapshot,
 } from "../types/bridge";
 
 export const claudeAccountsList = () => invoke<ClaudeAccount[]>("claude_accounts_list");
@@ -85,6 +86,14 @@ export function reorderProviders(ids: string[]): Promise<ProviderSummary[]> {
 
 export function getSettingsSnapshot(): Promise<SettingsSnapshot> {
   return invoke<SettingsSnapshot>("get_settings_snapshot");
+}
+
+export function getCurrencyRates(preferredCurrencyCode: string): Promise<CurrencyRatesSnapshot> {
+  return invoke<CurrencyRatesSnapshot>("get_currency_rates", { preferredCurrencyCode });
+}
+
+export function getStayAwakeStatus(): Promise<boolean> {
+  return invoke<boolean>("get_stay_awake_status");
 }
 
 export function updateSettings(
@@ -284,9 +293,10 @@ export function getProviderLocalUsageSummary(
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
 
-export function getUsageSpendSummary(options?: { historyDays?: number; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
+/** `period` is a raw reporting period; omitted means the saved `costReportingPeriod`. */
+export function getUsageSpendSummary(options?: { period?: string; forceRefresh?: boolean }): Promise<UsageSpendSummary> {
   return invoke<UsageSpendSummary>("get_usage_spend_summary", {
-    historyDays: options?.historyDays ?? null,
+    period: options?.period ?? null,
     forceRefresh: options?.forceRefresh ?? null,
   });
 }
@@ -295,13 +305,23 @@ export function writeUsageSpendExport(path: string, payload: string): Promise<vo
   return invoke<void>("write_usage_spend_export", { path, payload });
 }
 
+/** Write portable preferences to `path`; resolves with how many were exported. */
+export function exportPreferences(path: string): Promise<number> {
+  return invoke<number>("export_preferences", { path });
+}
+
+/** Apply the preferences file at `path`; the shell validates before saving anything. */
+export function importPreferences(path: string): Promise<SettingsSnapshot> {
+  return invoke<SettingsSnapshot>("import_preferences", { path });
+}
+
 export function getSpendContract(
   providerId: string,
-  options?: { historyDays?: number; includeOpenCodex?: boolean },
+  options?: { period?: string; includeOpenCodex?: boolean },
 ): Promise<SpendContract> {
   return invoke<SpendContract>("get_spend_contract", {
     providerId,
-    historyDays: options?.historyDays ?? null,
+    period: options?.period ?? null,
     includeOpenCodex: options?.includeOpenCodex ?? null,
   });
 }
@@ -414,6 +434,13 @@ export function setProviderUsageSource(providerId: string, source: string): Prom
   return invoke<void>("set_provider_usage_source", { providerId, source });
 }
 
+export function setProviderOptionalDetails(
+  providerId: string,
+  enabled: boolean,
+): Promise<void> {
+  return invoke<void>("set_provider_optional_details", { providerId, enabled });
+}
+
 export function setProviderAutoResumeAfterQuotaReset(
   providerId: string,
   enabled: boolean,
@@ -448,6 +475,10 @@ export function setProviderGatewayUrl(
   gatewayUrl: string,
 ): Promise<void> {
   return invoke<void>("set_provider_gateway_url", { providerId, gatewayUrl });
+}
+
+export function getProviderGatewayUrl(providerId: string): Promise<string> {
+  return invoke<string>("get_provider_gateway_url", { providerId });
 }
 
 export function getProviderAzureApiVersion(providerId: string): Promise<string | null> {

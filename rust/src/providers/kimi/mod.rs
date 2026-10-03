@@ -5,16 +5,31 @@
 //! Provider policies are centralized in the submodules:
 //! - [`web`]: `kimi.com` cookie auth, browser-import gate (Cookie Source Off,
 //!   upstream #2623), and the shared web-token resolution chain
-//!   (manual cookie → Kimi Desktop session → browser import).
+//!   (manual cookie → Kimi Desktop session → browser import → Chromium
+//!   local-storage `access_token`, upstream #3923).
 //! - [`code_api`]: Kimi Code API auth/endpoint/CLI-credential policy, plus the
 //!   upstream 0.48.0 monthly-membership enrichment of Code API + CLI usage
 //!   from a signed-in Kimi Desktop session (#2622).
+//! - [`local_storage`]: current `access_token` JWTs from Chromium local storage
+//!   for the selected region, read through the shared LevelDB reader.
 //! - [`desktop_token`]: read-only, WAL-safe reader for the Kimi Desktop
 //!   (Electron) Chromium cookie store.
+//! - [`ratio_pool`]: zero-ratio placeholder reconciliation against matching
+//!   legacy counters (upstream 0.63.0).
+//! - [`auto`]: Auto-mode order after the Code API key (CLI credential, then
+//!   web auth) and which failure is reported when neither works.
 
+mod auto;
 mod code_api;
 pub mod desktop_token;
+mod local_storage;
+#[cfg(test)]
+mod monthly_blocking_tests;
+mod ratio_pool;
+mod region;
 mod web;
+
+pub use region::KimiRegion;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -27,13 +42,14 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
-const KIMI_WEB_USAGE_URL: &str =
-    "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages";
-const KIMI_SUBSCRIPTION_STATS_URL: &str =
-    "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats";
-const KIMI_SUBSCRIPTION_URL: &str =
-    "https://www.kimi.com/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscription";
-const KIMI_COOKIE_DOMAINS: [&str; 2] = ["www.kimi.com", "kimi.moonshot.cn"];
+/// Extra-window id of the monthly membership pool (`Total usage`).
+pub const MONTHLY_WINDOW_ID: &str = "kimi-monthly";
+
+const KIMI_WEB_USAGE_SERVICE: &str = "kimi.gateway.billing.v1.BillingService/GetUsages";
+const KIMI_SUBSCRIPTION_STATS_SERVICE: &str =
+    "kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats";
+const KIMI_SUBSCRIPTION_SERVICE: &str =
+    "kimi.gateway.membership.v2.MembershipService/GetSubscription";
 
 #[derive(Debug, Deserialize)]
 struct KimiCodeApiUsageResponse {
@@ -262,7 +278,14 @@ impl KimiProvider {
     }
 
     fn auth_token_from_cookie_header(cookie_header: &str) -> Result<String, ProviderError> {
-        for cookie in cookie_header.split(';') {
+        let header = cookie_header.trim();
+        let header = header
+            .get(..7)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("cookie:"))
+            .map(|_| &header[7..])
+            .unwrap_or(header)
+            .trim();
+        for cookie in header.split(';') {
             let cookie = cookie.trim();
             if cookie.starts_with("kimi-auth=")
                 || cookie.starts_with("authorization=")
@@ -330,11 +353,12 @@ impl Provider for KimiProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         tracing::debug!("Fetching Kimi usage");
+        let region = KimiRegion::from_settings(ctx.api_region.as_deref());
 
         match ctx.source_mode {
             SourceMode::Auto => {
                 if code_api::code_api_key(ctx.api_key.as_deref()).is_ok() {
-                    match code_api::fetch_via_code_api(ctx, None, None, "Code API").await {
+                    match code_api::fetch_via_code_api(ctx, region, None, None, "Code API").await {
                         Ok(usage) => {
                             return Ok(ProviderFetchResult::new(usage, "code-api"));
                         }
@@ -347,38 +371,47 @@ impl Provider for KimiProvider {
                     }
                 }
 
-                if let Some(cli_token) = code_api::kimi_code_cli_access_token(unix_now_secs()) {
-                    let home = code_api::kimi_code_home().unwrap_or_default();
-                    let headers = code_api::kimi_code_cli_identity_headers(&home);
-                    match code_api::fetch_via_code_api(
-                        ctx,
-                        Some(&cli_token),
-                        Some(&headers),
-                        "Kimi Code CLI",
-                    )
-                    .await
-                    {
-                        Ok(usage) => {
-                            return Ok(ProviderFetchResult::new(usage, "code-cli"));
-                        }
-                        Err(err) => {
-                            tracing::debug!(
-                                error = %err,
-                                "Kimi Code CLI credential fetch failed; falling back to web"
-                            );
-                        }
-                    }
-                }
-
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref()).await?;
-                Ok(ProviderFetchResult::new(usage, "web"))
+                // Account-source order (upstream Kimi fetch plan): the classified
+                // CLI credential (fresh / stale / refresh-only), then web auth.
+                // A selected token account is an identity boundary, so the web
+                // session runs isolated and never falls back to ambient
+                // credentials.
+                auto::fetch_cli_then_web(
+                    code_api::kimi_code_cli_credential(region, unix_now_secs()),
+                    |cli_token| async move {
+                        let home = code_api::kimi_code_home().unwrap_or_default();
+                        let headers = code_api::kimi_code_cli_identity_headers(&home);
+                        code_api::fetch_via_code_api(
+                            ctx,
+                            region,
+                            Some(&cli_token),
+                            Some(&headers),
+                            "Kimi Code CLI",
+                        )
+                        .await
+                    },
+                    || {
+                        web::fetch_web_session_isolated(
+                            ctx.manual_cookie_header.as_deref(),
+                            region,
+                            ctx.token_account_isolated,
+                        )
+                    },
+                )
+                .await
             }
             SourceMode::OAuth => {
-                let usage = code_api::fetch_via_code_api(ctx, None, None, "Code API").await?;
+                let usage =
+                    code_api::fetch_via_code_api(ctx, region, None, None, "Code API").await?;
                 Ok(ProviderFetchResult::new(usage, "code-api"))
             }
             SourceMode::Web => {
-                let usage = web::fetch_via_web(ctx.manual_cookie_header.as_deref()).await?;
+                let usage = web::fetch_via_web(
+                    ctx.manual_cookie_header.as_deref(),
+                    region,
+                    ctx.token_account_isolated,
+                )
+                .await?;
                 Ok(ProviderFetchResult::new(usage, "web"))
             }
             SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
@@ -399,6 +432,13 @@ impl Provider for KimiProvider {
 
     fn supports_oauth(&self) -> bool {
         true
+    }
+
+    /// A Code API response may report only the monthly `Total usage` pool
+    /// (upstream 0.60.5 #3694). Automatic then reads that lane instead of the
+    /// informational weekly placeholder.
+    fn automatic_metric_missing_core_is_terminal(&self) -> bool {
+        false
     }
 }
 
@@ -427,7 +467,14 @@ fn apply_subscription_windows(
     // Upstream 0.49.0 #2741: the membership pool is the official "Total usage"
     // lane — the shared subscription pool (`amountUsedRatio`), not the
     // Code-only ratio. Feature-scoped or non-subscription balances are skipped.
-    if let Some(balance) = subscription.subscription_balance.as_ref()
+    // Upstream 0.60.5 #3694: a monthly pool reported by the Code API stays
+    // authoritative; web enrichment only fills in a missing one.
+    let has_monthly_pool = usage
+        .extra_rate_windows
+        .iter()
+        .any(|extra| extra.id == MONTHLY_WINDOW_ID);
+    if !has_monthly_pool
+        && let Some(balance) = subscription.subscription_balance.as_ref()
         && matches!(balance.feature.as_deref(), None | Some("FEATURE_OMNI"))
         && matches!(balance.balance_type.as_deref(), None | Some("SUBSCRIPTION"))
         && let Some(ratio) =
@@ -435,7 +482,7 @@ fn apply_subscription_windows(
     {
         // Verified monthly sentinel (#2431 / #2566).
         usage = usage.with_extra_rate_window(
-            "kimi-monthly",
+            MONTHLY_WINDOW_ID,
             "Total usage",
             RateWindow::with_details(
                 ratio * 100.0,
@@ -470,9 +517,10 @@ fn apply_subscription_windows(
 /// Upstream `isEquivalentToWeeklyWindow` (#2741): suppress the Code 7-day row
 /// only on positive evidence — the weekly counter must be reliable (window
 /// minutes present), the percentages must agree within 1 point, and both lanes
-/// need reset timestamps within 5 minutes of each other.
+/// need reset timestamps within 5 minutes of each other. An absent weekly
+/// quota (informational primary) is never equivalent.
 fn is_equivalent_to_weekly_window(window: &RateWindow, weekly: &RateWindow) -> bool {
-    if weekly.window_minutes.is_none() {
+    if weekly.is_informational || weekly.window_minutes.is_none() {
         return false;
     }
     if (window.used_percent - weekly.used_percent).abs() > 1.0 {
@@ -489,6 +537,7 @@ fn is_equivalent_to_weekly_window(window: &RateWindow, weekly: &RateWindow) -> b
 async fn kimi_web_post(
     client: &Client,
     url: &str,
+    region: KimiRegion,
     token: &str,
     body: serde_json::Value,
 ) -> Result<reqwest::Response, ProviderError> {
@@ -498,6 +547,8 @@ async fn kimi_web_post(
         .header("Cookie", format!("kimi-auth={token}"))
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
+        .header("Origin", region.web_base_url())
+        .header("Referer", region.console_url())
         .header(
             "User-Agent",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

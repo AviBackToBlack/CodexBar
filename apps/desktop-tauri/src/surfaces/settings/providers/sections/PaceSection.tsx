@@ -1,6 +1,8 @@
 import type { PaceSnapshot } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { formatEta } from "../../../../lib/formatEta";
+import { useMonthlyLimitBlockNow } from "../../../../hooks/useMonthlyLimitBlockNow";
+import { isMonthlyLimitBlockActive } from "../../../../lib/monthlyLimitBlock";
 
 interface Props {
   pace: PaceSnapshot | null;
@@ -19,7 +21,12 @@ const STAGE_TO_KEY: Record<PaceSnapshot["stage"], LocaleKey> = {
 
 /** 展示配额节奏状态及其辅助说明。 */
 export function PaceSection({ pace, t }: Props) {
-  if (!pace) return null;
+  const monthlyLimitBlockNow = useMonthlyLimitBlockNow([pace?.monthlyLimitBlock]);
+  // Upstream 0.69.0 #4091 drops the pace of a window blocked by a longer
+  // exhausted pool; its own resets cannot restore access.
+  if (!pace || isMonthlyLimitBlockActive(pace.monthlyLimitBlock, monthlyLimitBlockNow)) {
+    return null;
+  }
 
   const stageLabel = t(STAGE_TO_KEY[pace.stage]);
   const aux = pace.willLastToReset

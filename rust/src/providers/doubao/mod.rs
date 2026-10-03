@@ -13,8 +13,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::core::{
-    FetchContext, NamedRateWindow, Provider, ProviderError, ProviderFetchResult, ProviderId,
-    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256, sha256_hex,
+    FetchContext, IconLane, NamedRateWindow, Provider, ProviderError, ProviderFetchResult,
+    ProviderId, ProviderMetadata, RateWindow, SourceMode, UsageSnapshot, hex, hmac_sha256,
+    sha256_hex,
 };
 
 const DOUBAO_API_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
@@ -429,7 +430,9 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
         &["session", "5-hour", "five_hour", "5h"],
         Some(5 * 60),
     )
-    .unwrap_or_else(|| RateWindow::new(0.0));
+    // A missing Coding Plan session is not a measured 0%: keep the canonical
+    // informational placeholder so Agent Plan-only accounts do not draw one.
+    .unwrap_or_else(RateWindow::no_active_session);
     let mut snapshot = UsageSnapshot::new(primary);
     if let Some(weekly) = coding_plan_window(&usage, &["weekly", "week"], Some(7 * 24 * 60)) {
         snapshot = snapshot.with_secondary(weekly);
@@ -453,10 +456,10 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
             ],
             Some(5 * 60),
         ) {
-            snapshot.extra_rate_windows.push(NamedRateWindow::new(
-                format!("{id_prefix}-session"),
-                "5-hour",
-                w,
+            snapshot.extra_rate_windows.push(with_agent_icon_lane(
+                NamedRateWindow::new(format!("{id_prefix}-session"), "5-hour", w),
+                prefix,
+                IconLane::Primary,
             ));
         }
         if let Some(w) = coding_plan_window(
@@ -464,10 +467,10 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
             &[&format!("{prefix}weekly"), &format!("{prefix}week")],
             Some(7 * 24 * 60),
         ) {
-            snapshot.extra_rate_windows.push(NamedRateWindow::new(
-                format!("{id_prefix}-weekly"),
-                "Weekly",
-                w,
+            snapshot.extra_rate_windows.push(with_agent_icon_lane(
+                NamedRateWindow::new(format!("{id_prefix}-weekly"), "Weekly", w),
+                prefix,
+                IconLane::Secondary,
             ));
         }
         if let Some(w) = coding_plan_window(
@@ -489,6 +492,20 @@ fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
         snapshot.updated_at = update;
     }
     snapshot
+}
+
+/// Only the personal Agent Plan session/weekly lanes may stand in for a missing
+/// Coding Plan lane on the tray icon; team and monthly buckets never do.
+fn with_agent_icon_lane(
+    lane: NamedRateWindow,
+    level_prefix: &str,
+    icon_lane: IconLane,
+) -> NamedRateWindow {
+    if level_prefix == "agent_" {
+        lane.with_icon_fallback(icon_lane)
+    } else {
+        lane
+    }
 }
 
 fn coding_plan_window(
@@ -582,10 +599,20 @@ fn run_arkcli_usage_plan() -> Result<Vec<u8>, ProviderError> {
                 .into(),
         )
     })?;
-    let mut child = Command::new(&bin)
+    let mut command = Command::new(&bin);
+    command
         .args(["usage", "plan", "--format", "json"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    // Runs during background refreshes: keep the CLI's console window hidden
+    // so it does not flash up or take focus.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| ProviderError::Other(format!("Failed to launch arkcli: {e}")))?;
 
@@ -888,6 +915,15 @@ impl Provider for DoubaoProvider {
     }
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        if ctx.token_account_isolated
+            && ctx.token_account_kind == Some(crate::core::TokenAccountKind::ApiKey)
+        {
+            let api_key = selected_ark_api_key(ctx)?;
+            return Ok(ProviderFetchResult::new(
+                self.fetch_api(&api_key).await?,
+                "api",
+            ));
+        }
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::OAuth => {
                 if let Some(credentials) = Self::coding_plan_credentials(ctx.api_key.as_deref()) {
@@ -945,6 +981,15 @@ impl Provider for DoubaoProvider {
     }
 }
 
+fn selected_ark_api_key(ctx: &FetchContext) -> Result<String, ProviderError> {
+    ctx.api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .ok_or(ProviderError::AuthRequired)
+}
+
 fn resolve_api_key(
     explicit: Option<&str>,
     credential_target: &str,
@@ -975,8 +1020,30 @@ fn resolve_api_key(
 }
 
 #[cfg(test)]
+mod icon_lane_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_ark_account_requires_its_projected_key() {
+        let isolated = FetchContext {
+            token_account_isolated: true,
+            token_account_kind: Some(crate::core::TokenAccountKind::ApiKey),
+            ..FetchContext::default()
+        };
+        assert!(matches!(
+            selected_ark_api_key(&isolated),
+            Err(ProviderError::AuthRequired)
+        ));
+
+        let selected = FetchContext {
+            api_key: Some(" selected-key ".into()),
+            ..isolated
+        };
+        assert_eq!(selected_ark_api_key(&selected).unwrap(), "selected-key");
+    }
     use reqwest::header::{HeaderMap, HeaderValue};
 
     #[test]

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use uuid::Uuid;
 
-use super::models::{CodexAccount, CodexAccountSource};
+use super::models::CodexAccount;
 
 impl CodexAccount {
     /// The user-facing account label.
@@ -18,13 +18,17 @@ impl CodexAccount {
     }
 
     /// The label used by a user-facing account surface.
+    ///
+    /// Upstream 0.60.5 (#3702, `141ecf642`): Hide Personal Info redacts every
+    /// account in the System Account submenu, not only ambient ones — managed
+    /// accounts get the same generic label while the setting is on.
     pub fn privacy_safe_display_name(
         &self,
         hide_personal_info: bool,
         ordinal: usize,
         generic_label: &str,
     ) -> String {
-        if hide_personal_info && self.source == CodexAccountSource::Ambient {
+        if hide_personal_info {
             let label = generic_label.trim();
             let label = if label.is_empty() { "Account" } else { label };
             return format!("{label} {ordinal}");
@@ -134,6 +138,8 @@ pub fn ordinals_by_id(accounts: &[CodexAccount]) -> HashMap<Uuid, usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::codex_accounts::models::CodexAccountSource;
     use crate::codex_accounts::models::utc_now;
     use std::path::PathBuf;
 
@@ -211,22 +217,31 @@ mod tests {
     }
 
     #[test]
-    fn privacy_safe_display_name_hides_system_identity_but_preserves_managed_labels() {
+    fn privacy_safe_display_name_hides_every_account_under_hide_personal_info() {
         let mut system =
             display_account("11111111-1111-1111-1111-111111111111", "system-workspace");
         system.source = CodexAccountSource::Ambient;
         system.nickname = Some("Private System Name".to_string());
         let mut managed =
             display_account("22222222-2222-2222-2222-222222222222", "managed-workspace");
+        managed.source = CodexAccountSource::ManagedByApp;
         managed.nickname = Some("Work".to_string());
 
+        // Upstream 0.60.5 #3702 (141ecf642): every account is redacted, not only
+        // ambient ones — managed accounts get the generic label too.
         let hidden_system = system.privacy_safe_display_name(true, 1, "Account");
         let hidden_managed = managed.privacy_safe_display_name(true, 2, "Account");
         assert_eq!(hidden_system, "Account 1");
+        assert_eq!(hidden_managed, "Account 2");
         assert!(!hidden_system.contains("@"));
         assert!(!hidden_system.contains("Private System Name"));
-        assert_eq!(hidden_managed, "user@example.com — Work");
+        assert!(!hidden_managed.contains("Work"));
+        assert!(!hidden_managed.contains("@"));
 
+        // Ordinals stay account-specific so entries remain distinguishable.
+        assert_ne!(hidden_system, hidden_managed);
+
+        // With privacy off every account keeps its raw label.
         assert_eq!(
             system.privacy_safe_display_name(false, 1, "Account"),
             "user@example.com — Private System Name"

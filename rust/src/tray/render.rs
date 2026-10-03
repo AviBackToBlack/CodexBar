@@ -10,6 +10,100 @@ use super::icon::UsageLevel;
 /// Side length of the generated tray icon in pixels.
 pub const TRAY_ICON_SIZE: u32 = 32;
 
+/// Optional pace tint for a tray icon's usage indicator.
+///
+/// The upstream pace treatment uses green when usage is behind the expected
+/// pace and red when it is ahead. On-track and unavailable stages keep the
+/// normal usage-level colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayPaceColor {
+    Behind,
+    Ahead,
+}
+
+impl TrayPaceColor {
+    /// Map the canonical bridge pace stage to its tray tint.
+    pub fn from_stage(stage: &str) -> Option<Self> {
+        match stage {
+            "slightly_behind" | "behind" | "far_behind" => Some(Self::Behind),
+            "slightly_ahead" | "ahead" | "far_ahead" => Some(Self::Ahead),
+            _ => None,
+        }
+    }
+
+    fn rgb(self) -> (u8, u8, u8) {
+        match self {
+            Self::Behind => (76, 175, 80),
+            Self::Ahead => (244, 67, 54),
+        }
+    }
+}
+
+const ICON_INSET: u32 = 2;
+const BAR_LEFT: u32 = 4;
+const BAR_RIGHT: u32 = TRAY_ICON_SIZE - 4;
+const ICON_BACKGROUND_RGB: [u8; 3] = [60, 60, 70];
+const BAR_BACKGROUND: Rgba<u8> = Rgba([80, 80, 90, 255]);
+
+fn new_icon_canvas(has_error: bool) -> RgbaImage {
+    let mut image: RgbaImage = ImageBuffer::new(TRAY_ICON_SIZE, TRAY_ICON_SIZE);
+    let background = Rgba([
+        ICON_BACKGROUND_RGB[0],
+        ICON_BACKGROUND_RGB[1],
+        ICON_BACKGROUND_RGB[2],
+        if has_error { 180 } else { 255 },
+    ]);
+    for y in ICON_INSET..TRAY_ICON_SIZE - ICON_INSET {
+        for x in ICON_INSET..TRAY_ICON_SIZE - ICON_INSET {
+            image.put_pixel(x, y, background);
+        }
+    }
+    image
+}
+
+fn usage_color(percent: f64, has_error: bool, pace_color: Option<TrayPaceColor>) -> Rgba<u8> {
+    let (r, g, b) = pace_color
+        .map(TrayPaceColor::rgb)
+        .unwrap_or_else(|| UsageLevel::from_percent(percent).color());
+    if has_error {
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "mean of three u8 channels is bounded to 0..=255"
+        )]
+        let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
+        Rgba([gray, gray, gray, 255])
+    } else {
+        Rgba([r, g, b, 255])
+    }
+}
+
+fn draw_bar_row(
+    image: &mut RgbaImage,
+    y_start: u32,
+    y_end: u32,
+    percent: f64,
+    has_error: bool,
+    pace_color: Option<TrayPaceColor>,
+) {
+    let bar_width = BAR_RIGHT - BAR_LEFT;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "percent is clamped to 0..=100 and scaled to a 24-pixel meter"
+    )]
+    let fill = ((percent.clamp(0.0, 100.0) / 100.0) * bar_width as f64) as u32;
+    let fill_end = (BAR_LEFT + fill).min(BAR_RIGHT);
+    let color = usage_color(percent, has_error, pace_color);
+
+    for y in y_start..y_end {
+        for x in BAR_LEFT..BAR_RIGHT {
+            image.put_pixel(x, y, BAR_BACKGROUND);
+        }
+        for x in BAR_LEFT..fill_end {
+            image.put_pixel(x, y, color);
+        }
+    }
+}
+
 /// Render a usage-bar tray icon as raw RGBA bytes.
 ///
 /// - `session_percent`: primary bar fill (0–100), colour-coded by [`UsageLevel`]
@@ -24,90 +118,60 @@ pub fn render_bar_icon_rgba(
     weekly_percent: Option<f64>,
     has_error: bool,
 ) -> (Vec<u8>, u32, u32) {
-    const SZ: u32 = TRAY_ICON_SIZE;
-    let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
+    render_bar_icon_rgba_with_pace(session_percent, weekly_percent, has_error, None)
+}
 
-    for pixel in img.pixels_mut() {
-        *pixel = Rgba([0, 0, 0, 0]);
-    }
-
-    let bg_alpha: u8 = if has_error { 180 } else { 255 };
-    let bg_color = Rgba([60, 60, 70, bg_alpha]);
-    for y in 2..SZ - 2 {
-        for x in 2..SZ - 2 {
-            img.put_pixel(x, y, bg_color);
-        }
-    }
-
-    let color_for = |percent: f64| -> (u8, u8, u8) {
-        let (r, g, b) = UsageLevel::from_percent(percent).color();
-        if has_error {
-            // Average of three u8 colour channels: sum ≤ 765, so /3 ≤ 255 fits u8.
-            #[allow(
-                clippy::cast_possible_truncation,
-                reason = "mean of three u8 channels; r+g+b ≤ 765, divided by 3 is ≤ 255 and fits u8"
-            )]
-            let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
-            (gray, gray, gray)
-        } else {
-            (r, g, b)
-        }
-    };
-
-    let bar_left = 4u32;
-    let bar_right = SZ - 4;
-    let bar_width = bar_right - bar_left;
-
-    // pct is clamped to 0–100, scaled by bar_width (≤ SZ = 32), so the result fits u32.
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "pct clamped to 0–100 and scaled by bar_width ≤ 32; result is a small pixel count that fits u32"
-    )]
-    let fill_px = |pct: f64| ((pct.clamp(0.0, 100.0) / 100.0) * bar_width as f64) as u32;
-
-    let mut draw_bar = |y_start: u32, y_end: u32, pct: f64| {
-        let (r, g, b) = color_for(pct);
-        let fill_end = (bar_left + fill_px(pct)).min(bar_right);
-        for y in y_start..y_end {
-            for x in bar_left..bar_right {
-                img.put_pixel(x, y, Rgba([80, 80, 90, 255]));
-            }
-        }
-        for y in y_start..y_end {
-            for x in bar_left..fill_end {
-                img.put_pixel(x, y, Rgba([r, g, b, 255]));
-            }
-        }
-    };
+/// Render a usage-bar tray icon with an optional pace tint.
+pub fn render_bar_icon_rgba_with_pace(
+    session_percent: f64,
+    weekly_percent: Option<f64>,
+    has_error: bool,
+    pace_color: Option<TrayPaceColor>,
+) -> (Vec<u8>, u32, u32) {
+    let mut image = new_icon_canvas(has_error);
 
     match weekly_percent {
         Some(weekly) => {
-            draw_bar(8, 15, session_percent); // session bar (top, thicker)
-            draw_bar(18, 23, weekly); // weekly bar (bottom, thinner)
+            draw_bar_row(&mut image, 8, 15, session_percent, has_error, pace_color);
+            draw_bar_row(&mut image, 18, 23, weekly, has_error, pace_color);
         }
         None => {
-            draw_bar(10, 22, session_percent); // single thick bar (centred)
+            draw_bar_row(&mut image, 10, 22, session_percent, has_error, pace_color);
         }
     }
 
-    (img.into_raw(), SZ, SZ)
+    (image.into_raw(), TRAY_ICON_SIZE, TRAY_ICON_SIZE)
+}
+
+/// Render two providers as equally prominent stacked usage meters.
+///
+/// Unlike [`render_bar_icon_rgba`], both rows represent the selected metric
+/// for separate providers. The upper and lower rows therefore use equal
+/// height so neither provider is presented as a secondary quota window.
+pub fn render_stacked_bar_icon_rgba(
+    top_percent: f64,
+    bottom_percent: f64,
+    has_error: bool,
+) -> (Vec<u8>, u32, u32) {
+    let mut image = new_icon_canvas(has_error);
+    draw_bar_row(&mut image, 6, 14, top_percent, has_error, None);
+    draw_bar_row(&mut image, 18, 26, bottom_percent, has_error, None);
+    (image.into_raw(), TRAY_ICON_SIZE, TRAY_ICON_SIZE)
 }
 
 /// Render a compact numeric percent tray icon as raw RGBA bytes.
 pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32, u32) {
+    render_percent_icon_rgba_with_pace(percent, has_error, None)
+}
+
+/// Render a compact numeric percent tray icon with an optional pace tint.
+pub fn render_percent_icon_rgba_with_pace(
+    percent: f64,
+    has_error: bool,
+    pace_color: Option<TrayPaceColor>,
+) -> (Vec<u8>, u32, u32) {
     const SZ: u32 = TRAY_ICON_SIZE;
-    let mut img: RgbaImage = ImageBuffer::new(SZ, SZ);
-
-    for pixel in img.pixels_mut() {
-        *pixel = Rgba([0, 0, 0, 0]);
-    }
-
-    let bg_alpha: u8 = if has_error { 180 } else { 255 };
-    for y in 2..SZ - 2 {
-        for x in 2..SZ - 2 {
-            img.put_pixel(x, y, Rgba([60, 60, 70, bg_alpha]));
-        }
-    }
+    let mut img = new_icon_canvas(has_error);
 
     // percent clamped to 0–100 before rounding, so the cast to u32 cannot truncate.
     #[allow(
@@ -134,18 +198,7 @@ pub fn render_percent_icon_rgba(percent: f64, has_error: bool) -> (Vec<u8>, u32,
     let start_x = (SZ.saturating_sub(text_width)) / 2;
     let start_y = (SZ.saturating_sub(text_height)) / 2;
 
-    let (r, g, b) = UsageLevel::from_percent(percent).color();
-    let color = if has_error {
-        // Average of three u8 colour channels: sum ≤ 765, so /3 ≤ 255 fits u8.
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "mean of three u8 channels; r+g+b ≤ 765, divided by 3 is ≤ 255 and fits u8"
-        )]
-        let gray = ((r as u16 + g as u16 + b as u16) / 3) as u8;
-        Rgba([gray, gray, gray, 255])
-    } else {
-        Rgba([r, g, b, 255])
-    };
+    let color = usage_color(percent, has_error, pace_color);
 
     let mut x = start_x;
     for ch in text.chars() {
@@ -303,5 +356,65 @@ mod tests {
     fn percent_icon_clamps_to_hundred() {
         let (rgba, w, h) = render_percent_icon_rgba(125.0, false);
         assert_eq!(u32::try_from(rgba.len()).unwrap(), w * h * 4);
+    }
+
+    #[test]
+    fn pace_color_maps_canonical_stage_and_tints_bars() {
+        assert_eq!(
+            TrayPaceColor::from_stage("slightly_behind"),
+            Some(TrayPaceColor::Behind)
+        );
+        assert_eq!(
+            TrayPaceColor::from_stage("far_ahead"),
+            Some(TrayPaceColor::Ahead)
+        );
+        assert_eq!(TrayPaceColor::from_stage("on_track"), None);
+        assert_eq!(TrayPaceColor::from_stage("unknown"), None);
+
+        let (behind, _, _) =
+            render_bar_icon_rgba_with_pace(100.0, None, false, Some(TrayPaceColor::Behind));
+        let (ahead, _, _) =
+            render_bar_icon_rgba_with_pace(100.0, None, false, Some(TrayPaceColor::Ahead));
+        let idx = ((16 * TRAY_ICON_SIZE + 8) * 4) as usize;
+        assert_eq!(&behind[idx..idx + 3], &[76, 175, 80]);
+        assert_eq!(&ahead[idx..idx + 3], &[244, 67, 54]);
+    }
+
+    #[test]
+    fn stacked_provider_icon_uses_equal_separate_rows() {
+        let (rgba, width, height) = render_stacked_bar_icon_rgba(100.0, 0.0, false);
+        assert_eq!((width, height), (TRAY_ICON_SIZE, TRAY_ICON_SIZE));
+
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * width + x) * 4) as usize;
+            [
+                rgba[index],
+                rgba[index + 1],
+                rgba[index + 2],
+                rgba[index + 3],
+            ]
+        };
+        let (r, g, b) = UsageLevel::Critical.color();
+        assert_eq!(pixel(8, 8), [r, g, b, 255]);
+        assert_eq!(pixel(8, 20), [80, 80, 90, 255]);
+        assert_eq!(pixel(8, 15), [60, 60, 70, 255]);
+    }
+
+    #[test]
+    fn normal_and_stacked_bars_share_error_color_policy() {
+        let (normal, width, _) = render_bar_icon_rgba(100.0, None, true);
+        let (stacked, _, _) = render_stacked_bar_icon_rgba(100.0, 0.0, true);
+        let pixel = |rgba: &[u8], x: u32, y: u32| {
+            let index = ((y * width + x) * 4) as usize;
+            [
+                rgba[index],
+                rgba[index + 1],
+                rgba[index + 2],
+                rgba[index + 3],
+            ]
+        };
+
+        assert_eq!(pixel(&normal, 8, 12), pixel(&stacked, 8, 8));
+        assert_eq!(pixel(&normal, 8, 12)[0], pixel(&normal, 8, 12)[1]);
     }
 }

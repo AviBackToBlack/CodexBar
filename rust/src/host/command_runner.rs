@@ -18,6 +18,8 @@ use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use crate::process_environment::ProcessEnvironment;
+
 /// Command runner configuration
 #[derive(Debug, Clone)]
 pub struct CommandOptions {
@@ -110,7 +112,7 @@ impl std::error::Error for CommandError {}
 /// Command runner for executing CLI tools
 pub struct CommandRunner {
     /// Environment variables to add.
-    env_additions: HashMap<String, String>,
+    env_additions: ProcessEnvironment<HashMap<String, String>>,
     /// Whether the child inherits the ambient process environment.
     inherit_environment: bool,
 }
@@ -122,7 +124,7 @@ impl CommandRunner {
 
     pub fn new() -> Self {
         Self {
-            env_additions: HashMap::new(),
+            env_additions: ProcessEnvironment::default(),
             inherit_environment: true,
         }
     }

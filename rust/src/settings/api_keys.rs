@@ -22,9 +22,9 @@ pub struct ApiKeyEntry {
 }
 
 impl ApiKeys {
-    /// Get the API keys file path
+    /// Get the API keys file path (beside a `CODEXBAR_CONFIG` settings file).
     pub fn keys_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("CodexBar").join("api_keys.json"))
+        config_store_dir().map(|dir| dir.join("api_keys.json"))
     }
 
     /// Load API keys from disk
@@ -264,7 +264,9 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             name: "OpenRouter",
             requires_api_key: true,
             api_key_env_var: Some("OPENROUTER_API_KEY"),
-            api_key_help: Some("Get your API key from openrouter.ai/settings/keys"),
+            api_key_help: Some(
+                "Required. Enter a regular API key or a Management API key here. Management keys also enable account Activity on the official OpenRouter API.",
+            ),
             config_file_path: None,
             dashboard_url: Some("https://openrouter.ai/settings/credits"),
         },
@@ -372,7 +374,7 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
                 "Add a v0 Platform API key. An optional scope can use the provider workspace field or V0_SCOPE.",
             ),
             config_file_path: None,
-            dashboard_url: Some("https://v0.app/chat/settings/billing"),
+            dashboard_url: Some("https://v0.app/settings/billing"),
         },
         ProviderConfigInfo {
             id: ProviderId::Fireworks,
@@ -396,6 +398,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://console.aiand.com"),
         },
         ProviderConfigInfo {
+            id: ProviderId::AtlasCloud,
+            name: "Atlas Cloud",
+            requires_api_key: true,
+            api_key_env_var: Some("ATLASCLOUD_API_KEY"),
+            api_key_help: Some(
+                "Get an API key from Atlas Cloud and set it in Preferences or ATLASCLOUD_API_KEY.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some(crate::providers::atlascloud::DASHBOARD_URL),
+        },
+        ProviderConfigInfo {
             id: ProviderId::ZenMux,
             name: "ZenMux",
             requires_api_key: true,
@@ -409,10 +422,10 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
         ProviderConfigInfo {
             id: ProviderId::ClinePass,
             name: "ClinePass",
-            requires_api_key: true,
-            api_key_env_var: Some("CLINEPASS_API_KEY"),
+            requires_api_key: false,
+            api_key_env_var: Some("CLINE_API_KEY"),
             api_key_help: Some(
-                "Get your API key from Cline / ClinePass. Also accepts CLINE_API_KEY.",
+                "Paste an API key, or run cline auth. Reads the existing Cline session without copying it. Also accepts CLINEPASS_API_KEY.",
             ),
             config_file_path: None,
             dashboard_url: Some("https://app.cline.bot/dashboard/subscription?personal=true"),
@@ -427,6 +440,39 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://portal.neuralwatt.com/dashboard"),
         },
         ProviderConfigInfo {
+            id: ProviderId::DevPass,
+            name: "DevPass",
+            requires_api_key: true,
+            api_key_env_var: Some("DEVPASS_API_KEY"),
+            api_key_help: Some(
+                "Use a regular LLM Gateway API key. Publishable keys and end-user sessions cannot read plan state.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://devpass.llmgateway.io/dashboard"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::XKiro,
+            name: "xKiro",
+            requires_api_key: true,
+            api_key_env_var: Some("XKIRO_API_KEY"),
+            api_key_help: Some(
+                "Create an API key at xkiro.com. It is sent only to api.xkiro.com and reads the free usage endpoint.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://xkiro.com"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Vercel,
+            name: "Vercel AI Gateway",
+            requires_api_key: true,
+            api_key_env_var: Some("AI_GATEWAY_API_KEY"),
+            api_key_help: Some(
+                "Add a Vercel AI Gateway API key to show the team's credit balance and lifetime spend.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::Doubao,
             name: "Doubao / Volcengine Ark",
             requires_api_key: true,
@@ -438,15 +484,6 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             ),
             config_file_path: None,
             dashboard_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/usage"),
-        },
-        ProviderConfigInfo {
-            id: ProviderId::Crof,
-            name: "Crof",
-            requires_api_key: true,
-            api_key_env_var: Some("CROF_API_KEY"),
-            api_key_help: Some("Get your API key from Crof."),
-            config_file_path: None,
-            dashboard_url: Some("https://crof.ai"),
         },
         ProviderConfigInfo {
             id: ProviderId::StepFun,
@@ -501,7 +538,7 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             id: ProviderId::ElevenLabs,
             name: "ElevenLabs",
             requires_api_key: true,
-            api_key_env_var: Some("ELEVENLABS_API_KEY"),
+            api_key_env_var: Some("ELEVENLABS_API_KEY / XI_API_KEY"),
             api_key_help: Some("Get your API key from ElevenLabs Settings > API Keys."),
             config_file_path: None,
             dashboard_url: Some("https://elevenlabs.io/app/settings/api-keys"),
@@ -529,7 +566,9 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             name: "LLM Proxy",
             requires_api_key: true,
             api_key_env_var: Some("LLM_PROXY_API_KEY + LLM_PROXY_BASE_URL"),
-            api_key_help: Some("Set an LLM Proxy API key and base URL for quota-stats."),
+            api_key_help: Some(
+                "Set an LLM Proxy API key and base URL (Settings or LLM_PROXY_BASE_URL) for quota-stats.",
+            ),
             config_file_path: None,
             dashboard_url: None,
         },
@@ -551,6 +590,17 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             api_key_env_var: Some("LITELLM_API_KEY + LITELLM_BASE_URL"),
             api_key_help: Some(
                 "Paste a LiteLLM key and set the base URL in provider extras or LITELLM_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
+        },
+        ProviderConfigInfo {
+            id: ProviderId::LLMMan,
+            name: "llmman",
+            requires_api_key: false,
+            api_key_env_var: Some("LLMMAN_API_KEY + LLMMAN_HOST"),
+            api_key_help: Some(
+                "Optional: an open local daemon needs no key. Set the base URL in provider extras or LLMMAN_HOST (default http://127.0.0.1:17434).",
             ),
             config_file_path: None,
             dashboard_url: None,
@@ -628,12 +678,69 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             config_file_path: None,
             dashboard_url: Some("https://dev.meta.ai/docs"),
         },
+        ProviderConfigInfo {
+            id: ProviderId::Hyper,
+            name: "Charm Hyper",
+            requires_api_key: false,
+            api_key_env_var: Some("HYPER_API_KEY"),
+            api_key_help: Some(
+                "Fallback when no hyper.charm.land session is available. Save an API key here or set HYPER_API_KEY.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://hyper.charm.land"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::GitKraken,
+            name: "GitKraken AI",
+            requires_api_key: true,
+            api_key_env_var: Some("GITKRAKEN_API_TOKEN"),
+            api_key_help: Some(
+                "Save a GitKraken access token. Optional organization ID: provider extras or GITKRAKEN_ORG_ID.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://gitkraken.dev/account#ai-usage"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Bifrost,
+            name: "Bifrost",
+            requires_api_key: true,
+            api_key_env_var: Some("BIFROST_API_KEY"),
+            api_key_help: Some(
+                "Save a Bifrost virtual key and configure the gateway base URL in provider settings. Or set BIFROST_API_KEY and BIFROST_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Aixy,
+            name: "Aixy",
+            requires_api_key: true,
+            api_key_env_var: Some("AIXY_API_KEY"),
+            api_key_help: Some(
+                "Save an Aixy API key. Leave the Base URL empty for the hosted gateway, or set it for a self-hosted one. Or set AIXY_API_KEY and AIXY_BASE_URL.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://dash.aixy-gateway.com"),
+        },
     ]
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ApiKeys;
+    use super::{ApiKeys, get_api_key_providers};
+    use crate::core::ProviderId;
+
+    #[test]
+    fn elevenlabs_lists_both_api_key_environment_names() {
+        let provider = get_api_key_providers()
+            .into_iter()
+            .find(|provider| provider.id == ProviderId::ElevenLabs)
+            .unwrap();
+        assert_eq!(
+            provider.api_key_env_var,
+            Some("ELEVENLABS_API_KEY / XI_API_KEY")
+        );
+    }
 
     #[test]
     fn api_version_survives_api_key_update() {

@@ -15,6 +15,18 @@ const PAGE_SIZE: usize = 200;
 /// Keep fetches bounded for menu-bar refresh latency.
 const MAX_PAGES: usize = 5;
 
+/// Why the events request produced no report. A 403 is a cost-only rejection
+/// (geo or permission block on this endpoint): the usage session that
+/// authenticated the quota request is still good, so it must never be
+/// reported as `ProviderError::AuthRequired`.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum TokenCostError {
+    #[error("Cursor rejected the usage events request (HTTP 403)")]
+    CostRequestForbidden,
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+}
+
 #[derive(Debug)]
 struct UsageEventsPage {
     total_usage_events_count: Option<i64>,
@@ -227,16 +239,17 @@ fn sanitize_id(model: &str) -> String {
         .collect()
 }
 
-pub async fn fetch_token_cost_report(
+pub(super) async fn fetch_token_cost_report(
     client: &reqwest::Client,
+    base_url: &str,
     cookie_header: &str,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
-) -> Result<CursorTokenCostReport, ProviderError> {
+) -> Result<CursorTokenCostReport, TokenCostError> {
     let mut all = Vec::new();
     let mut expected_total: Option<i64> = None;
     for page in 1..=MAX_PAGES {
-        let page_body = fetch_page(client, cookie_header, page, since, until).await?;
+        let page_body = fetch_page(client, base_url, cookie_header, page, since, until).await?;
         if let Some(total) = page_body.total_usage_events_count {
             expected_total = Some(total.max(0));
         }
@@ -266,12 +279,13 @@ pub async fn fetch_token_cost_report(
 
 async fn fetch_page(
     client: &reqwest::Client,
+    base_url: &str,
     cookie_header: &str,
     page: usize,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
-) -> Result<UsageEventsPage, ProviderError> {
-    let url = format!("https://cursor.com{EVENTS_PATH}");
+) -> Result<UsageEventsPage, TokenCostError> {
+    let url = format!("{base_url}{EVENTS_PATH}");
     let body = json!({
         "page": page,
         "pageSize": PAGE_SIZE,
@@ -283,23 +297,30 @@ async fn fetch_page(
         .header("Cookie", cookie_header)
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
+        // Cursor enforces CSRF on its dashboard POST endpoints (upstream
+        // CursorUsageEventsFetcher): a matching Origin is required.
+        .header("Origin", base_url)
         .json(&body)
         .timeout(std::time::Duration::from_secs(20))
         .send()
-        .await?;
-    if response.status() == 401 || response.status() == 403 {
-        return Err(ProviderError::AuthRequired);
+        .await
+        .map_err(ProviderError::from)?;
+    match response.status().as_u16() {
+        401 => return Err(ProviderError::AuthRequired.into()),
+        403 => return Err(TokenCostError::CostRequestForbidden),
+        _ => {}
     }
     if !response.status().is_success() {
         return Err(ProviderError::Other(format!(
             "Cursor usage events returned {}",
             response.status()
-        )));
+        ))
+        .into());
     }
     response
         .json()
         .await
-        .map_err(|e| ProviderError::Parse(format!("Cursor usage events: {e}")))
+        .map_err(|e| ProviderError::Parse(format!("Cursor usage events: {e}")).into())
 }
 
 fn summarize_events(events: &[UsageEvent]) -> CursorTokenCostReport {
@@ -573,6 +594,55 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn events_status(status: usize) -> Result<CursorTokenCostReport, TokenCostError> {
+        let mut server = mockito::Server::new_async().await;
+        let origin = server.url();
+        let mock = server
+            .mock("POST", EVENTS_PATH)
+            .match_header("origin", origin.as_str())
+            .with_status(status)
+            .with_body("{}")
+            .create_async()
+            .await;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("the test client should build");
+        let result = fetch_token_cost_report(&client, &origin, "cookie=1", None, None).await;
+        mock.assert_async().await;
+        result
+    }
+
+    #[tokio::test]
+    async fn sends_origin_and_reads_an_empty_success() {
+        let report = events_status(200).await.expect("empty result is a report");
+        assert_eq!(report.api_rate_usd, 0.0);
+    }
+
+    #[tokio::test]
+    async fn forbidden_is_a_cost_only_rejection_not_auth_required() {
+        assert!(matches!(
+            events_status(403).await,
+            Err(TokenCostError::CostRequestForbidden)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unauthorized_still_maps_to_auth_required() {
+        assert!(matches!(
+            events_status(401).await,
+            Err(TokenCostError::Provider(ProviderError::AuthRequired))
+        ));
+    }
+
+    #[tokio::test]
+    async fn other_statuses_stay_generic_failures() {
+        assert!(matches!(
+            events_status(503).await,
+            Err(TokenCostError::Provider(ProviderError::Other(_)))
+        ));
+    }
 
     #[test]
     fn summarizes_per_model_and_metered() {

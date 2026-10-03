@@ -3,11 +3,13 @@
 //! Utilities for validating and inspecting configuration.
 
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::path::Path;
 
+use super::usage::OutputFormat;
 use crate::core::{ProviderId, TokenAccountStore, instantiate_provider};
-use crate::settings::{ApiKeys, ManualCookies, Settings};
+use crate::settings::{ApiKeys, ManualCookies, PreferencesDocument, Settings};
 
 /// Arguments for the config command
 #[derive(Parser, Debug)]
@@ -30,21 +32,28 @@ pub enum ConfigCommand {
         show_secrets: bool,
     },
     /// List providers and enabled state
-    Providers,
+    Providers {
+        #[command(flatten)]
+        output: ConfigOutputArgs,
+    },
     /// Enable a provider
     Enable {
-        /// Provider CLI name or alias
-        provider: String,
+        #[command(flatten)]
+        target: ConfigProviderArg,
+        #[command(flatten)]
+        output: ConfigOutputArgs,
     },
     /// Disable a provider
     Disable {
-        /// Provider CLI name or alias
-        provider: String,
+        #[command(flatten)]
+        target: ConfigProviderArg,
+        #[command(flatten)]
+        output: ConfigOutputArgs,
     },
     /// Store an API key for a provider
     SetApiKey {
-        /// Provider CLI name or alias
-        provider: String,
+        #[command(flatten)]
+        target: ConfigProviderArg,
         /// API key to store
         #[arg(long = "api-key")]
         api_key: Option<String>,
@@ -57,6 +66,110 @@ pub enum ConfigCommand {
     },
     /// Show configuration file paths
     Path,
+    /// Export or import portable preferences (no secrets, no machine state)
+    Preferences {
+        #[command(subcommand)]
+        action: PreferencesAction,
+    },
+    /// Allow or deny reading (and refreshing) Claude Code's own credentials
+    /// (~/.claude/.credentials.json or Credential Manager), or show the
+    /// current choice. Off by default; without it Claude Auto falls back to
+    /// reduced-fidelity CLI usage.
+    ClaudeCodeCredentials {
+        /// allow, deny, or status
+        #[arg(value_enum)]
+        action: ConsentAction,
+        #[command(flatten)]
+        output: ConfigOutputArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PreferencesAction {
+    /// Write portable preferences as JSON (to stdout unless --file is given)
+    Export {
+        /// Destination file
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+    },
+    /// Apply a preferences file; restart a running CodexBar afterwards
+    Import {
+        /// Preferences file to read
+        #[arg(long)]
+        file: std::path::PathBuf,
+    },
+}
+
+/// `config claude-code-credentials` action.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentAction {
+    /// Let CodexBar read and refresh Claude Code's credentials
+    Allow,
+    /// Keep Claude Code's credentials closed (the default)
+    Deny,
+    /// Show the current choice without changing it
+    Status,
+}
+
+/// `--format`, `--json`, and `--pretty` for the config subcommands that
+/// report a result (upstream `CLICommonOptions`).
+#[derive(clap::Args, Debug, Clone, Copy, Default)]
+pub struct ConfigOutputArgs {
+    /// Output format: text or json
+    #[arg(short, long, default_value = "text")]
+    pub format: OutputFormat,
+
+    /// Shorthand for --format json
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+impl ConfigOutputArgs {
+    fn is_json(self) -> bool {
+        self.json || self.format == OutputFormat::Json
+    }
+
+    fn print_json<T: Serialize>(self, value: &T) -> anyhow::Result<()> {
+        let json = if self.pretty {
+            serde_json::to_string_pretty(value)?
+        } else {
+            serde_json::to_string(value)?
+        };
+        println!("{json}");
+        Ok(())
+    }
+}
+
+/// The provider a config subcommand acts on: positional, or `-p/--provider`
+/// as upstream spells it.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ConfigProviderArg {
+    /// Provider CLI name or alias
+    #[arg(value_name = "PROVIDER", required_unless_present = "provider_option")]
+    pub provider: Option<String>,
+
+    /// Provider CLI name or alias (same as the positional PROVIDER)
+    #[arg(
+        id = "provider_option",
+        short = 'p',
+        long = "provider",
+        value_name = "PROVIDER",
+        conflicts_with = "provider"
+    )]
+    pub provider_option: Option<String>,
+}
+
+impl ConfigProviderArg {
+    fn name(&self) -> &str {
+        self.provider_option
+            .as_deref()
+            .or(self.provider.as_deref())
+            .unwrap_or_default()
+    }
 }
 
 /// Run the config command
@@ -67,17 +180,56 @@ pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
             format,
             show_secrets,
         } => dump_config(&format, show_secrets).await,
-        ConfigCommand::Providers => list_providers().await,
-        ConfigCommand::Enable { provider } => set_provider_enabled(&provider, true).await,
-        ConfigCommand::Disable { provider } => set_provider_enabled(&provider, false).await,
+        ConfigCommand::Providers { output } => list_providers(output).await,
+        ConfigCommand::Enable { target, output } => {
+            set_provider_enabled(target.name(), true, output).await
+        }
+        ConfigCommand::Disable { target, output } => {
+            set_provider_enabled(target.name(), false, output).await
+        }
         ConfigCommand::SetApiKey {
-            provider,
+            target,
             api_key,
             stdin,
             no_enable,
-        } => set_api_key(&provider, api_key.as_deref(), stdin, !no_enable).await,
+        } => set_api_key(target.name(), api_key.as_deref(), stdin, !no_enable).await,
         ConfigCommand::Path => show_paths().await,
+        ConfigCommand::Preferences { action } => transfer_preferences(action),
+        ConfigCommand::ClaudeCodeCredentials { action, output } => {
+            claude_code_credentials(action, output).await
+        }
     }
+}
+
+/// Export or import the portable preferences document.
+fn transfer_preferences(action: PreferencesAction) -> anyhow::Result<()> {
+    match action {
+        PreferencesAction::Export { file } => {
+            let document = PreferencesDocument::from_settings(&Settings::load())?;
+            match file {
+                Some(path) => {
+                    document.write_file(&path)?;
+                    println!(
+                        "Config: exported {} preferences to {}",
+                        document.len(),
+                        path.display()
+                    );
+                }
+                None => print!("{}", document.to_json()),
+            }
+        }
+        PreferencesAction::Import { file: path } => {
+            let document = PreferencesDocument::read_file(&path)?;
+            let mut settings = Settings::load();
+            let applied = document.apply_to(&mut settings)?;
+            settings.save()?;
+            println!(
+                "Config: imported {applied} preferences from {}. Restart CodexBar to apply them to a running app.",
+                path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Validate configuration files
@@ -322,33 +474,68 @@ fn redact_secrets_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// One `config providers` row; the JSON shape matches upstream's
+/// `ConfigProviderStatusResult`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigProviderStatus {
+    provider: String,
+    display_name: String,
+    enabled: bool,
+    default_enabled: bool,
+}
+
+impl ConfigProviderStatus {
+    fn text_line(&self) -> String {
+        let state = if self.enabled { "enabled" } else { "disabled" };
+        let default_marker = if self.default_enabled { " default" } else { "" };
+        format!(
+            "{}: {state}{default_marker} ({})",
+            self.provider, self.display_name
+        )
+    }
+}
+
+fn provider_statuses(settings: &Settings) -> Vec<ConfigProviderStatus> {
+    ProviderId::all()
+        .iter()
+        .map(|id| ConfigProviderStatus {
+            provider: id.cli_name().to_string(),
+            display_name: id.display_name().to_string(),
+            enabled: settings.is_provider_enabled(*id),
+            default_enabled: instantiate_provider(*id).metadata().default_enabled,
+        })
+        .collect()
+}
+
 /// List provider enabled state.
-async fn list_providers() -> anyhow::Result<()> {
-    let settings = Settings::load();
-    for id in ProviderId::all() {
-        let state = if settings.is_provider_enabled(*id) {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let default_marker = if instantiate_provider(*id).metadata().default_enabled {
-            " default"
-        } else {
-            ""
-        };
-        println!(
-            "{}: {}{} ({})",
-            id.cli_name(),
-            state,
-            default_marker,
-            id.display_name()
-        );
+async fn list_providers(output: ConfigOutputArgs) -> anyhow::Result<()> {
+    let statuses = provider_statuses(&Settings::load());
+    if output.is_json() {
+        return output.print_json(&statuses);
+    }
+    for status in &statuses {
+        println!("{}", status.text_line());
     }
     Ok(())
 }
 
+/// `config enable|disable` JSON result (upstream `ConfigProviderToggleResult`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigProviderToggle {
+    provider: String,
+    display_name: String,
+    enabled: bool,
+    config_path: Option<String>,
+}
+
 /// Enable or disable a provider by CLI name.
-async fn set_provider_enabled(provider: &str, enabled: bool) -> anyhow::Result<()> {
+async fn set_provider_enabled(
+    provider: &str,
+    enabled: bool,
+    output: ConfigOutputArgs,
+) -> anyhow::Result<()> {
     let id = parse_provider(provider)?;
     let mut settings = Settings::load();
     if enabled {
@@ -357,8 +544,65 @@ async fn set_provider_enabled(provider: &str, enabled: bool) -> anyhow::Result<(
         settings.disable_provider(id);
     }
     settings.save()?;
+    if output.is_json() {
+        return output.print_json(&ConfigProviderToggle {
+            provider: id.cli_name().to_string(),
+            display_name: id.display_name().to_string(),
+            enabled,
+            config_path: Settings::settings_path().map(|path| path.display().to_string()),
+        });
+    }
     let state = if enabled { "enabled" } else { "disabled" };
     println!("Config: {state} {}", id.display_name());
+    Ok(())
+}
+
+/// `config claude-code-credentials` JSON result.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeCodeCredentialsConsent {
+    allowed: bool,
+    config_path: Option<String>,
+}
+
+/// Apply a consent action to the settings `claude_allow_reading_claude_code_credentials`
+/// flag; returns whether it changed (and so needs saving).
+fn apply_consent_action(settings: &mut Settings, action: ConsentAction) -> bool {
+    let allowed = match action {
+        ConsentAction::Allow => true,
+        ConsentAction::Deny => false,
+        ConsentAction::Status => return false,
+    };
+    let changed = settings.claude_allow_reading_claude_code_credentials != allowed;
+    settings.claude_allow_reading_claude_code_credentials = allowed;
+    changed
+}
+
+fn consent_text(allowed: bool) -> &'static str {
+    if allowed {
+        "Claude Code credentials: allowed (CodexBar may read and refresh Claude Code's OAuth credentials)"
+    } else {
+        "Claude Code credentials: not allowed (Claude Auto falls back to reduced-fidelity CLI usage)"
+    }
+}
+
+/// Allow, deny, or show consent to read Claude Code's own credentials.
+async fn claude_code_credentials(
+    action: ConsentAction,
+    output: ConfigOutputArgs,
+) -> anyhow::Result<()> {
+    let mut settings = Settings::load();
+    if apply_consent_action(&mut settings, action) {
+        settings.save()?;
+    }
+    let allowed = settings.claude_allow_reading_claude_code_credentials;
+    if output.is_json() {
+        return output.print_json(&ClaudeCodeCredentialsConsent {
+            allowed,
+            config_path: Settings::settings_path().map(|path| path.display().to_string()),
+        });
+    }
+    println!("{}", consent_text(allowed));
     Ok(())
 }
 
@@ -466,9 +710,16 @@ async fn show_paths() -> anyhow::Result<()> {
     };
     println!("  Token accounts: {}{}", token_path.display(), exists);
 
+    if crate::settings::settings_file_override().is_some() {
+        println!();
+        println!(
+            "Settings file from {}; the stores above sit beside it.",
+            crate::settings::CONFIG_PATH_ENV
+        );
+    }
+
     // Show config directory
-    if let Some(config_dir) = dirs::config_dir() {
-        let codexbar_dir = config_dir.join("CodexBar");
+    if let Some(codexbar_dir) = crate::settings::config_store_dir() {
         println!();
         println!("Config directory: {}", codexbar_dir.display());
     }
@@ -478,11 +729,234 @@ async fn show_paths() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigFileError, read_json_config, sanitize_settings_for_dump};
+    use super::{
+        ClaudeCodeCredentialsConsent, ConfigCommand, ConfigFileError, ConfigOutputArgs,
+        ConsentAction, apply_consent_action, consent_text, provider_statuses, read_json_config,
+        sanitize_settings_for_dump,
+    };
+    use crate::cli::{Cli, Commands};
+    use crate::core::ProviderId;
     #[cfg(windows)]
     use crate::secure_file;
-    use crate::settings::ManualCookies;
+    use crate::settings::{ManualCookies, Settings};
+    use clap::Parser;
     use serde_json::json;
+
+    #[test]
+    fn preferences_subcommands_parse_a_path() {
+        use super::{ConfigArgs, ConfigCommand, PreferencesAction};
+        use clap::Parser;
+
+        let export =
+            ConfigArgs::try_parse_from(["config", "preferences", "export", "--file", "p.json"])
+                .expect("export parses");
+        assert!(matches!(
+            export.command,
+            ConfigCommand::Preferences {
+                action: PreferencesAction::Export { file: Some(_) }
+            }
+        ));
+        let stdout = ConfigArgs::try_parse_from(["config", "preferences", "export"])
+            .expect("export without --file parses");
+        assert!(matches!(
+            stdout.command,
+            ConfigCommand::Preferences {
+                action: PreferencesAction::Export { file: None }
+            }
+        ));
+        let import =
+            ConfigArgs::try_parse_from(["config", "preferences", "import", "--file", "p.json"])
+                .expect("import parses");
+        assert!(matches!(
+            import.command,
+            ConfigCommand::Preferences {
+                action: PreferencesAction::Import { .. }
+            }
+        ));
+        assert!(ConfigArgs::try_parse_from(["config", "preferences", "import"]).is_err());
+    }
+
+    fn parse_config(argv: &[&str]) -> Result<ConfigCommand, clap::Error> {
+        let cli = Cli::try_parse_from(["codexbar", "config"].iter().chain(argv.iter()))?;
+        match cli.command {
+            Some(Commands::Config(args)) => Ok(args.command),
+            other => panic!("expected the config command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_providers_accepts_json_output_flags() {
+        let ConfigCommand::Providers { output } = parse_config(&["providers"]).unwrap() else {
+            panic!("expected providers");
+        };
+        assert!(!output.is_json());
+        for argv in [
+            &["providers", "--json"][..],
+            &["providers", "--format", "json"][..],
+            &["providers", "-f", "json", "--pretty"][..],
+        ] {
+            let ConfigCommand::Providers { output } = parse_config(argv).unwrap() else {
+                panic!("expected providers for {argv:?}");
+            };
+            assert!(output.is_json(), "{argv:?}");
+        }
+        assert!(parse_config(&["providers", "--format", "toml"]).is_err());
+    }
+
+    #[test]
+    fn provider_status_json_matches_the_upstream_shape() {
+        let mut settings = Settings::default();
+        settings.enabled_providers.clear();
+        settings.enable_provider(ProviderId::Cursor);
+
+        let statuses = provider_statuses(&settings);
+
+        assert_eq!(statuses.len(), ProviderId::all().len());
+        let cursor = statuses
+            .iter()
+            .find(|status| status.provider == "cursor")
+            .expect("cursor row");
+        assert!(cursor.enabled);
+        let codex = statuses
+            .iter()
+            .find(|status| status.provider == "codex")
+            .expect("codex row");
+        assert!(!codex.enabled);
+
+        let value = serde_json::to_value(codex).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["defaultEnabled", "displayName", "enabled", "provider"]
+        );
+        assert_eq!(value["displayName"], ProviderId::Codex.display_name());
+        assert_eq!(value["enabled"], false);
+        assert_eq!(value["defaultEnabled"], codex.default_enabled);
+    }
+
+    #[test]
+    fn provider_status_text_lines_keep_the_existing_format() {
+        let mut settings = Settings::default();
+        settings.enabled_providers.clear();
+        settings.enable_provider(ProviderId::Codex);
+        let statuses = provider_statuses(&settings);
+        let codex = statuses.iter().find(|s| s.provider == "codex").unwrap();
+        let claude = statuses.iter().find(|s| s.provider == "claude").unwrap();
+
+        let marker = |default: bool| if default { " default" } else { "" };
+        assert_eq!(
+            codex.text_line(),
+            format!("codex: enabled{} (Codex)", marker(codex.default_enabled))
+        );
+        assert_eq!(
+            claude.text_line(),
+            format!(
+                "claude: disabled{} (Claude)",
+                marker(claude.default_enabled)
+            )
+        );
+    }
+
+    #[test]
+    fn provider_subcommands_accept_the_positional_or_provider_option() {
+        for argv in [
+            &["enable", "cursor"][..],
+            &["enable", "-p", "cursor"][..],
+            &["enable", "--provider", "cursor", "--json"][..],
+        ] {
+            let ConfigCommand::Enable { target, .. } = parse_config(argv).unwrap() else {
+                panic!("expected enable for {argv:?}");
+            };
+            assert_eq!(target.name(), "cursor", "{argv:?}");
+        }
+        let ConfigCommand::Disable { target, output } =
+            parse_config(&["disable", "--provider", "cursor", "--format", "json"]).unwrap()
+        else {
+            panic!("expected disable");
+        };
+        assert_eq!(target.name(), "cursor");
+        assert!(output.is_json());
+        let ConfigCommand::SetApiKey { target, stdin, .. } =
+            parse_config(&["set-api-key", "-p", "openrouter", "--stdin"]).unwrap()
+        else {
+            panic!("expected set-api-key");
+        };
+        assert_eq!(target.name(), "openrouter");
+        assert!(stdin);
+
+        assert!(parse_config(&["enable"]).is_err(), "provider is required");
+        assert!(
+            parse_config(&["enable", "cursor", "--provider", "codex"]).is_err(),
+            "positional and --provider conflict"
+        );
+    }
+
+    #[test]
+    fn default_output_args_are_text() {
+        assert!(!ConfigOutputArgs::default().is_json());
+    }
+
+    #[test]
+    fn claude_code_credentials_parses_each_action() {
+        for (word, expected) in [
+            ("allow", ConsentAction::Allow),
+            ("deny", ConsentAction::Deny),
+            ("status", ConsentAction::Status),
+        ] {
+            let ConfigCommand::ClaudeCodeCredentials { action, output } =
+                parse_config(&["claude-code-credentials", word, "--json"]).unwrap()
+            else {
+                panic!("expected claude-code-credentials for {word}");
+            };
+            assert_eq!(action, expected);
+            assert!(output.is_json());
+        }
+        assert!(parse_config(&["claude-code-credentials"]).is_err());
+        assert!(parse_config(&["claude-code-credentials", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn consent_actions_toggle_only_the_claude_code_flag() {
+        let mut settings = Settings::default();
+        assert!(!settings.claude_allow_reading_claude_code_credentials);
+        let before = serde_json::to_value(&settings).unwrap();
+
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Status));
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Deny));
+        assert!(apply_consent_action(&mut settings, ConsentAction::Allow));
+        assert!(settings.claude_allow_reading_claude_code_credentials);
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Allow));
+        assert!(!apply_consent_action(&mut settings, ConsentAction::Status));
+        assert!(settings.claude_allow_reading_claude_code_credentials);
+
+        let mut after = serde_json::to_value(&settings).unwrap();
+        after["claude_allow_reading_claude_code_credentials"] = json!(false);
+        assert_eq!(after, before, "no other setting changes");
+
+        assert!(apply_consent_action(&mut settings, ConsentAction::Deny));
+        assert!(!settings.claude_allow_reading_claude_code_credentials);
+    }
+
+    #[test]
+    fn consent_output_reports_the_choice() {
+        let value = serde_json::to_value(ClaudeCodeCredentialsConsent {
+            allowed: true,
+            config_path: Some("settings.json".to_string()),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            json!({ "allowed": true, "configPath": "settings.json" })
+        );
+        assert!(consent_text(true).contains("allowed"));
+        assert!(consent_text(false).contains("not allowed"));
+    }
 
     #[cfg(windows)]
     #[test]

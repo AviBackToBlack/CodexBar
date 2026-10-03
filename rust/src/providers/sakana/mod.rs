@@ -1,12 +1,15 @@
 //! Sakana AI provider implementation.
 //!
 //! Scrapes the billing page with browser/manual cookies, matching upstream
-//! v0.38.0's UTC interpretation for reset dates shown in billing HTML.
+//! v0.38.0's UTC interpretation for reset dates shown in billing HTML. A
+//! best-effort second GET adds the pay-as-you-go credit balance (v0.67.0).
+
+mod payg;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use regex_lite::Regex;
-use reqwest::Client;
+use reqwest::{Client, RequestBuilder, Url};
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -14,11 +17,13 @@ use crate::core::{
 };
 
 const BILLING_URL: &str = "https://console.sakana.ai/billing";
+const PAYG_QUERY: &str = "tab=payAsYouGo";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 pub struct SakanaProvider {
     metadata: ProviderMetadata,
     client: Client,
+    billing_url: Url,
 }
 
 impl SakanaProvider {
@@ -41,39 +46,79 @@ impl SakanaProvider {
                 .timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_else(|_| Client::new()),
+            billing_url: Url::parse(BILLING_URL).expect("billing URL is valid"),
         }
     }
 
-    async fn fetch_web(&self, cookie_header: &str) -> Result<ProviderFetchResult, ProviderError> {
+    async fn fetch_web(
+        &self,
+        cookie_header: &str,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
         let cookie = normalize_cookie_header(cookie_header).ok_or(ProviderError::NoCookies)?;
-        let response = self
-            .client
-            .get(BILLING_URL)
-            .header("Cookie", cookie)
-            .header(
-                "Accept",
-                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        // The optional lookup runs alongside the required request. Dropping
+        // the handle on any early return cancels it.
+        let payg = ctx.include_credits.then(|| {
+            let mut payg_url = self.billing_url.clone();
+            payg_url.set_query(Some(PAYG_QUERY));
+            payg::PaygLookup::spawn(
+                self.client.clone(),
+                payg_url,
+                cookie.clone(),
+                self.billing_url.clone(),
             )
-            .header("User-Agent", USER_AGENT)
+        });
+        let response = billing_request(&self.client, self.billing_url.clone(), &cookie)
             .send()
             .await?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED
-            || response.status() == reqwest::StatusCode::FORBIDDEN
+        let status = response.status();
+        // Cross-origin redirects are stopped by the client policy and surface
+        // as a redirect status; same-origin ones are followed, so the final
+        // URL must also stay on the billing origin.
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+            || status.is_redirection()
+            || !crate::core::is_same_origin(response.url(), &self.billing_url)
         {
             return Err(ProviderError::AuthRequired);
         }
-        if !response.status().is_success() {
+        if status != reqwest::StatusCode::OK {
             return Err(ProviderError::Other(format!(
-                "Sakana billing returned status {}",
-                response.status()
+                "Sakana billing returned status {status}"
             )));
         }
         let text = response.text().await?;
         if looks_signed_out(&text) {
             return Err(ProviderError::AuthRequired);
         }
-        Ok(ProviderFetchResult::new(snapshot_from_html(&text)?, "web"))
+        let mut result = ProviderFetchResult::new(snapshot_from_html(&text)?, "web");
+        if let Some(payg) = payg
+            && let Some(balance) = payg.join(ctx.requires_optional_usage_completeness).await
+        {
+            for row in balance.display_details() {
+                result = result.with_display_detail(Some(row));
+            }
+        }
+        Ok(result)
     }
+
+    #[cfg(test)]
+    fn with_billing_url(mut self, client: Client, billing_url: Url) -> Self {
+        self.client = client;
+        self.billing_url = billing_url;
+        self
+    }
+}
+
+fn billing_request(client: &Client, url: Url, cookie: &str) -> RequestBuilder {
+    client
+        .get(url)
+        .header("Cookie", cookie)
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("User-Agent", USER_AGENT)
 }
 
 impl Default for SakanaProvider {
@@ -204,7 +249,7 @@ impl Provider for SakanaProvider {
                     Some(cookie) => cookie.to_string(),
                     None => crate::providers::browser_cookie_header(&["console.sakana.ai"])?,
                 };
-                self.fetch_web(&cookie).await
+                self.fetch_web(&cookie, ctx).await
             }
             SourceMode::OAuth | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -222,29 +267,4 @@ impl Provider for SakanaProvider {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_sakana_windows_and_utc_reset() {
-        let html = r#"
-            <section>5-hour quota <span>42%</span> resets July 3, 2026 at 4:30 PM</section>
-            <section>Weekly usage <span>80% used</span> resets July 8, 2026 at 12:00 AM</section>
-        "#;
-        let snapshot = snapshot_from_html(html).unwrap();
-        assert_eq!(snapshot.primary.used_percent, 42.0);
-        assert_eq!(snapshot.secondary.unwrap().used_percent, 80.0);
-        assert_eq!(
-            snapshot.primary.resets_at.unwrap().to_rfc3339(),
-            "2026-07-03T16:30:00+00:00"
-        );
-    }
-
-    #[test]
-    fn normalizes_sakana_cookie_header() {
-        assert_eq!(
-            normalize_cookie_header("Cookie: session=a; empty=; other=b").as_deref(),
-            Some("session=a; other=b")
-        );
-    }
-}
+mod tests;

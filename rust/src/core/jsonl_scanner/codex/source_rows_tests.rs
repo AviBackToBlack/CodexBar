@@ -13,6 +13,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
             output: 0,
             reasoning: None,
             source_end_offset: 100,
+            turn_id: None,
             pricing: CodexSourcePricingEvidence {
                 pricing_model: Some("gpt-5.5".to_string()),
                 pricing_mode: Some("priority".to_string()),
@@ -27,6 +28,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
             output: 0,
             reasoning: None,
             source_end_offset: 200,
+            turn_id: None,
             pricing: CodexSourcePricingEvidence {
                 pricing_model: Some("gpt-5.5".to_string()),
                 pricing_mode: Some("standard".to_string()),
@@ -44,6 +46,7 @@ fn source_row_recovery_preserves_unanimous_pricing_only() {
             output: 0,
             reasoning: None,
             source_end_offset: 300,
+            turn_id: None,
             pricing: CodexSourcePricingEvidence {
                 pricing_model: Some("gpt-5.4".to_string()),
                 pricing_mode: Some("standard".to_string()),
@@ -68,6 +71,7 @@ fn source_row_recovery_does_not_price_an_appended_duplicate() {
         output: 0,
         reasoning: None,
         source_end_offset: 100,
+        turn_id: None,
         pricing: CodexSourcePricingEvidence {
             pricing_model: Some("gpt-5.5".to_string()),
             pricing_mode: Some("priority".to_string()),
@@ -103,6 +107,7 @@ fn source_rows_from_records_use_source_model_as_initial_evidence() {
             cached: 20,
             output: -4,
             reasoning: Some(-2),
+            turn_id: None,
         },
         42,
     )];
@@ -184,4 +189,91 @@ fn pricing_mode_suffix_bijection_round_trips() {
         assert_eq!(evidence.pricing_mode.as_deref(), Some(expected_mode));
         assert_eq!(model_of_pricing_mode(model), base);
     }
+}
+
+fn evidence_row(model: &str, mode: &str, input: i64, turn_id: Option<&str>) -> CodexSourceUsageRow {
+    CodexSourceUsageRow {
+        day_key: "2026-09-19".to_string(),
+        timestamp: None,
+        model: model.to_string(),
+        input,
+        cached: 0,
+        output: 10,
+        reasoning: None,
+        source_end_offset: 100,
+        turn_id: turn_id.map(str::to_string),
+        pricing: CodexSourcePricingEvidence {
+            pricing_model: Some(model.to_string()),
+            pricing_mode: Some(mode.to_string()),
+        },
+    }
+}
+
+#[test]
+fn row_priced_model_keeps_priority_only_inside_the_fast_lane() {
+    let price =
+        |model, mode, input| row_priced_model(&evidence_row(model, mode, input, None), None);
+    assert_eq!(
+        price("gpt-5.5", "priority", 272_000).as_deref(),
+        Some("gpt-5.5-priority")
+    );
+    // Too long for the gpt-5.5 Fast lane: upstream charges the Standard cost.
+    assert_eq!(
+        price("gpt-5.5", "priority", 272_001).as_deref(),
+        Some("gpt-5.5")
+    );
+    // Astra publishes long-context Fast rates.
+    assert_eq!(
+        price("gpt-6-astra", "priority", 300_000).as_deref(),
+        Some("gpt-6-astra-priority")
+    );
+    // gpt-5 has no Fast lane at all.
+    assert_eq!(price("gpt-5", "priority", 1_000).as_deref(), Some("gpt-5"));
+    assert_eq!(
+        price("gpt-5.5", "standard", 300_000).as_deref(),
+        Some("gpt-5.5")
+    );
+}
+
+#[test]
+fn row_priced_model_without_pricing_evidence_stays_unattributed() {
+    let mut row = evidence_row("gpt-5.5", "priority", 1_000, None);
+    row.pricing = CodexSourcePricingEvidence::default();
+    assert_eq!(row_priced_model(&row, None), None);
+}
+
+#[test]
+fn row_priced_model_applies_trace_evidence_only_inside_the_fast_lane() {
+    let home = std::env::temp_dir().join("codexbar-row-priced-model");
+    let mut cursor = CodexPriorityTurnsCursor {
+        database_path: home.join("logs_2.sqlite").to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    cursor.request_sources.insert(
+        "turn-fast".to_string(),
+        std::collections::BTreeMap::from([(
+            1,
+            CodexPriorityTurnMetadata {
+                turn_id: "turn-fast".to_string(),
+                model: Some("gpt-5.5".to_string()),
+                ..Default::default()
+            },
+        )]),
+    );
+    let file = home.join("sessions").join("rollout.jsonl");
+    let overlay = cursor
+        .overlay_for_file(&file)
+        .expect("a session file under the trace database home");
+    let price = |input, turn| {
+        row_priced_model(
+            &evidence_row("gpt-5.5", "standard", input, Some(turn)),
+            Some(&overlay),
+        )
+    };
+    assert_eq!(
+        price(1_000, "turn-fast").as_deref(),
+        Some("gpt-5.5-priority")
+    );
+    assert_eq!(price(300_000, "turn-fast").as_deref(), Some("gpt-5.5"));
+    assert_eq!(price(1_000, "turn-other").as_deref(), Some("gpt-5.5"));
 }

@@ -4,6 +4,7 @@ use clap::Args;
 use serde::Serialize;
 
 use crate::core::{FetchContext, ProviderFetchResult, ProviderId, SourceMode};
+use crate::settings::Settings;
 
 mod claude_swap;
 mod fetch_helpers;
@@ -25,7 +26,8 @@ pub(super) enum UsageOutput {
     Toon(Vec<serde_json::Value>),
 }
 
-pub const PROVIDER_ARG_HELP: &str = "Provider to query (for example: codex, claude, pi, gemini, antigravity/agy, nanogpt, deepseek, codebuff, windsurf, all, both)";
+/// `usage --provider` help: without the flag, the enabled providers are read.
+pub const PROVIDER_ARG_HELP: &str = "Provider to query (for example: codex, claude, pi, gemini, antigravity/agy, nanogpt, deepseek, codebuff, windsurf, all, both). Default: the providers enabled in settings";
 
 /// Arguments for the usage command
 #[derive(Args, Debug, Default)]
@@ -121,11 +123,15 @@ impl std::str::FromStr for UsageOutputFormat {
 }
 
 /// Provider selection from CLI args
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderSelection {
     Single(ProviderId),
     Both,
     All,
+    /// An explicit provider list in display order: the enabled-provider
+    /// default when it is neither one provider nor exactly Codex + Claude
+    /// (upstream `ProviderSelection.custom`). Empty when nothing is enabled.
+    Custom(Vec<ProviderId>),
 }
 
 impl ProviderSelection {
@@ -147,11 +153,41 @@ impl ProviderSelection {
         }
     }
 
+    /// Selection for `usage` and serve `/usage`: an explicit provider wins;
+    /// without one, the providers enabled in settings decide (upstream
+    /// `CodexBarCLI.providerSelection`). `enabled` runs only when no provider
+    /// was passed, so an explicit `--provider` never reads settings.
+    pub fn from_arg_or_enabled(
+        arg: Option<&str>,
+        enabled: impl FnOnce() -> Vec<ProviderId>,
+    ) -> anyhow::Result<Self> {
+        match arg {
+            Some(raw) => Self::from_arg(Some(raw)),
+            None => Ok(Self::for_enabled(enabled())),
+        }
+    }
+
+    /// Upstream `providerSelection(rawOverride: nil, enabled:)`: exactly
+    /// Codex + Claude is `Both`; any other two or more providers keep the
+    /// given display order; one provider is `Single`; nothing enabled is an
+    /// empty list.
+    pub fn for_enabled(enabled: Vec<ProviderId>) -> Self {
+        match enabled.as_slice() {
+            [] => ProviderSelection::Custom(Vec::new()),
+            [only] => ProviderSelection::Single(*only),
+            [ProviderId::Codex, ProviderId::Claude] | [ProviderId::Claude, ProviderId::Codex] => {
+                ProviderSelection::Both
+            }
+            _ => ProviderSelection::Custom(enabled),
+        }
+    }
+
     pub fn as_list(&self) -> Vec<ProviderId> {
         match self {
             ProviderSelection::Single(id) => vec![*id],
             ProviderSelection::Both => vec![ProviderId::Codex, ProviderId::Claude],
             ProviderSelection::All => ProviderId::all().to_vec(),
+            ProviderSelection::Custom(ids) => ids.clone(),
         }
     }
 }
@@ -178,6 +214,14 @@ struct ErrorPayload {
 pub async fn run(args: UsageArgs) -> anyhow::Result<()> {
     let command = UsageCommand::from_args(args)?;
     command.log();
+    if command.providers.is_empty() && command.format == UsageOutputFormat::Text {
+        // JSON and TOON print an empty list; text explains the empty answer.
+        eprintln!(
+            "No providers are enabled. Enable one with `codexbar config enable <provider>` \
+             or pass --provider <name>."
+        );
+        return Ok(());
+    }
     let output = claude_swap::collect_usage_output(&command).await;
     print_usage_output(output)
 }
@@ -198,14 +242,26 @@ struct UsageCommand {
 
 impl UsageCommand {
     fn from_args(args: UsageArgs) -> anyhow::Result<Self> {
+        Self::from_args_with(args, || Settings::load().get_enabled_provider_ids())
+    }
+
+    /// `enabled` supplies the enabled providers for a plain `usage` (no
+    /// `--provider`); tests inject it so they never read real settings.
+    fn from_args_with(
+        args: UsageArgs,
+        enabled: impl FnOnce() -> Vec<ProviderId>,
+    ) -> anyhow::Result<Self> {
         let format = effective_format(&args);
         let source_mode = SourceMode::parse(&args.source).unwrap_or(SourceMode::Auto);
-        let providers = ProviderSelection::from_arg(args.provider.as_deref())?.as_list();
-        if args.account.is_some() && providers.len() != 1 {
-            anyhow::bail!("--account requires a single --provider (not all/both)");
-        }
         if args.all_accounts && args.account.is_some() {
             anyhow::bail!("--all-accounts cannot be combined with --account");
+        }
+        let providers =
+            ProviderSelection::from_arg_or_enabled(args.provider.as_deref(), enabled)?.as_list();
+        if args.account.is_some() && providers.len() != 1 {
+            anyhow::bail!(
+                "--account requires a single --provider (not all, both, or several enabled providers)"
+            );
         }
 
         Ok(Self {
@@ -249,14 +305,20 @@ fn build_usage_fetch_context(args: &UsageArgs, source_mode: SourceMode) -> Fetch
         manual_cookie_header: None,
         manual_cookie_missing: false,
         api_key: None,
+        token_account_kind: None,
+        token_account_isolated: false,
         workspace_id: None,
         seat_credit_entitlement: None,
         api_region: None,
         gateway_url: None,
         auto_prefer_web: false,
+        browser_cookie_import: false,
         // `codexbar usage` is a foreground read: optional enrichment (e.g. the
         // OpenCode Go Zen balance) is worth its full bounded wait (#2583).
         requires_optional_usage_completeness: true,
+        // Per-provider opt-ins live in settings, which this shared context
+        // does not load; the optional breakdowns stay off here.
+        optional_details_enabled: false,
     }
 }
 
