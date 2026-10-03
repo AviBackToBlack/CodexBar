@@ -3,9 +3,11 @@
 //! Utilities for validating and inspecting configuration.
 
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::path::Path;
 
+use super::usage::OutputFormat;
 use crate::core::{ProviderId, TokenAccountStore, instantiate_provider};
 use crate::settings::{ApiKeys, ManualCookies, Settings};
 
@@ -30,21 +32,28 @@ pub enum ConfigCommand {
         show_secrets: bool,
     },
     /// List providers and enabled state
-    Providers,
+    Providers {
+        #[command(flatten)]
+        output: ConfigOutputArgs,
+    },
     /// Enable a provider
     Enable {
-        /// Provider CLI name or alias
-        provider: String,
+        #[command(flatten)]
+        target: ConfigProviderArg,
+        #[command(flatten)]
+        output: ConfigOutputArgs,
     },
     /// Disable a provider
     Disable {
-        /// Provider CLI name or alias
-        provider: String,
+        #[command(flatten)]
+        target: ConfigProviderArg,
+        #[command(flatten)]
+        output: ConfigOutputArgs,
     },
     /// Store an API key for a provider
     SetApiKey {
-        /// Provider CLI name or alias
-        provider: String,
+        #[command(flatten)]
+        target: ConfigProviderArg,
         /// API key to store
         #[arg(long = "api-key")]
         api_key: Option<String>,
@@ -59,6 +68,67 @@ pub enum ConfigCommand {
     Path,
 }
 
+/// `--format`, `--json`, and `--pretty` for the config subcommands that
+/// report a result (upstream `CLICommonOptions`).
+#[derive(clap::Args, Debug, Clone, Copy, Default)]
+pub struct ConfigOutputArgs {
+    /// Output format: text or json
+    #[arg(short, long, default_value = "text")]
+    pub format: OutputFormat,
+
+    /// Shorthand for --format json
+    #[arg(long)]
+    pub json: bool,
+
+    /// Pretty-print JSON output
+    #[arg(long)]
+    pub pretty: bool,
+}
+
+impl ConfigOutputArgs {
+    fn is_json(self) -> bool {
+        self.json || self.format == OutputFormat::Json
+    }
+
+    fn print_json<T: Serialize>(self, value: &T) -> anyhow::Result<()> {
+        let json = if self.pretty {
+            serde_json::to_string_pretty(value)?
+        } else {
+            serde_json::to_string(value)?
+        };
+        println!("{json}");
+        Ok(())
+    }
+}
+
+/// The provider a config subcommand acts on: positional, or `-p/--provider`
+/// as upstream spells it.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ConfigProviderArg {
+    /// Provider CLI name or alias
+    #[arg(value_name = "PROVIDER", required_unless_present = "provider_option")]
+    pub provider: Option<String>,
+
+    /// Provider CLI name or alias (same as the positional PROVIDER)
+    #[arg(
+        id = "provider_option",
+        short = 'p',
+        long = "provider",
+        value_name = "PROVIDER",
+        conflicts_with = "provider"
+    )]
+    pub provider_option: Option<String>,
+}
+
+impl ConfigProviderArg {
+    fn name(&self) -> &str {
+        self.provider_option
+            .as_deref()
+            .or(self.provider.as_deref())
+            .unwrap_or_default()
+    }
+}
+
 /// Run the config command
 pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
     match args.command {
@@ -67,15 +137,19 @@ pub async fn run(args: ConfigArgs) -> anyhow::Result<()> {
             format,
             show_secrets,
         } => dump_config(&format, show_secrets).await,
-        ConfigCommand::Providers => list_providers().await,
-        ConfigCommand::Enable { provider } => set_provider_enabled(&provider, true).await,
-        ConfigCommand::Disable { provider } => set_provider_enabled(&provider, false).await,
+        ConfigCommand::Providers { output } => list_providers(output).await,
+        ConfigCommand::Enable { target, output } => {
+            set_provider_enabled(target.name(), true, output).await
+        }
+        ConfigCommand::Disable { target, output } => {
+            set_provider_enabled(target.name(), false, output).await
+        }
         ConfigCommand::SetApiKey {
-            provider,
+            target,
             api_key,
             stdin,
             no_enable,
-        } => set_api_key(&provider, api_key.as_deref(), stdin, !no_enable).await,
+        } => set_api_key(target.name(), api_key.as_deref(), stdin, !no_enable).await,
         ConfigCommand::Path => show_paths().await,
     }
 }
@@ -322,33 +396,68 @@ fn redact_secrets_value(value: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// One `config providers` row; the JSON shape matches upstream's
+/// `ConfigProviderStatusResult`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigProviderStatus {
+    provider: String,
+    display_name: String,
+    enabled: bool,
+    default_enabled: bool,
+}
+
+impl ConfigProviderStatus {
+    fn text_line(&self) -> String {
+        let state = if self.enabled { "enabled" } else { "disabled" };
+        let default_marker = if self.default_enabled { " default" } else { "" };
+        format!(
+            "{}: {state}{default_marker} ({})",
+            self.provider, self.display_name
+        )
+    }
+}
+
+fn provider_statuses(settings: &Settings) -> Vec<ConfigProviderStatus> {
+    ProviderId::all()
+        .iter()
+        .map(|id| ConfigProviderStatus {
+            provider: id.cli_name().to_string(),
+            display_name: id.display_name().to_string(),
+            enabled: settings.is_provider_enabled(*id),
+            default_enabled: instantiate_provider(*id).metadata().default_enabled,
+        })
+        .collect()
+}
+
 /// List provider enabled state.
-async fn list_providers() -> anyhow::Result<()> {
-    let settings = Settings::load();
-    for id in ProviderId::all() {
-        let state = if settings.is_provider_enabled(*id) {
-            "enabled"
-        } else {
-            "disabled"
-        };
-        let default_marker = if instantiate_provider(*id).metadata().default_enabled {
-            " default"
-        } else {
-            ""
-        };
-        println!(
-            "{}: {}{} ({})",
-            id.cli_name(),
-            state,
-            default_marker,
-            id.display_name()
-        );
+async fn list_providers(output: ConfigOutputArgs) -> anyhow::Result<()> {
+    let statuses = provider_statuses(&Settings::load());
+    if output.is_json() {
+        return output.print_json(&statuses);
+    }
+    for status in &statuses {
+        println!("{}", status.text_line());
     }
     Ok(())
 }
 
+/// `config enable|disable` JSON result (upstream `ConfigProviderToggleResult`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigProviderToggle {
+    provider: String,
+    display_name: String,
+    enabled: bool,
+    config_path: Option<String>,
+}
+
 /// Enable or disable a provider by CLI name.
-async fn set_provider_enabled(provider: &str, enabled: bool) -> anyhow::Result<()> {
+async fn set_provider_enabled(
+    provider: &str,
+    enabled: bool,
+    output: ConfigOutputArgs,
+) -> anyhow::Result<()> {
     let id = parse_provider(provider)?;
     let mut settings = Settings::load();
     if enabled {
@@ -357,6 +466,14 @@ async fn set_provider_enabled(provider: &str, enabled: bool) -> anyhow::Result<(
         settings.disable_provider(id);
     }
     settings.save()?;
+    if output.is_json() {
+        return output.print_json(&ConfigProviderToggle {
+            provider: id.cli_name().to_string(),
+            display_name: id.display_name().to_string(),
+            enabled,
+            config_path: Settings::settings_path().map(|path| path.display().to_string()),
+        });
+    }
     let state = if enabled { "enabled" } else { "disabled" };
     println!("Config: {state} {}", id.display_name());
     Ok(())
@@ -478,11 +595,143 @@ async fn show_paths() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigFileError, read_json_config, sanitize_settings_for_dump};
+    use super::{
+        ConfigCommand, ConfigFileError, ConfigOutputArgs, provider_statuses, read_json_config,
+        sanitize_settings_for_dump,
+    };
+    use crate::cli::{Cli, Commands};
+    use crate::core::ProviderId;
     #[cfg(windows)]
     use crate::secure_file;
-    use crate::settings::ManualCookies;
+    use crate::settings::{ManualCookies, Settings};
+    use clap::Parser;
     use serde_json::json;
+
+    fn parse_config(argv: &[&str]) -> Result<ConfigCommand, clap::Error> {
+        let cli = Cli::try_parse_from(["codexbar", "config"].iter().chain(argv.iter()))?;
+        match cli.command {
+            Some(Commands::Config(args)) => Ok(args.command),
+            other => panic!("expected the config command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_providers_accepts_json_output_flags() {
+        let ConfigCommand::Providers { output } = parse_config(&["providers"]).unwrap() else {
+            panic!("expected providers");
+        };
+        assert!(!output.is_json());
+        for argv in [
+            &["providers", "--json"][..],
+            &["providers", "--format", "json"][..],
+            &["providers", "-f", "json", "--pretty"][..],
+        ] {
+            let ConfigCommand::Providers { output } = parse_config(argv).unwrap() else {
+                panic!("expected providers for {argv:?}");
+            };
+            assert!(output.is_json(), "{argv:?}");
+        }
+        assert!(parse_config(&["providers", "--format", "toml"]).is_err());
+    }
+
+    #[test]
+    fn provider_status_json_matches_the_upstream_shape() {
+        let mut settings = Settings::default();
+        settings.enabled_providers.clear();
+        settings.enable_provider(ProviderId::Cursor);
+
+        let statuses = provider_statuses(&settings);
+
+        assert_eq!(statuses.len(), ProviderId::all().len());
+        let cursor = statuses
+            .iter()
+            .find(|status| status.provider == "cursor")
+            .expect("cursor row");
+        assert!(cursor.enabled);
+        let codex = statuses
+            .iter()
+            .find(|status| status.provider == "codex")
+            .expect("codex row");
+        assert!(!codex.enabled);
+
+        let value = serde_json::to_value(codex).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["defaultEnabled", "displayName", "enabled", "provider"]
+        );
+        assert_eq!(value["displayName"], ProviderId::Codex.display_name());
+        assert_eq!(value["enabled"], false);
+        assert_eq!(value["defaultEnabled"], codex.default_enabled);
+    }
+
+    #[test]
+    fn provider_status_text_lines_keep_the_existing_format() {
+        let mut settings = Settings::default();
+        settings.enabled_providers.clear();
+        settings.enable_provider(ProviderId::Codex);
+        let statuses = provider_statuses(&settings);
+        let codex = statuses.iter().find(|s| s.provider == "codex").unwrap();
+        let claude = statuses.iter().find(|s| s.provider == "claude").unwrap();
+
+        let marker = |default: bool| if default { " default" } else { "" };
+        assert_eq!(
+            codex.text_line(),
+            format!("codex: enabled{} (Codex)", marker(codex.default_enabled))
+        );
+        assert_eq!(
+            claude.text_line(),
+            format!(
+                "claude: disabled{} (Claude)",
+                marker(claude.default_enabled)
+            )
+        );
+    }
+
+    #[test]
+    fn provider_subcommands_accept_the_positional_or_provider_option() {
+        for argv in [
+            &["enable", "cursor"][..],
+            &["enable", "-p", "cursor"][..],
+            &["enable", "--provider", "cursor", "--json"][..],
+        ] {
+            let ConfigCommand::Enable { target, .. } = parse_config(argv).unwrap() else {
+                panic!("expected enable for {argv:?}");
+            };
+            assert_eq!(target.name(), "cursor", "{argv:?}");
+        }
+        let ConfigCommand::Disable { target, output } =
+            parse_config(&["disable", "--provider", "cursor", "--format", "json"]).unwrap()
+        else {
+            panic!("expected disable");
+        };
+        assert_eq!(target.name(), "cursor");
+        assert!(output.is_json());
+        let ConfigCommand::SetApiKey { target, stdin, .. } =
+            parse_config(&["set-api-key", "-p", "openrouter", "--stdin"]).unwrap()
+        else {
+            panic!("expected set-api-key");
+        };
+        assert_eq!(target.name(), "openrouter");
+        assert!(stdin);
+
+        assert!(parse_config(&["enable"]).is_err(), "provider is required");
+        assert!(
+            parse_config(&["enable", "cursor", "--provider", "codex"]).is_err(),
+            "positional and --provider conflict"
+        );
+    }
+
+    #[test]
+    fn default_output_args_are_text() {
+        assert!(!ConfigOutputArgs::default().is_json());
+    }
 
     #[cfg(windows)]
     #[test]
