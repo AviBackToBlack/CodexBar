@@ -53,19 +53,6 @@ fn validate_surface_target_rejects_hidden_mode() {
 }
 
 #[test]
-fn validate_surface_target_rejects_retired_popout_mode() {
-    for target in [
-        SurfaceTarget::Dashboard,
-        SurfaceTarget::Provider {
-            provider_id: "codex".into(),
-        },
-    ] {
-        let error = validate_surface_target(SurfaceMode::PopOut, target).unwrap_err();
-        assert!(error.contains("popOut surface is retired"));
-    }
-}
-
-#[test]
 fn external_url_validation_allows_only_http_urls() {
     assert_eq!(
         validate_external_url(" https://github.com/Finesssee/Win-CodexBar ").unwrap(),

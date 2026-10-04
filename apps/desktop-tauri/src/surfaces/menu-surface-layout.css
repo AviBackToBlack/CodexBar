@@ -1,44 +1,44 @@
-/* Tray panel account and usage-card layout. */
+/* Tray/popout account and usage-card layout. */
 .menu-surface {
   --surface-inset: 16px;
   line-height: 1.4;
 }
 
-.menu-surface--tray .menu-card {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card {
   --menu-card-x: var(--surface-inset);
   --menu-card-header-only-y: 12px;
   --menu-card-section-y: 12px;
   gap: 12px;
 }
 
-.menu-surface--tray .menu-card__name-group {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__name-group {
   flex-direction: row;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
 
-.menu-surface--tray .menu-card__name {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__name {
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
 }
 
-.menu-surface--tray .menu-card__email {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__email {
   max-width: 60%;
   text-align: right;
   font-size: 11px;
 }
 
-.menu-surface--tray .menu-card__subtitle,
-.menu-surface--tray .menu-card__plan-badge {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__subtitle,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__plan-badge {
   font-size: 11px;
   font-weight: 400;
   background: transparent;
   padding: 0;
 }
 
-.menu-surface--tray .menu-card__content,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__content,
 .menu-card__metrics,
 .menu-card__more-content {
   display: flex;
@@ -47,23 +47,23 @@
   padding-bottom: 0;
 }
 
-.menu-surface--tray .menu-card__divider {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-card__divider {
   margin: 0;
 }
 
-.menu-surface--tray .menu-metric {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric {
   gap: 6px;
 }
 
-.menu-surface--tray .menu-metric__title {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__title {
   font-size: 13px;
   font-weight: 600;
 }
 
-.menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset,
-.menu-surface--tray .menu-metric__status,
-.menu-surface--tray .menu-metric__detail {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__pct,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__reset,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__status,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-metric__detail {
   font-size: 11px;
   line-height: 1.4;
 }
@@ -148,26 +148,26 @@
   padding-top: 12px;
 }
 
-.menu-surface--tray .menu-stack__item,
-.menu-surface--tray .menu-stack__item--selected {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-stack__item,
+:is(.menu-surface--tray, .menu-surface--popout) .menu-stack__item--selected {
   background: transparent;
   border: 0;
   border-radius: 0;
   padding: 0;
 }
-.menu-surface--tray .menu-stack__sep {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-stack__sep {
   height: 1px;
   margin: 4px var(--surface-inset);
   background: var(--panel-border);
 }
-.menu-surface--tray .provider-grid {
+:is(.menu-surface--tray, .menu-surface--popout) .provider-grid {
   padding: 8px var(--surface-inset);
   gap: 8px;
 }
-.menu-surface--tray .provider-grid__item {
+:is(.menu-surface--tray, .menu-surface--popout) .provider-grid__item {
   min-height: 32px;
 }
-.menu-surface--tray .menu-surface__footer-row {
+:is(.menu-surface--tray, .menu-surface--popout) .menu-surface__footer-row {
   min-height: 28px;
   font-size: 12px;
   padding-top: 5px;

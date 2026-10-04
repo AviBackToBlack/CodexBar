@@ -5,7 +5,7 @@ vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key, language: "english" }),
 }));
 // The FloatBar section pulls in its own bridge dependencies; it is irrelevant
-// to the display controls under test.
+// to the window-scale control under test.
 vi.mock("../../../floatbar/SettingsSection", () => ({
   default: () => null,
 }));
@@ -47,13 +47,27 @@ function renderTab(
   );
 }
 
-describe("DisplayTab menu settings", () => {
-  it("no longer offers the retired PopOut window scale", () => {
-    // Window scale only zoomed the retired PopOut layout. The tray panel
-    // has its own Zoom slider in its footer (trayScalePercent).
-    const { container } = renderTab(vi.fn());
+describe("DisplayTab window scale", () => {
+  it("commits the new window scale on blur", () => {
+    const set = vi.fn();
+    renderTab(set);
+    const slider = screen.getByRole("slider", { name: "WindowScaleAriaLabel" });
 
-    expect(container.querySelector('input[type="range"]')).toBeNull();
+    fireEvent.change(slider, { target: { value: "175" } });
+    fireEvent.blur(slider);
+
+    expect(set).toHaveBeenCalledWith({ windowScalePercent: 175 });
+  });
+
+  it("does not commit when the value is unchanged", () => {
+    const set = vi.fn();
+    renderTab(set);
+    const slider = screen.getByRole("slider", { name: "WindowScaleAriaLabel" });
+
+    fireEvent.change(slider, { target: { value: "100" } });
+    fireEvent.blur(slider);
+
+    expect(set).not.toHaveBeenCalled();
   });
 
   it("updates the exhausted reset display preference", () => {

@@ -11,13 +11,6 @@ const webviewWindowMocks = vi.hoisted(() => ({
   label: "main",
 }));
 
-const surfaceMocks = vi.hoisted(() => ({
-  snapshot: {
-    mode: "hidden",
-    target: { kind: "summary" },
-  } as { mode: string; target: Record<string, unknown> },
-}));
-
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ label: webviewWindowMocks.label }),
 }));
@@ -46,6 +39,9 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 vi.mock("./surfaces/TrayPanel", () => ({
   default: () => <div data-testid="surface-tray-panel" />,
 }));
+vi.mock("./surfaces/PopOutPanel", () => ({
+  default: () => <div data-testid="surface-pop-out-panel" />,
+}));
 vi.mock("./surfaces/Settings", () => ({
   default: () => <div data-testid="surface-settings" />,
 }));
@@ -54,7 +50,10 @@ vi.mock("./floatbar/FloatBar", () => ({
 }));
 
 vi.mock("./hooks/useSurfaceSnapshot", () => ({
-  useSurfaceSnapshot: () => surfaceMocks.snapshot,
+  useSurfaceSnapshot: () => ({
+    mode: "hidden",
+    target: { kind: "summary" },
+  }),
 }));
 
 import App from "./App";
@@ -149,7 +148,6 @@ describe("App window-label routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     webviewWindowMocks.label = "main";
-    surfaceMocks.snapshot = { mode: "hidden", target: { kind: "summary" } };
     tauriMocks.getBootstrapState.mockResolvedValue(bootstrap());
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
     tauriMocks.checkForUpdates.mockResolvedValue({
@@ -178,6 +176,7 @@ describe("App window-label routing", () => {
     await waitFor(() => {
       expect(queryByTestId("surface-tray-panel")).not.toBeNull();
     });
+    expect(queryByTestId("surface-pop-out-panel")).toBeNull();
     expect(queryByTestId("surface-settings")).toBeNull();
     expect(queryByTestId("surface-float-bar")).toBeNull();
   });
@@ -205,8 +204,8 @@ describe("App window-label routing", () => {
   });
 
   it("does not route the shared main window to TrayPanel while hidden", async () => {
-    // main's surface-mode machine only holds Hidden/Settings outside proof
-    // mode — it never reports "trayPanel" — so the
+    // main's surface-mode machine only ever holds Hidden/PopOut/Settings
+    // post-refactor — it can never report "trayPanel" — so the
     // isFlyoutWindow()/isSettingsWindow()/isFloatBarWindow() checks all miss
     // and control falls through to SurfaceRouter, which renders nothing for
     // "hidden".
@@ -229,34 +228,5 @@ describe("App window-label routing", () => {
     });
     expect(queryByTestId("surface-tray-panel")).toBeNull();
     expect(container.firstChild).toBeNull();
-  });
-
-  it("renders the tray panel, never a legacy layout, for a stale popOut mode", async () => {
-    // The legacy PopOut layout is retired: the backend rejects popOut, and
-    // the router falls back to the tray panel if a stale snapshot reports it.
-    webviewWindowMocks.label = "main";
-    surfaceMocks.snapshot = { mode: "popOut", target: { kind: "dashboard" } };
-
-    const { queryByTestId } = render(<App />);
-
-    await waitFor(() => {
-      expect(queryByTestId("surface-tray-panel")).not.toBeNull();
-    });
-    expect(queryByTestId("surface-settings")).toBeNull();
-  });
-
-  it("does not open a second window from the global-shortcut event", async () => {
-    // shortcut_bridge::plugin's native handler toggles the tray-panel flyout
-    // for every registered shortcut; the frontend no longer listens.
-    webviewWindowMocks.label = "main";
-
-    render(<App />);
-
-    await waitFor(() => {
-      expect(tauriMocks.getBootstrapState).toHaveBeenCalled();
-    });
-    const events = eventMocks.listen.mock.calls.map(([event]) => event);
-    expect(events).not.toContain("global-shortcut-triggered");
-    expect(tauriMocks.setSurfaceMode).not.toHaveBeenCalled();
   });
 });

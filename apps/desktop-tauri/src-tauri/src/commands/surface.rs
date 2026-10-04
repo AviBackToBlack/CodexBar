@@ -67,11 +67,13 @@ pub async fn open_settings_window(app: tauri::AppHandle, tab: String) -> Result<
     crate::shell::settings_window::open_or_focus(&app, &tab)
 }
 
-/// Open (or focus) the detached flyout ("Pop Out Dashboard") window, the
-/// only dashboard layout. Used by the frontend global-shortcut fallback.
-/// Same `async` requirement as `open_settings_window`:
-/// `WebviewWindowBuilder::build` deadlocks inside synchronous Tauri commands
-/// on Windows.
+/// Open (or focus) the detached flyout ("Pop Out Dashboard") window.
+///
+/// Used by `PopOutPanel`'s "back to tray" action, which previously called
+/// `set_surface_mode("trayPanel", ...)` on the shared window — now that the
+/// flyout is its own window, that action opens it directly instead.  Same
+/// `async` requirement as `open_settings_window`: `WebviewWindowBuilder::build`
+/// deadlocks inside synchronous Tauri commands on Windows.
 #[tauri::command]
 pub async fn open_flyout_window(app: tauri::AppHandle) -> Result<(), String> {
     crate::shell::flyout_window::open_or_focus(&app, None, Activation::UserAction)
@@ -157,12 +159,6 @@ pub(crate) fn validate_surface_target(
 ) -> Result<SurfaceTarget, String> {
     if mode == SurfaceMode::Hidden {
         return Err("set_surface_mode only supports visible surfaces".into());
-    }
-
-    // The legacy PopOut layout on `main` is retired; the dashboard is the
-    // tray-panel flyout, opened with `open_flyout_window`.
-    if mode == SurfaceMode::PopOut {
-        return Err("the popOut surface is retired; use open_flyout_window".into());
     }
 
     if target.mode() != mode {

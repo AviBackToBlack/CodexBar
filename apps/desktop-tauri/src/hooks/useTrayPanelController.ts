@@ -10,6 +10,7 @@ import {
   quitApp as quitApplication,
   reorderProviders,
   setFlyoutSize,
+  setSurfaceMode,
   updateSettings,
 } from "../lib/tauri";
 import { useProviders } from "./useProviders";
@@ -30,7 +31,9 @@ const TRAY_INITIAL_REFRESH_DELAY_MS = 250;
 const DENSE_OVERVIEW_THRESHOLD = 32;
 
 // ── Tray flyout zoom (footer slider, above Refresh) ───────────────────
-// Applied via CSS `zoom` on the MenuSurface root (see TrayPanel render).
+// PopOut window mode has its own independent windowScalePercent (webview
+// setZoom) — this is a separate setting/control for the tray flyout only,
+// applied via CSS `zoom` on the MenuSurface root (see TrayPanel render).
 export const TRAY_SCALE_MIN = 100;
 export const TRAY_SCALE_MAX = 200;
 export const TRAY_SCALE_STEP = 5;
@@ -250,7 +253,7 @@ export function useTrayPanelController(state: BootstrapState) {
   // window (see App.tsx's isFlyoutWindow() routing) — it is no longer a
   // state of the shared `main` window's surface-mode machine. The old
   // `useSurfaceMode() === "trayPanel"` check would be permanently false
-  // here (outside proof mode that machine only tracks Hidden/Settings),
+  // here (that machine now only tracks Hidden/PopOut/Settings on `main`),
   // which would silently gate off the fixed-size restore + reveal below
   // (useTrayPanelLayout's `isOpen` gate) — a user-resized flyout would never
   // reveal itself. Hardcoded true: being mounted IS "the flyout is open".
@@ -284,6 +287,9 @@ export function useTrayPanelController(state: BootstrapState) {
       void getCurrentWindow().close();
     });
   }, []);
+  const openPopOut = useCallback(() => {
+    setSurfaceMode("popOut", { kind: "dashboard" });
+  }, []);
   const openAbout = useCallback(() => {
     void openSettingsWindow("about").finally(() => {
       void getCurrentWindow().close();
@@ -292,6 +298,10 @@ export function useTrayPanelController(state: BootstrapState) {
   const quitApp = useCallback(() => {
     void quitApplication();
   }, []);
+
+  const headerActions = [
+    { icon: "⧉", title: t("TooltipPopOut"), onClick: openPopOut },
+  ];
 
   const footerRows: MenuFooterRow[] = [
     { icon: "↻", label: t("ActionRefresh"), shortcut: "Ctrl+R", onClick: refresh },
@@ -383,6 +393,7 @@ export function useTrayPanelController(state: BootstrapState) {
     useWideColumns,
     layoutReady,
     requestLayout,
+    headerActions,
     footerRows,
     updateState,
     checkNow,

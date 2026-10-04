@@ -137,6 +137,10 @@ pub(crate) fn build_tray_menu_with(
         "pop_out",
         text(LocaleKey::TrayPopOutDashboard),
     ));
+    menu.push(TrayMenuEntry::item(
+        "show_panel",
+        text(LocaleKey::TrayShowWindow),
+    ));
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
         text(LocaleKey::TrayShowFloatBar),
@@ -217,16 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn tray_menu_offers_only_the_tray_panel_window_entry() {
-        // The legacy "Show Window" entry opened the retired PopOut layout on
-        // `main`; "Pop Out Dashboard" (the tray-panel flyout) is the only
-        // window entry now.
-        let menu = build_tray_menu(&sample_provider_catalog(), &[], &both_enabled());
-        assert!(menu_contains(&menu, "pop_out"));
-        assert!(!menu_contains(&menu, "show_panel"));
-    }
-
-    #[test]
     fn provider_check_items_reflect_enabled_state() {
         let menu = build_tray_menu(
             &sample_provider_catalog(),
@@ -303,7 +297,7 @@ mod tests {
         }
 
         assert_eq!(label_for(&menu, "refresh"), "すべて更新");
-        assert_eq!(label_for(&menu, "pop_out"), "ダッシュボードを開く");
+        assert_eq!(label_for(&menu, "show_panel"), "ウィンドウを表示");
         assert_eq!(label_for(&menu, "settings"), "設定...");
         assert_eq!(label_for(&menu, "quit"), "終了");
 

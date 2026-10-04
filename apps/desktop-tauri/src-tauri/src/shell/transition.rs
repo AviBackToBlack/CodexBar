@@ -97,6 +97,25 @@ pub fn transition_to_target(
     )
 }
 
+pub fn reopen_to_target(
+    app: &AppHandle,
+    mode: SurfaceMode,
+    target: SurfaceTarget,
+    position: Option<(i32, i32)>,
+    activation: Activation,
+) -> Result<SurfaceMode, String> {
+    apply_transition_request_with_strategy(
+        app,
+        ShellTransitionRequest {
+            mode,
+            target,
+            position,
+        },
+        true,
+        activation,
+    )
+}
+
 fn apply_transition_request_with_strategy(
     app: &AppHandle,
     request: ShellTransitionRequest,
