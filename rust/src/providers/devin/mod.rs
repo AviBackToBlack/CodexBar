@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use reqwest::{Client, Url};
+use chrono::{DateTime, Utc};
+use reqwest::{Client, StatusCode, Url};
 use serde_json::Value;
 
 use crate::core::{
@@ -8,11 +9,10 @@ use crate::core::{
 };
 
 const CREDENTIAL_TARGET: &str = "codexbar-devin";
-const BASE_URLS: [&str; 2] = ["https://api.devin.ai", "https://app.devin.ai/api"];
-const MISSING_ORGANIZATION_DETAIL: &str = "No organizations found for auth1 user";
-const MISSING_ORGANIZATION_MESSAGE: &str = "No Devin organization was found. Set Organization (provider extras or DEVIN_ORG) to the internal org-... or org_... ID from a successful quota request's x-cog-org-id header, then refresh.";
-const MISSING_ORGANIZATION_CONFIG_MESSAGE: &str = "Devin organization not found; set it in provider extras, DEVIN_ORGANIZATION, or DEVIN_ORG using the internal ID from a successful quota request's x-cog-org-id header.";
-const MISSING_TOKEN_MESSAGE: &str = "Devin Bearer token not found. In app.devin.ai open Developer Tools > Network, reload Usage & Limits, select a successful billing/quota/usage request and copy its Authorization value (a leading 'Bearer ' is accepted) into the Devin token field in Preferences, or set DEVIN_BEARER_TOKEN / DEVIN_AUTHORIZATION.";
+const BASE_URL: &str = "https://app.devin.ai/api/";
+const ON_DEMAND_PERIOD: &str = "On-demand billing cycle";
+const DEFAULT_ORG_ENV_VARS: &[&str] = &["DEVIN_ORGANIZATION", "DEVIN_ORG"];
+const TOKEN_ENV_VARS: &[&str] = &["DEVIN_BEARER_TOKEN", "DEVIN_AUTHORIZATION", "DEVIN_API_KEY"];
 
 pub struct DevinProvider {
     metadata: ProviderMetadata,
@@ -62,29 +62,9 @@ impl Provider for DevinProvider {
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::OAuth => {
-                let token = resolved_manual_token(crate::providers::resolve_api_key(
-                    ctx.api_key.as_deref(),
-                    CREDENTIAL_TARGET,
-                    &["DEVIN_BEARER_TOKEN", "DEVIN_AUTHORIZATION", "DEVIN_API_KEY"],
-                ))?;
-                let env_org = std::env::var("DEVIN_ORGANIZATION")
-                    .ok()
-                    .filter(|org| !org.trim().is_empty())
-                    .or_else(|| {
-                        std::env::var("DEVIN_ORG")
-                            .ok()
-                            .filter(|org| !org.trim().is_empty())
-                    });
-                let raw_org = ctx
-                    .workspace_id
-                    .as_deref()
-                    .filter(|org| !org.trim().is_empty())
-                    .or(env_org.as_deref())
-                    .ok_or_else(|| {
-                        ProviderError::NotInstalled(MISSING_ORGANIZATION_CONFIG_MESSAGE.into())
-                    })?;
-                let org = normalized_org(raw_org);
-                fetch_quota(&self.client, &token, &org, devin_urls(&org)?).await
+                let token = resolve_bearer_token(ctx.api_key.as_deref())?;
+                let organization = resolve_organization(ctx.workspace_id.as_deref())?;
+                fetch_quota(&self.client, &token, &organization).await
             }
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -97,198 +77,389 @@ impl Provider for DevinProvider {
     }
 }
 
-fn resolved_manual_token(raw: Result<String, ProviderError>) -> Result<String, ProviderError> {
-    match raw {
-        Ok(raw) => manual_bearer_token(&raw).ok_or_else(missing_token_error),
-        Err(ProviderError::NotInstalled(_)) => Err(missing_token_error()),
-        Err(error) => Err(error),
-    }
-}
-
-fn manual_bearer_token(raw: &str) -> Option<String> {
-    let mut token = raw.trim();
-    if token
-        .get(.."Authorization:".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Authorization:"))
-    {
-        token = token["Authorization:".len()..].trim();
-    }
-    if token
-        .get(.."Bearer ".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("Bearer "))
-    {
-        token = token["Bearer ".len()..].trim();
-    }
-    (!token.is_empty()).then(|| token.to_string())
-}
-
-fn missing_token_error() -> ProviderError {
-    ProviderError::NotInstalled(MISSING_TOKEN_MESSAGE.into())
-}
-
 async fn fetch_quota(
     client: &Client,
     token: &str,
-    org: &str,
-    urls: impl IntoIterator<Item = Url>,
+    organization: &DevinOrganization,
 ) -> Result<ProviderFetchResult, ProviderError> {
-    let mut last_non_auth_error: Option<ProviderError> = None;
-    let mut candidate_count = 0usize;
-    let mut auth_failures = 0usize;
-    for url in urls {
-        candidate_count += 1;
-        let response = match client
-            .get(url)
-            .bearer_auth(token)
-            // Auth1 sessions resolve their organization context
-            // from this header; without it the gateway answers 401
-            // "No organizations found for auth1 user" even for a
-            // valid session token.
-            .header("x-cog-org-id", org)
-            .header("Accept", "application/json")
-            .send()
-            .await
+    let response = send_devin_get(
+        client,
+        token,
+        organization,
+        organization.request_url().clone(),
+    )
+    .send()
+    .await?;
+    match response.status() {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ProviderError::AuthRequired),
+        StatusCode::NOT_FOUND => Err(ProviderError::Other(format!(
+            "Devin quota endpoint returned 404 for {}",
+            organization.display()
+        ))),
+        status if !status.is_success() => Err(ProviderError::Other(format!(
+            "Devin quota returned status {status} for {}",
+            organization.request_url()
+        ))),
+        _ => {
+            let value: Value = response
+                .json()
+                .await
+                .map_err(|e| ProviderError::Parse(format!("Failed to parse Devin quota: {e}")))?;
+            let mut billing = fetch_billing_enrichment(client, token, organization).await;
+            billing.quota_balance = extra_usage_balance(&value);
+
+            Ok(fetch_result_from_quota(
+                &value,
+                organization.display(),
+                billing,
+            ))
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct DevinBillingEnrichment {
+    quota_balance: Option<f64>,
+    on_demand: Option<DevinOnDemandUsage>,
+    status: Option<DevinBillingStatus>,
+}
+
+async fn fetch_billing_enrichment(
+    client: &Client,
+    token: &str,
+    organization: &DevinOrganization,
+) -> DevinBillingEnrichment {
+    let (on_demand, status) = tokio::join!(
+        fetch_on_demand_usage(client, token, organization),
+        fetch_billing_status(client, token, organization),
+    );
+
+    DevinBillingEnrichment {
+        quota_balance: None,
+        on_demand: on_demand.ok().flatten(),
+        status: status.ok().flatten(),
+    }
+}
+
+async fn fetch_on_demand_usage(
+    client: &Client,
+    token: &str,
+    organization: &DevinOrganization,
+) -> Result<Option<DevinOnDemandUsage>, ProviderError> {
+    let response = send_devin_get(
+        client,
+        token,
+        organization,
+        organization.on_demand_request_url(),
+    )
+    .send()
+    .await?;
+
+    match response.status() {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ProviderError::AuthRequired),
+        StatusCode::NOT_FOUND => Ok(None),
+        status if !status.is_success() => Ok(None),
+        _ => {
+            let value: Value = response.json().await.map_err(|_| {
+                ProviderError::Other("Failed to parse Devin on-demand usage".into())
+            })?;
+            Ok(parse_on_demand_usage(&value))
+        }
+    }
+}
+
+async fn fetch_billing_status(
+    client: &Client,
+    token: &str,
+    organization: &DevinOrganization,
+) -> Result<Option<DevinBillingStatus>, ProviderError> {
+    let response = send_devin_get(
+        client,
+        token,
+        organization,
+        organization.status_request_url(),
+    )
+    .send()
+    .await?;
+
+    match response.status() {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ProviderError::AuthRequired),
+        StatusCode::NOT_FOUND => Ok(None),
+        status if !status.is_success() => Ok(None),
+        _ => {
+            let value: Value = response
+                .json()
+                .await
+                .map_err(|_| ProviderError::Other("Failed to parse Devin billing status".into()))?;
+            Ok(parse_billing_status(&value))
+        }
+    }
+}
+
+fn send_devin_get(
+    client: &Client,
+    token: &str,
+    organization: &DevinOrganization,
+    url: Url,
+) -> reqwest::RequestBuilder {
+    let mut request = client
+        .get(url)
+        .bearer_auth(token)
+        .header("Accept", "application/json");
+    if let Some(org_id) = organization.x_cog_org_id() {
+        request = request.header("x-cog-org-id", org_id);
+    }
+    request
+}
+
+fn resolve_bearer_token(raw: Option<&str>) -> Result<String, ProviderError> {
+    let raw = crate::providers::resolve_api_key(raw, CREDENTIAL_TARGET, TOKEN_ENV_VARS)?;
+    normalize_bearer_token(&raw).ok_or_else(|| {
+        ProviderError::NotInstalled(
+            "Devin bearer token not found. Set DEVIN_BEARER_TOKEN, DEVIN_AUTHORIZATION, or Preferences в†’ Providers."
+                .into(),
+        )
+    })
+}
+
+fn resolve_organization(raw: Option<&str>) -> Result<DevinOrganization, ProviderError> {
+    if let Some(org) = raw.and_then(normalize_organization) {
+        return Ok(org);
+    }
+
+    for env in DEFAULT_ORG_ENV_VARS {
+        if let Ok(value) = std::env::var(env)
+            && let Some(org) = normalize_organization(&value)
         {
-            Ok(response) => response,
-            Err(error) => {
-                last_non_auth_error = Some(ProviderError::Network(error));
-                continue;
-            }
-        };
-        let status = response.status();
-        if status.is_success() {
-            let body = match response.bytes().await {
-                Ok(body) => body,
-                Err(error) => {
-                    last_non_auth_error = Some(ProviderError::Network(error));
-                    continue;
-                }
-            };
-            let value: Value = match serde_json::from_slice(&body) {
-                Ok(value) => value,
-                Err(error) => {
-                    last_non_auth_error = Some(ProviderError::Parse(format!(
-                        "Failed to parse Devin quota: {error}"
-                    )));
-                    continue;
-                }
-            };
-            match fetch_result_from_quota(&value, org) {
-                Ok(result) => return Ok(result),
-                Err(error) => {
-                    last_non_auth_error = Some(error);
-                    continue;
-                }
-            }
-        }
-        let body = match response.bytes().await {
-            Ok(body) => body,
-            Err(error) => {
-                last_non_auth_error = Some(ProviderError::Network(error));
-                continue;
-            }
-        };
-        // Web-session tokens (auth1_) are rejected on the API host
-        // but work on the web host, and vice versa for service
-        // keys, so every candidate is tried before giving up.
-        if let Some(error) = auth_response_error(status, &body) {
-            if matches!(error, ProviderError::AuthRequired) {
-                auth_failures += 1;
-            } else {
-                last_non_auth_error = Some(error);
-            }
-        } else {
-            last_non_auth_error = Some(ProviderError::Other(format!(
-                "Devin quota returned status {}",
-                status
-            )));
+            return Ok(org);
         }
     }
-    if candidate_count > 0 && auth_failures == candidate_count {
-        Err(ProviderError::AuthRequired)
-    } else {
-        Err(last_non_auth_error
-            .unwrap_or_else(|| ProviderError::Other("Devin quota request failed".into())))
+
+    Err(ProviderError::NotInstalled(
+        "Devin organization not found. Set it in provider extras or DEVIN_ORGANIZATION / DEVIN_ORG."
+            .into(),
+    ))
+}
+
+pub(crate) fn normalize_bearer_token(raw: &str) -> Option<String> {
+    let mut value = strip_wrapping_quotes(raw.trim())?.trim().to_string();
+    loop {
+        let trimmed = value.trim_start();
+        if let Some(rest) = strip_case_insensitive_prefix(trimmed, "authorization:") {
+            value = rest.trim_start().to_string();
+            continue;
+        }
+        if let Some(rest) = strip_case_insensitive_prefix(trimmed, "bearer ") {
+            value = rest.trim_start().to_string();
+            continue;
+        }
+        break;
+    }
+
+    let token = value.trim();
+    (!token.is_empty()).then_some(token.to_string())
+}
+
+pub(crate) fn normalize_organization(raw: &str) -> Option<DevinOrganization> {
+    DevinOrganization::parse(raw)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DevinOrganization {
+    display: String,
+    request_url: Url,
+    x_cog_org_id: Option<String>,
+}
+
+impl DevinOrganization {
+    fn parse(raw: &str) -> Option<Self> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        if trimmed.contains("://") {
+            return Self::from_url(trimmed);
+        }
+
+        Self::from_reference(trimmed)
+    }
+
+    fn from_url(raw: &str) -> Option<Self> {
+        let url = Url::parse(raw).ok()?;
+        if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return None;
+        }
+
+        if url.host_str()? != "app.devin.ai" {
+            return None;
+        }
+
+        let segments: Vec<_> = url.path_segments()?.collect();
+        if segments.is_empty() {
+            return None;
+        }
+
+        match segments.as_slice() {
+            ["api", org_id, "billing", "quota", "usage"] if is_internal_org_id(org_id) => {
+                Self::internal(org_id)
+            }
+            ["org", slug] if is_organization_slug(slug) => Self::slug(slug),
+            ["organizations", org_id] if is_internal_org_id(org_id) => Self::internal(org_id),
+            _ => None,
+        }
+    }
+
+    fn from_reference(raw: &str) -> Option<Self> {
+        if raw.contains("://") {
+            return None;
+        }
+
+        let segments: Vec<_> = raw
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        match segments.as_slice() {
+            [org_id] if is_internal_org_id(org_id) => Self::internal(org_id),
+            [slug] if is_organization_slug(slug) => Self::slug(slug),
+            ["org", slug] if is_organization_slug(slug) => Self::slug(slug),
+            ["organizations", org_id] if is_internal_org_id(org_id) => Self::internal(org_id),
+            _ => None,
+        }
+    }
+
+    fn slug(slug: &str) -> Option<Self> {
+        let slug = validate_identifier(slug)?;
+        let path = format!("org/{slug}");
+        Some(Self {
+            display: format!("org/{slug}"),
+            request_url: usage_url(&path),
+            x_cog_org_id: None,
+        })
+    }
+
+    fn internal(org_id: &str) -> Option<Self> {
+        let org_id = validate_identifier(org_id)?;
+        Some(Self {
+            display: org_id.clone(),
+            request_url: usage_url(&org_id),
+            x_cog_org_id: Some(org_id),
+        })
+    }
+
+    fn display(&self) -> &str {
+        &self.display
+    }
+
+    fn request_url(&self) -> &Url {
+        &self.request_url
+    }
+
+    fn status_request_url(&self) -> Url {
+        self.endpoint_request_url("billing/status", None)
+    }
+
+    fn on_demand_request_url(&self) -> Url {
+        self.endpoint_request_url("billing/quota/my-on-demand-usage", None)
+    }
+
+    fn x_cog_org_id(&self) -> Option<&str> {
+        self.x_cog_org_id.as_deref()
+    }
+
+    fn endpoint_request_url(&self, suffix: &str, query: Option<&str>) -> Url {
+        let mut url = self.request_url.clone();
+        let path = url.path();
+        let prefix = path.strip_suffix("/billing/quota/usage").unwrap_or(path);
+        url.set_path(&format!("{prefix}/{suffix}"));
+        url.set_query(query);
+        url
     }
 }
 
-fn devin_urls(org: &str) -> Result<Vec<Url>, ProviderError> {
-    BASE_URLS
-        .iter()
-        .map(|base| Url::parse(&format!("{base}/{org}/billing/quota/usage")))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| ProviderError::Other(format!("Invalid Devin quota URL: {e}")))
+fn usage_url(path: &str) -> Url {
+    let url = format!("{BASE_URL}{path}/billing/quota/usage");
+    Url::parse(&url).unwrap_or_else(|e| panic!("invalid Devin quota URL {url}: {e}"))
 }
 
-fn auth_response_error(status: reqwest::StatusCode, body: &[u8]) -> Option<ProviderError> {
-    if status != reqwest::StatusCode::UNAUTHORIZED && status != reqwest::StatusCode::FORBIDDEN {
+fn validate_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().any(|c| c.is_control() || c.is_whitespace())
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || value.len() > 128
+    {
         return None;
     }
+    Some(value.to_string())
+}
 
-    let is_missing_organization = serde_json::from_slice::<Value>(body)
-        .ok()
-        .is_some_and(|value| {
-            value.get("detail").and_then(Value::as_str) == Some(MISSING_ORGANIZATION_DETAIL)
-        });
-    if is_missing_organization {
-        Some(ProviderError::Other(
-            MISSING_ORGANIZATION_MESSAGE.to_string(),
-        ))
-    } else {
-        Some(ProviderError::AuthRequired)
+fn is_internal_org_id(value: &str) -> bool {
+    let value = value.trim();
+    (value.starts_with("org_") || value.starts_with("org-")) && validate_identifier(value).is_some()
+}
+
+fn is_organization_slug(value: &str) -> bool {
+    validate_identifier(value)
+        .is_some_and(|value| !value.starts_with("org_") && !value.starts_with("org-"))
+}
+
+fn fetch_result_from_quota(
+    value: &Value,
+    org: &str,
+    billing: DevinBillingEnrichment,
+) -> ProviderFetchResult {
+    let mut usage = snapshot_from_quota(value, org);
+    if let Some(method) = billing
+        .status
+        .as_ref()
+        .and_then(|status| status.plan_label.clone())
+    {
+        usage = usage.with_login_method(method);
     }
+
+    let mut result = ProviderFetchResult::new(usage, "api");
+    if let Some(cost) = cost_from_billing(
+        billing.quota_balance,
+        billing.status.as_ref().and_then(|status| status.balance),
+        billing.on_demand.as_ref(),
+    ) {
+        result = result.with_cost(cost);
+    }
+    result
 }
 
-fn normalized_org(raw: &str) -> String {
-    // Both hosts serve the quota at /{org}/billing/quota/usage with the bare
-    // organization id (org_...); a prefixed path 404s server-side.
-    let trimmed = raw.trim();
-    let organization_from_url = Url::parse(trimmed).ok().and_then(|url| {
-        let host = url.host_str()?.to_ascii_lowercase();
-        if host != "devin.ai" && !host.ends_with(".devin.ai") {
-            return None;
-        }
-        let mut segments = url.path_segments()?;
-        let prefix = segments.next()?;
-        if prefix != "org" && prefix != "organizations" {
-            return None;
-        }
-        segments
-            .next()
-            .filter(|organization| !organization.is_empty())
-            .map(str::to_owned)
-    });
-    let trimmed = organization_from_url
-        .as_deref()
-        .unwrap_or(trimmed)
-        .trim_matches('/');
-    trimmed
-        .strip_prefix("organizations/")
-        .or_else(|| trimmed.strip_prefix("org/"))
-        .unwrap_or(trimmed)
-        .to_string()
-}
-
-fn snapshot_from_quota(value: &Value, org: &str) -> Result<UsageSnapshot, ProviderError> {
+fn snapshot_from_quota(value: &Value, org: &str) -> UsageSnapshot {
     let daily = percent(value, &["daily_percentage", "dailyPercentage"])
-        .or_else(|| percent(value, &["used_percent", "usedPercent"]))
-        .ok_or_else(|| {
-            ProviderError::Parse("Devin quota response missing daily usage".to_string())
-        })?;
-    let mut snapshot =
-        UsageSnapshot::new(RateWindow::new(daily)).with_organization(org.to_string());
-    if let Some(weekly) = percent(value, &["weekly_percentage", "weeklyPercentage"]) {
-        snapshot = snapshot.with_secondary(RateWindow::new(weekly));
-    }
-    Ok(snapshot)
-}
+        .unwrap_or_else(|| percent(value, &["used_percent", "usedPercent"]).unwrap_or(0.0));
+    let daily_reset_at = timestamp(value, &["daily_reset_at", "dailyResetAt"]);
+    let weekly_reset_at = timestamp(value, &["weekly_reset_at", "weeklyResetAt"]);
 
-fn fetch_result_from_quota(value: &Value, org: &str) -> Result<ProviderFetchResult, ProviderError> {
-    let mut result = ProviderFetchResult::new(snapshot_from_quota(value, org)?, "api");
-    if let Some(balance) = extra_usage_balance(value) {
-        result = result.with_cost(CostSnapshot::new(balance, "USD", "Extra usage balance"));
+    let mut snapshot = UsageSnapshot::new(RateWindow::with_details(
+        daily,
+        Some(1440),
+        daily_reset_at,
+        None,
+    ))
+    .with_organization(org.to_string());
+
+    if let Some(weekly) = percent(value, &["weekly_percentage", "weeklyPercentage"]) {
+        snapshot = snapshot.with_secondary(RateWindow::with_details(
+            weekly,
+            Some(10080),
+            weekly_reset_at,
+            None,
+        ));
     }
-    Ok(result)
+
+    snapshot
 }
 
 fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
@@ -297,6 +468,7 @@ fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
             return Some(if v < 1.0 { v * 100.0 } else { v });
         }
     }
+
     let used = ["used", "usage", "used_count", "usedCount", "consumed"]
         .iter()
         .find_map(|k| value.get(*k).and_then(Value::as_f64));
@@ -307,6 +479,21 @@ fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
         (Some(used), Some(limit)) if limit > 0.0 => Some(used / limit * 100.0),
         _ => None,
     }
+}
+
+fn timestamp(value: &Value, keys: &[&str]) -> Option<DateTime<Utc>> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .and_then(parse_rfc3339_timestamp)
+    })
+}
+
+fn parse_rfc3339_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw.trim())
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn extra_usage_balance(value: &Value) -> Option<f64> {
@@ -328,410 +515,126 @@ fn extra_usage_balance(value: &Value) -> Option<f64> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Debug, Clone, PartialEq)]
+struct DevinBillingStatus {
+    balance: Option<f64>,
+    plan_label: Option<String>,
+}
 
-    #[test]
-    fn parses_fraction_percent() {
-        let snapshot =
-            snapshot_from_quota(&serde_json::json!({"daily_percentage":0.25}), "org/demo")
-                .expect("daily usage");
-        assert_eq!(snapshot.primary.used_percent, 25.0);
-    }
+#[derive(Debug, Clone, PartialEq)]
+struct DevinOnDemandUsage {
+    amount: Option<f64>,
+    cycle_end: Option<DateTime<Utc>>,
+}
 
-    #[test]
-    fn parses_exact_one_as_one_percent() {
-        let snapshot =
-            snapshot_from_quota(&serde_json::json!({"daily_percentage":1.0}), "org/demo")
-                .expect("daily usage");
-        assert_eq!(snapshot.primary.used_percent, 1.0);
-    }
+fn parse_billing_status(value: &Value) -> Option<DevinBillingStatus> {
+    let balance = value
+        .get("overage_credits")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0);
+    let plan_label = value
+        .get("plan_slug")
+        .and_then(Value::as_str)
+        .map(format_plan_label)
+        .filter(|label| !label.is_empty());
 
-    #[test]
-    fn parses_extra_usage_balance() {
-        let result = fetch_result_from_quota(
-            &serde_json::json!({"daily_percentage": 0.2, "overage_balance": 12.34}),
-            "org/demo",
-        )
-        .expect("daily usage");
-
-        let cost = result.cost.unwrap();
-        assert_eq!(cost.used, 12.34);
-        assert_eq!(cost.period, "Extra usage balance");
-    }
-
-    #[test]
-    fn parses_extra_usage_balance_cents() {
-        let result = fetch_result_from_quota(
-            &serde_json::json!({"daily_percentage": 0.2, "overage_balance_cents": 7087}),
-            "org/demo",
-        )
-        .expect("daily usage");
-
-        assert_eq!(result.cost.unwrap().used, 70.87);
-    }
-
-    #[test]
-    fn identifies_missing_organization_without_exposing_response_body() {
-        let body = br#"{"detail":"No organizations found for auth1 user","trace":"private-trace","token":"Bearer sk-private-fixture"}"#;
-
-        for status in [
-            reqwest::StatusCode::UNAUTHORIZED,
-            reqwest::StatusCode::FORBIDDEN,
-        ] {
-            let error = auth_response_error(status, body).expect("authorization error");
-            assert!(matches!(error, ProviderError::Other(_)));
-            assert_eq!(error.to_string(), MISSING_ORGANIZATION_MESSAGE);
-            assert!(!error.to_string().contains("private-trace"));
-            assert!(!error.to_string().contains("sk-private-fixture"));
-        }
-    }
-
-    #[test]
-    fn keeps_unrelated_authorization_failures_as_auth_required() {
-        for status in [
-            reqwest::StatusCode::UNAUTHORIZED,
-            reqwest::StatusCode::FORBIDDEN,
-        ] {
-            for body in [
-                br#"{"detail":"Unauthorized","trace":"private-trace"}"#.as_slice(),
-                br#"{"detail":"Token expired","trace":"private-trace"}"#.as_slice(),
-                br#"{"detail":"No organizations found for another user"}"#.as_slice(),
-                b"not-json".as_slice(),
-            ] {
-                let error = auth_response_error(status, body).expect("authorization error");
-                assert!(matches!(error, ProviderError::AuthRequired));
-                assert_eq!(error.to_string(), "Authentication required");
-            }
-        }
-    }
-
-    #[test]
-    fn ignores_organization_detail_on_non_authorization_responses() {
-        let body = br#"{"detail":"No organizations found for auth1 user"}"#;
-        assert!(auth_response_error(reqwest::StatusCode::NOT_FOUND, body).is_none());
-    }
-
-    #[test]
-    fn normalized_org_strips_known_prefixes() {
-        assert_eq!(normalized_org("org_TJ2demo"), "org_TJ2demo");
-        assert_eq!(normalized_org(" org_TJ2demo/ "), "org_TJ2demo");
-        assert_eq!(normalized_org("org/org_TJ2demo"), "org_TJ2demo");
-        assert_eq!(normalized_org("organizations/org_TJ2demo"), "org_TJ2demo");
-    }
-
-    #[test]
-    fn manual_bearer_token_accepts_pasted_authorization_values() {
-        for raw in [
-            "secret-token",
-            "Bearer secret-token",
-            "bearer secret-token",
-            "Authorization: Bearer secret-token",
-            "  authorization:bearer   secret-token  ",
-        ] {
-            assert_eq!(manual_bearer_token(raw).as_deref(), Some("secret-token"));
-        }
-        assert_eq!(manual_bearer_token("Bearer").as_deref(), Some("Bearer"));
-        assert_eq!(manual_bearer_token("Authorization:"), None);
-        assert_eq!(manual_bearer_token("   "), None);
-    }
-
-    #[test]
-    fn missing_or_empty_resolved_token_uses_devin_manual_guidance() {
-        for raw in [
-            Err(ProviderError::NotInstalled("generic key error".into())),
-            Ok("Authorization:   ".into()),
-        ] {
-            let error = resolved_manual_token(raw).expect_err("the token is missing");
-            assert!(
-                matches!(&error, ProviderError::NotInstalled(message) if message == MISSING_TOKEN_MESSAGE)
-            );
-        }
-    }
-
-    #[test]
-    fn normalized_org_accepts_devin_organization_urls_only() {
-        for (raw, expected) in [
-            (
-                "https://app.devin.ai/org/example-org/settings/usage",
-                "example-org",
-            ),
-            (
-                "https://app.devin.ai/organizations/org_TJ2demo",
-                "org_TJ2demo",
-            ),
-            ("https://devin.ai/org/foo/", "foo"),
-            ("org_TJ2demo", "org_TJ2demo"),
-            (" org_TJ2demo/ ", "org_TJ2demo"),
-            ("org/org_TJ2demo", "org_TJ2demo"),
-            ("organizations/org_TJ2demo", "org_TJ2demo"),
-            ("https://evil.example/org/x", "https://evil.example/org/x"),
-            ("https://notdevin.ai/org/x", "https://notdevin.ai/org/x"),
-        ] {
-            assert_eq!(normalized_org(raw), expected, "raw organization {raw:?}");
-        }
-    }
-
-    #[test]
-    fn devin_urls_use_bare_org_on_both_hosts() {
-        let org = normalized_org("org/org_TJ2demo");
-        let urls = devin_urls(&org).expect("candidate urls");
-        assert_eq!(
-            urls.iter().map(|u| u.as_str()).collect::<Vec<_>>(),
-            vec![
-                "https://api.devin.ai/org_TJ2demo/billing/quota/usage",
-                "https://app.devin.ai/api/org_TJ2demo/billing/quota/usage",
-            ]
-        );
-    }
-
-    async fn quota_mock(status: usize, body: &str) -> (mockito::ServerGuard, Url) {
-        let mut server = mockito::Server::new_async().await;
-        server
-            .mock("GET", "/org_TJ2demo/billing/quota/usage")
-            .match_header("x-cog-org-id", "org_TJ2demo")
-            .with_status(status)
-            .with_body(body)
-            .create_async()
-            .await;
-        let url = Url::parse(&format!("{}/org_TJ2demo/billing/quota/usage", server.url()))
-            .expect("the mock server URL should be valid");
-        (server, url)
-    }
-
-    fn test_client() -> Client {
-        Client::builder()
-            .no_proxy()
-            .build()
-            .expect("the test client should build")
-    }
-
-    #[tokio::test]
-    async fn retries_the_next_quota_url_after_auth_failure() {
-        let (_first_server, first_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
-        let (_second_server, second_url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
-
-        let result = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect("the second host should succeed");
-
-        assert_eq!(result.usage.primary.used_percent, 25.0);
-    }
-
-    #[tokio::test]
-    async fn normalized_organization_is_sent_in_quota_request() {
-        let (_server, url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
-        let org = normalized_org("organizations/org_TJ2demo");
-
-        let result = fetch_quota(&test_client(), "test-token", &org, [url])
-            .await
-            .expect("the normalized organization should authenticate");
-
-        assert_eq!(result.usage.primary.used_percent, 25.0);
-    }
-
-    #[tokio::test]
-    async fn pasted_authorization_and_devin_url_are_normalized_in_quota_request() {
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("GET", "/org_TJ2demo/billing/quota/usage")
-            .match_header("authorization", "Bearer fixture-token")
-            .match_header("x-cog-org-id", "org_TJ2demo")
-            .with_status(200)
-            .with_body(r#"{"daily_percentage":0.25}"#)
-            .create_async()
-            .await;
-        let url = Url::parse(&format!("{}/org_TJ2demo/billing/quota/usage", server.url()))
-            .expect("the mock server URL should be valid");
-        let token = manual_bearer_token("Authorization: Bearer fixture-token")
-            .expect("the pasted authorization value should contain a token");
-        let org = normalized_org("https://app.devin.ai/org/org_TJ2demo/settings/usage");
-
-        fetch_quota(&test_client(), &token, &org, [url])
-            .await
-            .expect("the normalized credentials should authenticate");
-
-        mock.assert_async().await;
-    }
-
-    #[tokio::test]
-    async fn mixed_auth_and_server_failures_do_not_become_auth_required() {
-        let (_first_server, first_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
-        let (_second_server, second_url) = quota_mock(500, "server failure").await;
-
-        let error = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect_err("mixed failures should return the non-auth failure");
-
-        assert!(matches!(error, ProviderError::Other(message) if message.contains("500")));
-    }
-
-    #[tokio::test]
-    async fn server_failure_followed_by_auth_failure_preserves_server_failure() {
-        let (_first_server, first_url) = quota_mock(500, "server failure").await;
-        let (_second_server, second_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
-
-        let error = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect_err("mixed failures should return the non-auth failure");
-
-        assert!(matches!(error, ProviderError::Other(message) if message.contains("500")));
-    }
-
-    #[tokio::test]
-    async fn transport_failure_followed_by_auth_failure_is_not_auth_required() {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .expect("a local ephemeral port should be available");
-        let refused_port = listener
-            .local_addr()
-            .expect("the local listener should expose its address")
-            .port();
-        drop(listener);
-        let (_second_server, second_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
-        let refused_url = Url::parse(&format!(
-            "http://127.0.0.1:{refused_port}/org_TJ2demo/billing/quota/usage"
-        ))
-        .expect("the refused URL should be valid");
-
-        let error = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [refused_url, second_url],
-        )
-        .await
-        .expect_err("a transport failure must not be hidden as auth");
-
-        assert!(matches!(error, ProviderError::Network(_)));
-    }
-
-    #[tokio::test]
-    async fn invalid_json_success_followed_by_valid_json_retries() {
-        let (_first_server, first_url) = quota_mock(200, "not-json").await;
-        let (_second_server, second_url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
-
-        let result = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect("the second host should provide valid JSON");
-
-        assert_eq!(result.usage.primary.used_percent, 25.0);
-    }
-
-    #[tokio::test]
-    async fn unrecognized_success_schema_followed_by_valid_json_retries() {
-        let (_first_server, first_url) = quota_mock(200, r#"{"status":"ok"}"#).await;
-        let (_second_server, second_url) = quota_mock(200, r#"{"daily_percentage":0.25}"#).await;
-
-        let result = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect("the second host should provide a recognized schema");
-
-        assert_eq!(result.usage.primary.used_percent, 25.0);
-    }
-
-    #[tokio::test]
-    async fn all_unrecognized_success_schemas_return_parse_error() {
-        let (_first_server, first_url) = quota_mock(200, r#"{"status":"ok"}"#).await;
-        let (_second_server, second_url) = quota_mock(200, r#"{"status":"still-ok"}"#).await;
-
-        let error = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect_err("unrecognized success schemas should remain a parse error");
-
-        assert!(matches!(
-            error,
-            ProviderError::Parse(message)
-                if message == "Devin quota response missing daily usage"
-        ));
-    }
-
-    #[tokio::test]
-    async fn all_auth_failures_return_auth_required() {
-        let (_first_server, first_url) = quota_mock(401, r#"{"detail":"Unauthorized"}"#).await;
-        let (_second_server, second_url) = quota_mock(403, r#"{"detail":"Forbidden"}"#).await;
-
-        let error = fetch_quota(
-            &test_client(),
-            "test-token",
-            "org_TJ2demo",
-            [first_url, second_url],
-        )
-        .await
-        .expect_err("all credential failures should remain authentication errors");
-
-        assert!(matches!(error, ProviderError::AuthRequired));
-    }
-
-    #[tokio::test]
-    async fn retries_the_next_quota_url_after_a_transport_failure() {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .expect("a local ephemeral port should be available");
-        let refused_port = listener
-            .local_addr()
-            .expect("the local listener should expose its address")
-            .port();
-        drop(listener);
-
-        let mut server = mockito::Server::new_async().await;
-        let mock = server
-            .mock("GET", "/org_TJ2demo/billing/quota/usage")
-            .match_header("x-cog-org-id", "org_TJ2demo")
-            .with_status(200)
-            .with_body(r#"{"daily_percentage":0.25}"#)
-            .create_async()
-            .await;
-        let fallback_url = Url::parse(&format!("{}/org_TJ2demo/billing/quota/usage", server.url()))
-            .expect("the mock server URL should be valid");
-        let refused_url = Url::parse(&format!(
-            "http://127.0.0.1:{refused_port}/org_TJ2demo/billing/quota/usage"
-        ))
-        .expect("the refused URL should be valid");
-        let client = Client::builder()
-            .no_proxy()
-            .build()
-            .expect("the test client should build");
-
-        let result = fetch_quota(
-            &client,
-            "test-token",
-            "org_TJ2demo",
-            [refused_url, fallback_url],
-        )
-        .await
-        .expect("the fallback URL should succeed");
-
-        assert_eq!(result.usage.primary.used_percent, 25.0);
-        mock.assert_async().await;
+    if balance.is_none() && plan_label.is_none() {
+        None
+    } else {
+        Some(DevinBillingStatus {
+            balance,
+            plan_label,
+        })
     }
 }
+
+fn format_plan_label(plan_slug: &str) -> String {
+    let plan = plan_slug.trim();
+    if plan.is_empty() {
+        return String::new();
+    }
+
+    let title = plan
+        .split(['-', '_', ' '])
+        .filter(|part| !part.is_empty())
+        .map(title_case_word)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        String::new()
+    } else {
+        format!("Devin {title}")
+    }
+}
+
+fn title_case_word(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first
+            .to_uppercase()
+            .chain(chars.flat_map(char::to_lowercase))
+            .collect(),
+        None => String::new(),
+    }
+}
+
+fn parse_on_demand_usage(value: &Value) -> Option<DevinOnDemandUsage> {
+    let amount = value
+        .get("amount")
+        .and_then(Value::as_f64)
+        .filter(|amount| amount.is_finite() && *amount >= 0.0);
+    let cycle_end = timestamp(value, &["cycle_end", "cycleEnd"]);
+    if amount.is_none() && cycle_end.is_none() {
+        None
+    } else {
+        Some(DevinOnDemandUsage { amount, cycle_end })
+    }
+}
+
+fn cost_from_billing(
+    quota_balance: Option<f64>,
+    status_balance: Option<f64>,
+    on_demand: Option<&DevinOnDemandUsage>,
+) -> Option<CostSnapshot> {
+    let used = on_demand.and_then(|usage| usage.amount);
+    let balance = quota_balance.or(status_balance);
+    if used.is_none() && balance.is_none() {
+        return None;
+    }
+
+    let mut cost = CostSnapshot::new(used.unwrap_or(0.0), "USD", ON_DEMAND_PERIOD);
+    if let Some(balance) = balance {
+        cost = cost.with_balance(balance);
+    }
+    if let Some(resets_at) = on_demand.and_then(|usage| usage.cycle_end) {
+        cost = cost.with_resets_at(resets_at);
+    }
+    Some(cost)
+}
+
+fn strip_wrapping_quotes(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.len() >= 2
+        && ((value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\'')))
+    {
+        Some(value[1..value.len() - 1].trim().to_string())
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn strip_case_insensitive_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    if value.len() < prefix.len() {
+        return None;
+    }
+    let (head, tail) = value.split_at(prefix.len());
+    head.eq_ignore_ascii_case(prefix).then_some(tail)
+}
+
+#[cfg(test)]
+mod tests;
