@@ -1843,6 +1843,8 @@ body:has(.tray-panel-reveal) {
 .mini-chart__axis {
   position: relative;
   font-size: 0.68rem;
+  line-height: 1.2;
+  min-height: 1.2em;
   color: var(--text-muted);
   font-family: "Cascadia Code", "Fira Code", monospace;
   padding: 0 2px;
