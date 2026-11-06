@@ -1,0 +1,32 @@
+name: Validate custom LiteLLM (macOS)
+
+on:
+  push:
+    branches:
+      - personal/litellm-v0.83.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
+            if [[ -d "$candidate" ]]; then
+              sudo xcode-select -s "$candidate/Contents/Developer"
+              break
+            fi
+          done
+          xcodebuild -version
+      - name: Ensure bundled JavaScript syntax
+        run: node --check Sources/CodexBarCore/Resources/Plugins/litellm.js
+      - name: Run all LiteLLM Swift tests
+        run: swift test --filter LiteLLM

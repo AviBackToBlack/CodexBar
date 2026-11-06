@@ -86,7 +86,7 @@ defineProvider({
     number(key.spend);
     const expires = date(key.expires);
     if (!userID && !teamID) return fail("LiteLLM key info did not include a user_id or team_id.");
-    const budget = (value: unknown, scope: "Personal" | "Team", requireID = false) => {
+    const budget = (value: unknown, scope: "Key" | "Personal" | "Team", requireID = false) => {
       const info = object(value);
       const id = scope === "Team" ? text(info.team_id) : undefined;
       if (requireID && id === undefined) return fail("missing team_id");
@@ -95,7 +95,7 @@ defineProvider({
       const used = number(info.spend) ?? 0,
         limit = Math.max(0, number(info.max_budget) ?? 0);
       const resetsAt = date(info.budget_reset_at);
-      const label = scope === "Personal" ? "" : `Team${alias === undefined ? "" : ` ${alias}`}: `;
+      const label = scope === "Team" ? `Team${alias === undefined ? "" : ` ${alias}`}: ` : "";
       return {
         id,
         alias,
@@ -113,6 +113,9 @@ defineProvider({
             : null,
       };
     };
+    // Key limits are independent of the user/team budget; prefer only when a positive limit is reported.
+    const keyBudget = budget(key, "Key");
+    const hasKeyBudget = keyBudget.window !== null;
     let email: string | undefined, personal: ReturnType<typeof budget> | undefined, team: typeof personal;
     if (userID) {
       const root = object(await request("user/info", `?user_id=${encodeURIComponent(userID)}`));
@@ -233,9 +236,18 @@ defineProvider({
     const details =
       userID && ctx.settings.get("LITELLM_MODEL_USAGE_ENABLED") === "true" ? await modelActivity().catch(() => []) : [];
     return {
-      primary: personal?.window,
-      secondary: team?.window,
-      cost: (personal ?? team)!.cost,
+      primary: hasKeyBudget ? keyBudget.window : personal?.window,
+      secondary: hasKeyBudget ? (personal?.window ?? team?.window) : team?.window,
+      tertiary: hasKeyBudget && personal?.window ? team?.window : null,
+      litellmBudget: hasKeyBudget
+        ? {
+            source: "key",
+            primary: "key",
+            secondary: personal?.window ? "personal" : team?.window ? "team" : null,
+            tertiary: personal?.window && team?.window ? "team" : null,
+          }
+        : undefined,
+      cost: hasKeyBudget ? keyBudget.cost : (personal ?? team)!.cost,
       details,
       subscriptionExpiresAt: expires,
       identity: { email, organization: team?.alias, loginMethod: "api" },

@@ -47,7 +47,7 @@ enum ProviderPluginSnapshotMapper {
         try self.object(
             value,
             allowed: [
-                "primary", "secondary", "tertiary", "extraWindows", "cost", "costUsage", "details",
+                "primary", "secondary", "tertiary", "extraWindows", "litellmBudget", "cost", "costUsage", "details",
                 "identity", "iconProvider", "menuBarItems",
                 "subscriptionRenewsAt", "subscriptionExpiresAt", "dataConfidence", "empty",
             ],
@@ -56,6 +56,7 @@ enum ProviderPluginSnapshotMapper {
         let primary = try self.window(value, property: "primary", percentPolicy: percentPolicy)
         let secondary = try self.window(value, property: "secondary", percentPolicy: percentPolicy)
         let tertiary = try self.window(value, property: "tertiary", percentPolicy: percentPolicy)
+        let litellmBudget = try self.liteLLMBudget(value, provider: provider)
         let extraRateWindows = try self.extraWindows(value, percentPolicy: percentPolicy)
         let providerCost = try self.cost(value, now: now)
         let costUsage = try self.costUsage(value)
@@ -92,11 +93,43 @@ enum ProviderPluginSnapshotMapper {
             details: details,
             iconProvider: iconProvider,
             menuBarItems: menuBarItems,
+            litellmBudget: litellmBudget,
             subscriptionExpiresAt: subscriptionExpiresAt,
             subscriptionRenewsAt: subscriptionRenewsAt,
             updatedAt: now,
             identity: identity,
             dataConfidence: dataConfidence)
+    }
+
+    private static func liteLLMBudget(
+        _ root: any ProviderPluginValue,
+        provider: ProviderInstanceID) throws -> LiteLLMBudgetContext?
+    {
+        guard let value = root.property("litellmBudget"), !value.isUndefined, !value.isNull else { return nil }
+        guard provider == UsageProvider.litellm.instanceID, value.isObject, !value.isArray else {
+            throw ProviderPluginError.invalidSnapshot("litellmBudget is reserved for LiteLLM")
+        }
+        let source = try self.requiredDetailString(value, property: "source", path: "litellmBudget")
+        guard source == "key" else {
+            throw ProviderPluginError.invalidSnapshot("litellmBudget requires source key")
+        }
+        func role(_ property: String) throws -> LiteLLMBudgetContext.Window? {
+            guard let raw = value.property(property), !raw.isUndefined, !raw.isNull else { return nil }
+            guard raw.isString, let role = LiteLLMBudgetContext.Window(rawValue: raw.stringValue()) else {
+                throw ProviderPluginError.invalidSnapshot("litellmBudget.\(property) has invalid role")
+            }
+            return role
+        }
+        let primary = try role("primary")
+        let secondary = try role("secondary")
+        let tertiary = try role("tertiary")
+        guard primary == .key,
+              secondary == nil || secondary == .personal || secondary == .team,
+              tertiary == nil || (secondary == .personal && tertiary == .team)
+        else {
+            throw ProviderPluginError.invalidSnapshot("litellmBudget roles are inconsistent")
+        }
+        return LiteLLMBudgetContext(source: .key, primary: primary, secondary: secondary, tertiary: tertiary)
     }
 
     private static func iconProvider(_ root: any ProviderPluginValue) throws -> UsageProvider? {

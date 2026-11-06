@@ -130,6 +130,13 @@ interface CodexBarUsageSnapshot {
   primary?: CodexBarRateWindow | null;
   secondary?: CodexBarRateWindow | null;
   tertiary?: CodexBarRateWindow | null;
+  /** Private LiteLLM semantic window roles; required when a virtual key budget precedes personal/team. */
+  litellmBudget?: {
+    source: "key";
+    primary: "key";
+    secondary?: "personal" | "team" | null;
+    tertiary?: "team" | null;
+  } | null;
   extraWindows?: CodexBarNamedRateWindow[] | null;
   cost?: CodexBarCostSnapshot | null;
   /** Exact provider-reported daily spend. The host validates and sums every numeric row. */

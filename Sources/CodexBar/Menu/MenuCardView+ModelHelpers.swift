@@ -220,8 +220,8 @@ extension UsageMenuCardView.Model {
     static func redactedMetricDetail(_ detail: String?, provider: UsageProvider, metricID: String) -> String? {
         guard let detail else { return nil }
         guard provider == .litellm,
-              metricID == "secondary",
-              detail.hasPrefix("Team "),
+              (metricID == "secondary" || metricID == "tertiary"),
+              (detail.hasPrefix("Team ") || detail.hasPrefix("Team:")),
               let separator = detail.range(of: ": ", options: .backwards)
         else {
             return PersonalInfoRedactor.redactEmails(in: detail, isEnabled: true)
@@ -570,6 +570,10 @@ extension UsageMenuCardView.Model {
         snapshot: UsageSnapshot) -> (primary: String, secondary: String, tertiary: String, showsTertiary: Bool)
     {
         let presentation = ProviderDescriptorRegistry.descriptor(for: input.provider).presentation
+        if input.provider == .litellm, snapshot.litellmBudget != nil {
+            let labels = presentation.rateWindowLabels(metadata: input.metadata, snapshot: snapshot, now: input.now)
+            return (L(labels.primary), L(labels.secondary), L(labels.tertiary), labels.showsTertiary)
+        }
         if input.provider == .factory, snapshot.tertiary != nil {
             return (L("5-hour"), L("Weekly"), L("Monthly"), true)
         }

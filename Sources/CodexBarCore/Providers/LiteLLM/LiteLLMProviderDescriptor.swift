@@ -23,6 +23,20 @@ public enum LiteLLMProviderDescriptor {
             requiresManualCookieSource: false,
             cookieName: nil),
         presentation: ProviderUsagePresentation(
+            rateWindowLabeler: { metadata, snapshot, _ in
+                guard let roles = snapshot.litellmBudget else {
+                    return ProviderRateWindowLabels(
+                        primary: metadata.sessionLabel,
+                        secondary: metadata.weeklyLabel,
+                        tertiary: metadata.opusLabel ?? "Sonnet",
+                        showsTertiary: metadata.supportsOpus)
+                }
+                return ProviderRateWindowLabels(
+                    primary: roles.primary?.title ?? metadata.sessionLabel,
+                    secondary: roles.secondary?.title ?? metadata.weeklyLabel,
+                    tertiary: roles.tertiary?.title ?? "Team budget",
+                    showsTertiary: snapshot.tertiary != nil)
+            },
             costPresenter: { snapshot in
                 guard let cost = snapshot.providerCost,
                       cost.limit <= 0 else { return .init(menuCardStyle: .hidden) }
@@ -36,6 +50,14 @@ public enum LiteLLMProviderDescriptor {
             },
             menuBarWindowResolver: { context in
                 guard context.metric == .automatic else { return .unhandled }
+                if context.snapshot.litellmBudget?.source == .key {
+                    let windows = [
+                        context.snapshot.primary,
+                        context.snapshot.secondary,
+                        context.snapshot.tertiary,
+                    ].compactMap(\.self)
+                    return .resolved(windows.max(by: { $0.usedPercent < $1.usedPercent }))
+                }
                 return .resolved(
                     ProviderUsagePresentation.exhausted(context.snapshot.primary, context.snapshot.secondary)
                         ?? context.snapshot.secondary

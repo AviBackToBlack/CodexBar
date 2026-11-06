@@ -128,7 +128,7 @@ defineProvider({
           _nullishCoalesce(number(info.max_budget), () => 0),
         );
       const resetsAt = date(info.budget_reset_at);
-      const label = scope === "Personal" ? "" : `Team${alias === undefined ? "" : ` ${alias}`}: `;
+      const label = scope === "Team" ? `Team${alias === undefined ? "" : ` ${alias}`}: ` : "";
       return {
         id,
         alias,
@@ -146,6 +146,9 @@ defineProvider({
             : null,
       };
     };
+    // Key limits are independent of the user/team budget; prefer only when a positive limit is reported.
+    const keyBudget = budget(key, "Key");
+    const hasKeyBudget = keyBudget.window !== null;
     let email, personal, team;
     if (userID) {
       const root = object(await request("user/info", `?user_id=${encodeURIComponent(userID)}`));
@@ -283,14 +286,38 @@ defineProvider({
     const details =
       userID && ctx.settings.get("LITELLM_MODEL_USAGE_ENABLED") === "true" ? await modelActivity().catch(() => []) : [];
     return {
-      primary: _optionalChain([personal, "optionalAccess", (_11) => _11.window]),
-      secondary: _optionalChain([team, "optionalAccess", (_12) => _12.window]),
-      cost: _nullishCoalesce(personal, () => team).cost,
+      primary: hasKeyBudget ? keyBudget.window : _optionalChain([personal, "optionalAccess", (_11) => _11.window]),
+      secondary: hasKeyBudget
+        ? _nullishCoalesce(_optionalChain([personal, "optionalAccess", (_12) => _12.window]), () =>
+            _optionalChain([team, "optionalAccess", (_13) => _13.window]),
+          )
+        : _optionalChain([team, "optionalAccess", (_14) => _14.window]),
+      tertiary:
+        hasKeyBudget && _optionalChain([personal, "optionalAccess", (_15) => _15.window])
+          ? _optionalChain([team, "optionalAccess", (_16) => _16.window])
+          : null,
+      litellmBudget: hasKeyBudget
+        ? {
+            source: "key",
+            primary: "key",
+            secondary: _optionalChain([personal, "optionalAccess", (_17) => _17.window])
+              ? "personal"
+              : _optionalChain([team, "optionalAccess", (_18) => _18.window])
+                ? "team"
+                : null,
+            tertiary:
+              _optionalChain([personal, "optionalAccess", (_19) => _19.window]) &&
+              _optionalChain([team, "optionalAccess", (_20) => _20.window])
+                ? "team"
+                : null,
+          }
+        : undefined,
+      cost: hasKeyBudget ? keyBudget.cost : _nullishCoalesce(personal, () => team).cost,
       details,
       subscriptionExpiresAt: expires,
       identity: {
         email,
-        organization: _optionalChain([team, "optionalAccess", (_13) => _13.alias]),
+        organization: _optionalChain([team, "optionalAccess", (_21) => _21.alias]),
         loginMethod: "api",
       },
     };

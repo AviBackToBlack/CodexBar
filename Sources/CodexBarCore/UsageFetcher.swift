@@ -190,6 +190,7 @@ public struct UsageSnapshot: Codable, Sendable {
     public let throughput: ProviderThroughputSnapshot?
     public let openAIAPIUsage: OpenAIAPIUsageSnapshot?
     public let codexResetCredits: CodexRateLimitResetCreditsSnapshot?
+    public let litellmBudget: LiteLLMBudgetContext?
     /// Live-only display inventory. Grok redemption token identifiers are intentionally excluded.
     public let grokResetCredits: GrokRateLimitResetCreditsSnapshot?
     /// Live-only display inventory. Claude grant identifiers are never decoded.
@@ -226,6 +227,7 @@ public struct UsageSnapshot: Codable, Sendable {
         case throughput
         case openAIAPIUsage
         case codexResetCredits
+        case litellmBudget
         case mistralUsage
         case copilotMeteredZeroCredits
         case subscriptionExpiresAt
@@ -259,6 +261,7 @@ public struct UsageSnapshot: Codable, Sendable {
         throughput: ProviderThroughputSnapshot? = nil,
         openAIAPIUsage: OpenAIAPIUsageSnapshot? = nil,
         codexResetCredits: CodexRateLimitResetCreditsSnapshot? = nil,
+        litellmBudget: LiteLLMBudgetContext? = nil,
         grokResetCredits: GrokRateLimitResetCreditsSnapshot? = nil,
         claudeResetCredits: ClaudeRateLimitResetCreditsSnapshot? = nil,
         mistralUsage: MistralUsageSnapshot? = nil,
@@ -296,6 +299,7 @@ public struct UsageSnapshot: Codable, Sendable {
         self.throughput = throughput
         self.openAIAPIUsage = openAIAPIUsage
         self.codexResetCredits = codexResetCredits
+        self.litellmBudget = litellmBudget
         self.grokResetCredits = grokResetCredits
         self.claudeResetCredits = claudeResetCredits
         self.mistralUsage = mistralUsage
@@ -414,6 +418,7 @@ public struct UsageSnapshot: Codable, Sendable {
         self.codexResetCredits = try container.decodeIfPresent(
             CodexRateLimitResetCreditsSnapshot.self,
             forKey: .codexResetCredits)
+        self.litellmBudget = try container.decodeIfPresent(LiteLLMBudgetContext.self, forKey: .litellmBudget)
         self.grokResetCredits = nil // Live-only inventory; refresh without persisting redemption state.
         self.claudeResetCredits = nil // Live-only inventory; a reset used on claude.ai must not reappear.
         self.mistralUsage = try container.decodeIfPresent(MistralUsageSnapshot.self, forKey: .mistralUsage)
@@ -459,6 +464,7 @@ public struct UsageSnapshot: Codable, Sendable {
         try container.encodeIfPresent(self.throughput, forKey: .throughput)
         try container.encodeIfPresent(self.openAIAPIUsage, forKey: .openAIAPIUsage)
         try container.encodeIfPresent(self.codexResetCredits, forKey: .codexResetCredits)
+        try container.encodeIfPresent(self.litellmBudget, forKey: .litellmBudget)
         try container.encodeIfPresent(self.mistralUsage, forKey: .mistralUsage)
         if self.copilotMeteredZeroCredits {
             try container.encode(true, forKey: .copilotMeteredZeroCredits)
@@ -642,6 +648,7 @@ public struct UsageSnapshot: Codable, Sendable {
         deepseekPlatformProfiles: Replacement<[DeepSeekPlatformProfile]> = .unchanged,
         browserSessionOwner: Replacement<ProviderBrowserSessionOwner?> = .unchanged,
         codexResetCredits: Replacement<CodexRateLimitResetCreditsSnapshot?> = .unchanged,
+        litellmBudget: Replacement<LiteLLMBudgetContext?> = .unchanged,
         grokResetCredits: Replacement<GrokRateLimitResetCreditsSnapshot?> = .unchanged,
         subscriptionExpiresAt: Replacement<Date?> = .unchanged,
         subscriptionRenewsAt: Replacement<Date?> = .unchanged,
@@ -668,6 +675,7 @@ public struct UsageSnapshot: Codable, Sendable {
             throughput: self.throughput,
             openAIAPIUsage: self.openAIAPIUsage,
             codexResetCredits: codexResetCredits.resolving(self.codexResetCredits),
+            litellmBudget: litellmBudget.resolving(self.litellmBudget),
             grokResetCredits: grokResetCredits.resolving(self.grokResetCredits),
             claudeResetCredits: self.claudeResetCredits,
             mistralUsage: self.mistralUsage,
