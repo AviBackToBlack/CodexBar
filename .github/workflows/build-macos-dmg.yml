@@ -62,7 +62,9 @@ jobs:
           trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true; rm -rf "$stage" "$mount"' EXIT
 
           codesign --verify --deep --strict --verbose=2 CodexBar.app
-          lipo CodexBar.app/Contents/MacOS/CodexBar -verify_arch arm64 x86_64
+          app_binary="CodexBar.app/Contents/MacOS/CodexBar"
+          lipo -verify_arch arm64 "$app_binary"
+          lipo -verify_arch x86_64 "$app_binary"
           ditto CodexBar.app "$stage/CodexBar.app"
           ln -s /Applications "$stage/Applications"
           mkdir -p artifacts
