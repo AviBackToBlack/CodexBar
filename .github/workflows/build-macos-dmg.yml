@@ -6,21 +6,17 @@ on:
       ref:
         description: 'Branch, tag, or commit to build'
         required: true
-        default: 'personal/litellm-work-key'
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/build-macos-dmg.yml'
+        default: 'personal/litellm-v0.83.0'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 75
     env:
-      TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || 'personal/litellm-work-key' }}
+      TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || 'personal/litellm-v0.83.0' }}
 
     steps:
       - name: Checkout requested ref
@@ -43,12 +39,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
-            if [[ -d "$candidate" ]]; then
-              sudo xcode-select -s "$candidate/Contents/Developer"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.0.app/Contents/Developer
+          echo "DEVELOPER_DIR=/Applications/Xcode_27.0.app/Contents/Developer" >> "$GITHUB_ENV"
+          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 27* ]]
           xcodebuild -version
           swift --version
 

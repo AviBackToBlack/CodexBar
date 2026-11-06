@@ -15,9 +15,13 @@ It intentionally contains two different downstream lines that must not be merged
 
 Tracks the canonical `steipete/CodexBar` line and hosts fork-only documentation plus manual build entry points.
 
-### `personal/litellm-work-key`
+### `personal/litellm-v0.83.0` (current)
 
-Personal macOS/Swift compatibility patch for a non-standard work LiteLLM virtual-key budget configuration.
+Personal macOS compatibility patch based directly on the upstream `v0.83.0` release. The provider is implemented as a TypeScript/JavaScript plugin in this version, and the patch preserves the virtual **Key budget**, followed by Personal and Team budgets when present.
+
+### `personal/litellm-work-key` (legacy backup)
+
+The original September 2026 macOS/Swift compatibility patch for a non-standard work LiteLLM virtual-key budget configuration.
 
 This branch is for private-use behavior and is not intended to define general LiteLLM semantics or require Windows parity.
 
@@ -34,7 +38,7 @@ The current Devin implementation is a working development version, not yet the f
 1. Open **Actions**.
 2. Select **Build macOS DMG**.
 3. Choose **Run workflow**.
-4. Enter a branch, tag, or commit SHA. Default: `personal/litellm-work-key`.
+4. Enter a branch, tag, or commit SHA. Default: `personal/litellm-v0.83.0`.
 5. Download the `CodexBar-macOS-<sha>` artifact when the run completes.
 
 The artifact contains:
@@ -61,7 +65,7 @@ The build happens entirely on a GitHub-hosted Windows runner. No local Rust, Car
 
 ## Updating the macOS line
 
-Keep `main` close to `steipete/CodexBar`, then rebase or otherwise refresh `personal/litellm-work-key` on the desired canonical revision and validate it with **Build macOS DMG**.
+Use a new versioned branch from the desired upstream release tag; port the personal LiteLLM key-budget behavior into the version's actual provider implementation, then validate it with **Build macOS DMG**. Keep previous working branches as recoverable backups. The `main` branch is the fork's build entry point, not the macOS application source selected by the workflow.
 
 ## Updating the Windows line
 
