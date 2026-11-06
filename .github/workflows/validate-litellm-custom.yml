@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +19,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for candidate in /Applications/Xcode_26.3.app /Applications/Xcode_26.2.app; do
-            if [[ -d "$candidate" ]]; then
-              sudo xcode-select -s "$candidate/Contents/Developer"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.0.app/Contents/Developer
+          echo "DEVELOPER_DIR=/Applications/Xcode_27.0.app/Contents/Developer" >> "$GITHUB_ENV"
+          [[ "$(/usr/bin/xcodebuild -version)" == Xcode\ 27* ]]
           xcodebuild -version
       - name: Ensure bundled JavaScript syntax
         run: node --check Sources/CodexBarCore/Resources/Plugins/litellm.js
